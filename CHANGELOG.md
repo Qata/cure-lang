@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added -- canonical `%[A, B]` tuple-type syntax
+
+Tuple types use the same `%[...]` sigil as tuple values. `%[A, B]`, `%[A]`,
+and `%[]` enter the dependent tuple pipeline directly; positions may also carry
+dependent binders such as `%[x: A, B(x)]`. Legacy `(A, B)` remains accepted and
+compiles to the same Core and BEAM representation, while parser tooling emits
+the explainable `E086 / E-TYPE-TUPLE-PAREN` deprecation. Grouped `(A)` and
+function domains `(A, B) -> C` are unchanged.
+
 ### Added -- `Std.Iter` becomes a peer of `Std.List`
 
 The lazy half of the collections story is fleshed out. `Std.Iter`

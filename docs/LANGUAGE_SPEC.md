@@ -189,8 +189,14 @@ type) against which the Melquiades Operator type-checks every send.
 
 - `List(T)` -- linked list
 - `Map(K, V)` -- hash map
-- `%[A, B]` -- tuple
+- `%[A, B]` -- tuple (the type-level counterpart of the value `%[a, b]`)
 - `A -> B` -- function type
+
+`%[A, B]` is the canonical tuple-type spelling. The legacy spelling
+`(A, B)` remains accepted and has the same elaborated and runtime
+representation, but emits the `E086 / E-TYPE-TUPLE-PAREN` deprecation so the
+rewrite can be applied mechanically. A grouped type `(A)` and a function domain
+`(A, B) -> C` are unaffected.
 
 ### ADT (sum types)
 

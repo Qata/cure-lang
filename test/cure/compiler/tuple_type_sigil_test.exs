@@ -40,13 +40,61 @@ defmodule Cure.Compiler.TupleTypeSigilTest do
     assert apply(mod, :f, [{5, true}]) == apply(mod, :g, [{5, true}])
   end
 
-  test "the legacy parenthesised tuple type (A, B) still parses (my change didn't break it)" do
-    # `(A, B)` as a tuple type parses to the legacy `{:tuple, [], …}` node (soft-deprecated toward `%[A, B]`).
-    # It is parse-level backward compat only — on the dependent pipeline the legacy node does not codegen (which
-    # is precisely why `%[A, B]`/`Tuple(A, B)` are the working forms and `(A, B)` is deprecated).
-    src = "mod L\n  fn legacy(p: (Int, Bool)) -> Int = 0\n"
-    {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
-    assert {:ok, _ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
+  test "legacy (A, B) is definitionally and operationally identical to %[A, B]" do
+    src = """
+    mod L
+      fn legacy() -> (Int, Bool) = %[7, true]
+      fn canonical() -> %[Int, Bool] = %[7, true]
+      fn first(p: (Int, Bool)) -> Int = p.1
+    """
+
+    assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(mod, :legacy, []) == {7, true}
+    assert apply(mod, :legacy, []) == apply(mod, :canonical, [])
+    assert apply(mod, :first, [{9, false}]) == 9
+  end
+
+  test "legacy (A, B) emits registered E086 deprecation metadata" do
+    Cure.Pipeline.Events.subscribe(:parser, :deprecation)
+    src = "mod L\n  fn legacy(p: (Int, Bool)) -> Int = p.1\n"
+    {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, file: "legacy_tuple.cure", emit_events: false)
+    assert {:ok, _ast} = Cure.Compiler.Parser.parse(tokens, file: "legacy_tuple.cure", emit_events: true)
+
+    assert_receive {
+      Cure.Pipeline.Events,
+      :parser,
+      :deprecation,
+      %{code: "E086", arity: 2, message: message},
+      %{file: "legacy_tuple.cure"}
+    }
+
+    assert message =~ "E-TYPE-TUPLE-PAREN"
+    assert message =~ "%[A, B]"
+    assert {:ok, explanation} = Cure.Compiler.Errors.explain("E086")
+    assert explanation =~ "mechanical"
+    assert Cure.Compiler.Errors.explain("e086") == {:ok, explanation}
+  end
+
+  test "canonical, grouped, and function-domain types do not emit E086" do
+    Cure.Pipeline.Events.subscribe(:parser, :deprecation)
+
+    for {name, source} <- [
+          canonical: "mod C\n  fn f(p: %[Int, Bool]) -> Int = p.1\n",
+          grouped: "mod G\n  fn f(p: (Int)) -> Int = p\n",
+          function_domain: "mod F\n  fn apply(f: (Int, Bool) -> Int) -> Int = f(1, true)\n"
+        ] do
+      file = "#{name}.cure"
+      {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false)
+      assert {:ok, _ast} = Cure.Compiler.Parser.parse(tokens, file: file, emit_events: true)
+    end
+
+    refute_receive {
+      Cure.Pipeline.Events,
+      :parser,
+      :deprecation,
+      %{code: "E086"},
+      _meta
+    }
   end
 
   test "tuple type spellings retain exact authored delimiters and argument ranges" do

@@ -37,6 +37,18 @@ Functions are checked in two passes:
 - `Ref` -- monitor reference returned by `Std.Process.monitor/1`
   (v0.25.0)
 
+## Composite Types
+
+- `List(T)` -- homogeneous linked list
+- `Map(K, V)` -- map from `K` to `V`
+- `%[A, B, ...]` -- tuple type, mirroring the value syntax `%[a, b, ...]`
+- `A -> B`, `(A, B) -> C` -- function types
+
+The canonical tuple-type spelling is `%[A, B]`. Legacy `(A, B)` remains
+accepted and compiles to the identical dependent tuple and flat BEAM value, but
+emits the explainable `E086 / E-TYPE-TUPLE-PAREN` deprecation. This does not
+affect grouped `(A)` or the parameter list in `(A, B) -> C`.
+
 ## Subtyping
 
 - `Int <: Float` (numeric widening)

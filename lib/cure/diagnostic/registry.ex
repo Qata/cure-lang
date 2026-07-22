@@ -48,7 +48,7 @@ defmodule Cure.Diagnostic.Registry do
 
   alias Cure.Diagnostic.Registry.Entry
 
-  @retired ~w[E001 E002 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E063 E064 E071 E072 E073 E074 E075 E079 E080 E085 H083 H084 W081 W082 W088]
+  @retired ~w[E001 E002 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E063 E064 E071 E072 E073 E074 E075 E079 E080 E085 E086 H083 H084 W081 W082 W088]
   @operational ~w[E008 E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002 W003]
   @retirement_reasons %{
     "E001" => "No first-party producer remains; contextual E093 is the active type-mismatch path.",
@@ -89,6 +89,8 @@ defmodule Cure.Diagnostic.Registry do
     "E079" => "No first-party producer remains; pickup guards use contextual E093 diagnostics.",
     "E080" => "No first-party producer remains; pickup branch joins use contextual E093 diagnostics.",
     "E085" => "The legacy if migration is emitted as a migration event, not a compiler diagnostic.",
+    "E086" =>
+      "The legacy parenthesised tuple-type migration is emitted as a deprecation event, not a compile-stopping diagnostic.",
     "H083" => "Formatter normalization is not emitted as a diagnostic code.",
     "H084" => "Formatter normalization is not emitted as a diagnostic code.",
     "W081" => "No first-party producer remains; pickup reachability warnings are not emitted.",
@@ -791,6 +793,25 @@ defmodule Cure.Diagnostic.Registry do
     Fix: replace the `if` chain with a `pickup` block, or run
     `mix cure.rewrite if-to-pickup <path>` to convert the file in
     place.
+    """,
+    "E086" => """
+    E086: Parenthesised Tuple Type Deprecated (E-TYPE-TUPLE-PAREN)
+
+    A type expression uses the legacy parenthesised tuple form `(A, B)`.
+    Tuple values use `%[a, b]`, and the canonical type spelling now mirrors
+    them as `%[A, B]`. The legacy spelling remains accepted and elaborates to
+    exactly the same dependent tuple type, but parser tooling emits a
+    deprecation event so editors and migration tools can suggest the clearer
+    form.
+
+    Example:
+      fn divmod(a: Int, b: Int) -> (Int, Int)     # deprecated
+      fn divmod(a: Int, b: Int) -> %[Int, Int]    # preferred
+
+    Grouping `(A)` and a function domain `(A, B) -> C` are unaffected.
+
+    Fix: replace `(A, B)` with `%[A, B]`. The rewrite is mechanical and does
+    not change the elaborated type or emitted BEAM representation.
     """,
     "E034" => """
     E034: Let Pattern Not Exhaustive

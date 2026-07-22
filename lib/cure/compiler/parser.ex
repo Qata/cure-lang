@@ -12010,8 +12010,14 @@ defmodule Cure.Compiler.Parser do
                 {single, state}
 
               many ->
-                meta = put_container_source_info([], open_token, state, close_token)
-                {{:tuple, meta, many}, deprecate_paren_tuple(state, token, length(many))}
+                # Legacy spelling, canonical representation. Downstream
+                # elaboration and emission must not recover which tuple spelling
+                # was authored; all spellings enter the dependent pipeline as
+                # the same unit-terminated tuple telescope.
+                binders = List.duplicate("_", length(many))
+                meta = [arity: length(many), binders: binders]
+                meta = put_container_source_info(meta, open_token, state, close_token)
+                {{:tuple_type, meta, many}, deprecate_paren_tuple(state, token, length(many))}
             end
         end
 
@@ -12457,10 +12463,10 @@ defmodule Cure.Compiler.Parser do
       :parser,
       :deprecation,
       %{
-        code: "E-TYPE-TUPLE-PAREN",
+        code: "E086",
         arity: arity,
         message:
-          "parenthesised tuple type `(A, B)` is deprecated; write `%[A, B]` (the tuple-type sigil matching the value tuple `%[a, b]`)"
+          "parenthesised tuple type `(A, B)` is deprecated; write `%[A, B]` (E086 / E-TYPE-TUPLE-PAREN; the tuple-type sigil matching the value tuple `%[a, b]`)"
       },
       Events.meta(file, token.line)
     )
