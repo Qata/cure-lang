@@ -10011,11 +10011,10 @@ defmodule Cure.Compiler.Parser do
 
     # Parse module path
     path_start = peek(state)
-    {path, state} = parse_dotted_name(state)
-    path_end = authored_token(state)
+    {path, path_end, state} = parse_dotted_name_owned(state)
 
     # Check for selective import: .{a, b, c}
-    {items, state} =
+    {items, selection_span, state} =
       case peek(state) do
         %Token{type: :dot} ->
           next = peek_at(state, 1)
@@ -10025,38 +10024,53 @@ defmodule Cure.Compiler.Parser do
             state = advance(state) |> advance()
             {names, state} = parse_name_list(state, :rbrace)
 
-            {state, _close_token} =
+            {state, close_token} =
               expect_container_close(state, :rbrace, :selective_import, open_token, names, true, %{
                 module: path,
                 closing_values: [:as]
               })
 
-            {names, state}
+            {names, through_spans(open_token.span, close_token && close_token.span) || open_token.span, state}
           else
-            {[], state}
+            {[], nil, state}
           end
 
         _ ->
-          {[], state}
+          {[], nil, state}
       end
 
     # Check for alias: as Name
-    {alias_name, state} =
+    {alias_name, as_token, alias_token, state} =
       case peek(state) do
-        %Token{type: :keyword, value: :as} ->
+        %Token{type: :keyword, value: :as} = as_token ->
           state = advance(state)
           a = peek(state)
           state = advance(state)
-          {to_string(a.value), state}
+          {to_string(a.value), as_token, a, state}
 
         _ ->
-          {nil, state}
+          {nil, nil, nil, state}
       end
 
     meta = [source: path, import_type: :use, language: :cure, line: token.line, col: token.col]
     meta = if items != [], do: Keyword.put(meta, :items, items), else: meta
     meta = if alias_name, do: Keyword.put(meta, :alias, alias_name), else: meta
-    meta = put_container_source_info(meta, token, path_start, path_end, state)
+    terminal_span = (alias_token && alias_token.span) || selection_span || path_end.span
+
+    fields =
+      %{}
+      |> maybe_put_source_field(:alias_keyword, as_token)
+      |> maybe_put_source_field(:alias, alias_token)
+      |> then(fn fields -> if selection_span, do: Map.put(fields, :selection, selection_span), else: fields end)
+
+    meta =
+      Metadata.put_source_info(meta, %SourceInfo{
+        whole: through_spans(token.span, terminal_span) || token.span,
+        opener: token.span,
+        name: through_spans(path_start.span, path_end.span) || path_start.span,
+        fields: fields
+      })
+
     ast = {:import, meta, []}
     {ast, state}
   end
@@ -12157,6 +12171,31 @@ defmodule Cure.Compiler.Parser do
     first = peek(state)
     state = advance(state)
     parse_dotted_name(state, to_string(first.value))
+  end
+
+  defp parse_dotted_name_owned(state) do
+    first = peek(state)
+    state = advance(state)
+    parse_dotted_name_owned(state, to_string(first.value), first)
+  end
+
+  defp parse_dotted_name_owned(state, acc, last_token) do
+    case peek(state) do
+      %Token{type: :dot} ->
+        next = peek_at(state, 1)
+
+        if next && next.type in [:lbrace, :lbracket] do
+          {acc, last_token, state}
+        else
+          state = advance(state)
+          next_token = peek(state)
+          state = advance(state)
+          parse_dotted_name_owned(state, acc <> "." <> to_string(next_token.value), next_token)
+        end
+
+      _ ->
+        {acc, last_token, state}
+    end
   end
 
   defp parse_dotted_name(state, acc) do

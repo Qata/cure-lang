@@ -250,7 +250,10 @@ defmodule Cure.Compiler.SourceSpansTest do
     fixity_info = Metadata.source_info(elem(fixity, 1))
 
     assert slice(source, import_info.whole) == "use Std.List as L"
+    assert slice(source, import_info.opener) == "use"
     assert slice(source, import_info.name) == "Std.List"
+    assert slice(source, Map.fetch!(import_info.fields, :alias_keyword)) == "as"
+    assert slice(source, Map.fetch!(import_info.fields, :alias)) == "L"
     assert slice(source, group_info.whole) == "precedencegroup additive"
     assert slice(source, group_info.name) == "additive"
     assert slice(source, fixity_info.whole) == "infix <+> : additive"
@@ -258,6 +261,21 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, fixity_info.operator) == "<+>"
     assert slice(source, Map.fetch!(fixity_info.fields, :separator)) == ":"
     assert slice(source, fixity_info.name) == "additive"
+  end
+
+  test "selective imports retain their exact path, selection, alias, and whole ranges" do
+    source = "use Std.List.{map, fold} as Lists\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "selective.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "selective.cure", emit_events: false, prelude_macros: false)
+
+    {:import, meta, _} = find_node(ast, :import)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "use Std.List.{map, fold} as Lists"
+    assert slice(source, info.name) == "Std.List"
+    assert slice(source, Map.fetch!(info.fields, :selection)) == "{map, fold}"
+    assert slice(source, Map.fetch!(info.fields, :alias_keyword)) == "as"
+    assert slice(source, Map.fetch!(info.fields, :alias)) == "Lists"
   end
 
   test "protocol and interface declarations retain authored name ranges" do
