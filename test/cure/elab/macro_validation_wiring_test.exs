@@ -1,7 +1,7 @@
 defmodule Cure.Elab.MacroValidationWiringTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.Errors
+  alias Cure.Compiler.{Errors, Lexer, Parser}
   alias Cure.Diagnostic.Renderer
   alias Cure.Elab.Program
 
@@ -302,5 +302,54 @@ defmodule Cure.Elab.MacroValidationWiringTest do
 
              Hint: Use a generatable category, or mark the rule `contextual` when proof needs its call site
              """)
+  end
+
+  test "a defensive generated-hole invariant failure blames the hole, not the author" do
+    source = """
+    mod M
+      macro Broken
+        syntax bad <n: Nat> becomes n
+    """
+
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
+    {:macro_def, _, [rule]} = Enum.find(children, &match?({:macro_def, _, _}, &1))
+    [span] = get_in(rule, [:field_spans, "n"])
+
+    reason =
+      {:source_context,
+       {:generated_hole_not_well_typed,
+        %{term: {:ctor, :Bad, []}, category: "Nat", hole: "n", generator_invariant: true}},
+       %{
+         span: span,
+         hole_spans: [span],
+         macro: "Broken",
+         category: "Nat",
+         hole: "n",
+         expression_category: :macro_proof_generator_invariant
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "generator_invariant.cure", source)
+    fingerprint = diagnostic.payload.fingerprint
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- MACRO PROOF GENERATOR PRODUCED AN INVALID VALUE [E092] -- generator_invariant.cure
+
+             The compiler's `Nat` proof generator produced a value that failed its own type
+             check. This is not an error in the macro declaration.
+
+             at generator_invariant.cure:3:16
+             3 |     syntax bad <n: Nat> becomes n
+               |                ^^^^^^^^ proof generation failed while checking this hole
+
+             Note: Internal diagnostic fingerprint: #{fingerprint}.
+
+             Hint: Report this compiler defect with fingerprint `#{fingerprint}`
+             """)
+
+    refute Map.has_key?(diagnostic.payload, :generated_term)
+    {debug_diagnostic, _registry} = Errors.to_diagnostic(reason, "generator_invariant.cure", source, debug: true)
+    assert debug_diagnostic.payload.generated_term == {:ctor, :Bad, []}
   end
 end

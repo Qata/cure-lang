@@ -621,6 +621,10 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:source_context, {:unsupported_hole_type, category}, context}, opts) when is_map(context),
     do: macro_validation_failure(:unsupported_hole_type, %{detail: category}, opts, context)
 
+  def from_error({:source_context, {:generated_hole_not_well_typed, details}, context}, opts)
+      when is_map(details) and is_map(context),
+      do: generated_hole_invariant_failure(details, context, opts)
+
   def from_error({:example_mismatch, mismatches}, opts),
     do: macro_validation_failure(:example_mismatch, mismatches, opts)
 
@@ -1352,8 +1356,7 @@ defmodule Cure.Diagnostic.Adapter do
                :malformed_reflected_map,
                :invalid_syntax_attrs,
                :unknown_reducer_constructor,
-               :incomplete_reducer,
-               :unsupported_hole_arity
+               :incomplete_reducer
              ],
       do: macro_validation_failure(kind, %{detail: detail}, opts)
 
@@ -4465,6 +4468,54 @@ defmodule Cure.Diagnostic.Adapter do
       ],
       notes: ["The generated counterexample and internal elaboration reason are available in debug output."],
       provenance: Keyword.get(opts, :provenance, []),
+      payload: payload
+    )
+  end
+
+  defp generated_hole_invariant_failure(details, context, opts) do
+    category = Map.get(details, :category, Map.get(context, :category, "unknown"))
+    hole = Map.get(details, :hole, Map.get(context, :hole))
+    fingerprint = diagnostic_fingerprint({:generated_hole_not_well_typed, category, hole, Map.get(details, :term)})
+
+    payload = %{
+      kind: :generated_hole_not_well_typed,
+      macro: Map.get(context, :macro),
+      category: category,
+      hole: hole,
+      fingerprint: fingerprint
+    }
+
+    payload =
+      if Keyword.get(opts, :debug, false),
+        do: Map.put(payload, :generated_term, Map.get(details, :term)),
+        else: payload
+
+    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      context
+      |> Map.get(:hole_spans, [])
+      |> Enum.map(&pickup_label(&1, :secondary, "this hole is affected by the same generator failure"))
+      |> Enum.reject(&(&1.span == primary_span))
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_validation_failed,
+      severity: :error,
+      title: "Macro proof generator produced an invalid value",
+      body:
+        Doc.paragraph(
+          "The compiler's `#{name_to_string(category)}` proof generator produced a value that failed its own type check. This is not an error in the macro declaration."
+        ),
+      primary: pickup_label(primary_span, :primary, "proof generation failed while checking this hole"),
+      secondary: secondary,
+      notes: ["Internal diagnostic fingerprint: #{fingerprint}."],
+      suggestions: [
+        %Suggestion{
+          message: "Report this compiler defect with fingerprint `#{fingerprint}`",
+          applicability: :manual
+        }
+      ],
       payload: payload
     )
   end

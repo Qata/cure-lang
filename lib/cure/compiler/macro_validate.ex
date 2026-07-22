@@ -82,7 +82,8 @@ defmodule Cure.Compiler.MacroValidate do
               :example_type_mismatch,
               :computed_example_error,
               :expansion_ill_typed,
-              :unsupported_hole_type
+              :unsupported_hole_type,
+              :generated_hole_not_well_typed
             ] do
     {:error, {:source_context, reason, validation_source_context(reason, meta, rules)}}
   end
@@ -223,6 +224,34 @@ defmodule Cure.Compiler.MacroValidate do
       macro: Keyword.get(meta, :name),
       category: category,
       expression_category: :macro_expansion_proof
+    }
+  end
+
+  defp validation_source_context({:generated_hole_not_well_typed, details}, meta, rules) do
+    category = if is_map(details), do: Map.get(details, :category), else: nil
+    hole = if is_map(details), do: Map.get(details, :hole), else: nil
+
+    spans =
+      for rule <- rules,
+          rule[:kind] in [:syntax, :computed],
+          field <- fields_with_category(rule[:segments] || [], category),
+          is_nil(hole) or field == hole,
+          span <- List.wrap(get_in(rule, [:field_spans, field])) do
+        span
+      end
+      |> Enum.uniq()
+
+    macro_span = macro_source_span(meta)
+
+    %{
+      span: List.first(spans) || macro_span,
+      hole_spans: spans,
+      related_spans: Enum.drop(spans, 1),
+      macro_span: macro_span,
+      macro: Keyword.get(meta, :name),
+      category: category,
+      hole: hole,
+      expression_category: :macro_proof_generator_invariant
     }
   end
 

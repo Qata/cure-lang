@@ -314,7 +314,6 @@ defmodule Cure.DiagnosticTest do
       {:invalid_board_buses, "E092"},
       {:invalid_board_flash, "E092"},
       {:flash_offset_out_of_bounds, "E092"},
-      {{:unsupported_hole_arity, 3}, "E092"},
       {{:bad_grade, :not_a_grade}, "E100"},
       {{:unknown_symbol, "not_loaded"}, "E100"},
       {{:ill_formed_term, {:not_core, 1}}, "E100"},

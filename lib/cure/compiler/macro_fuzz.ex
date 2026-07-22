@@ -299,7 +299,6 @@ defmodule Cure.Compiler.MacroFuzz do
           :ok
           | {:error, {:expansion_ill_typed, map()}}
           | {:error, {:unsupported_hole_type, String.t()}}
-          | {:error, {:unsupported_hole_arity, non_neg_integer()}}
           | {:error, term()}
   def check_expansion_proof(macro_def, env, opts \\ []) do
     {result, _manifest, _cached?} = cached_proof(macro_def, env, opts)
@@ -464,6 +463,11 @@ defmodule Cure.Compiler.MacroFuzz do
             end)
 
           {:cont, {:ok, next}}
+
+        {:error, {:generated_hole_not_well_typed, term}} ->
+          {:halt,
+           {:error,
+            {:generated_hole_not_well_typed, %{term: term, category: kind, hole: name, generator_invariant: true}}}}
 
         {:error, _} = error ->
           {:halt, error}

@@ -213,7 +213,6 @@ defmodule Cure.DiagnosticExerciserTest do
       {"invalid board buses", "E092", :invalid_board_buses},
       {"invalid board flash", "E092", :invalid_board_flash},
       {"board flash offset", "E092", :flash_offset_out_of_bounds},
-      {"unsupported macro hole arity", "E092", {:unsupported_hole_arity, 3}},
       {"invalid Core grade", "E100", {:bad_grade, :not_a_grade}},
       {"unknown Core symbol", "E100", {:unknown_symbol, "not_loaded"}},
       {"ill-formed Core term", "E100", {:ill_formed_term, {:not_core, 1}}},
