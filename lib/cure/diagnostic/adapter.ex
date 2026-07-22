@@ -1327,7 +1327,13 @@ defmodule Cure.Diagnostic.Adapter do
     do: macro_validation_failure(:example_use_site_not_fully_consumed, %{}, opts)
 
   def from_error({:closed_category_extension, categories}, opts),
-    do: macro_validation_failure(:closed_category_extension, %{categories: categories}, opts)
+    do: macro_module_failure(:closed_category_extension, %{categories: categories}, opts)
+
+  def from_error({:ambiguous_macro_extension, keywords}, opts),
+    do: macro_module_failure(:ambiguous_macro_extension, %{keywords: keywords}, opts)
+
+  def from_error({kind, _detail}, opts) when kind in [:module_rule_not_fully_consumed, :not_a_module_rule],
+    do: macro_module_failure(kind, %{}, opts)
 
   def from_error({:duplicate_unit, suffix}, opts),
     do: macro_unit_failure(:duplicate_unit, %{suffix: suffix}, opts)
@@ -1394,9 +1400,6 @@ defmodule Cure.Diagnostic.Adapter do
                :invalid_driver_register,
                :duplicate_driver_register,
                :overlapping_driver_register,
-               :module_rule_not_fully_consumed,
-               :not_a_module_rule,
-               :ambiguous_macro_extension,
                :invalid_macro_diagnostics,
                :invalid_macro_diagnostic,
                :invalid_syntax_list,
@@ -1501,8 +1504,6 @@ defmodule Cure.Diagnostic.Adapter do
              :invalid_driver_register,
              :duplicate_driver_register,
              :overlapping_driver_register,
-             :module_rule_not_fully_consumed,
-             :not_a_module_rule,
              :expander_without_accepts,
              :accepts_without_syntax_family,
              :accepts_without_expander,
@@ -1513,6 +1514,17 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error(kind, opts) when kind in [:invalid_check_property, :duplicate_check_property],
     do: macro_check_failure(kind, %{}, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :module_rule_not_fully_consumed,
+             :not_a_module_rule,
+             :invalid_module_rule_set,
+             :invalid_module_rule_bindings,
+             :invalid_macro_extension_rules,
+             :invalid_macro_extension_rule
+           ],
+      do: macro_module_failure(kind, %{}, opts)
 
   def from_error(kind, opts)
       when kind in [:invalid_parse_productions, :invalid_parse_production, :duplicate_parse_production],
@@ -5106,6 +5118,78 @@ defmodule Cure.Diagnostic.Adapter do
       payload: Map.put(details, :kind, kind)
     )
   end
+
+  defp macro_module_failure(kind, details, opts) do
+    {title, message, label, hint} = macro_module_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_module_validation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp macro_module_content(:module_rule_not_fully_consumed, _details),
+    do:
+      {"Module macro leaves input unconsumed",
+       "This module macro expands one declaration but leaves additional authored tokens outside the matched rule.",
+       "match the complete module-macro input", "Extend the rule to consume the remaining tokens or remove them"}
+
+  defp macro_module_content(:not_a_module_rule, _details),
+    do:
+      {"Macro rule cannot expand a module",
+       "This rule is being executed as a module macro, but it was not declared with module scope.",
+       "use a module-scoped macro rule", "Declare this syntax as a module rule before executing it here"}
+
+  defp macro_module_content(:invalid_module_rule_set, _details),
+    do:
+      {"Module macro rule set is malformed",
+       "Module expansion needs a list containing valid syntax rules from the same macro.",
+       "rewrite this module-macro rule set", "Provide the parsed syntax rules that own this module rule"}
+
+  defp macro_module_content(:invalid_module_rule_bindings, _details),
+    do:
+      {"Module macro bindings are malformed",
+       "Module-rule bindings must map each declared hole name to its captured syntax value.",
+       "rewrite these module-macro bindings", "Provide a map from hole names to captured syntax"}
+
+  defp macro_module_content(:invalid_macro_extension_rules, _details),
+    do:
+      {"Macro extension lists are malformed",
+       "Open-category composition needs separate lists of base rules and extension rules.",
+       "rewrite these macro extension lists", "Provide one list of base rules and one list of extension rules"}
+
+  defp macro_module_content(:invalid_macro_extension_rule, _details),
+    do:
+      {"Macro extension rule is malformed", "Every base or extension rule must be a parsed macro-rule map.",
+       "rewrite this macro extension rule", "Provide valid parsed macro rules in both lists"}
+
+  defp macro_module_content(:closed_category_extension, %{categories: categories}) do
+    rendered = Enum.map_join(categories, ", ", &"`#{name_to_string(&1)}`")
+
+    {"Closed macro category cannot be extended",
+     "The extension adds syntax to #{category_phrase(categories, rendered)}, but only categories declared open accept external rules.",
+     "remove this closed-category extension", "Declare the category open or move the syntax into its owning macro"}
+  end
+
+  defp macro_module_content(:ambiguous_macro_extension, %{keywords: keywords}) do
+    rendered = Enum.map_join(keywords, ", ", &"`#{name_to_string(&1)}`")
+
+    {"Macro extension repeats a keyword",
+     "The composed macro would contain multiple rules beginning with #{keyword_phrase(keywords, rendered)}, making dispatch ambiguous.",
+     "rename this extension keyword", "Give each composed rule a distinct leading keyword"}
+  end
+
+  defp category_phrase([_one], rendered), do: "closed category #{rendered}"
+  defp category_phrase(_many, rendered), do: "closed categories #{rendered}"
+
+  defp keyword_phrase([_one], rendered), do: "keyword #{rendered}"
+  defp keyword_phrase(_many, rendered), do: "keywords #{rendered}"
 
   defp macro_reducer_content(:invalid_reducer_arms, _details),
     do:
