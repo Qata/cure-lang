@@ -18,6 +18,15 @@
 > until that proof surface is implemented, then restore it without changing the
 > checker mathematics or trust boundary.
 
+> **2026-07-22 OTP-first execution amendment.** The follow-on execution spec
+> `2026-07-22-certificate-generator-integration-design.md` establishes the
+> implementation order. Before completing this document's general Farkas/cut
+> path, Cure vertically slices B3 mailbox-pattern inclusion using checked
+> affine embeddings between semilinear components. Full commutative-regex
+> inclusion is quantified Presburger arithmetic; it is not covered merely by
+> adding quantifier-free cut/split nodes. This changes priority and adds a
+> domain certificate, but does not change the trust boundary described here.
+
 ## 0. Motivation
 
 The Int-refinement prelude (`IsTrue`/`Confirmed`, `Std.Proof.IntMath`) discharges
