@@ -310,7 +310,12 @@ defmodule Cure.DiagnosticExerciserTest do
     end)
 
     compiler_fixture_ids =
-      [exercise_ambiguous_name_fixture(), exercise_kernel_type_mismatch_fixture() | compiler_fixture_ids]
+      [
+        exercise_ambiguous_name_fixture(),
+        exercise_kernel_type_mismatch_fixture(),
+        exercise_computed_macro_internal_fixture()
+        | compiler_fixture_ids
+      ]
 
     assert :ok =
              Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
@@ -562,5 +567,22 @@ defmodule Cure.DiagnosticExerciserTest do
     assert_no_raw_diagnostic_leaks(plain, "kernel type mismatch")
 
     :type_mismatch_kernel
+  end
+
+  defp exercise_computed_macro_internal_fixture do
+    source = "mod M\n  fn result() -> Int = broken\nend\n"
+    file = "computed macro internal failure.cure"
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic(
+        {:computed_macro_error, [keyword: "broken", line: 2, col: 24], {:host_exception, RuntimeError}},
+        file,
+        source
+      )
+
+    assert diagnostic.code == "E101"
+    assert diagnostic.primary.span.start_line == 2
+    assert Renderer.plain(diagnostic, registry) =~ "this invocation reached the failing compiler path"
+    :internal_failure_macro_expansion
   end
 end

@@ -3140,6 +3140,39 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:computed_macro_error, meta, {:host_exception, exception}}, opts)
+      when is_list(meta) do
+    keyword = Keyword.get(meta, :keyword, "computed")
+    source_info = Metadata.source_info(meta)
+    span = (source_info && source_info.whole) || Keyword.get(opts, :span)
+    provenance = ((source_info && source_info.provenance) || []) ++ Keyword.get(opts, :provenance, [])
+    exception_name = exception |> name_to_string() |> String.trim_leading("Elixir.")
+    fingerprint = diagnostic_fingerprint({:computed_macro_host_exception, keyword, exception})
+
+    Diagnostic.new(
+      code: "E101",
+      key: :internal_compiler_error,
+      severity: :error,
+      title: "Compiler failed while running a computed macro",
+      body:
+        Doc.paragraph(
+          "The compiler raised `#{exception_name}` while evaluating the `#{keyword}` macro. This is a compiler defect, not a type or syntax error in the generated expansion. Diagnostic fingerprint: `#{fingerprint}`."
+        ),
+      primary: pickup_label(span, :primary, "this invocation reached the failing compiler path"),
+      notes: ["Report this internal compiler failure with the diagnostic fingerprint."],
+      suggestions: [
+        %Suggestion{
+          message: "Report fingerprint `#{fingerprint}` together with this source file",
+          applicability: :manual
+        }
+      ],
+      provenance: provenance,
+      payload:
+        %{stage: :computed_macro_expansion, macro: keyword, exception: exception_name, fingerprint: fingerprint}
+        |> maybe_put_meta_location(meta)
+    )
+  end
+
   def from_error({:computed_macro_error, meta, reason}, opts) when is_list(meta) do
     keyword = Keyword.get(meta, :keyword, "computed")
     payload = %{keyword: keyword, reason: computed_macro_payload(reason)} |> maybe_put_meta_location(meta)

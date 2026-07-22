@@ -74,6 +74,43 @@ defmodule Cure.Elab.ComputedMacroExecutionDiagnosticTest do
     refute inspect(lsp) =~ "Core"
   end
 
+  test "a caught host exception is an internal diagnostic with invocation context" do
+    {diagnostic, registry} =
+      Errors.to_diagnostic(
+        {:computed_macro_error, @meta, {:host_exception, RuntimeError}},
+        "internal.cure",
+        @source
+      )
+
+    assert diagnostic.code == "E101"
+    assert diagnostic.payload.stage == :computed_macro_expansion
+    assert diagnostic.payload.exception == "RuntimeError"
+    assert fingerprint = diagnostic.payload.fingerprint
+    assert fingerprint =~ ~r/^[0-9a-f]{12}$/
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- COMPILER FAILED WHILE RUNNING A COMPUTED MACRO [E101] --------- internal.cure
+
+             The compiler raised `RuntimeError` while evaluating the `expand` macro. This is
+             a compiler defect, not a type or syntax error in the generated expansion.
+             Diagnostic fingerprint: `#{fingerprint}`.
+
+             at internal.cure:2:24
+             2 |   fn result() -> Int = expand here
+               |                        ^^^^^^ this invocation reached the failing compiler path
+
+             Note: Report this internal compiler failure with the diagnostic fingerprint.
+
+             Hint: Report fingerprint `#{fingerprint}` together with this source file
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert lsp["code"] == "E101"
+    assert lsp["range"] == range(1, 23, 29)
+    assert lsp["data"]["payload"]["fingerprint"] == fingerprint
+  end
+
   defp range(line, start_character, end_character) do
     %{
       "start" => %{"line" => line, "character" => start_character},
