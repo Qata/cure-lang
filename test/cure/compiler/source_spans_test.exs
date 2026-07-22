@@ -203,7 +203,23 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, module_info.name) == "Demo.Core"
     assert Enum.map(module_info.branches, &slice(source, &1)) == ["rec Point\n    x: Int"]
     assert slice(source, record_info.whole) == "rec Point\n    x: Int"
+    assert slice(source, record_info.opener) == "rec"
     assert slice(source, record_info.name) == "Point"
+    assert Enum.map(record_info.branches, &slice(source, &1)) == ["x: Int"]
+  end
+
+  test "parameterized records retain their type-parameter and field declaration ranges" do
+    source = "rec Box(T)\n  value: T\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "record.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "record.cure", emit_events: false, prelude_macros: false)
+
+    {:container, meta, _} = find_node(ast, :container)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "rec Box(T)\n  value: T"
+    assert slice(source, info.name) == "Box"
+    assert slice(source, Map.fetch!(info.fields, :type_parameters)) == "(T)"
+    assert Enum.map(info.branches, &slice(source, &1)) == ["value: T"]
   end
 
   test "proof containers retain exact dotted names and child declaration ranges" do
