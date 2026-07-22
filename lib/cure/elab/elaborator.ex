@@ -1176,10 +1176,10 @@ defmodule Cure.Elab.Elaborator do
     do: elaborate_expr_typed(Cure.Compiler.MacroSyntax.lower_quote(inner), names, ctx, env)
 
   def elaborate_expr_typed({:async_operation, meta, _children}, _names, _ctx, _env),
-    do: {:error, {:unsupported_async, "`spawn` is not supported by the dependent runtime yet.", meta}}
+    do: {:error, unsupported_async_error(meta)}
 
   def elaborate_expr_typed({tag, meta, _}, _names, _ctx, _env) when tag in [:splice, :splice_group],
-    do: {:error, {:splice_outside_quote, tag, meta}}
+    do: {:error, splice_outside_quote_error(tag, meta)}
 
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
 
@@ -10121,16 +10121,34 @@ defmodule Cure.Elab.Elaborator do
     do: elaborate_expr(Cure.Compiler.MacroSyntax.lower_quote(inner), scope, env)
 
   def elaborate_expr({:async_operation, meta, _children}, _scope, _env),
-    do: {:error, {:unsupported_async, "`spawn` is not supported by the dependent runtime yet.", meta}}
+    do: {:error, unsupported_async_error(meta)}
 
   # A `$(e)` / `$(e ...)` splice reaching the elaborator as a bare node means it
   # sits outside any enclosing `quote` — a category error. Inside a quote,
   # `lower_quote/1` consumes the splice wrapper (only its inner expression
   # survives), so this clause fires only for an orphan splice.
   def elaborate_expr({tag, meta, _}, _scope, _env) when tag in [:splice, :splice_group],
-    do: {:error, {:splice_outside_quote, tag, meta}}
+    do: {:error, splice_outside_quote_error(tag, meta)}
 
   def elaborate_expr(other, _scope, _env), do: {:error, {:unsupported_expression, other}}
+
+  defp unsupported_async_error(meta) do
+    {:unsupported_async,
+     %{
+       primitive: :spawn,
+       stage: :dependent_runtime,
+       span: surface_expression_span({:async_operation, meta, []})
+     }}
+  end
+
+  defp splice_outside_quote_error(tag, meta) do
+    {:splice_outside_quote,
+     %{
+       form: tag,
+       stage: :elaboration,
+       span: surface_expression_span({tag, meta, []})
+     }}
+  end
 
   # The registered Sigma constructor name (canonically `:mk_pair`), resolved via the
   # builtin registry (§1.4) rather than hard-coded; defaults to `:mk_pair` when no

@@ -138,7 +138,7 @@ defmodule Cure.Compiler.QuasiquoteTest do
              end
              """)
 
-    assert {:splice_outside_quote, :splice, _meta} = Cure.Elab.Program.semantic_error(error)
+    assert {:splice_outside_quote, %{form: :splice}} = Cure.Elab.Program.semantic_error(error)
   end
 
   test "an orphan `$(xs ...)` group splice outside any quote is rejected" do
@@ -150,7 +150,7 @@ defmodule Cure.Compiler.QuasiquoteTest do
              end
              """)
 
-    assert {:splice_outside_quote, :splice_group, _meta} = Cure.Elab.Program.semantic_error(error)
+    assert {:splice_outside_quote, %{form: :splice_group}} = Cure.Elab.Program.semantic_error(error)
   end
 
   test "splicing a non-Syntax expression is a compile error" do

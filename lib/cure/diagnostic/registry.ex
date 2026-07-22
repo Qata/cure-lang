@@ -1330,18 +1330,23 @@ defmodule Cure.Diagnostic.Registry do
     "E107" => """
     E107: Unsupported Asynchronous Primitive
 
-    This asynchronous primitive is not available in the current Cure
-    runtime or execution context.
+    An asynchronous primitive such as `spawn` cannot be lowered by the
+    dependent runtime while preserving Cure's checked process and message
+    types. The diagnostic identifies the authored operation and the runtime
+    stage that rejected it.
 
-    Fix: use a supported actor or supervisor operation, or move the work to
-    an explicit asynchronous boundary.
+    Fix: express managed concurrency with an actor, FSM, or supervisor
+    declaration.
     """,
     "E108" => """
     E108: Splice Outside Quote
 
-    A splice was used where no quote exists to receive the generated syntax.
+    A scalar `$()` or repeated `$(... ...)` splice was used where no `quote`
+    exists to receive generated syntax. The parser-owned range includes the
+    splice opener, body, optional ellipsis, and closing parenthesis.
 
-    Fix: place the splice inside a quote or use an ordinary expression.
+    Fix: move the splice inside `quote ...`, or remove `$()` to evaluate an
+    ordinary expression.
     """,
     "E109" => """
     E109: Proof Chain Syntax Error

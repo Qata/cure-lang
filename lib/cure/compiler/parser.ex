@@ -13585,18 +13585,36 @@ defmodule Cure.Compiler.Parser do
       %Token{type: :ellipsis} ->
         state = advance(state)
 
-        {state, _close_token} =
+        {state, close_token} =
           expect_container_close(state, :rparen, :splice_group, open_token, [expr], false)
 
+        meta = put_splice_source_info(meta, open_token, close_token, expr)
         {{:splice_group, meta, [expr]}, state}
 
       _ ->
-        {state, _close_token} =
+        {state, close_token} =
           expect_container_close(state, :rparen, :splice, open_token, [expr], false)
 
+        meta = put_splice_source_info(meta, open_token, close_token, expr)
         {{:splice, meta, [expr]}, state}
     end
   end
+
+  defp put_splice_source_info(
+         meta,
+         %Token{span: %Cure.Diagnostic.Span{} = opener},
+         %Token{span: %Cure.Diagnostic.Span{} = closer},
+         expression
+       ) do
+    Metadata.put_source_info(meta, %SourceInfo{
+      whole: through_spans(opener, closer),
+      opener: opener,
+      closer: closer,
+      body: ast_source_span(expression)
+    })
+  end
+
+  defp put_splice_source_info(meta, _open_token, _close_token, _expression), do: meta
 
   # -- Send ------------------------------------------------------------------
 

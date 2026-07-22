@@ -189,7 +189,34 @@ defmodule Cure.Diagnostic.Adapter do
       title: "Unsupported asynchronous primitive",
       body: Doc.paragraph(message),
       primary: primary_label(opts, "use a supported asynchronous boundary"),
-      payload: %{message: message, meta: meta}
+      payload: %{primitive: :unknown, stage: :runtime}
+    )
+  end
+
+  def from_error({:unsupported_async, %{primitive: primitive} = details}, opts) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E107",
+      key: :unsupported_async,
+      severity: :error,
+      title: "`#{name_to_string(primitive)}` is unavailable in dependent code",
+      body:
+        Doc.paragraph(
+          "The dependent runtime cannot lower `#{name_to_string(primitive)}` while preserving Cure's checked process and message types. This is a runtime capability boundary, not a type error in the spawned expression."
+        ),
+      primary: pickup_label(span, :primary, "this asynchronous operation has no dependent-runtime lowering"),
+      suggestions: [
+        %Suggestion{
+          message: "Use an actor, FSM, or supervisor declaration for managed concurrency",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        primitive: primitive,
+        stage: Map.get(details, :stage, :dependent_runtime),
+        capability: :managed_concurrency
+      }
     )
   end
 
@@ -203,7 +230,32 @@ defmodule Cure.Diagnostic.Adapter do
       title: "Splice outside quote",
       body: Doc.paragraph("The `#{form}` splice has no surrounding quote to receive generated syntax."),
       primary: primary_label(opts, "place this splice inside a quote"),
-      payload: %{tag: tag, meta: meta}
+      payload: %{form: tag, stage: :elaboration}
+    )
+  end
+
+  def from_error({:splice_outside_quote, %{form: tag} = details}, opts)
+      when tag in [:splice, :splice_group] do
+    form = if tag == :splice_group, do: "$(expressions ...)", else: "$(expression)"
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E108",
+      key: :splice_outside_quote,
+      severity: :error,
+      title: "Splice has no enclosing quote",
+      body:
+        Doc.paragraph(
+          "`#{form}` inserts syntax into a surrounding `quote`, but this splice is in ordinary expression code. There is no quoted syntax tree here to receive its value."
+        ),
+      primary: pickup_label(span, :primary, "this splice is outside every `quote`"),
+      suggestions: [
+        %Suggestion{
+          message: "Move this splice inside `quote ...`, or remove `$()` to evaluate an ordinary expression",
+          applicability: :manual
+        }
+      ],
+      payload: %{form: tag, stage: Map.get(details, :stage, :elaboration)}
     )
   end
 
