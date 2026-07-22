@@ -2631,6 +2631,22 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:macro_nested_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        alternatives: Map.get(details, :alternatives, []),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:refinement_type_syntax, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -5256,6 +5272,12 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :macro_definition_entry_invalid}),
     do: "Macro declaration entry is invalid"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_example_entry_invalid}),
+    do: "Macro example entry is invalid"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_explain_point_invalid}),
+    do: "Macro explanation point is invalid"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "Explanation clause arrow is missing"
 
@@ -5632,7 +5654,6 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_parentheses}), do: "Parenthesized expression is not closed"
   defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_brackets}), do: "Bracketed expression is not closed"
   defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_braces}), do: "Braced expression is not closed"
-  defp syntax_problem_title(%SyntaxProblem{expected: :explain_point}), do: "Explanation clause needs a failure point"
   defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
 
   defp syntax_problem_context(%SyntaxProblem{
@@ -5824,6 +5845,14 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :macro_definition_entry_invalid, observed: observed}),
     do:
       "#{authored_syntax(observed)} cannot start an entry in a macro declaration. Use a syntax rule, family contract, expander, literal rule, explanation, failure, or opened category."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_example_entry_invalid, observed: observed}),
+    do:
+      "#{authored_syntax(observed)} cannot start a pinned macro example. Each line in this nested block must use `example use_site expands expected`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_explain_point_invalid, observed: observed}),
+    do:
+      "#{authored_syntax(observed)} cannot name a macro failure point. Use a failure category such as `Duration`, or `keyword \"every\"` for a literal token."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "An explanation clause needs `=>` between its failure point and message."
@@ -6300,10 +6329,6 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :unclosed_braces}),
     do: "This braced expression reaches the end of the source without its closing '}'."
 
-  defp syntax_problem_context(%SyntaxProblem{expected: :explain_point, observed: observed}),
-    do:
-      "#{String.capitalize(syntax_name(observed))} starts an explanation message, but each clause must first name a failure category or `keyword \"...\"`."
-
   defp syntax_problem_context(%SyntaxProblem{observed: :eof}),
     do: "The source ended while I was still parsing this construct."
 
@@ -6327,8 +6352,6 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_expected_doc(%SyntaxProblem{kind: kind})
        when kind in [:container_unclosed, :container_separator_missing, :container_trailing_separator],
        do: Doc.empty()
-
-  defp syntax_expected_doc(%SyntaxProblem{expected: :explain_point}), do: Doc.empty()
 
   defp syntax_expected_doc(%SyntaxProblem{} = problem) do
     expected = [problem.expected | problem.alternatives] |> Enum.reject(&is_nil/1) |> Enum.map(&syntax_name/1)
@@ -6466,6 +6489,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :macro_definition_entry_invalid}),
     do: "replace this with a valid macro declaration entry"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :macro_example_entry_invalid}),
+    do: "start this line with `example`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :macro_explain_point_invalid}),
+    do: "name the failure point before `=>`"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "insert `=>` before this explanation message"
@@ -6819,8 +6848,6 @@ defmodule Cure.Diagnostic.Adapter do
        when kind in [:unclosed_parentheses, :unclosed_brackets, :unclosed_braces],
        do: "the closing delimiter belongs here"
 
-  defp syntax_problem_label(%SyntaxProblem{expected: :explain_point}), do: "name the failure point before this arrow"
-
   defp syntax_problem_label(%SyntaxProblem{kind: :non_associative}),
     do: "this second operator makes the chain ambiguous"
 
@@ -7061,6 +7088,28 @@ defmodule Cure.Diagnostic.Adapter do
       pickup_label(opener, :secondary, "this macro declaration starts here"),
       pickup_label(previous, :secondary, previous_message)
     ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: kind, opener: %Span{} = opener, previous: previous},
+         primary_span
+       )
+       when kind in [:macro_example_entry_invalid, :macro_explain_point_invalid] do
+    {opener_message, previous_message} =
+      case kind do
+        :macro_example_entry_invalid ->
+          {"this syntax rule owns the example block", "the previous macro example ends here"}
+
+        :macro_explain_point_invalid ->
+          {"this explanation block starts here", "the previous explanation clause ends here"}
+      end
+
+    [pickup_label(opener, :secondary, opener_message), pickup_label(previous, :secondary, previous_message)]
     |> Enum.reject(fn
       nil -> true
       %Label{span: span} -> span == primary_span
@@ -8174,6 +8223,24 @@ defmodule Cure.Diagnostic.Adapter do
     ]
   end
 
+  defp syntax_insertions(%SyntaxProblem{kind: :macro_example_entry_invalid}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Write `example use_site expands expected` on this line",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :macro_explain_point_invalid}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Write `Category => message` or `keyword \"word\" => message`",
+        applicability: :manual
+      }
+    ]
+  end
+
   defp syntax_insertions(
          %SyntaxProblem{
            kind: :branch_arrow_missing,
@@ -8861,14 +8928,6 @@ defmodule Cure.Diagnostic.Adapter do
       }
     ]
 
-  defp syntax_insertions(%SyntaxProblem{expected: :explain_point}, %Span{}),
-    do: [
-      %Suggestion{
-        message: "Write `Category => message` or `keyword \"word\" => message`",
-        applicability: :manual
-      }
-    ]
-
   defp syntax_insertions(_problem, _span), do: []
 
   defp closing_delimiter_insertion(expected, span) do
@@ -9317,6 +9376,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_name(:failure_constructor), do: "a failure constructor call"
   defp syntax_name(:family_field), do: "a typed field"
   defp syntax_name(:syntax_family_production), do: "a declared family production"
+  defp syntax_name(:failure_category), do: "a failure category"
   defp syntax_name(:float), do: "a number"
   defp syntax_name(:string), do: "a string"
   defp syntax_name(:char), do: "a character"

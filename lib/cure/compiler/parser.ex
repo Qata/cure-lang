@@ -11550,7 +11550,7 @@ defmodule Cure.Compiler.Parser do
     state = expect_macro_rule_keyword(state, :becomes, :macro_rule_becomes_missing, kw_token)
 
     {template, state} = parse_expr(state, 0)
-    {examples, state} = parse_rule_examples(state)
+    {examples, state} = parse_rule_examples(state, kw_token)
     terminal_span = examples |> List.last() |> then(&(&1 && &1.source_span)) || ast_source_span(template)
 
     rule = %{
@@ -11591,7 +11591,7 @@ defmodule Cure.Compiler.Parser do
     state = expect_macro_rule_keyword(state, :by, :computed_rule_by_missing, kw_token)
 
     {elab, state} = parse_expr(state, 0)
-    {examples, state} = parse_rule_examples(state)
+    {examples, state} = parse_rule_examples(state, kw_token)
     terminal_span = examples |> List.last() |> then(&(&1 && &1.source_span)) || ast_source_span(elab)
 
     rule = %{
@@ -11708,13 +11708,13 @@ defmodule Cure.Compiler.Parser do
   # After a syntax rule's template, an OPTIONAL indented block of `example …`
   # lines (self-proving §5). Consumes the nested indent/dedent so the macro-body
   # loop stays at the rule level. Returns [] when no example block follows.
-  defp parse_rule_examples(state) do
+  defp parse_rule_examples(state, rule_token) do
     state = skip_macro_trivia(state)
 
     case peek(state) do
       %Token{type: :indent} ->
         state = advance(state)
-        {examples, state} = parse_example_lines(state, [])
+        {examples, state} = parse_example_lines(state, [], rule_token)
         state = expect_dedent(state)
         {examples, state}
 
@@ -11723,7 +11723,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_example_lines(state, acc) do
+  defp parse_example_lines(state, acc, rule_token) do
     state = skip_macro_trivia(state)
 
     case peek(state) do
@@ -11732,12 +11732,28 @@ defmodule Cure.Compiler.Parser do
 
       %Token{type: :identifier, value: "example"} ->
         {ex, state} = parse_one_example(state)
-        parse_example_lines(state, [ex | acc])
+        parse_example_lines(state, [ex | acc], rule_token)
 
-      other ->
-        state = add_error(state, {:expected, :example, :got, other.type, other.line, other.col, other.span})
+      observed ->
+        state =
+          add_error(
+            state,
+            {:macro_nested_syntax,
+             %{
+               kind: :macro_example_entry_invalid,
+               expected: :example,
+               observed: macro_separator_observed(observed),
+               token_type: observed.type,
+               span: observed.span,
+               opener_span: rule_token.span,
+               previous_span: acc |> List.first() |> then(&(&1 && &1.source_span)) || rule_token.span,
+               line: observed.line,
+               column: observed.col
+             }}
+          )
+
         # Recover: skip one token so a bad line does not eat the block.
-        parse_example_lines(advance(state), acc)
+        parse_example_lines(advance(state), acc, rule_token)
     end
   end
 
@@ -11860,7 +11876,7 @@ defmodule Cure.Compiler.Parser do
       case peek(state) do
         %Token{type: :indent} ->
           state = advance(state)
-          {cs, state} = parse_explain_clauses(state, [])
+          {cs, state} = parse_explain_clauses(state, [], kw)
           state = expect_dedent(state)
           {cs, state}
 
@@ -11876,7 +11892,7 @@ defmodule Cure.Compiler.Parser do
      }, state}
   end
 
-  defp parse_explain_clauses(state, acc) do
+  defp parse_explain_clauses(state, acc, explain_token) do
     state = skip_macro_trivia(state)
 
     case peek(state) do
@@ -11885,7 +11901,11 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         clause_start = peek(state)
-        {point, point_span, state} = parse_explain_point(state)
+
+        previous_span =
+          acc |> List.first() |> then(&(&1 && &1.source_span)) || explain_token.span
+
+        {point, point_span, state} = parse_explain_point(state, explain_token, previous_span)
         state = expect_explain_clause_arrow(state, clause_start, point_span)
         state = skip_macro_trivia(state)
         {body, state} = parse_expr(state, 0)
@@ -11897,7 +11917,7 @@ defmodule Cure.Compiler.Parser do
           source_span: macro_rule_source_span(clause_start, ast_source_span(body))
         }
 
-        parse_explain_clauses(state, [clause | acc])
+        parse_explain_clauses(state, [clause | acc], explain_token)
     end
   end
 
@@ -11937,7 +11957,7 @@ defmodule Cure.Compiler.Parser do
   # (a stray `=>` with no preceding point) would otherwise crash the whole parse
   # with a CaseClauseError — record a recoverable diagnostic instead and do NOT
   # advance past the offending token (so the caller's expect/2 reports cleanly).
-  defp parse_explain_point(state) do
+  defp parse_explain_point(state, explain_token, previous_span) do
     case peek(state) do
       %Token{type: :identifier, value: "keyword"} ->
         keyword_token = peek(state)
@@ -11950,10 +11970,24 @@ defmodule Cure.Compiler.Parser do
       %Token{type: :identifier, value: cat} = token ->
         {{:category, cat}, token.span, advance(state)}
 
-      other ->
-        error = {:expected, :explain_point, :got, other.type, other.line, other.col, other.span}
+      observed ->
+        error =
+          {:macro_nested_syntax,
+           %{
+             kind: :macro_explain_point_invalid,
+             expected: :failure_category,
+             alternatives: [:keyword],
+             observed: macro_separator_observed(observed),
+             token_type: observed.type,
+             span: observed.span,
+             opener_span: explain_token.span,
+             previous_span: previous_span,
+             line: observed.line,
+             column: observed.col
+           }}
+
         state = add_error(state, error)
-        {{:category, "?"}, other.span, state}
+        {{:category, "?"}, observed.span, state}
     end
   end
 

@@ -1,7 +1,8 @@
 # test/cure/compiler/macro_example_test.exs
 defmodule Cure.Compiler.MacroExampleTest do
   use ExUnit.Case, async: true
-  alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Compiler.{Errors, Lexer, Parser}
+  alias Cure.Diagnostic.Renderer
 
   defp parse!(src) do
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
@@ -40,7 +41,55 @@ defmodule Cure.Compiler.MacroExampleTest do
     assert syntax_rule(node).examples == []
   end
 
-  alias Cure.Compiler.{MacroValidate, Errors}
+  test "an invalid nested example line reports the owning syntax rule and exact source" do
+    source = "macro Now\n  syntax now becomes 1\n    oops\n"
+
+    {:ok, tokens} = Lexer.tokenize(source, file: "example.cure", emit_events: false)
+    assert {:error, [error]} = Parser.parse(tokens, emit_events: false)
+
+    assert {:macro_nested_syntax,
+            %{
+              kind: :macro_example_entry_invalid,
+              expected: :example,
+              observed: "oops",
+              token_type: :identifier,
+              span: %Cure.Diagnostic.Span{} = span,
+              opener_span: %Cure.Diagnostic.Span{},
+              previous_span: %Cure.Diagnostic.Span{},
+              line: 3,
+              column: 5
+            }} = error
+
+    assert span.start_column == 5
+    assert span.end_column == 9
+
+    {diagnostic, registry} = Errors.to_diagnostic({:parse_error, [error]}, "example.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- MACRO EXAMPLE ENTRY IS INVALID [E094] -------------------------- example.cure
+
+             'oops' cannot start a pinned macro example. Each line in this nested block must
+             use `example use_site expands expected`.
+
+             A valid continuation here starts with 'example'.
+
+             at example.cure:3:5
+             2 |   syntax now becomes 1
+               |   ------ this syntax rule owns the example block
+             3 |     oops
+               |     ^^^^ start this line with `example`
+
+             Hint: Write `example use_site expands expected` on this line
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 2, "character" => 4},
+             "end" => %{"line" => 2, "character" => 8}
+           }
+  end
+
+  alias Cure.Compiler.MacroValidate
 
   defp macro_def!(src) do
     node = parse!(src)

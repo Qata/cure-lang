@@ -41,8 +41,21 @@ defmodule Cure.Compiler.MacroExplainTest do
 
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
 
-    assert [{:expected, :explain_point, :got, :fat_arrow, 4, 5, %Cure.Diagnostic.Span{} = span} = error] =
-             errors
+    assert [
+             {:macro_nested_syntax,
+              %{
+                kind: :macro_explain_point_invalid,
+                expected: :failure_category,
+                alternatives: [:keyword],
+                observed: "=>",
+                token_type: :fat_arrow,
+                span: %Cure.Diagnostic.Span{} = span,
+                opener_span: %Cure.Diagnostic.Span{},
+                previous_span: %Cure.Diagnostic.Span{},
+                line: 4,
+                column: 5
+              }} = error
+           ] = errors
 
     assert span.start_column == 5
     assert span.end_column == 7
@@ -51,14 +64,18 @@ defmodule Cure.Compiler.MacroExplainTest do
 
     assert Renderer.plain(diagnostic, registry, width: 80) ==
              String.trim_trailing("""
-             -- EXPLANATION CLAUSE NEEDS A FAILURE POINT [E094] ---------------- explain.cure
+             -- MACRO EXPLANATION POINT IS INVALID [E094] ---------------------- explain.cure
 
-             '=>' starts an explanation message, but each clause must first name a failure
-             category or `keyword "..."`.
+             '=>' cannot name a macro failure point. Use a failure category such as
+             `Duration`, or `keyword "every"` for a literal token.
+
+             A valid continuation here starts with a failure category or a keyword.
 
              at explain.cure:4:5
+             3 |   explain
+               |   ------- this explanation block starts here
              4 |     => "oops"
-               |     ^^ name the failure point before this arrow
+               |     ^^ name the failure point before `=>`
 
              Hint: Write `Category => message` or `keyword "word" => message`
              """)
