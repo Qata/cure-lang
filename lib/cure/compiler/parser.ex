@@ -11074,8 +11074,7 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{value: value} = token when value in ["where", :where] ->
         interface_start = peek_at(state, 1)
-        {interface, state} = parse_dotted_name(advance(state))
-        interface_end = authored_token(state)
+        {interface, interface_end, state} = parse_dotted_name_owned(advance(state))
 
         interface_span =
           case {interface_start, interface_end} do
