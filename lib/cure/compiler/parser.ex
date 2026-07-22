@@ -2602,6 +2602,9 @@ defmodule Cure.Compiler.Parser do
   defp subst_lift_module_value(%Cure.MetaAST.SourceInfo{} = value, _bindings, _state, _module_hole, _module_name),
     do: value
 
+  defp subst_lift_module_value(%Cure.Diagnostic.Span{} = value, _bindings, _state, _module_hole, _module_name),
+    do: value
+
   defp subst_lift_module_value(value, bindings, state, module_hole, module_name) when is_map(value) do
     value =
       Map.new(value, fn {key, item} ->
@@ -10547,8 +10550,7 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
     state = advance(state)
     name_token = peek(state)
-    {name, state} = parse_dotted_name(state)
-    name_end_token = authored_token(state)
+    {name, name_end_token, state} = parse_dotted_name_owned(state)
 
     name =
       case macro_module_marker(name) do
@@ -10559,41 +10561,49 @@ defmodule Cure.Compiler.Parser do
 
     state = skip_newlines(state)
 
-    {behaviour, callbacks, declarations, state} =
+    {behaviour, behaviour_span, callbacks, declarations, state} =
       case peek(state) do
         %Token{type: :indent} ->
-          parse_lift_module_block(advance(state), nil, [], [])
+          parse_lift_module_block(advance(state), nil, nil, [], [])
 
         _ ->
-          {nil, [], [], state}
+          {nil, nil, [], [], state}
       end
+
+    source_provenance = %{file: state.file, line: token.line, col: token.col}
 
     meta = [
       module: name,
       behaviour: behaviour,
       callbacks: callbacks,
       declarations: declarations,
-      source_provenance: %{file: state.file, line: token.line, col: token.col},
       line: token.line,
       col: token.col
     ]
 
-    meta = put_lift_module_source_info(meta, token, name_token, name_end_token, state)
+    name_span = through_spans(name_token.span, name_end_token.span) || name_token.span
+
+    branch_spans =
+      (Enum.map(callbacks, &Map.get(&1, :source_span)) ++ Enum.map(declarations, &ast_source_span/1))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.sort_by(& &1.start_byte)
+
+    terminal_span =
+      [behaviour_span | branch_spans]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.max_by(& &1.end_byte, fn -> name_span end)
+
+    meta =
+      Metadata.put_source_info(meta, %SourceInfo{
+        whole: through_spans(token.span, terminal_span) || token.span,
+        opener: token.span,
+        name: name_span,
+        branches: branch_spans,
+        fields: maybe_put_source_field(%{}, :behaviour, behaviour_span)
+      })
+      |> Keyword.put(:source_provenance, source_provenance)
 
     {{:lift_module, meta, []}, state}
-  end
-
-  defp put_lift_module_source_info(meta, first, name_start, name_end, state) do
-    with %Token{span: %Cure.Diagnostic.Span{} = first_span} <- first,
-         %Token{span: %Cure.Diagnostic.Span{} = name_start_span} <- name_start,
-         %Token{span: %Cure.Diagnostic.Span{} = name_end_span} <- name_end,
-         %Token{span: %Cure.Diagnostic.Span{} = last_span} <- authored_token(state),
-         {:ok, whole} <- Range.through(first_span, last_span),
-         {:ok, name} <- Range.through(name_start_span, name_end_span) do
-      Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name})
-    else
-      _ -> meta
-    end
   end
 
   # A lower-case single-segment name in a macro template is a substituted
@@ -10619,29 +10629,30 @@ defmodule Cure.Compiler.Parser do
 
   defp macro_module_marker(_name), do: :none
 
-  defp parse_lift_module_block(state, behaviour, callbacks, declarations) do
+  defp parse_lift_module_block(state, behaviour, behaviour_span, callbacks, declarations) do
     state = skip_newlines(state)
 
     case peek(state) do
       %Token{type: :dedent} ->
-        {behaviour, Enum.reverse(callbacks), Enum.reverse(declarations), advance(state)}
+        {behaviour, behaviour_span, Enum.reverse(callbacks), Enum.reverse(declarations), advance(state)}
 
       %Token{type: :eof} ->
-        {behaviour, Enum.reverse(callbacks), Enum.reverse(declarations), state}
+        {behaviour, behaviour_span, Enum.reverse(callbacks), Enum.reverse(declarations), state}
 
-      %Token{type: :identifier, value: "behaviour"} ->
+      %Token{type: :identifier, value: "behaviour"} = behaviour_keyword ->
         state = advance(state)
         behaviour_token = peek(state)
         behaviour = String.to_atom(to_string(behaviour_token.value))
-        parse_lift_module_block(advance(state), behaviour, callbacks, declarations)
+        span = through_spans(behaviour_keyword.span, behaviour_token.span) || behaviour_keyword.span
+        parse_lift_module_block(advance(state), behaviour, span, callbacks, declarations)
 
       %Token{type: :identifier, value: "callback"} ->
         {callback, state} = parse_lift_callback(state, behaviour)
-        parse_lift_module_block(state, behaviour, [callback | callbacks], declarations)
+        parse_lift_module_block(state, behaviour, behaviour_span, [callback | callbacks], declarations)
 
       _ ->
         {declaration, state} = parse_expr_or_block(state)
-        parse_lift_module_block(state, behaviour, callbacks, [declaration | declarations])
+        parse_lift_module_block(state, behaviour, behaviour_span, callbacks, [declaration | declarations])
     end
   end
 
@@ -10655,19 +10666,33 @@ defmodule Cure.Compiler.Parser do
     {params, state} =
       parse_macro_typed_parameters(state, token, name_token, :lift_callback_parameters, name)
 
-    {return_type, state} =
+    {return_type, returns_token, state} =
       case peek(state) do
-        %Token{type: :identifier, value: "returns"} ->
+        %Token{type: :identifier, value: "returns"} = returns_token ->
           {return_type, state} = parse_type_expr(advance(state))
-          {return_type, state}
+          {return_type, returns_token, state}
 
         _ ->
-          {nil, state}
+          {nil, nil, state}
       end
 
-    state = expect_lift_callback_body_separator(state, token, name_token, name, return_type)
+    {separator_token, state} = expect_lift_callback_body_separator(state, token, name_token, name, return_type)
     state = skip_newlines(state)
     {body, state} = parse_expr_or_block(state)
+
+    parameter_spans = params |> Enum.map(&ast_source_span/1) |> Enum.reject(&is_nil/1)
+    body_span = ast_source_span(body)
+
+    source_info = %SourceInfo{
+      whole: through_spans(token.span, body_span || name_token.span) || token.span,
+      opener: token.span,
+      name: name_token.span,
+      arguments: parameter_spans,
+      annotation: ast_source_span(return_type),
+      operator: separator_token && separator_token.span,
+      body: body_span,
+      fields: maybe_put_source_field(%{}, :returns, returns_token)
+    }
 
     callback = %{
       name: name,
@@ -10675,6 +10700,8 @@ defmodule Cure.Compiler.Parser do
       params: params,
       return_type: return_type,
       body: body,
+      source_span: source_info.whole,
+      source_info: source_info,
       line: token.line,
       callback_context: %{
         behaviour: behaviour,
@@ -10697,8 +10724,8 @@ defmodule Cure.Compiler.Parser do
     expected = if return_type, do: :assign, else: :arrow
 
     case expect_token(state, expected) do
-      {:ok, _separator, next_state} ->
-        next_state
+      {:ok, separator, next_state} ->
+        {separator, next_state}
 
       {:error, next_state} ->
         [_generic | rest] = next_state.errors
@@ -10722,7 +10749,7 @@ defmodule Cure.Compiler.Parser do
              column: observed.col
            }}
 
-        %{next_state | errors: [error | rest]}
+        {nil, %{next_state | errors: [error | rest]}}
     end
   end
 

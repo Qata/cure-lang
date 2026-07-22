@@ -471,6 +471,39 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, Map.fetch!(info.fields, {:lower_than, :whole})) == "lower_than: composition"
   end
 
+  test "lifted modules own dotted names, behaviour, callbacks, and declarations" do
+    source =
+      "lift module Cure.Generated.Worker\n" <>
+        "  behaviour GenServer\n" <>
+        "  callback init(arg: Int) returns Int = arg\n" <>
+        "  fn helper(x: Int) -> Int = x\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "lift.cure", emit_events: false)
+
+    assert {:ok, {:lift_module, meta, []}} =
+             Parser.parse(tokens, file: "lift.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == String.trim_trailing(source)
+    assert slice(source, info.opener) == "lift"
+    assert slice(source, info.name) == "Cure.Generated.Worker"
+    assert slice(source, Map.fetch!(info.fields, :behaviour)) == "behaviour GenServer"
+
+    assert Enum.map(info.branches, &slice(source, &1)) == [
+             "callback init(arg: Int) returns Int = arg",
+             "fn helper(x: Int) -> Int = x"
+           ]
+
+    [callback] = Keyword.fetch!(meta, :callbacks)
+    callback_info = callback.source_info
+    assert slice(source, callback_info.name) == "init"
+    assert Enum.map(callback_info.arguments, &slice(source, &1)) == ["arg: Int"]
+    assert slice(source, Map.fetch!(callback_info.fields, :returns)) == "returns"
+    assert slice(source, callback_info.annotation) == "Int"
+    assert slice(source, callback_info.operator) == "="
+    assert slice(source, callback_info.body) == "arg"
+  end
+
   test "selective imports retain their exact path, selection, alias, and whole ranges" do
     source = "use Std.List.{map, fold} as Lists\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "selective.cure", emit_events: false)
