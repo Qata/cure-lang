@@ -41,7 +41,11 @@ defmodule Cure.Elab.Implementation do
          {:ok, method_map, mangled_fns} <-
            build_methods(desc, iface, head, for_name, for_type, body, implementation_span, env),
          ref = %{iface: iface, head: head, methods: method_map, as: as_name},
-         {:ok, env1} <- register_instance(env, iface, head, as_name, ref),
+         {:ok, env1} <-
+           register_instance(env, iface, head, as_name, ref, %{
+             for: for_name,
+             span: implementation_span
+           }),
          {:ok, env2} <- register_signatures(mangled_fns, env1),
          {:ok, env3} <- bind_named_instance(env2, desc, iface, head, as_name, ref) do
       {:ok, env3, mangled_fns, superinterface_obligations(iface, desc, head, for_name, implementation_span)}
@@ -444,12 +448,12 @@ defmodule Cure.Elab.Implementation do
 
   # -- registration -----------------------------------------------------------
 
-  defp register_instance(env, iface, head, as_name, ref) do
+  defp register_instance(env, iface, head, as_name, ref, origin) do
     coherence = Env.coherence(env) || Coherence.new()
 
     result =
       case as_name do
-        nil -> Coherence.register_anon(coherence, iface, head, ref)
+        nil -> Coherence.register_anon(coherence, iface, head, ref, origin)
         name -> Coherence.register_named(coherence, String.to_atom(name), {iface, head}, ref)
       end
 

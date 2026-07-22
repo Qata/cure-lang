@@ -15,11 +15,12 @@ defmodule Cure.Elab.Coherence do
   abstract sites.
   """
 
-  defstruct anon: %{}, named: %{}
+  defstruct anon: %{}, named: %{}, anon_origins: %{}
 
   @type t :: %__MODULE__{
           anon: %{{atom(), atom()} => map()},
-          named: %{atom() => map()}
+          named: %{atom() => map()},
+          anon_origins: %{{atom(), atom()} => map()}
         }
 
   @doc "An empty registry."
@@ -31,13 +32,35 @@ defmodule Cure.Elab.Coherence do
   the same pair is an overlap error.
   """
   @spec register_anon(t(), atom(), atom(), map()) :: {:ok, t()} | {:error, term()}
-  def register_anon(%__MODULE__{anon: anon} = c, iface, head, ref) do
+  def register_anon(%__MODULE__{} = c, iface, head, ref) do
+    register_anon(c, iface, head, ref, %{})
+  end
+
+  @doc "Register an anonymous instance while retaining inert source context for overlap diagnostics."
+  @spec register_anon(t(), atom(), atom(), map(), map()) :: {:ok, t()} | {:error, term()}
+  def register_anon(%__MODULE__{anon: anon, anon_origins: origins} = c, iface, head, ref, origin) do
     key = {iface, head}
 
     if Map.has_key?(anon, key) do
-      {:error, {:overlapping_instance, iface, head}}
+      first = Map.get(origins, key, %{})
+
+      {:error,
+       {:overlapping_instance,
+        %{
+          interface: iface,
+          head: head,
+          first_span: Map.get(first, :span),
+          second_span: Map.get(origin, :span),
+          first_for: Map.get(first, :for),
+          second_for: Map.get(origin, :for)
+        }}}
     else
-      {:ok, %{c | anon: Map.put(anon, key, ref)}}
+      {:ok,
+       %{
+         c
+         | anon: Map.put(anon, key, ref),
+           anon_origins: Map.put(origins, key, origin)
+       }}
     end
   end
 
@@ -87,6 +110,9 @@ defmodule Cure.Elab.Coherence do
   def merge(nil, other), do: other
   def merge(other, nil), do: other
 
-  def merge(%__MODULE__{anon: a1, named: n1}, %__MODULE__{anon: a2, named: n2}),
-    do: %__MODULE__{anon: Map.merge(a1, a2), named: Map.merge(n1, n2)}
+  def merge(
+        %__MODULE__{anon: a1, named: n1, anon_origins: o1},
+        %__MODULE__{anon: a2, named: n2, anon_origins: o2}
+      ),
+      do: %__MODULE__{anon: Map.merge(a1, a2), named: Map.merge(n1, n2), anon_origins: Map.merge(o1, o2)}
 end

@@ -2667,10 +2667,40 @@ defmodule Cure.Elab.Program do
     # and `import_env/2` accumulates left-to-right — so only a genuine DISAGREEMENT
     # is an overlap. Named instances are exempt from uniqueness by design but their
     # names must still not collide with a different instance.
-    with {:ok, anon} <- merge_instances(left.anon, right.anon, :overlapping_instance),
+    with {:ok, anon, anon_origins} <- merge_anon_instances(left, right),
          {:ok, named} <- merge_instances(left.named, right.named, :overlapping_named_instance) do
-      {:ok, %Coherence{anon: anon, named: named}}
+      {:ok, %Coherence{anon: anon, named: named, anon_origins: anon_origins}}
     end
+  end
+
+  defp merge_anon_instances(%Coherence{} = left, %Coherence{} = right) do
+    Enum.reduce_while(right.anon, {:ok, left.anon, left.anon_origins}, fn {key = {iface, head}, ref},
+                                                                          {:ok, anon, origins} ->
+      case Map.fetch(anon, key) do
+        {:ok, ^ref} ->
+          origin = Map.get(origins, key) || Map.get(right.anon_origins, key, %{})
+          {:cont, {:ok, anon, Map.put(origins, key, origin)}}
+
+        {:ok, _other} ->
+          first = Map.get(origins, key, %{})
+          second = Map.get(right.anon_origins, key, %{})
+
+          {:halt,
+           {:error,
+            {:overlapping_instance,
+             %{
+               interface: iface,
+               head: head,
+               first_span: Map.get(first, :span),
+               second_span: Map.get(second, :span),
+               first_for: Map.get(first, :for),
+               second_for: Map.get(second, :for)
+             }}}}
+
+        :error ->
+          {:cont, {:ok, Map.put(anon, key, ref), Map.put(origins, key, Map.get(right.anon_origins, key, %{}))}}
+      end
+    end)
   end
 
   defp merge_instances(left, right, error_tag) do
@@ -2683,7 +2713,6 @@ defmodule Cure.Elab.Program do
     end)
   end
 
-  defp overlap_error(:overlapping_instance, {iface, head}), do: {:overlapping_instance, iface, head}
   defp overlap_error(:overlapping_named_instance, name), do: {:overlapping_named_instance, name}
 
   # Two passes so that forward references and mutual recursion resolve: first
@@ -3521,8 +3550,15 @@ defmodule Cure.Elab.Program do
             do: key
 
     case keys_to_drop do
-      [] -> env
-      _ -> Env.put_coherence(env, %{coherence | anon: Map.drop(coherence.anon, keys_to_drop)})
+      [] ->
+        env
+
+      _ ->
+        Env.put_coherence(env, %{
+          coherence
+          | anon: Map.drop(coherence.anon, keys_to_drop),
+            anon_origins: Map.drop(coherence.anon_origins, keys_to_drop)
+        })
     end
   end
 
@@ -3582,7 +3618,7 @@ defmodule Cure.Elab.Program do
             # derived instance whose head matches a hand-written one is rejected
             # BEFORE `register_signatures` runs — the hand-written method body is
             # never overwritten). Leave it authoritative, derive nothing.
-            {:error, {:overlapping_instance, :Equatable, _head}} ->
+            {:error, {:overlapping_instance, %{interface: :Equatable}}} ->
               {:cont, {:ok, acc, fns}}
 
             {:error, _} = err ->

@@ -164,6 +164,56 @@ defmodule Cure.Elab.ImplementationDiagnosticTest do
     assert {:ok, _environment} = Program.elaborate(fixed, file: "value_head_fixed.cure")
   end
 
+  test "overlapping anonymous implementations label both declarations" do
+    source =
+      "mod M\n  interface Eqs(a)\n    fn eqs(x: a, y: a) -> Bool = true\n  implementation Eqs for Int\n  implementation Eqs for Int\nend\n"
+
+    {diagnostic, registry, error} = diagnostic(source, "overlap.cure")
+
+    assert {:overlapping_instance,
+            %{
+              interface: :Eqs,
+              head: head,
+              first_span: %Cure.Diagnostic.Span{},
+              second_span: %Cure.Diagnostic.Span{}
+            }} = Program.semantic_error(error)
+
+    assert Cure.Elab.Name.base(head) == "Int"
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- IMPLEMENTATIONS OVERLAP [E105] --------------------------------- overlap.cure
+
+             There are two anonymous implementations of `Eqs` for `Int`. Cure requires one
+             globally coherent implementation so every call selects the same behavior.
+
+             at overlap.cure:5:3
+             4 |   implementation Eqs for Int
+               |   -------------------------- the first `Eqs` implementation for `Int` is here
+             5 |   implementation Eqs for Int
+               |   ^^^^^^^^^^^^^^^^^^^^^^^^^^ this second implementation conflicts with the first
+
+             Hint: Remove one implementation, or give one an `as` name and select it explicitly
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert lsp["range"] == range(4, 2, 28)
+
+    assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+             range(3, 2, 28)
+           ]
+
+    assert lsp["data"]["payload"] == %{
+             "head" => "Int",
+             "head_id" => "Std.Int#Int",
+             "interface" => "Eqs",
+             "kind" => "overlapping_instance"
+           }
+
+    fixed = String.replace(source, "  implementation Eqs for Int\nend", "end")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "overlap_fixed.cure")
+  end
+
   defp diagnostic(source, file) do
     assert {:error, error} = Program.elaborate(source, file: file)
     {diagnostic, registry} = Errors.to_diagnostic(error, file, source)

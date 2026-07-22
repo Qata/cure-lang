@@ -23,7 +23,7 @@ defmodule Cure.Elab.ImplementationElabTest do
   end
 
   test "a duplicate anonymous instance is an overlap error" do
-    assert {:error, {:overlapping_instance, :Eqs, :"Std.Int#Int"}} =
+    assert {:error, {:overlapping_instance, %{interface: :Eqs, head: :"Std.Int#Int"}}} =
              Program.elaborate("""
              mod M
                interface Eqs(a)

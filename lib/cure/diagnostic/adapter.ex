@@ -114,6 +114,46 @@ defmodule Cure.Diagnostic.Adapter do
     declaration_conflict(:overlapping_instance, %{interface: interface, head: head}, opts)
   end
 
+  def from_error({:overlapping_instance, %{interface: interface, head: canonical_head} = details}, opts) do
+    interface = name_to_string(interface)
+    head = name_to_string(Map.get(details, :second_for) || Cure.Elab.Name.base(canonical_head))
+    primary_span = Map.get(details, :second_span) || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(details, :first_span) do
+        %Span{} = span when span != primary_span ->
+          [pickup_label(span, :secondary, "the first `#{interface}` implementation for `#{head}` is here")]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Implementations overlap",
+      body:
+        Doc.paragraph(
+          "There are two anonymous implementations of `#{interface}` for `#{head}`. Cure requires one globally coherent implementation so every call selects the same behavior."
+        ),
+      primary: pickup_label(primary_span, :primary, "this second implementation conflicts with the first"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Remove one implementation, or give one an `as` name and select it explicitly",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :overlapping_instance,
+        interface: interface,
+        head: head,
+        head_id: name_to_string(canonical_head)
+      }
+    )
+  end
+
   def from_error({:overlapping_named_instance, name, interface, head}, opts) do
     declaration_conflict(
       :overlapping_named_instance,
