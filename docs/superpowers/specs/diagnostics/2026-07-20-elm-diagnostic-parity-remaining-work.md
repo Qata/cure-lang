@@ -239,6 +239,36 @@ Suggestion ranking must prefer immediately usable candidates, then namespace,
 arity, visibility, qualification/import cost, and edit distance. The message
 states when a candidate needs qualification or an import.
 
+Elm reference behavior is part of this deliverable. The equivalent of
+`Reporting.Suggest` must be a deterministic, pure ranking helper that applies
+restricted Damerau-Levenshtein distance after semantic filtering and compares
+names case-insensitively for ranking. It must not search arbitrary source text
+or let edit distance override namespace, visibility, arity, qualification, or
+import usability.
+
+The producer-specific candidate sets are also required:
+
+- unknown values, types, constructors, modules, members, and exports rank only
+  candidates visible in the relevant namespace; qualified alternatives retain
+  their owner and state whether an import or qualification is required;
+- record-field typos rank fields from the actual record shape and may show the
+  nearest replacement plus nearby fields; a missing-field or incompatible-root
+  error must not invent a rename candidate;
+- arity failures may suggest only declarations whose callable shape can satisfy
+  the observed application, and must preserve the argument/application range;
+- duplicate, ambiguous, inaccessible, and wrong-namespace errors may list
+  candidates for explanation but must not mark them as directly applicable
+  edits;
+- machine data retains the candidate identity, namespace, owner, qualification
+  or import requirement, and source origin. Human output may cap the displayed
+  list (Elm commonly shows the nearest few), but renderers must not recompute
+  eligibility or ranking independently.
+
+This workstream does not implement typed-hole completion, case generation, or
+hole-specific code actions. Those are a separate future feature; ordinary
+diagnostic metadata here must remain sufficient for source ranges and
+provenance without storing candidate sets in the MetaAST.
+
 ### Gate
 
 Every unknown-name class identifies the offender and its namespace/import

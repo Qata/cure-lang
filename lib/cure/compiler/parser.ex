@@ -5173,7 +5173,7 @@ defmodule Cure.Compiler.Parser do
           previous =
             Map.get(context, :previous_span) ||
               elements |> List.last() |> first_node_source_span() ||
-              open_token.span
+              previous_authored_span(next_state, open_token.span)
 
           span =
             if kind == :container_separator_missing or observed.type == :newline or closing_boundary? do
@@ -5208,6 +5208,25 @@ defmodule Cure.Compiler.Parser do
         else
           {next_state, nil}
         end
+    end
+  end
+
+  # Recovery diagnostics sometimes parse scalar elements (for example names in
+  # an import list) which deliberately have no AST metadata. Recover their
+  # exact ownership from the token immediately before the observed token. This
+  # is not used to construct successful AST ranges.
+  defp previous_authored_span(state, fallback) do
+    state.tokens
+    |> Tuple.to_list()
+    |> Enum.take(state.pos)
+    |> Enum.reverse()
+    |> Enum.find(fn
+      %Token{type: type} -> type not in [:newline, :indent, :dedent]
+      _ -> false
+    end)
+    |> case do
+      %Token{span: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> fallback
     end
   end
 

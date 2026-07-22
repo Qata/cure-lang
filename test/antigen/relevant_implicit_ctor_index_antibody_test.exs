@@ -74,7 +74,7 @@ defmodule Antigen.RelevantImplicitCtorIndexAntibodyTest do
     assert context.expectation_origin == :trusted_declaration_check
     assert context.expression_category == :relevance_check
     assert context.span.start_line == 6
-    assert context.span.start_column == 6
+    assert context.span.start_column == 41
   end
 
   # A relevant implicit appearing in no argument / index — unsolvable at construction.
