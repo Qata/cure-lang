@@ -321,9 +321,25 @@ defmodule Cure.Compiler.SourceSpansTest do
     interface_info = Metadata.source_info(elem(interface, 1))
 
     assert slice(source, proto_info.whole) == "proto Show(T)\n  fn show(x: T) -> String"
+    assert slice(source, proto_info.opener) == "proto"
     assert slice(source, proto_info.name) == "Show"
+    assert slice(source, Map.fetch!(proto_info.fields, :type_parameters)) == "(T)"
+    assert Enum.map(proto_info.branches, &slice(source, &1)) == ["fn show(x: T) -> String"]
     assert slice(source, interface_info.whole) == "interface Eq(T)\n  fn eq(x: T, y: T) -> Bool"
     assert slice(source, interface_info.name) == "Eq"
+  end
+
+  test "an empty protocol range ends at its authored header" do
+    source = "proto Empty(T)\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "empty_proto.cure", emit_events: false)
+
+    assert {:ok, {:container, meta, []}} =
+             Parser.parse(tokens, file: "empty_proto.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == "proto Empty(T)"
+    assert slice(source, Map.fetch!(info.fields, :type_parameters)) == "(T)"
+    assert info.branches == []
   end
 
   test "record declaration fields retain authored parameter ranges" do

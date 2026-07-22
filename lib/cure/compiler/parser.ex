@@ -9802,23 +9802,24 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     # Type params: (T) or (T, U)
-    {type_params, state} =
+    {type_params, type_parameter_span, state} =
       case peek(state) do
         %Token{type: :lparen} ->
           open_token = peek(state)
           state = advance(state)
           {tp, state} = parse_name_list(state, :rparen)
 
-          {state, _close_token} =
+          {state, close_token} =
             expect_container_close(state, :rparen, :type_parameters, open_token, tp, true, %{
               declaration: name,
               declaration_kind: :protocol
             })
 
-          {tp, state}
+          span = through_spans(open_token.span, close_token && close_token.span) || open_token.span
+          {tp, span, state}
 
         _ ->
-          {[], state}
+          {[], nil, state}
       end
 
     state = skip_newlines(state)
@@ -9832,7 +9833,19 @@ defmodule Cure.Compiler.Parser do
       col: token.col
     ]
 
-    meta = put_container_source_info(meta, token, name_token, name_token, state)
+    branches = body |> Enum.map(&ast_source_span/1) |> Enum.reject(&is_nil/1)
+    terminal_span = List.last(branches) || type_parameter_span || name_token.span
+    source_fields = if type_parameter_span, do: %{type_parameters: type_parameter_span}, else: %{}
+
+    meta =
+      Metadata.put_source_info(meta, %SourceInfo{
+        whole: through_spans(token.span, terminal_span) || token.span,
+        opener: token.span,
+        name: name_token.span,
+        branches: branches,
+        fields: source_fields
+      })
+
     ast = {:container, meta, body}
     {ast, state}
   end
