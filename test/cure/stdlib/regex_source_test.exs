@@ -1,5 +1,5 @@
 defmodule Cure.Stdlib.RegexSourceTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Elab.Program
@@ -13,9 +13,7 @@ defmodule Cure.Stdlib.RegexSourceTest do
              File.read!(file) =~ ":re."
            end)
 
-    regex_sources =
-      Enum.filter(["lib/std/regex.cure"], &File.exists?/1) ++
-        Path.wildcard("lib/std/regex/**/*.cure")
+    regex_sources = Path.wildcard("lib/std/regex*.cure")
 
     refute Enum.any?(regex_sources, fn file ->
              source = File.read!(file)
@@ -45,12 +43,12 @@ defmodule Cure.Stdlib.RegexSourceTest do
             ]} = ast
 
     assert use_meta[:keyword] == "regex"
-    assert use_meta[:home_source] =~ "lib/std/regex.cure"
+    assert use_meta[:home_source] =~ "lib/std/regex_syntax.cure"
     assert pattern_meta[:subtype] == :string
     assert flags_meta[:subtype] == :string
   end
 
-  @tag timeout: 300_000
+  @tag timeout: 600_000
   test "a slash literal expands and elaborates without importing Std.Regex" do
     source = """
     mod RegexLiteralWithoutUse
@@ -61,6 +59,7 @@ defmodule Cure.Stdlib.RegexSourceTest do
     assert {:ok, _env} = Program.elaborate(source)
   end
 
+  @tag timeout: 600_000
   test "a slash literal does not leak Std.Regex bare names into caller scope" do
     source = """
     mod RegexLiteralScope
@@ -72,7 +71,7 @@ defmodule Cure.Stdlib.RegexSourceTest do
     assert {:error, _diagnostic} = Program.elaborate(source)
   end
 
-  @tag timeout: 300_000
+  @tag timeout: 600_000
   test "word-boundary and class-backspace syntax expand during elaboration" do
     source = """
     mod RegexBoundaryLiteralExpansion

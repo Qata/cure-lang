@@ -1554,6 +1554,53 @@ defmodule Cure.Elab.Program do
 
   def env_with_macro_home(caller, _path), do: caller
 
+  @doc false
+  @spec env_with_generated_dependencies(Env.t(), term()) :: Env.t()
+  def env_with_generated_dependencies(%Env{} = caller, ast) do
+    with_loader_session(fn ->
+      sources = generated_qualified_sources(ast)
+
+      case load_dependency_env(sources) do
+        {:ok, generated} ->
+          case merge_env(generated, caller) do
+            {:ok, merged} -> %{merged | import_modules: caller.import_modules}
+            {:error, _} -> caller
+          end
+
+        {:error, _} ->
+          caller
+      end
+    end)
+  end
+
+  defp generated_qualified_sources({:function_call, meta, children}) when is_list(meta) do
+    own =
+      if is_binary(Keyword.get(meta, :macro_home_source)) do
+        case Keyword.get(meta, :name) do
+          name when is_binary(name) ->
+            case String.split(name, ".") do
+              parts when length(parts) > 1 -> [parts |> Enum.drop(-1) |> Enum.join(".")]
+              _ -> []
+            end
+
+          _ ->
+            []
+        end
+      else
+        []
+      end
+
+    own ++ generated_qualified_sources(children)
+  end
+
+  defp generated_qualified_sources({_tag, _meta, children}) when is_list(children),
+    do: generated_qualified_sources(children)
+
+  defp generated_qualified_sources(values) when is_list(values),
+    do: values |> Enum.flat_map(&generated_qualified_sources/1) |> Enum.uniq()
+
+  defp generated_qualified_sources(_other), do: []
+
   # Macro homes are ordinary module interfaces. Definition-site lookup therefore
   # observes exactly the same dependency graph and cache as a `use` import.
   defp cached_macro_home_env(path), do: module_slice_env(path)

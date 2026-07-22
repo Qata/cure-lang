@@ -102,10 +102,19 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
         source_dir
         |> Path.join("*.cure")
         |> Path.wildcard()
-        |> Enum.sort()
+        |> dependency_order()
         |> Enum.reduce({:ok, %{compiled: 0, skipped: 0, errors: 0}}, fn src, {:ok, counts} ->
           compile_one(src, dest_dir, counts)
         end)
+    end
+  end
+
+  defp dependency_order(paths) do
+    with {:ok, graph} <- Cure.Compiler.DepGraph.scan(paths),
+         {:ok, ordered, _cycles} <- Cure.Compiler.DepGraph.order(graph) do
+      ordered
+    else
+      _ -> Enum.sort(paths)
     end
   end
 

@@ -614,6 +614,7 @@ defmodule Cure.Elab.Declarations do
         body_expr
         |> macro_home_sources()
         |> Enum.reduce(env, &Cure.Elab.Program.env_with_macro_home(&2, &1))
+        |> Cure.Elab.Program.env_with_generated_dependencies(body_expr)
         # Generated code needs definition-site declarations for qualified
         # references, but a macro use must not open the home module in the
         # caller. Preserve only the caller's lexical import set.
