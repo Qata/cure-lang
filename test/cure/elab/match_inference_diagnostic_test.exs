@@ -82,6 +82,65 @@ defmodule Cure.Elab.MatchInferenceDiagnosticTest do
            ]
   end
 
+  test "a dependent inferred result labels the responsible branch and the complete match" do
+    source = """
+    mod M
+      type Nat = Z | S(Nat)
+      type Vec(a: Type) indices (n: Nat)
+        Nil : Vec(a, Z)
+        Cons : a -> Vec(a, n) -> Vec(a, S(n))
+      fn tail({a: Type}, {n: Nat}, v: Vec(a, S(n))) = match v
+        Cons(x, xs) -> xs
+    end
+    """
+
+    {diagnostic, registry, error} = diagnostic(source, "dependent_infer.cure")
+
+    assert {:cannot_infer_dependent_match, _inferred_type} = Program.semantic_error(error)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- DEPENDENT MATCH RESULT NEEDS AN ANNOTATION [E093] ------ dependent_infer.cure
+
+             Cure inferred a branch result whose type depends on values introduced by that
+             branch's constructor pattern. Those values do not exist outside the branch, so
+             Cure cannot choose one result type for `tail` without an annotation.
+
+             at dependent_infer.cure:7:5
+             6 |   fn tail({a: Type}, {n: Nat}, v: Vec(a, S(n))) = match v
+               |                                                   ----- this match has no expected result type
+             7 |     Cons(x, xs) -> xs
+               |     ^^^^^^^^^^^^^^^^^ the `Cons` branch returns a type tied to values introduced by its pattern
+
+             Hint: Add a result annotation to `tail` that states the indexed result shared by every branch
+             """)
+
+    assert diagnostic.payload == %{
+             kind: :cannot_infer_dependent_match,
+             checking: :tail,
+             expression_category: :pattern_match,
+             branch: "Cons"
+           }
+
+    refute inspect(diagnostic.payload) =~ "{:data"
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert lsp["range"] == range(6, 4, 6, 21)
+
+    assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+             range(5, 50, 5, 55)
+           ]
+
+    repaired =
+      String.replace(
+        source,
+        "v: Vec(a, S(n))) = match v",
+        "v: Vec(a, S(n))) -> Vec(a, n) = match v"
+      )
+
+    assert {:ok, _env} = Program.elaborate(repaired, file: "dependent_infer.cure")
+  end
+
   defp diagnostic(source, file) do
     assert {:error, error} = Program.elaborate(source, file: file)
     {diagnostic, registry} = Errors.to_diagnostic(error, file, source)

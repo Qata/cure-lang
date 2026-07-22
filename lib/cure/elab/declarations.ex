@@ -1010,6 +1010,7 @@ defmodule Cure.Elab.Declarations do
     reason = Elaborator.contextualize_call_arity(reason, expression, env)
     {line, column, length} = expression_extent(expression)
     meta = expression_meta(expression)
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
 
     expectation_origin =
       if branch_type_reason?(reason) and dependent_match?(expression, env),
@@ -1021,7 +1022,8 @@ defmodule Cure.Elab.Declarations do
       column: column,
       length: length,
       checking: checking,
-      span: Cure.MetaAST.Metadata.source_info(meta) |> then(&if(&1, do: &1.whole)),
+      span: if(source_info, do: source_info.whole),
+      opener_span: if(source_info, do: source_info.opener),
       expectation_span: expectation_span,
       expression_category: expression_category(expression),
       expectation_origin: expectation_origin,
