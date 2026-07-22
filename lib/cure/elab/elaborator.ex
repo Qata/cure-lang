@@ -1064,8 +1064,14 @@ defmodule Cure.Elab.Elaborator do
            :ok <- Kernel.check(ctx, term, result_type_val) do
         {:ok, term, result_type_val}
       else
-        {:ok, _term, _non_data_type} -> {:error, {:cannot_infer_match_type, expr}}
-        {:error, _} = err -> err
+        {:ok, _term, _non_data_type} ->
+          {:error, cannot_infer_match_type(expr, arms, :scrutinee_not_data)}
+
+        {:error, {:cannot_infer_match_type, :no_constructor_arm}} ->
+          {:error, cannot_infer_match_type(expr, arms, :no_constructor_arm)}
+
+        {:error, _} = err ->
+          err
       end
     end
   end
@@ -1507,6 +1513,30 @@ defmodule Cure.Elab.Elaborator do
         {:cont, acc}
     end)
   end
+
+  defp cannot_infer_match_type(expr, arms, reason) do
+    %{
+      reason: reason,
+      span: surface_expression_span(expr),
+      scrutinee_span: match_scrutinee_span(expr),
+      branch_spans: Enum.map(arms, &match_arm_pattern_span/1) |> Enum.reject(&is_nil/1),
+      expression_category: :pattern_match
+    }
+    |> then(&{:cannot_infer_match_type, &1})
+  end
+
+  defp match_scrutinee_span({:pattern_match, _meta, [scrutinee | _arms]}),
+    do: surface_expression_span(scrutinee)
+
+  defp match_scrutinee_span(_expression), do: nil
+
+  defp match_arm_pattern_span({:match_arm, arm_meta, _body}) when is_list(arm_meta) do
+    arm_meta
+    |> Keyword.get(:pattern)
+    |> surface_expression_span()
+  end
+
+  defp match_arm_pattern_span(_arm), do: nil
 
   # Strengthen a branch-body type out of the constructor's `arity` bound vars (de
   # Bruijn 0..arity-1, most-recently bound). If any of those occur the type is

@@ -589,6 +589,7 @@ defmodule Cure.Diagnostic.HostTest do
 
     assert match =~ "[E093]"
     assert match =~ "CANNOT INFER MATCH TYPE"
+    assert match =~ "Add a result annotation"
     assert lambda =~ "[E093]"
     assert lambda =~ "LAMBDA USED WHERE A FUNCTION WAS NOT EXPECTED"
     assert lambda =~ "Int"

@@ -156,16 +156,13 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:no_operator_meaning, operator}, opts),
     do: operator_failure(:no_operator_meaning, operator, %{}, opts)
 
-  def from_error({:cannot_infer_match_type, expression}, opts) do
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Cannot infer match type",
-      body: Doc.paragraph("The compiler cannot determine one common type for the branches of this match expression."),
-      primary: primary_label(opts, "add an annotation or make the branches agree"),
-      payload: %{kind: :cannot_infer_match_type, expression: expression}
-    )
+  def from_error({:cannot_infer_match_type, %{reason: reason} = details}, opts)
+      when reason in [:no_constructor_arm, :scrutinee_not_data] do
+    match_inference_failure(reason, details, opts)
+  end
+
+  def from_error({:cannot_infer_match_type, _legacy_expression}, opts) do
+    match_inference_failure(:unknown, %{}, opts)
   end
 
   def from_error({:lambda_expected_pi, expected}, opts) do
@@ -3373,6 +3370,72 @@ defmodule Cure.Diagnostic.Adapter do
       do: contextual_type_failure(kind, %{first: first, second: second}, opts)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp match_inference_failure(reason, details, opts) do
+    {title, body, label, hint} =
+      case reason do
+        :no_constructor_arm ->
+          {
+            "Match result needs an annotation",
+            "Cure is inferring the result type of this match, but none of its patterns names a constructor. A wildcard or variable arm can handle values of many data types, so it does not reveal the family or dependent result that the branches must share.",
+            "this match has no constructor arm to guide inference",
+            "Add a result annotation to the enclosing declaration, or include a constructor pattern that identifies the matched data family"
+          }
+
+        :scrutinee_not_data ->
+          {
+            "Match target does not have a data type",
+            "Cure can only infer an unannotated match from a scrutinee whose type has constructors. This value does not infer as a data family, so its patterns cannot determine a shared result type.",
+            "this match cannot infer a result from its target",
+            "Match a value of a declared data type, or add a result annotation that gives this match an expected type"
+          }
+
+        :unknown ->
+          {
+            "Cannot infer match type",
+            "Cure cannot determine one result type shared by every branch of this match.",
+            "add an annotation or make the branches agree",
+            "Add a result annotation to the enclosing declaration"
+          }
+      end
+
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: pickup_label(span, :primary, label),
+      secondary: match_inference_labels(reason, details, span),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind: :cannot_infer_match_type,
+        reason: reason,
+        expression_category: Map.get(details, :expression_category, :pattern_match)
+      }
+    )
+  end
+
+  defp match_inference_labels(:no_constructor_arm, details, primary_span) do
+    details
+    |> Map.get(:branch_spans, [])
+    |> Enum.reject(&(&1 == primary_span))
+    |> Enum.map(&pickup_label(&1, :secondary, "this pattern does not identify a constructor"))
+  end
+
+  defp match_inference_labels(:scrutinee_not_data, details, primary_span) do
+    case Map.get(details, :scrutinee_span) do
+      %Span{} = span when span != primary_span ->
+        [pickup_label(span, :secondary, "this value does not infer as a data family")]
+
+      _ ->
+        []
+    end
+  end
+
+  defp match_inference_labels(_reason, _details, _primary_span), do: []
 
   defp argument_count(1), do: "1 argument"
   defp argument_count(count) when is_integer(count), do: "#{count} arguments"
