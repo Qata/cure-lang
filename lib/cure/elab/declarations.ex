@@ -2309,7 +2309,8 @@ defmodule Cure.Elab.Declarations do
       else: {:error, {:result_type_not_family, fam}}
   end
 
-  defp family_index_args(other, _fam), do: {:error, {:bad_result_type, other}}
+  defp family_index_args(other, fam),
+    do: {:error, {:bad_result_type, index_problem_details(other, family: fam)}}
 
   # Source-position telescope: convert each domain in the scope of all preceding
   # binders (inferred implicits, then earlier source-position doms). Returns the
@@ -2691,7 +2692,7 @@ defmodule Cure.Elab.Declarations do
 
   defp idx_to_core({:variable, _meta, "Type"}, _scope, _fam, _env, _ctx), do: {:ok, {:type, 0}}
 
-  defp idx_to_core({:variable, _meta, name}, scope, _fam, env, _ctx) do
+  defp idx_to_core({:variable, _meta, name} = node, scope, _fam, env, _ctx) do
     # A numeric literal in a dependent type index — the `5` in `Bounded(5)`, the
     # `0x110000` Char bound in `Bounded(1114112)`, a scientific `1e6`. The lexer's
     # numeric token is stringified into a NAME node by the type parser. It can never
@@ -2704,7 +2705,13 @@ defmodule Cure.Elab.Declarations do
         {:ok, {:nat_lit, n}}
 
       {:error, reason} ->
-        {:error, reason}
+        case reason do
+          {:non_integer_index, ^name} ->
+            {:error, {:non_integer_index, index_problem_details(node, value: name)}}
+
+          _ ->
+            {:error, reason}
+        end
 
       :not_numeric ->
         cond do
@@ -2841,7 +2848,7 @@ defmodule Cure.Elab.Declarations do
         end
 
       attr in ["1", "2"] ->
-        {:error, {:sigma_projection_needs_ctx, attr}}
+        {:error, {:sigma_projection_needs_ctx, index_problem_details(node, projection: attr)}}
 
       true ->
         {:error, {:bad_projection, attr}}
@@ -2878,13 +2885,18 @@ defmodule Cure.Elab.Declarations do
   # types) and stays on the int op: it simply will not type-check or discharge — a
   # documented residual, never unsound. Operands recurse through `idx_to_core`, so
   # nested connectives compose.
-  defp idx_to_core({:binary_op, meta, [l_ast, r_ast]}, scope, fam, env, ctx) do
+  defp idx_to_core({:binary_op, meta, [l_ast, r_ast]} = node, scope, fam, env, ctx) do
     op = Keyword.fetch!(meta, :operator)
 
     with {:ok, l} <- idx_to_core(l_ast, scope, fam, env, ctx),
-         {:ok, r} <- idx_to_core(r_ast, scope, fam, env, ctx),
-         {:ok, global} <- index_binop_global(op, float_operands?(l, r)) do
-      {:ok, {:app, {:app, {:global, global}, l}, r}}
+         {:ok, r} <- idx_to_core(r_ast, scope, fam, env, ctx) do
+      case index_binop_global(op, float_operands?(l, r)) do
+        {:ok, global} ->
+          {:ok, {:app, {:app, {:global, global}, l}, r}}
+
+        {:error, {:unsupported_index_operator, ^op}} ->
+          {:error, {:unsupported_index_operator, index_problem_details(node, operator: op)}}
+      end
     end
   end
 
@@ -2893,15 +2905,42 @@ defmodule Cure.Elab.Declarations do
   # NAME nodes handled by the `{:variable, ...}` clause). An integer operand of an Int
   # comparison must be a real `{:int_lit, _}` so the kernel's `int_*` fold fires; a Nat
   # literal (`{:nat_lit, _}`, `{:vnat, _}`) would leave the spine stuck.
-  defp idx_to_core({:literal, meta, value}, _scope, _fam, _env, _ctx) do
+  defp idx_to_core({:literal, meta, value} = node, _scope, _fam, _env, _ctx) do
     case Keyword.get(meta, :subtype) do
-      :integer -> {:ok, {:int_lit, value}}
-      :float -> {:ok, {:float_lit, value}}
-      other -> {:error, {:unsupported_index_literal, other}}
+      :integer ->
+        {:ok, {:int_lit, value}}
+
+      :float ->
+        {:ok, {:float_lit, value}}
+
+      other ->
+        {:error, {:unsupported_index_literal, index_problem_details(node, subtype: other, value: value)}}
     end
   end
 
-  defp idx_to_core(other, _scope, _fam, _env, _ctx), do: {:error, {:unsupported_index_expr, other}}
+  defp idx_to_core(other, _scope, _fam, _env, _ctx),
+    do: {:error, {:unsupported_index_expr, index_problem_details(other)}}
+
+  defp index_problem_details(expression, extra \\ []) do
+    %{
+      expression: expression,
+      span: index_expression_span(expression),
+      shape: index_expression_shape(expression)
+    }
+    |> Map.merge(Map.new(extra))
+  end
+
+  defp index_expression_span({_tag, meta, _children}) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp index_expression_span(_expression), do: nil
+
+  defp index_expression_shape({tag, _meta, _children}) when is_atom(tag), do: tag
+  defp index_expression_shape(_expression), do: :unknown
 
   # A comparison is over Float when either lowered operand is a float literal. This is
   # the only operand-type signal available in an index position (the scope threaded
