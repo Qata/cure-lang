@@ -7234,14 +7234,14 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_let_block(
-         [{:assignment, meta, [{:variable, _, name}, rhs]} | rest],
+         [{:assignment, meta, [{:variable, _, name}, rhs]} = assignment | rest],
          expected_core,
          names,
          ctx,
          env
        ) do
     if not Keyword.get(meta, :let, false) do
-      {:error, {:unsupported_block_statement, meta}}
+      {:error, {:unsupported_block_statement, assignment}}
     else
       # A surface grade (`let c :linear = e`, plan slice 5b); absent means ω.
       grade = Keyword.get(meta, :grade, Grade.unrestricted())
@@ -7287,13 +7287,13 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp infer_block_term(
-         [{:assignment, meta, [{:variable, _, name}, rhs]} | rest],
+         [{:assignment, meta, [{:variable, _, name}, rhs]} = assignment | rest],
          names,
          ctx,
          env
        ) do
     if not Keyword.get(meta, :let, false) do
-      {:error, {:unsupported_block_statement, meta}}
+      {:error, {:unsupported_block_statement, assignment}}
     else
       grade = Keyword.get(meta, :grade, Grade.unrestricted())
 
