@@ -1197,6 +1197,45 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:method_signature_mismatch, %{interface: _interface, method: _method} = details}, opts),
     do: method_signature_failure(details, opts)
 
+  def from_error({:instance_head_ill_formed, %{reason: reason} = details}, opts) do
+    interface = name_to_string(Map.get(details, :interface, "this interface"))
+    authored_head = name_to_string(Map.get(details, :for, "this expression"))
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    {explanation, label, hint} =
+      case reason do
+        :not_type_head ->
+          {
+            "`#{authored_head}` is a value, but an implementation can only be declared for a type. Cure needs a type constructor here so it can select this implementation consistently.",
+            "this is a value, not an implementation type",
+            "Replace `#{authored_head}` with the name of a type that implements `#{interface}`"
+          }
+
+        :lowering_failed ->
+          {
+            "Cure could not interpret `#{authored_head}` as a type for this `#{interface}` implementation.",
+            "this implementation head is not a valid type",
+            "Use a well-formed type after `for`"
+          }
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Implementation head is not a type",
+      body: Doc.paragraph(explanation),
+      primary: pickup_label(span, :primary, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind: :instance_head_ill_formed,
+        reason: reason,
+        interface: interface,
+        authored_head: authored_head
+      }
+    )
+  end
+
   def from_error({:instance_head_ill_formed, reason}, opts),
     do: interface_failure(:instance_head_ill_formed, %{reason: reason}, opts)
 

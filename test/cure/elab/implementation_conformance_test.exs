@@ -149,4 +149,21 @@ defmodule Cure.Elab.ImplementationConformanceTest do
       assert Cure.Elab.Name.base(head) == "Int"
     end
   end
+
+  describe "implementation heads" do
+    test "a value cannot be used as an implementation head" do
+      src = """
+      mod M
+        interface Eqs(a)
+          fn eqs(x: a, y: a) -> Bool = true
+        implementation Eqs for 1
+      end
+      """
+
+      assert {:error,
+              {:instance_head_ill_formed,
+               %{reason: :not_type_head, interface: :Eqs, for: "1", span: %Cure.Diagnostic.Span{}}}} =
+               Program.elaborate(src)
+    end
+  end
 end

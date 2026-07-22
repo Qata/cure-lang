@@ -31,7 +31,7 @@ defmodule Cure.Elab.Implementation do
   def register({:implementation, meta, body}, env) do
     iface = meta |> Keyword.fetch!(:interface) |> String.to_atom()
     for_type = Keyword.fetch!(meta, :for_type)
-    for_name = Keyword.get(meta, :for)
+    for_name = surface_for_name(for_type, Keyword.get(meta, :for))
     as_name = Keyword.get(meta, :as)
     implementation_span = implementation_header_span(meta)
 
@@ -46,8 +46,20 @@ defmodule Cure.Elab.Implementation do
          {:ok, env3} <- bind_named_instance(env2, desc, iface, head, as_name, ref) do
       {:ok, env3, mangled_fns, superinterface_obligations(iface, desc, head)}
     else
-      nil -> {:error, {:no_such_interface, iface}}
-      {:error, _} = err -> err
+      nil ->
+        {:error, {:no_such_interface, iface}}
+
+      {:error, {:instance_head_ill_formed, details}} ->
+        {:error,
+         {:instance_head_ill_formed,
+          Map.merge(details, %{
+            interface: iface,
+            for: for_name,
+            span: implementation_type_span(meta)
+          })}}
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -92,16 +104,22 @@ defmodule Cure.Elab.Implementation do
   defp head_key(for_type_ast, env) do
     case Declarations.lower_type(for_type_ast, [], env) do
       {:ok, core_type} ->
-        atom =
+        head =
           core_type
           |> Cure.Core.Eval.eval([])
           |> Cure.Core.Normalise.whnf_value(env, [])
           |> whnf_head_atom()
 
-        {:ok, atom}
+        case head do
+          :non_type_head ->
+            {:error, {:instance_head_ill_formed, %{reason: :not_type_head}}}
+
+          atom ->
+            {:ok, atom}
+        end
 
       {:error, reason} ->
-        {:error, {:instance_head_ill_formed, reason}}
+        {:error, {:instance_head_ill_formed, %{reason: :lowering_failed, underlying: reason}}}
     end
   end
 
@@ -324,6 +342,21 @@ defmodule Cure.Elab.Implementation do
         source_info_span(source_info)
     end
   end
+
+  defp implementation_type_span(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{annotation: %Cure.Diagnostic.Span{} = span} -> span
+      _source_info -> implementation_header_span(meta)
+    end
+  end
+
+  defp surface_for_name({:literal, _meta, value}, _fallback) when is_integer(value),
+    do: Integer.to_string(value)
+
+  defp surface_for_name({:literal, _meta, value}, _fallback) when is_float(value),
+    do: Float.to_string(value)
+
+  defp surface_for_name(_for_type, fallback), do: fallback
 
   # Build the surface function-type AST `T1 -> ... -> Tn -> R` from a param list
   # and return type, MIRRORING `Interface.build_method_map`'s `method_type_ast`

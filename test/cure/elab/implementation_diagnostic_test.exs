@@ -126,6 +126,44 @@ defmodule Cure.Elab.ImplementationDiagnosticTest do
     assert {:ok, _environment} = Program.elaborate(fixed, file: "missing_method_fixed.cure")
   end
 
+  test "a value used as an implementation head points at the value after `for`" do
+    source =
+      "mod M\n  interface Eqs(a)\n    fn eqs(x: a, y: a) -> Bool = true\n  implementation Eqs for 1\nend\n"
+
+    {diagnostic, registry, error} = diagnostic(source, "value_head.cure")
+
+    assert {:instance_head_ill_formed, %{reason: :not_type_head, interface: :Eqs, span: %Cure.Diagnostic.Span{}}} =
+             Program.semantic_error(error)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- IMPLEMENTATION HEAD IS NOT A TYPE [E105] -------------------- value_head.cure
+
+             `1` is a value, but an implementation can only be declared for a type. Cure
+             needs a type constructor here so it can select this implementation consistently.
+
+             at value_head.cure:4:26
+             4 |   implementation Eqs for 1
+               |                          ^ this is a value, not an implementation type
+
+             Hint: Replace `1` with the name of a type that implements `Eqs`
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert lsp["range"] == range(3, 25, 26)
+    assert lsp["relatedInformation"] == []
+
+    assert lsp["data"]["payload"] == %{
+             "authored_head" => "1",
+             "interface" => "Eqs",
+             "kind" => "instance_head_ill_formed",
+             "reason" => "not_type_head"
+           }
+
+    fixed = String.replace(source, "for 1", "for Int")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "value_head_fixed.cure")
+  end
+
   defp diagnostic(source, file) do
     assert {:error, error} = Program.elaborate(source, file: file)
     {diagnostic, registry} = Errors.to_diagnostic(error, file, source)
