@@ -9106,7 +9106,7 @@ defmodule Cure.Compiler.Parser do
 
       true ->
         type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
-        parse_type_def_adt(state, name, type_params, token, name_token)
+        parse_type_def_adt(state, name, type_params, token, name_token, type_parameter_span)
     end
   end
 
@@ -9205,7 +9205,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   # Ordinary ADT / alias body: `type NAME(type_params) = …`.
-  defp parse_type_def_adt(state, name, type_params, token, name_token) do
+  defp parse_type_def_adt(state, name, type_params, token, name_token, type_parameter_span) do
     state = skip_newlines(state)
 
     {pre_assign_block, state} =
@@ -9214,6 +9214,7 @@ defmodule Cure.Compiler.Parser do
         _ -> {false, state}
       end
 
+    assign_token = if match?(%Token{type: :assign}, peek(state)), do: peek(state)
     state = expect_type_declaration_assign(state, :type, token, name_token, name)
     state = skip_newlines(state)
 
@@ -9255,7 +9256,8 @@ defmodule Cure.Compiler.Parser do
           meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
 
           if name == "Unit" do
-            {{:container, meta, [{:variable, [variant: true], "unit"}]}, state}
+            variant_meta = Metadata.put_source_info([variant: true], %SourceInfo{whole: unit_span})
+            {{:container, meta, [{:variable, variant_meta, "unit"}]}, state}
           else
             state =
               add_error(state, {
@@ -9289,14 +9291,14 @@ defmodule Cure.Compiler.Parser do
 
         _ ->
           # v0.21.0: accept an optional leading `|` before the first variant.
-          {had_leading_bar, state} =
+          {leading_bar_token, state} =
             case peek(state) do
-              %Token{type: :bar} ->
+              %Token{type: :bar} = bar_token ->
                 s = advance(state)
-                {true, skip_newlines(s)}
+                {bar_token, skip_newlines(s)}
 
               _ ->
-                {false, state}
+                {nil, state}
             end
 
           # `type Empty = |` declares an explicit CONSTRUCTOR-LESS (uninhabited)
@@ -9305,46 +9307,49 @@ defmodule Cure.Compiler.Parser do
           # are no variants at all. The leading bar is required so a bare
           # `type Foo =` (a genuinely missing RHS) still errors rather than silently
           # becoming an empty type.
-          if had_leading_bar and no_more_variants?(state) do
-            meta = [container_type: :enum, name: name, line: token.line, col: token.col]
-            meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
-            {{:container, meta, []}, state}
-          else
-            # Parse as ADT variants (A(T) | B | C) or type alias
-            {first_variant, state} = parse_type_variant(state)
-            state = skip_newlines(state)
+          {ast, state} =
+            if leading_bar_token && no_more_variants?(state) do
+              meta = [container_type: :enum, name: name, line: token.line, col: token.col]
+              meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+              {{:container, meta, []}, state}
+            else
+              # Parse as ADT variants (A(T) | B | C) or type alias
+              {first_variant, state} = parse_type_variant(state)
+              state = skip_newlines(state)
 
-            case peek(state) do
-              %Token{type: :bar} ->
-                # ADT: multiple variants separated by |
-                {rest_variants, state} = parse_more_variants(state)
-                variants = [first_variant | rest_variants]
-                meta = [container_type: :enum, name: name, line: token.line, col: token.col]
-                meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
-                {{:container, meta, variants}, state}
-
-              _ ->
-                if variant_ctor?(first_variant) do
-                  # Single-constructor ADT: `type Box = MkBox(Nat)` is a one-ctor
-                  # inductive family, not a type alias. (A constructor variant carries
-                  # `variant: true`; a genuine alias RHS — `type Celsius = Int` — is a
-                  # plain type expression and stays a `:type_annotation`.)
+              case peek(state) do
+                %Token{type: :bar} ->
+                  # ADT: multiple variants separated by |
+                  {rest_variants, state} = parse_more_variants(state)
+                  variants = [first_variant | rest_variants]
                   meta = [container_type: :enum, name: name, line: token.line, col: token.col]
                   meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
-                  {{:container, meta, [first_variant]}, state}
-                else
-                  # Type alias: type Name = ExistingType
-                  meta = [name: name, line: token.line, col: token.col]
-                  meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
-                  {{:type_annotation, meta, [first_variant]}, state}
-                end
+                  {{:container, meta, variants}, state}
+
+                _ ->
+                  if variant_ctor?(first_variant) do
+                    # Single-constructor ADT: `type Box = MkBox(Nat)` is a one-ctor
+                    # inductive family, not a type alias. (A constructor variant carries
+                    # `variant: true`; a genuine alias RHS — `type Celsius = Int` — is a
+                    # plain type expression and stays a `:type_annotation`.)
+                    meta = [container_type: :enum, name: name, line: token.line, col: token.col]
+                    meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+                    {{:container, meta, [first_variant]}, state}
+                  else
+                    # Type alias: type Name = ExistingType
+                    meta = [name: name, line: token.line, col: token.col]
+                    meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+                    {{:type_annotation, meta, [first_variant]}, state}
+                  end
+              end
             end
-          end
+
+          {put_leading_variant_separator(ast, leading_bar_token), state}
       end
 
     # An optional `deriving Iface{, Iface}` suffix follows the last variant on
     # the same line, so it must be consumed BEFORE the block-closing dedent.
-    {ast, state} = maybe_attach_deriving(ast, state)
+    {ast, deriving_span, state} = maybe_attach_deriving(ast, state)
 
     # Close the optional wrapping block by consuming the matching `:dedent`.
     # Surrounding newlines are skipped for us by the caller's own
@@ -9358,15 +9363,62 @@ defmodule Cure.Compiler.Parser do
         _, acc -> acc
       end)
 
-    {put_type_decl_source_info(ast, token, name_token, state), state}
+    ast =
+      put_type_decl_source_info(
+        ast,
+        token,
+        name_token,
+        type_parameter_span,
+        assign_token,
+        deriving_span
+      )
+
+    {ast, state}
   end
 
-  defp put_type_decl_source_info({tag, meta, payload}, %Token{} = token, %Token{} = name_token, state)
+  defp put_type_decl_source_info(
+         {tag, meta, payload},
+         %Token{} = token,
+         %Token{} = name_token,
+         type_parameter_span,
+         assign_token,
+         deriving_span
+       )
        when is_list(meta) do
-    {tag, put_container_source_info(meta, token, name_token, name_token, state), payload}
+    payload_spans = payload |> Enum.map(&ast_source_span/1) |> Enum.reject(&is_nil/1)
+    annotation_span = if tag == :type_annotation, do: List.first(payload_spans)
+    branches = if tag == :container, do: payload_spans, else: []
+    existing_info = Metadata.source_info(meta) || %SourceInfo{}
+
+    terminal_span =
+      deriving_span || List.last(branches) || annotation_span || existing_info.whole ||
+        (assign_token && assign_token.span) || type_parameter_span || name_token.span
+
+    fields =
+      existing_info.fields
+      |> maybe_put_source_field(:type_parameters, type_parameter_span)
+      |> maybe_put_source_field(:separator, assign_token)
+      |> maybe_put_source_field(:deriving, deriving_span)
+
+    meta =
+      Metadata.put_source_info(meta, %SourceInfo{
+        whole: through_spans(token.span, terminal_span) || token.span,
+        opener: token.span,
+        name: name_token.span,
+        annotation: annotation_span,
+        branches: branches,
+        fields: fields
+      })
+
+    {tag, meta, payload}
   end
 
-  defp put_type_decl_source_info(ast, _token, _name_token, _state), do: ast
+  defp put_leading_variant_separator({tag, meta, payload}, %Token{} = bar_token) when is_list(meta) do
+    info = %SourceInfo{whole: bar_token.span, fields: %{leading_separator: bar_token.span}}
+    {tag, Metadata.put_source_info(meta, info), payload}
+  end
+
+  defp put_leading_variant_separator(ast, _bar_token), do: ast
 
   defp layout_block_count(opened_block, pre_assign_block) do
     Enum.count([opened_block, pre_assign_block], & &1)
@@ -9377,17 +9429,18 @@ defmodule Cure.Compiler.Parser do
   # non-container asts pass through untouched.
   defp maybe_attach_deriving({:container, meta, body}, state) do
     case peek(state) do
-      %Token{type: :keyword, value: :deriving} ->
+      %Token{type: :keyword, value: :deriving} = deriving_token ->
         state = advance(state)
-        {names, state} = parse_deriving_names(state, [])
-        {{:container, Keyword.put(meta, :deriving, names), body}, state}
+        {names, last_name_token, state} = parse_deriving_names(state, [])
+        span = through_spans(deriving_token.span, last_name_token.span) || deriving_token.span
+        {{:container, Keyword.put(meta, :deriving, names), body}, span, state}
 
       _ ->
-        {{:container, meta, body}, state}
+        {{:container, meta, body}, nil, state}
     end
   end
 
-  defp maybe_attach_deriving(ast, state), do: {ast, state}
+  defp maybe_attach_deriving(ast, state), do: {ast, nil, state}
 
   defp parse_deriving_names(state, acc) do
     name_token = peek(state)
@@ -9399,7 +9452,7 @@ defmodule Cure.Compiler.Parser do
         parse_deriving_names(advance(state), [name | acc])
 
       _ ->
-        {Enum.reverse([name | acc]), state}
+        {Enum.reverse([name | acc]), name_token, state}
     end
   end
 

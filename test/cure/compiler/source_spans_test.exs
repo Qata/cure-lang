@@ -251,7 +251,60 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, alias_info.annotation) == "Int"
     assert slice(source, Map.fetch!(alias_info.fields, :separator)) == "="
     assert slice(source, enum_info.whole) == "type Color = Red | Blue deriving Show"
+    assert slice(source, enum_info.opener) == "type"
     assert slice(source, enum_info.name) == "Color"
+    assert slice(source, Map.fetch!(enum_info.fields, :separator)) == "="
+    assert slice(source, Map.fetch!(enum_info.fields, :deriving)) == "deriving Show"
+    assert Enum.map(enum_info.branches, &slice(source, &1)) == ["Red", "Blue"]
+  end
+
+  test "ordinary type aliases and empty ADTs use exact RHS boundaries" do
+    source = "type Count = Int\ntype Never = |\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "ordinary_types.cure", emit_events: false)
+
+    assert {:ok, {:block, _, [alias_ast, empty_ast]}} =
+             Parser.parse(tokens, file: "ordinary_types.cure", emit_events: false, prelude_macros: false)
+
+    alias_info = alias_ast |> elem(1) |> Metadata.source_info()
+    empty_info = empty_ast |> elem(1) |> Metadata.source_info()
+    assert slice(source, alias_info.whole) == "type Count = Int"
+    assert slice(source, alias_info.annotation) == "Int"
+    assert slice(source, empty_info.whole) == "type Never = |"
+    assert slice(source, Map.fetch!(empty_info.fields, :leading_separator)) == "|"
+    assert empty_info.branches == []
+  end
+
+  test "the unit declaration owns its authored unit variant" do
+    source = "type Unit = ()\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "unit.cure", emit_events: false)
+
+    assert {:ok, {:container, meta, [{:variable, variant_meta, "unit"}]}} =
+             Parser.parse(tokens, file: "unit.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    variant_info = Metadata.source_info(variant_meta)
+    assert slice(source, info.whole) == "type Unit = ()"
+    assert Enum.map(info.branches, &slice(source, &1)) == ["()"]
+    assert slice(source, variant_info.whole) == "()"
+  end
+
+  test "multiline parameterized ADTs retain leading bars, variants, and deriving ranges" do
+    source =
+      "type Result(a, e) =\n" <>
+        "  | Ok(a)\n" <>
+        "  | Err(e) deriving Show, Eq\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "result.cure", emit_events: false)
+
+    assert {:ok, {:container, meta, [_ok, _err]}} =
+             Parser.parse(tokens, file: "result.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == String.trim_trailing(source)
+    assert slice(source, Map.fetch!(info.fields, :type_parameters)) == "(a, e)"
+    assert slice(source, Map.fetch!(info.fields, :leading_separator)) == "|"
+    assert slice(source, Map.fetch!(info.fields, :deriving)) == "deriving Show, Eq"
+    assert Enum.map(info.branches, &slice(source, &1)) == ["Ok(a)", "Err(e)"]
   end
 
   test "parameterized type aliases retain exact parameter and RHS ranges" do
