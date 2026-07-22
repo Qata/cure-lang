@@ -745,14 +745,17 @@ defmodule Cure.Diagnostic.HostTest do
 
     assert expression =~ "EXPRESSION IS NOT SUPPORTED"
     assert annotation =~ "BINDING NEEDS AN ANNOTATION"
-    assert pattern =~ "PATTERN BINDS A NAME TWICE"
+    assert pattern =~ "[E119]"
+    assert pattern =~ "PATTERN BINDS `X` MORE THAN ONCE"
     assert alias_error =~ "TYPE ALIAS DOES NOT NAME A TYPE"
     assert effect =~ "EFFECT OPERATION ARITY MISMATCH"
 
-    for output <- [expression, annotation, pattern, alias_error, effect] do
+    for output <- [expression, annotation, alias_error, effect] do
       assert output =~ "[E093]"
       refute output =~ "INTERNAL COMPILER ERROR"
     end
+
+    refute pattern =~ "INTERNAL COMPILER ERROR"
   end
 
   test "bare branch verdicts do not fall back to generic elaboration failure" do

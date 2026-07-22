@@ -857,7 +857,7 @@ defmodule Cure.Elab.Declarations do
       expectation_span: expectation_span,
       expression_category: expression_category(expression),
       expectation_origin: expectation_origin,
-      branch_patterns: branch_patterns(expression)
+      branch_patterns: branch_patterns(expression, env)
     }
 
     outer_context = declaration_expectation_context(expression, reason, outer_context, env)
@@ -977,15 +977,17 @@ defmodule Cure.Elab.Declarations do
   defp expression_category({kind, _meta, _left, _right}) when is_atom(kind), do: kind
   defp expression_category(_expression), do: :expression
 
-  defp branch_patterns({:pattern_match, _meta, [_scrutinee | arms]}) do
+  defp branch_patterns({:pattern_match, _meta, [_scrutinee | arms]}, env) do
     Enum.map(arms, fn
       {:match_arm, arm_meta, _body} ->
         pattern = Keyword.get(arm_meta, :pattern)
 
         %{
           name: pattern_label(pattern),
+          kind: pattern_kind(pattern, env),
           span: arm_span(arm_meta),
-          pattern_span: surface_pattern_span(arm_meta, pattern)
+          pattern_span: surface_pattern_span(arm_meta, pattern),
+          variable_spans: pattern_variable_spans(pattern)
         }
 
       _ ->
@@ -993,7 +995,7 @@ defmodule Cure.Elab.Declarations do
     end)
   end
 
-  defp branch_patterns(_expression), do: []
+  defp branch_patterns(_expression, _env), do: []
 
   defp branch_type_reason?(:branch_type), do: true
   defp branch_type_reason?({:branch_type, _details}), do: true
@@ -1037,6 +1039,14 @@ defmodule Cure.Elab.Declarations do
   defp pattern_label({:literal, _meta, value}), do: inspect(value)
   defp pattern_label(_pattern), do: "pattern"
 
+  defp pattern_kind({:variable, _meta, name}, env) when is_binary(name) do
+    key = Env.resolve_key(env, env.ctors, String.to_atom(name))
+    if Inductive.get_ctor(env, key), do: :constructor, else: :variable
+  end
+
+  defp pattern_kind({:function_call, _meta, _args}, _env), do: :constructor
+  defp pattern_kind(_pattern, _env), do: :other
+
   defp arm_span(meta) when is_list(meta) do
     case Keyword.get(meta, :source_info) do
       %Cure.MetaAST.SourceInfo{whole: span} -> span
@@ -1050,6 +1060,26 @@ defmodule Cure.Elab.Declarations do
       _ -> expression_meta(pattern) |> Cure.MetaAST.Metadata.source_info() |> then(&if(&1, do: &1.whole))
     end
   end
+
+  defp pattern_variable_spans({:variable, meta, name}) when is_list(meta) and name != "_" do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> %{to_string(name) => [span]}
+      _ -> %{}
+    end
+  end
+
+  defp pattern_variable_spans({_tag, _meta, children}), do: pattern_variable_spans(children)
+
+  defp pattern_variable_spans(items) when is_list(items) do
+    Enum.reduce(items, %{}, fn item, acc ->
+      Map.merge(acc, pattern_variable_spans(item), fn _name, left, right -> left ++ right end)
+    end)
+  end
+
+  defp pattern_variable_spans(item) when is_tuple(item),
+    do: item |> Tuple.to_list() |> pattern_variable_spans()
+
+  defp pattern_variable_spans(_item), do: %{}
 
   defp expression_extent({_, meta, _} = expression) when is_list(meta) do
     case Cure.MetaAST.Metadata.source_info(meta) do

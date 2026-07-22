@@ -5316,17 +5316,29 @@ defmodule Cure.Elab.Elaborator do
   defp try_trivial_match(scrut_expr, [{:match_arm, meta, body}], expected, names, ctx, env) do
     case Keyword.fetch!(meta, :pattern) do
       {:variable, _m, "_"} ->
-        elaborate_expr_checked(single_body(body), expected, names, ctx, env)
+        if Keyword.get(meta, :impossible) do
+          {:error, {:impossible_default_pattern, "_"}}
+        else
+          elaborate_expr_checked(single_body(body), expected, names, ctx, env)
+        end
 
       {:variable, _m, name} ->
         b = single_body(body)
 
         cond do
+          Keyword.get(meta, :impossible) ->
+            {:error, {:impossible_default_pattern, name}}
+
           # A complex scrutinee would be duplicated by substitution; leave those to
           # the ordinary path (which binds via the case machinery).
-          not match?({:variable, _sm, _sn}, scrut_expr) -> :not_applicable
-          binds_any?(b, [name]) -> {:error, {:unsupported_pattern, :shadowed_catchall}}
-          true -> elaborate_expr_checked(subst_surface_var(b, name, scrut_expr), expected, names, ctx, env)
+          not match?({:variable, _sm, _sn}, scrut_expr) ->
+            :not_applicable
+
+          binds_any?(b, [name]) ->
+            {:error, {:unsupported_pattern, :shadowed_catchall}}
+
+          true ->
+            elaborate_expr_checked(subst_surface_var(b, name, scrut_expr), expected, names, ctx, env)
         end
 
       _ ->

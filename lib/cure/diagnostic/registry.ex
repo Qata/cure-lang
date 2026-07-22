@@ -96,7 +96,7 @@ defmodule Cure.Diagnostic.Registry do
     "W088" =>
       "The dependent-only pipeline rejects unresolved imported names as E091 before the classic codegen fallback can occur."
   }
-  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E112 E113 E114 E115 E116 E117 E118 W086 W088]
+  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E112 E113 E114 E115 E116 E117 E118 E119 W086 W088]
   @known_producers ~w[
     beam_writer dependency_graph elaboration kernel lexer macro_expansion
     name_resolution operational parser pattern_checker proof_checker
@@ -176,6 +176,7 @@ defmodule Cure.Diagnostic.Registry do
     "E116" => :implementation_scope,
     "E117" => :resource_usage_violation,
     "E118" => :pattern_coverage,
+    "E119" => :pattern_structure,
     "W000" => :compiler_warning,
     "W001" => :migration_warning,
     "W002" => :configuration_warning,
@@ -1445,6 +1446,16 @@ defmodule Cure.Diagnostic.Registry do
     Add every reachable constructor exactly once. Use `impossible` only when the
     constructor is ruled out by the matched indices.
     """,
+    "E119" => """
+    E119: Pattern Structure
+
+    A pattern binds one name more than once, contains more than one catch-all,
+    marks a catch-all impossible, or leaves an open binary/map match without a
+    fallback.
+
+    Bind each name once and keep one final catch-all for open pattern families.
+    Use explicit comparisons when two bound values must be equal.
+    """,
     "W000" => """
     W000: Compiler Warning
 
@@ -1788,6 +1799,7 @@ defmodule Cure.Diagnostic.Registry do
   defp stable_key("E116", _title), do: :implementation_scope
   defp stable_key("E117", _title), do: :resource_usage_violation
   defp stable_key("E118", _title), do: :pattern_coverage
+  defp stable_key("E119", _title), do: :pattern_structure
 
   defp stable_key(_code, title) do
     title
@@ -1855,6 +1867,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E116"), do: [:elaboration]
   defp producers("E117"), do: [:elaboration]
   defp producers("E118"), do: [:elaboration]
+  defp producers("E119"), do: [:elaboration]
   defp producers("E008"), do: [:operational]
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
@@ -1919,6 +1932,7 @@ defmodule Cure.Diagnostic.Registry do
   defp subsystem("E116"), do: :elaboration
   defp subsystem("E117"), do: :elaboration
   defp subsystem("E118"), do: :elaboration
+  defp subsystem("E119"), do: :elaboration
   defp subsystem("E091"), do: :resolution
   defp subsystem("E092"), do: :macros
   defp subsystem("E093"), do: :elaboration
