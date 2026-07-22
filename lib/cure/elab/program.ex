@@ -2822,10 +2822,10 @@ defmodule Cure.Elab.Program do
   defp contextualize_trusted_declaration_error(result, _items), do: result
 
   defp trusted_declaration_span({:unknown_erasure_class, name, _class}, items),
-    do: declaration_role_span(items, name, :erases_decorator, :erasure_annotation)
+    do: erasure_source_context(items, name)
 
   defp trusted_declaration_span({:erases_on_non_opaque, name}, items),
-    do: declaration_role_span(items, name, :erases_decorator, :erasure_annotation)
+    do: erasure_source_context(items, name)
 
   defp trusted_declaration_span({:non_strictly_positive, constructor}, items),
     do: positivity_source_context(items, constructor)
@@ -3070,6 +3070,34 @@ defmodule Cure.Elab.Program do
           info = Cure.MetaAST.Metadata.source_info(meta)
           span = source_role_span(info, role) || source_role_span(info, :name) || source_role_span(info, :whole)
           if span, do: {span, qualified_name, category}
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp erasure_source_context(items, qualified_name) do
+    bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {tag, meta, _body} when tag in [:container, :indexed_type] and is_list(meta) ->
+        if to_string(Keyword.get(meta, :name)) == bare_name do
+          info = Cure.MetaAST.Metadata.source_info(meta)
+          decorator = info && Map.get(info.decorators, "erases")
+          decorator_span = decorator && decorator.whole
+
+          if decorator_span do
+            %{
+              span: decorator_span,
+              decorator_span: decorator_span,
+              argument_spans: decorator.arguments,
+              name_span: info.name,
+              declaration_span: info.whole,
+              checking: qualified_name,
+              expression_category: :erasure_annotation
+            }
+          end
         end
 
       _ ->
