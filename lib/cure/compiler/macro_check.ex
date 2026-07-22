@@ -4,7 +4,7 @@ defmodule Cure.Compiler.MacroCheck do
   @property_kinds [:round_trip, :total, :fault_rejection, :exhaustive, :termination]
 
   @spec plan(String.t() | atom(), [map()]) :: {:ok, map()} | {:error, term()}
-  def plan(name, properties) when is_list(properties) do
+  def plan(name, properties) when (is_atom(name) or is_binary(name)) and is_list(properties) do
     names = Enum.map(properties, &Map.get(&1, :name))
 
     cond do
@@ -24,6 +24,11 @@ defmodule Cure.Compiler.MacroCheck do
          }}
     end
   end
+
+  def plan(name, _properties) when not is_atom(name) and not is_binary(name),
+    do: {:error, {:invalid_check_name, name}}
+
+  def plan(_name, _properties), do: {:error, :invalid_check_property}
 
   defp valid_property?(%{name: name, kind: kind, expression: _expression})
        when (is_atom(name) or is_binary(name)) and kind in @property_kinds,

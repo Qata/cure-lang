@@ -77,4 +77,55 @@ defmodule Cure.Compiler.MacroUnitsCheckTest do
     duplicate = properties ++ [%{name: :round_trip, kind: :total, expression: {:call, :total}}]
     assert {:error, :duplicate_check_property} = MacroCheck.plan(:Frame, duplicate)
   end
+
+  test "malformed check plans are rejected instead of raising" do
+    assert {:error, {:invalid_check_name, 42}} = MacroCheck.plan(42, [])
+    assert {:error, :invalid_check_property} = MacroCheck.plan(:Frame, :not_a_property_list)
+  end
+
+  test "every check-plan validation branch has stable user-facing output" do
+    valid = %{name: :round_trip, kind: :round_trip, expression: {:call, :round_trip}}
+
+    cases = [
+      {fn -> MacroCheck.plan(42, []) end,
+       """
+       -- CHECK PLAN NAME IS INVALID [E092] -------------------------------------------
+
+       A generated check plan needs an atom or text name, but this plan uses `42`.
+
+       Hint: Use a stable name such as `FrameProperties`
+       """},
+      {fn -> MacroCheck.plan(:Frame, [%{name: :broken, kind: :mystery}]) end,
+       """
+       -- CHECK PROPERTY IS MALFORMED [E092] ------------------------------------------
+
+       Every check property needs a name, a supported check kind, and the expression to
+       test.
+
+       Hint: Provide `name`, `kind`, and `expression`; use `round_trip`, `total`, `fault_rejection`, `exhaustive`, or `termination`
+       """},
+      {fn -> MacroCheck.plan(:Frame, [valid, valid]) end,
+       """
+       -- CHECK PROPERTY NAME IS REPEATED [E092] --------------------------------------
+
+       Two properties in this check plan have the same name, so their generated results
+       cannot be distinguished.
+
+       Hint: Give every property in the check plan a unique name
+       """}
+    ]
+
+    Enum.each(cases, fn {run, expected} ->
+      assert {:error, reason} = run.()
+      {diagnostic, registry} = Errors.to_diagnostic(reason, "checks.cure", "")
+
+      assert diagnostic.code == "E092"
+      assert diagnostic.key == :macro_check_validation
+      assert Renderer.plain(diagnostic, registry, width: 80) == String.trim_trailing(expected)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+      refute Map.has_key?(lsp, "range")
+      assert lsp["relatedInformation"] == []
+    end)
+  end
 end

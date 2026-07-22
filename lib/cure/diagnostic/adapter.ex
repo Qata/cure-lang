@@ -1339,6 +1339,9 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:invalid_unit_literal, value, suffix}, opts),
     do: macro_unit_failure(:invalid_unit_literal, %{value: value, suffix: suffix}, opts)
 
+  def from_error({:invalid_check_name, name}, opts),
+    do: macro_check_failure(:invalid_check_name, %{name: name}, opts)
+
   # Some trusted checking paths can return the bare verdict after their
   # declaration wrapper has been stripped. Keep that verdict contextual rather
   # than falling through to the unhelpful generic "Elaboration failed" title.
@@ -1476,8 +1479,6 @@ defmodule Cure.Diagnostic.Adapter do
              :invalid_syntax_string,
              :invalid_syntax_literal,
              :invalid_syntax_pair,
-             :invalid_check_property,
-             :duplicate_check_property,
              :invalid_protocol_role,
              :duplicate_protocol_role,
              :duplicate_reducer_constructor,
@@ -1498,6 +1499,9 @@ defmodule Cure.Diagnostic.Adapter do
              :multiple_expands_declarations
            ],
       do: macro_validation_failure(kind, %{}, opts)
+
+  def from_error(kind, opts) when kind in [:invalid_check_property, :duplicate_check_property],
+    do: macro_check_failure(kind, %{}, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -5008,6 +5012,48 @@ defmodule Cure.Diagnostic.Adapter do
       suggestions: [%Suggestion{message: hint, applicability: :manual}],
       payload: Map.put(details, :kind, kind)
     )
+  end
+
+  defp macro_check_failure(kind, details, opts) do
+    {title, message, label, hint} = macro_check_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_check_validation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp macro_check_content(:invalid_check_name, %{name: name}) do
+    {
+      "Check plan name is invalid",
+      "A generated check plan needs an atom or text name, but this plan uses `#{name_to_string(name)}`.",
+      "replace this check plan name",
+      "Use a stable name such as `FrameProperties`"
+    }
+  end
+
+  defp macro_check_content(:invalid_check_property, _details) do
+    {
+      "Check property is malformed",
+      "Every check property needs a name, a supported check kind, and the expression to test.",
+      "rewrite this check property",
+      "Provide `name`, `kind`, and `expression`; use `round_trip`, `total`, `fault_rejection`, `exhaustive`, or `termination`"
+    }
+  end
+
+  defp macro_check_content(:duplicate_check_property, _details) do
+    {
+      "Check property name is repeated",
+      "Two properties in this check plan have the same name, so their generated results cannot be distinguished.",
+      "rename or remove this property",
+      "Give every property in the check plan a unique name"
+    }
   end
 
   defp macro_unit_content(:duplicate_unit, %{suffix: suffix}) do
