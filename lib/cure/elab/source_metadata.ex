@@ -10,9 +10,14 @@ defmodule Cure.Elab.SourceMetadata do
   @declaration_key {__MODULE__, :declaration_spans}
   @equation_key {__MODULE__, :equations}
   @interface_method_key {__MODULE__, :interface_method_spans}
+  @instance_origin_key {__MODULE__, :instance_origins}
 
   def reset do
-    Enum.each([@parameter_key, @declaration_key, @equation_key, @interface_method_key], &Process.delete/1)
+    Enum.each(
+      [@parameter_key, @declaration_key, @equation_key, @interface_method_key, @instance_origin_key],
+      &Process.delete/1
+    )
+
     :ok
   end
 
@@ -46,4 +51,13 @@ defmodule Cure.Elab.SourceMetadata do
 
   def interface_method_span(interface, method) when is_atom(interface) and is_atom(method),
     do: Process.get(@interface_method_key, %{}) |> Map.get({interface, method})
+
+  def put_instance_origin(kind, key, origin) when kind in [:anonymous, :named] and is_map(origin) do
+    origins = Process.get(@instance_origin_key, %{})
+    Process.put(@instance_origin_key, Map.update(origins, {kind, key}, [origin], &(&1 ++ [origin])))
+    :ok
+  end
+
+  def instance_origins(kind, key) when kind in [:anonymous, :named],
+    do: Process.get(@instance_origin_key, %{}) |> Map.get({kind, key}, [])
 end

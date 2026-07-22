@@ -43,7 +43,10 @@ defmodule Cure.Elab.Coherence do
     key = {iface, head}
 
     if Map.has_key?(anon, key) do
-      first = Map.get(origins, key, %{})
+      first =
+        Cure.Elab.SourceMetadata.instance_origins(:anonymous, key)
+        |> List.first()
+        |> then(&(&1 || Map.get(origins, key, %{})))
 
       {:error,
        {:overlapping_instance,
@@ -56,11 +59,13 @@ defmodule Cure.Elab.Coherence do
           second_for: Map.get(origin, :for)
         }}}
     else
+      :ok = Cure.Elab.SourceMetadata.put_instance_origin(:anonymous, key, origin)
+
       {:ok,
        %{
          c
          | anon: Map.put(anon, key, ref),
-           anon_origins: Map.put(origins, key, origin)
+           anon_origins: Map.put(origins, key, Map.drop(origin, [:span]))
        }}
     end
   end
@@ -84,7 +89,10 @@ defmodule Cure.Elab.Coherence do
         origin
       ) do
     if Map.has_key?(named, name) do
-      first = Map.get(origins, name, %{})
+      first =
+        Cure.Elab.SourceMetadata.instance_origins(:named, name)
+        |> List.first()
+        |> then(&(&1 || Map.get(origins, name, %{})))
 
       {:error,
        {:overlapping_named_instance,
@@ -100,11 +108,13 @@ defmodule Cure.Elab.Coherence do
           second_for: Map.get(origin, :for)
         }}}
     else
+      :ok = Cure.Elab.SourceMetadata.put_instance_origin(:named, name, origin)
+
       {:ok,
        %{
          c
          | named: Map.put(named, name, ref),
-           named_origins: Map.put(origins, name, origin)
+           named_origins: Map.put(origins, name, Map.drop(origin, [:span]))
        }}
     end
   end

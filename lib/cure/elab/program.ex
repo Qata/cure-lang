@@ -2689,8 +2689,9 @@ defmodule Cure.Elab.Program do
           {:cont, {:ok, anon, Map.put(origins, key, origin)}}
 
         {:ok, _other} ->
-          first = Map.get(origins, key, %{})
-          second = Map.get(right.anon_origins, key, %{})
+          stored_first = Map.get(origins, key, %{})
+          stored_second = Map.get(right.anon_origins, key, %{})
+          {first, second} = merged_instance_origins(:anonymous, key, stored_first, stored_second)
 
           {:halt,
            {:error,
@@ -2718,8 +2719,9 @@ defmodule Cure.Elab.Program do
           {:cont, {:ok, named, Map.put(origins, name, origin)}}
 
         {:ok, _other} ->
-          first = Map.get(origins, name, %{})
-          second = Map.get(right.named_origins, name, %{})
+          stored_first = Map.get(origins, name, %{})
+          stored_second = Map.get(right.named_origins, name, %{})
+          {first, second} = merged_instance_origins(:named, name, stored_first, stored_second)
 
           {:halt,
            {:error,
@@ -2740,6 +2742,16 @@ defmodule Cure.Elab.Program do
           {:cont, {:ok, Map.put(named, name, ref), Map.put(origins, name, Map.get(right.named_origins, name, %{}))}}
       end
     end)
+  end
+
+  defp merged_instance_origins(kind, key, stored_first, stored_second) do
+    case Cure.Elab.SourceMetadata.instance_origins(kind, key) do
+      [first | _] = origins ->
+        {Map.merge(stored_first, first), Map.merge(stored_second, List.last(origins))}
+
+      [] ->
+        {stored_first, stored_second}
+    end
   end
 
   # Two passes so that forward references and mutual recursion resolve: first
