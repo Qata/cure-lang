@@ -146,7 +146,7 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
       )
 
     assert rendered =~ "macro rejected expansion"
-    assert rendered =~ "reported 1 diagnostic(s)"
+    assert rendered =~ "reported `missing_state`"
     assert rendered =~ "actor.cure:4"
   end
 

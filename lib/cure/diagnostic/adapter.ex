@@ -7200,7 +7200,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: "invalid macro expansion at #{format_syntax_path(path)}"
 
   defp computed_macro_reason({:author_diagnostics, diagnostics}) when is_list(diagnostics),
-    do: "macro rejected expansion: it reported #{length(diagnostics)} diagnostic(s)"
+    do: "macro rejected expansion: #{author_diagnostic_summary(diagnostics)}"
 
   defp computed_macro_reason({:author_failure, name, args}) when is_list(args),
     do: "macro rejected expansion: the macro reported `#{name}`"
@@ -7223,14 +7223,44 @@ defmodule Cure.Diagnostic.Adapter do
       }
     ]
 
-  defp computed_macro_suggestions({:author_diagnostics, _diagnostics}),
-    do: [%Suggestion{message: "Address the macro's authored diagnostics at this invocation", applicability: :manual}]
+  defp computed_macro_suggestions({:author_diagnostics, diagnostics}),
+    do: [
+      %Suggestion{
+        message: "Address #{author_diagnostic_hint(diagnostics)} at this invocation",
+        applicability: :manual
+      }
+    ]
 
   defp computed_macro_suggestions({:author_failure, name, _args}),
     do: [%Suggestion{message: "Fix the `#{name}` condition reported by this macro", applicability: :manual}]
 
   defp computed_macro_suggestions(_reason),
     do: [%Suggestion{message: "Fix this invocation or the computed macro's expander", applicability: :manual}]
+
+  defp author_diagnostic_summary(diagnostics) do
+    case author_diagnostic_names(diagnostics) do
+      [] -> "it reported #{length(diagnostics)} authored diagnostic(s)"
+      [name] -> "it reported `#{name}`"
+      names -> "it reported #{Enum.map_join(names, ", ", &"`#{&1}`")}"
+    end
+  end
+
+  defp author_diagnostic_hint(diagnostics) do
+    case author_diagnostic_names(diagnostics) do
+      [] -> "the macro's authored diagnostics"
+      [name] -> "the macro's `#{name}` diagnostic"
+      names -> "the macro diagnostics #{Enum.map_join(names, ", ", &"`#{&1}`")}"
+    end
+  end
+
+  defp author_diagnostic_names(diagnostics) do
+    diagnostics
+    |> Enum.flat_map(fn
+      {:macro_failure, name, _args} -> [name_to_string(name)]
+      _diagnostic -> []
+    end)
+    |> Enum.uniq()
+  end
 
   defp format_syntax_path(path) do
     path
