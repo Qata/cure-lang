@@ -504,6 +504,59 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, callback_info.body) == "arg"
   end
 
+  test "macro declarations and syntax rules own exact authored ranges" do
+    source =
+      "macro Wrapper\n" <>
+        "  syntax wrap <value: Expression> where Eq(value) becomes value\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "macro.cure", emit_events: false)
+
+    assert {:ok, {:macro_def, meta, [rule]}} =
+             Parser.parse(tokens, file: "macro.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == String.trim_trailing(source)
+    assert slice(source, info.opener) == "macro"
+    assert slice(source, info.name) == "Wrapper"
+
+    assert Enum.map(info.branches, &slice(source, &1)) == [
+             "syntax wrap <value: Expression> where Eq(value) becomes value"
+           ]
+
+    assert slice(source, rule.source_span) ==
+             "syntax wrap <value: Expression> where Eq(value) becomes value"
+
+    assert [%{source_span: obligation_span}] = rule.obligations
+    assert slice(source, obligation_span) == "where Eq(value)"
+  end
+
+  test "syntax families own productions, includes, and semantic fields" do
+    source =
+      "macro Families\n" <>
+        "  syntax family Base\n" <>
+        "    syntax base <id: Expression>\n" <>
+        "  syntax family Child\n" <>
+        "    includes Base\n" <>
+        "    syntax child <id: Expression>\n" <>
+        "    optional label Name where Eq(label)\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "family.cure", emit_events: false)
+
+    assert {:ok, {:macro_def, meta, [_base, family]}} =
+             Parser.parse(tokens, file: "family.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == String.trim_trailing(source)
+
+    assert slice(source, family.source_span) ==
+             "syntax family Child\n    includes Base\n    syntax child <id: Expression>\n    optional label Name where Eq(label)"
+
+    assert [production] = family.productions
+    assert slice(source, production.source_span) == "syntax child <id: Expression>"
+    assert [field] = family.fields
+    assert slice(source, field.source_span) == "optional label Name where Eq(label)"
+  end
+
   test "selective imports retain their exact path, selection, alias, and whole ranges" do
     source = "use Std.List.{map, fold} as Lists\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "selective.cure", emit_events: false)
