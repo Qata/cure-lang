@@ -1065,6 +1065,16 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unknown_interface_method, interface, method}, opts),
     do: unknown_name(:member, method, Keyword.put(opts, :checking, interface))
 
+  def from_error({:unknown_interface_method, %{interface: interface, method: method} = details}, opts) do
+    opts =
+      opts
+      |> Keyword.put(:span, Map.get(details, :span) || Keyword.get(opts, :span))
+      |> Keyword.put(:checking, interface)
+      |> Keyword.put(:candidates, Map.get(details, :candidates, []))
+
+    unknown_name(:member, method, opts)
+  end
+
   def from_error({:implementation_scope, %{kind: :member_outside} = details}, opts) do
     implementation = "#{name_to_string(details.interface)} for #{name_to_string(details.for)}"
     primary_span = Map.get(details, :member_span) || Keyword.get(opts, :span)
@@ -1145,6 +1155,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:method_signature_mismatch, interface, method}, opts),
     do: interface_failure(:method_signature_mismatch, %{interface: interface, method: method}, opts)
+
+  def from_error({:method_signature_mismatch, %{interface: _interface, method: _method} = details}, opts),
+    do: method_signature_failure(details, opts)
 
   def from_error({:instance_head_ill_formed, reason}, opts),
     do: interface_failure(:instance_head_ill_formed, %{reason: reason}, opts)
@@ -4165,6 +4178,42 @@ defmodule Cure.Diagnostic.Adapter do
       body: Doc.paragraph(message),
       primary: primary_label(opts, label),
       payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp method_signature_failure(details, opts) do
+    interface = name_to_string(details.interface)
+    method = name_to_string(details.method)
+    expected_surface = if(details.expected, do: surface_type(details.expected), else: "the interface signature")
+    actual_surface = if(details.actual, do: surface_type(details.actual), else: "an invalid method signature")
+    primary_span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Implementation method has the wrong signature",
+      body:
+        Doc.stack([
+          Doc.paragraph(
+            "`#{method}` in this `#{interface}` implementation has a different signature from the method declared by the interface. Every parameter and the result must agree after substituting the implementation type."
+          ),
+          type_comparison_doc(details.expected || expected_surface, details.actual || actual_surface)
+        ]),
+      primary: pickup_label(primary_span, :primary, "this implementation provides the incompatible signature"),
+      suggestions: [
+        %Suggestion{
+          message: "Change `#{method}` to use the parameter and result types required by `#{interface}`",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :method_signature_mismatch,
+        interface: interface,
+        method: method,
+        expected_surface: expected_surface,
+        actual_surface: actual_surface
+      }
     )
   end
 

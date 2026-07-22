@@ -137,13 +137,23 @@ defmodule Cure.Elab.Implementation do
 
     body
     |> Enum.flat_map(fn
-      {:function_def, m, _b} -> [Keyword.fetch!(m, :name)]
+      {:function_def, m, _b} -> [{Keyword.fetch!(m, :name), m}]
       _ -> []
     end)
-    |> Enum.find(&(not MapSet.member?(declared, &1)))
+    |> Enum.find(fn {name, _meta} -> not MapSet.member?(declared, name) end)
     |> case do
-      nil -> :ok
-      stray -> {:error, {:unknown_interface_method, iface, String.to_atom(stray)}}
+      nil ->
+        :ok
+
+      {stray, member_meta} ->
+        {:error,
+         {:unknown_interface_method,
+          %{
+            interface: iface,
+            method: String.to_atom(stray),
+            candidates: desc.method_order,
+            span: metadata_span(member_meta)
+          }}}
     end
   end
 
@@ -254,9 +264,32 @@ defmodule Cure.Elab.Implementation do
          true <- Cure.Core.Conv.conv?(expected_core, actual_core, [], 0, env) do
       :ok
     else
-      _ -> {:error, {:method_signature_mismatch, iface, method}}
+      _ ->
+        expected_core = lower_type_or_nil(expected_ast, expected_scope, env)
+        actual_core = lower_type_or_nil(actual_ast, actual_scope, env)
+
+        {:error,
+         {:method_signature_mismatch,
+          %{
+            interface: iface,
+            method: method,
+            expected: expected_core,
+            actual: actual_core,
+            span: metadata_span(m)
+          }}}
     end
   end
+
+  defp lower_type_or_nil(ast, scope, env) do
+    case Declarations.lower_type(ast, scope, env) do
+      {:ok, core} -> core
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp metadata_span(meta), do: meta |> Cure.MetaAST.Metadata.source_info() |> source_info_span()
+  defp source_info_span(%Cure.MetaAST.SourceInfo{whole: span}), do: span
+  defp source_info_span(_source_info), do: nil
 
   # Build the surface function-type AST `T1 -> ... -> Tn -> R` from a param list
   # and return type, MIRRORING `Interface.build_method_map`'s `method_type_ast`

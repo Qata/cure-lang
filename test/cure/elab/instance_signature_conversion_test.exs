@@ -23,7 +23,8 @@ defmodule Cure.Elab.InstanceSignatureConversionTest do
     end
     """
 
-    assert {:error, {:method_signature_mismatch, :Equatable, :==}} = Program.elaborate(src)
+    assert {:error, {:method_signature_mismatch, %{interface: :Equatable, method: :==}}} =
+             Program.elaborate(src)
   end
 
   test "a correctly-typed instance passes conversion" do

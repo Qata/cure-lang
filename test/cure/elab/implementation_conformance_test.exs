@@ -41,7 +41,7 @@ defmodule Cure.Elab.ImplementationConformanceTest do
       end
       """
 
-      assert {:error, {:method_signature_mismatch, :Eqs, :eqs}} = Program.elaborate(src)
+      assert {:error, {:method_signature_mismatch, %{interface: :Eqs, method: :eqs}}} = Program.elaborate(src)
     end
 
     test "a clause whose parameter type diverges from the interface is rejected" do
@@ -54,7 +54,7 @@ defmodule Cure.Elab.ImplementationConformanceTest do
       end
       """
 
-      assert {:error, {:method_signature_mismatch, :Eqs, :eqs}} = Program.elaborate(src)
+      assert {:error, {:method_signature_mismatch, %{interface: :Eqs, method: :eqs}}} = Program.elaborate(src)
     end
 
     test "a conforming first-order implementation is accepted" do
@@ -98,7 +98,7 @@ defmodule Cure.Elab.ImplementationConformanceTest do
       end
       """
 
-      assert {:error, {:method_signature_mismatch, :Functor, :fmap}} = Program.elaborate(src)
+      assert {:error, {:method_signature_mismatch, %{interface: :Functor, method: :fmap}}} = Program.elaborate(src)
     end
   end
 
@@ -114,7 +114,7 @@ defmodule Cure.Elab.ImplementationConformanceTest do
       end
       """
 
-      assert {:error, {:unknown_interface_method, :Eqs, :eqz}} = Program.elaborate(src)
+      assert {:error, {:unknown_interface_method, %{interface: :Eqs, method: :eqz}}} = Program.elaborate(src)
     end
 
     test "an implementation relying entirely on interface defaults is still accepted" do
