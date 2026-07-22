@@ -235,7 +235,16 @@ defmodule Cure.Elab.Elaborator do
           ]}}
 
       :error ->
-        {:error, {:foreign_ctor, cname}}
+        {:error,
+         {:source_context, {:foreign_ctor, cname},
+          %{
+            constructor: cname,
+            actual_family: Inductive.ctor_family(sig, cname),
+            expected_family: dname,
+            expected_constructors: Enum.map(Inductive.ctors_of(sig, dname), & &1.name),
+            expectation_origin: :pattern_constructor,
+            expression_category: :constructor_pattern
+          }}}
     end
   end
 
