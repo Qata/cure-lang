@@ -13,18 +13,25 @@ defmodule Cure.Elab.PrimitiveDeclTest do
   end
 
   test "a primitive with no @builtin marker is rejected" do
-    assert {:error, _} = Program.elaborate("mod M\n  primitive Widget\nend\n")
+    assert {:error,
+            {:source_context, {:primitive_missing_builtin, "Widget"}, %{expectation_origin: :primitive_declaration}}} =
+             Program.elaborate("mod M\n  primitive Widget\nend\n")
   end
 
   test "a primitive with an unknown @builtin tag is rejected" do
-    assert {:error, _} = Program.elaborate("mod M\n  @builtin(:sparkle) primitive Sparkle\nend\n")
+    assert {:error,
+            {:source_context, {:unknown_primitive_tag, :sparkle}, %{expectation_origin: :primitive_declaration}}} =
+             Program.elaborate("mod M\n  @builtin(:sparkle) primitive Sparkle\nend\n")
   end
 
   test "a primitive whose tag disagrees with the name's floor is rejected" do
     # Binary's floor is {:binary_type}; tagging it :float contradicts the floor.
     # (Int is no longer a machine primitive — it is the inductive Std.Int#Int
     # family — so the floor-disagreement is exercised on a name still on the floor.)
-    assert {:error, _} = Program.elaborate("mod M\n  @builtin(:float) primitive Binary\nend\n")
+    assert {:error,
+            {:source_context, {:primitive_floor_mismatch, "Binary", {:float_type}, {:binary_type}},
+             %{expectation_origin: :primitive_declaration}}} =
+             Program.elaborate("mod M\n  @builtin(:float) primitive Binary\nend\n")
   end
 
   test "`:int` is no longer a legal @builtin primitive tag" do
@@ -37,6 +44,7 @@ defmodule Cure.Elab.PrimitiveDeclTest do
     # succeed and create an incoherent local `Int` binding that only fails much
     # later, at codegen, with a cryptic conversion_failure against the family
     # type. It must be rejected cleanly at the declaration site instead.
-    assert {:error, _} = Program.elaborate("mod M\n  @builtin(:int) primitive Int\nend\n")
+    assert {:error, {:source_context, {:unknown_primitive_tag, :int}, %{expectation_origin: :primitive_declaration}}} =
+             Program.elaborate("mod M\n  @builtin(:int) primitive Int\nend\n")
   end
 end

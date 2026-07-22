@@ -43,10 +43,13 @@ defmodule Cure.Elab.Declarations do
   """
   @spec elaborate(tuple(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
   def elaborate(decl, env) do
-    with :ok <- reject_erases_on_non_opaque(decl),
-         {:ok, env} <- Cure.Elab.Union.predeclare_all(decl, env) do
-      do_elaborate(decl, env)
-    end
+    result =
+      with :ok <- reject_erases_on_non_opaque(decl),
+           {:ok, env} <- Cure.Elab.Union.predeclare_all(decl, env) do
+        do_elaborate(decl, env)
+      end
+
+    attach_declaration_source_context(result, decl)
   end
 
   defp do_elaborate({:function_def, _meta, _body} = decl, env) do
@@ -185,7 +188,103 @@ defmodule Cure.Elab.Declarations do
     Cure.Elab.Interface.elaborate(decl, env)
   end
 
-  defp do_elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
+  defp do_elaborate(other, _env) when is_tuple(other),
+    do: {:error, {:unsupported_declaration, elem(other, 0)}}
+
+  defp do_elaborate(other, _env), do: {:error, {:unsupported_declaration, declaration_shape(other)}}
+
+  # Declaration validation runs after parsing and can also receive generated
+  # MetaAST. Preserve the exact authored declaration role when one exists,
+  # while leaving generated-only failures honestly span-free.
+  defp attach_declaration_source_context(
+         {:error, reason},
+         {:container, meta, _children}
+       )
+       when is_list(meta) and
+              elem(reason, 0) in [
+                :primitive_missing_builtin,
+                :unknown_primitive_tag,
+                :primitive_floor_mismatch
+              ] do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+    kind = elem(reason, 0)
+
+    context = %{
+      span: primitive_failure_span(kind, info),
+      declaration_span: if(info, do: info.whole),
+      name_span: if(info, do: info.name),
+      builtin_span: decorator_span(info, "builtin", :whole),
+      builtin_argument_span: decorator_span(info, "builtin", 0),
+      primitive: Keyword.get(meta, :name),
+      builtin_tag: primitive_decorator_tag(meta),
+      expectation_origin: :primitive_declaration,
+      expression_category: :primitive_declaration
+    }
+
+    {:error, {:source_context, reason, context}}
+  end
+
+  defp attach_declaration_source_context(
+         {:error, {:unsupported_declaration, _shape} = reason},
+         {_tag, meta, _children}
+       )
+       when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{} = info ->
+        {:error,
+         {:source_context, reason,
+          %{
+            span: info.whole,
+            declaration_span: info.whole,
+            name_span: info.name,
+            expectation_origin: :declaration_validation,
+            expression_category: :declaration
+          }}}
+
+      _ ->
+        {:error, reason}
+    end
+  end
+
+  defp attach_declaration_source_context(result, _decl), do: result
+
+  defp primitive_failure_span(kind, info)
+       when kind in [:unknown_primitive_tag, :primitive_floor_mismatch],
+       do: decorator_span(info, "builtin", 0) || if(info, do: info.name)
+
+  defp primitive_failure_span(_kind, info), do: if(info, do: info.name || info.whole)
+
+  defp decorator_span(%Cure.MetaAST.SourceInfo{decorators: decorators}, name, :whole) do
+    case Map.get(decorators, name) do
+      %{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp decorator_span(%Cure.MetaAST.SourceInfo{decorators: decorators}, name, index)
+       when is_integer(index) do
+    case Map.get(decorators, name) do
+      %{arguments: arguments} -> Enum.at(arguments, index)
+      _ -> nil
+    end
+  end
+
+  defp decorator_span(_info, _name, _role), do: nil
+
+  defp primitive_decorator_tag(meta) do
+    case Keyword.get(meta, :decorator) do
+      {:decorator, dm, [{:literal, _, tag}]} when is_atom(tag) ->
+        if Keyword.get(dm, :name) == :builtin, do: tag
+
+      _ ->
+        nil
+    end
+  end
+
+  defp declaration_shape(value) when is_map(value), do: :map
+  defp declaration_shape(value) when is_list(value), do: :list
+  defp declaration_shape(value) when is_atom(value), do: value
+  defp declaration_shape(_value), do: :unknown
 
   # `Cure.Elab.Union.union_family?/1` recognises a generated union family purely
   # by a name-prefix test ("Union<…>"). That is safe only if the prefix is truly

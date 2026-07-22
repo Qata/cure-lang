@@ -1205,6 +1205,31 @@ defmodule Cure.Diagnostic.Adapter do
     pattern_structure_failure(kind, nil, context, opts)
   end
 
+  def from_error({:source_context, {:primitive_missing_builtin, name}, context}, opts)
+      when is_map(context),
+      do: primitive_declaration_failure(:missing_builtin, %{name: name}, context, opts)
+
+  def from_error({:source_context, {:unknown_primitive_tag, tag}, context}, opts)
+      when is_map(context),
+      do: primitive_declaration_failure(:unknown_builtin, %{tag: tag}, context, opts)
+
+  def from_error(
+        {:source_context, {:primitive_floor_mismatch, name, declared, expected}, context},
+        opts
+      )
+      when is_map(context),
+      do:
+        primitive_declaration_failure(
+          :floor_mismatch,
+          %{name: name, declared: primitive_core_tag(declared), expected: primitive_core_tag(expected)},
+          context,
+          opts
+        )
+
+  def from_error({:source_context, {:unsupported_declaration, shape}, context}, opts)
+      when is_map(context),
+      do: primitive_declaration_failure(:unsupported_declaration, %{shape: shape}, context, opts)
+
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
     opts =
       opts
@@ -1481,11 +1506,7 @@ defmodule Cure.Diagnostic.Adapter do
                :duplicate_driver_register,
                :overlapping_driver_register,
                :unsupported_hole_type,
-               :invalid_generated_syntax,
-               :primitive_missing_builtin,
-               :unknown_primitive_tag,
-               :primitive_floor_mismatch,
-               :unsupported_declaration
+               :invalid_generated_syntax
              ],
       do: macro_validation_failure(kind, %{detail: detail}, opts)
 
@@ -1510,8 +1531,23 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:reducer_arity, constructor, actual, expected}, opts),
     do: macro_reducer_failure(:reducer_arity, %{constructor: constructor, actual: actual, expected: expected}, opts)
 
-  def from_error({:primitive_floor_mismatch, name, node, other}, opts),
-    do: macro_validation_failure(:primitive_floor_mismatch, %{name: name, node: node, other: other}, opts)
+  def from_error({:primitive_missing_builtin, name}, opts),
+    do: primitive_declaration_failure(:missing_builtin, %{name: name}, %{}, opts)
+
+  def from_error({:unknown_primitive_tag, tag}, opts),
+    do: primitive_declaration_failure(:unknown_builtin, %{tag: tag}, %{}, opts)
+
+  def from_error({:primitive_floor_mismatch, name, declared, expected}, opts),
+    do:
+      primitive_declaration_failure(
+        :floor_mismatch,
+        %{name: name, declared: primitive_core_tag(declared), expected: primitive_core_tag(expected)},
+        %{},
+        opts
+      )
+
+  def from_error({:unsupported_declaration, shape}, opts),
+    do: primitive_declaration_failure(:unsupported_declaration, %{shape: shape}, %{}, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -4027,6 +4063,118 @@ defmodule Cure.Diagnostic.Adapter do
       payload: %{kind: kind, name: detail, checking: Map.get(context, :checking)}
     )
   end
+
+  defp primitive_declaration_failure(kind, details, context, opts) do
+    name = Map.get(details, :name) || Map.get(context, :primitive)
+    tag = Map.get(details, :tag) || Map.get(context, :builtin_tag)
+    {title, body, primary_message, hint} = primitive_declaration_content(kind, name, tag, details)
+    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case {kind, Map.get(context, :name_span)} do
+        {kind, %Span{} = span} when kind in [:unknown_builtin, :floor_mismatch] and span != primary_span ->
+          [
+            %Label{
+              span: span,
+              style: :secondary,
+              message: "this is the primitive declaration being validated"
+            }
+          ]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E120",
+      key: :primitive_declaration,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: primary_label(Keyword.put(opts, :span, primary_span), primary_message),
+      secondary: secondary,
+      suggestions: primitive_declaration_suggestions(kind, details, context, hint),
+      payload: %{
+        kind: kind,
+        name: name,
+        tag: tag,
+        declared: Map.get(details, :declared),
+        expected: Map.get(details, :expected),
+        shape: Map.get(details, :shape)
+      }
+    )
+  end
+
+  defp primitive_declaration_content(:missing_builtin, name, _tag, _details) do
+    {
+      "Primitive declaration needs a builtin tag",
+      "`#{name_to_string(name)}` is declared as a primitive, but it has no `@builtin(...)` marker. The marker tells the compiler which runtime primitive representation this name denotes.",
+      "add a `@builtin(...)` marker for this primitive",
+      "Add one of `@builtin(:float)`, `@builtin(:binary)`, or `@builtin(:atom)` before this declaration"
+    }
+  end
+
+  defp primitive_declaration_content(:unknown_builtin, _name, tag, _details) do
+    {
+      "`#{primitive_tag_spelling(tag)}` is not a primitive builtin",
+      "The compiler has no primitive representation named `#{primitive_tag_spelling(tag)}`. Primitive declarations may currently use only `:float`, `:binary`, or `:atom`.",
+      "this builtin tag is not recognized",
+      "Use `:float`, `:binary`, or `:atom`, or declare an ordinary Cure type instead"
+    }
+  end
+
+  defp primitive_declaration_content(:floor_mismatch, name, _tag, details) do
+    declared = primitive_tag_spelling(Map.get(details, :declared))
+    expected = primitive_tag_spelling(Map.get(details, :expected))
+
+    {
+      "`#{name_to_string(name)}` has the wrong primitive builtin",
+      "`#{name_to_string(name)}` is part of the compiler's primitive floor and denotes `#{expected}`, but this declaration marks it as `#{declared}`. Those representations are not interchangeable.",
+      "replace this tag with `#{expected}`",
+      "Change the marker to `@builtin(#{expected})`"
+    }
+  end
+
+  defp primitive_declaration_content(:unsupported_declaration, _name, _tag, details) do
+    shape = details |> Map.get(:shape) |> name_to_string()
+
+    {
+      "Declaration form is not supported",
+      "The elaborator received a `#{shape}` declaration form that this compiler does not support. If a macro generated this declaration, its expansion must use a supported declaration node.",
+      "this declaration cannot be elaborated",
+      "Rewrite this as a supported function, type, interface, implementation, or primitive declaration"
+    }
+  end
+
+  defp primitive_declaration_suggestions(:floor_mismatch, details, context, hint) do
+    expected = Map.get(details, :expected)
+
+    case {Map.get(context, :builtin_argument_span), expected} do
+      {%Span{} = span, tag} when is_atom(tag) ->
+        [
+          %Suggestion{
+            message: hint,
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: primitive_tag_spelling(tag)}]
+          }
+        ]
+
+      _ ->
+        [%Suggestion{message: hint, applicability: :manual}]
+    end
+  end
+
+  defp primitive_declaration_suggestions(_kind, _details, _context, hint),
+    do: [%Suggestion{message: hint, applicability: :manual}]
+
+  defp primitive_core_tag({:float_type}), do: :float
+  defp primitive_core_tag({:binary_type}), do: :binary
+  defp primitive_core_tag({:atom_type}), do: :atom
+  defp primitive_core_tag(other) when is_atom(other), do: other
+  defp primitive_core_tag(_other), do: :unknown
+
+  defp primitive_tag_spelling(tag) when is_atom(tag), do: ":#{tag}"
+  defp primitive_tag_spelling(tag), do: name_to_string(tag)
 
   defp operator_failure(kind, operator, context, opts) do
     spelling = name_to_string(operator)
