@@ -3732,32 +3732,87 @@ defmodule Cure.Diagnostic.Adapter do
     do: {primary_label(opts, primary_message), []}
 
   defp coverage_problem(kind, branch, context, opts) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+    branch_name = surface_declaration_name(branch)
+    matching = matching_branch_patterns(context, branch_name)
 
-    {title, body, label} =
+    {title, body, primary, secondary, hint} =
       case kind do
         :missing_branch ->
-          {"Incomplete pattern match", "This match does not cover the branch `#{name_to_string(branch)}`.",
-           "add a branch for this constructor or a catch-all pattern"}
+          span = missing_branch_insertion_span(context) || Map.get(context, :span)
+
+          {
+            "Pattern match is missing `#{branch_name}`",
+            "This match can receive `#{branch_name}`, but no branch handles that constructor.",
+            pickup_label(span, :primary, "add a `#{branch_name}` branch here"),
+            [],
+            "Add a `#{branch_name}(...) -> ...` branch, or a catch-all branch"
+          }
 
         :reachable_impossible ->
-          {"Impossible pattern branch", "This branch can never be reached for the matched type.",
-           "remove this branch or correct its pattern"}
+          span = branch_pattern_span(List.first(matching)) || Map.get(context, :span)
+
+          {
+            "`#{branch_name}` is reachable here",
+            "This branch is marked `impossible`, but `#{branch_name}` can occur for the matched type and indices.",
+            pickup_label(span, :primary, "this constructor is reachable"),
+            [],
+            "Replace `impossible` with a result for the `#{branch_name}` case"
+          }
 
         :duplicate_branch ->
-          {"Duplicate pattern branch", "This branch repeats a constructor already handled by an earlier branch.",
-           "remove the duplicate branch"}
+          first = List.first(matching)
+          duplicate = List.last(matching)
+
+          secondary =
+            case pickup_label(branch_pattern_span(first), :secondary, "`#{branch_name}` is first handled here") do
+              nil -> []
+              label -> [label]
+            end
+
+          {
+            "`#{branch_name}` has more than one branch",
+            "Only one branch may handle each constructor. The later `#{branch_name}` branch can never be selected independently.",
+            pickup_label(
+              branch_pattern_span(duplicate) || Map.get(context, :span),
+              :primary,
+              "this repeats the earlier `#{branch_name}` branch"
+            ),
+            secondary,
+            "Combine these `#{branch_name}` cases or remove the duplicate branch"
+          }
       end
 
     Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
+      code: "E118",
+      key: :pattern_coverage,
       severity: :error,
       title: title,
       body: Doc.paragraph(body),
-      primary: primary_label(opts, label),
+      primary: primary || primary_label(opts, "fix this pattern match"),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
       payload: %{kind: kind, branch: branch, checking: Map.get(context, :checking)}
     )
+  end
+
+  defp matching_branch_patterns(context, branch_name) do
+    context
+    |> Map.get(:branch_patterns, [])
+    |> Enum.filter(fn pattern -> Map.get(pattern, :name) == branch_name end)
+  end
+
+  defp branch_pattern_span(%{pattern_span: %Span{} = span}), do: span
+  defp branch_pattern_span(%{span: %Span{} = span}), do: span
+  defp branch_pattern_span(_pattern), do: nil
+
+  defp missing_branch_insertion_span(context) do
+    case context |> Map.get(:branch_patterns, []) |> List.last() do
+      %{span: %Span{} = span} ->
+        %{span | start_byte: span.end_byte, start_line: span.end_line, start_column: span.end_column}
+
+      _ ->
+        nil
+    end
   end
 
   defp pattern_problem(kind, details, context, opts) do
@@ -5362,7 +5417,7 @@ defmodule Cure.Diagnostic.Adapter do
       )
     ]
     |> Enum.reject(&is_nil/1)
-    |> Enum.reject(&(&1.span == primary_span))
+    |> Enum.reject(&same_span_coordinates?(&1.span, primary_span))
   end
 
   defp usage_secondary_labels(context, primary_span, declared, _used) do
@@ -5376,7 +5431,7 @@ defmodule Cure.Diagnostic.Adapter do
     earlier_uses =
       context
       |> Map.get(:use_spans, [])
-      |> Enum.reject(&(&1 == primary_span))
+      |> Enum.reject(&same_span_coordinates?(&1, primary_span))
       |> Enum.map(&pickup_label(&1, :secondary, "another use on this path is here"))
 
     [binder | earlier_uses] |> Enum.reject(&is_nil/1)
@@ -5384,6 +5439,13 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp pickup_label(%Span{} = span, style, message), do: %Label{span: span, style: style, message: message}
   defp pickup_label(_, _style, _message), do: nil
+
+  defp same_span_coordinates?(%Span{} = left, %Span{} = right) do
+    left.start_byte == right.start_byte and left.end_byte == right.end_byte and
+      left.start_line == right.start_line and left.end_line == right.end_line
+  end
+
+  defp same_span_coordinates?(_left, _right), do: false
 
   defp edition_replacement_suggestion(%{
          argument_span: %Span{} = span,

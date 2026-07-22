@@ -980,7 +980,13 @@ defmodule Cure.Elab.Declarations do
   defp branch_patterns({:pattern_match, _meta, [_scrutinee | arms]}) do
     Enum.map(arms, fn
       {:match_arm, arm_meta, _body} ->
-        %{name: pattern_label(Keyword.get(arm_meta, :pattern)), span: arm_span(arm_meta)}
+        pattern = Keyword.get(arm_meta, :pattern)
+
+        %{
+          name: pattern_label(pattern),
+          span: arm_span(arm_meta),
+          pattern_span: surface_pattern_span(arm_meta, pattern)
+        }
 
       _ ->
         %{name: "unknown branch", span: nil}
@@ -1035,6 +1041,13 @@ defmodule Cure.Elab.Declarations do
     case Keyword.get(meta, :source_info) do
       %Cure.MetaAST.SourceInfo{whole: span} -> span
       _ -> nil
+    end
+  end
+
+  defp surface_pattern_span(meta, pattern) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{pattern: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> expression_meta(pattern) |> Cure.MetaAST.Metadata.source_info() |> then(&if(&1, do: &1.whole))
     end
   end
 

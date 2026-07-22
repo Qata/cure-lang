@@ -553,14 +553,18 @@ defmodule Cure.Diagnostic.HostTest do
   test "renders pattern coverage failures with branch identity" do
     missing = Host.render({:source_context, {:missing_branch, :None}, %{}}, "match.cure")
     impossible = Host.render({:source_context, {:reachable_impossible, :Some}, %{}}, "match.cure")
+    duplicate = Host.render({:source_context, {:duplicate_branch, :Some}, %{}}, "match.cure")
 
-    assert missing =~ "[E093]"
-    assert missing =~ "INCOMPLETE PATTERN MATCH"
+    assert missing =~ "[E118]"
+    assert missing =~ "PATTERN MATCH IS MISSING `NONE`"
     assert missing =~ "None"
-    assert impossible =~ "[E093]"
-    assert impossible =~ "IMPOSSIBLE PATTERN BRANCH"
+    assert impossible =~ "[E118]"
+    assert impossible =~ "`SOME` IS REACHABLE HERE"
+    assert duplicate =~ "[E118]"
+    assert duplicate =~ "`SOME` HAS MORE THAN ONE BRANCH"
     refute missing =~ ":missing_branch"
     refute impossible =~ ":reachable_impossible"
+    refute duplicate =~ ":duplicate_branch"
   end
 
   test "renders forced and rematched pattern failures contextually" do
