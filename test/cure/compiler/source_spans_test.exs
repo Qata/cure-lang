@@ -19,7 +19,9 @@ defmodule Cure.Compiler.SourceSpansTest do
     function_span = function |> elem(1) |> Metadata.source_info() |> Map.fetch!(:whole)
     assert slice(source, function_span) =~ "fn answer"
     assert slice(source, function_span) =~ "helper(x)"
-    assert slice(source, Metadata.source_info(elem(function, 1)).name) == "answer"
+    function_info = Metadata.source_info(elem(function, 1))
+    assert slice(source, function_info.name) == "answer"
+    assert slice(source, function_info.body) == "helper(x)"
 
     [{:param, parameter_meta, "x"}] = Keyword.fetch!(elem(function, 1), :params)
     parameter_info = Metadata.source_info(parameter_meta)
@@ -51,6 +53,7 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, Metadata.source_info(return_meta).whole) == "Int"
     assert slice(source, Metadata.source_info(parameter_type_meta).whole) == "Int"
     assert slice(source, function_info.annotation) == "Int"
+    assert slice(source, function_info.body) == "x"
   end
 
   test "parameter source info owns the authored annotation range" do

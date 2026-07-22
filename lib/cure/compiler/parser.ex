@@ -7267,6 +7267,7 @@ defmodule Cure.Compiler.Parser do
 
         meta =
           build_fn_meta(state, fn_token, name_token, name, params, return_type, visibility, guard, constraints, effects)
+          |> put_function_body_source_info(body)
 
         meta = if where_bindings == [], do: meta, else: Keyword.put(meta, :where, where_bindings)
         ast = {:function_def, meta, [body]}
@@ -7298,6 +7299,7 @@ defmodule Cure.Compiler.Parser do
                 constraints,
                 effects
               )
+              |> put_function_body_source_info(body)
 
             meta = if where_bindings == [], do: meta, else: Keyword.put(meta, :where, where_bindings)
 
@@ -7529,6 +7531,16 @@ defmodule Cure.Compiler.Parser do
           _ ->
             meta
         end
+
+      _ ->
+        meta
+    end
+  end
+
+  defp put_function_body_source_info(meta, body) do
+    case {Metadata.source_info(meta), ast_source_span(body)} do
+      {%SourceInfo{} = info, %Cure.Diagnostic.Span{} = body_span} ->
+        Metadata.put_source_info(meta, %{info | body: body_span})
 
       _ ->
         meta
