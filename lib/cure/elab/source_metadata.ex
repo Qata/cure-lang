@@ -9,6 +9,12 @@ defmodule Cure.Elab.SourceMetadata do
   @parameter_key {__MODULE__, :parameter_spans}
   @declaration_key {__MODULE__, :declaration_spans}
   @equation_key {__MODULE__, :equations}
+  @interface_method_key {__MODULE__, :interface_method_spans}
+
+  def reset do
+    Enum.each([@parameter_key, @declaration_key, @equation_key, @interface_method_key], &Process.delete/1)
+    :ok
+  end
 
   def put_parameter_spans(name, spans) when is_atom(name) and is_list(spans) do
     Process.put(@parameter_key, Map.put(Process.get(@parameter_key, %{}), name, spans))
@@ -31,4 +37,13 @@ defmodule Cure.Elab.SourceMetadata do
   end
 
   def equation(theorem) when is_atom(theorem), do: Process.get(@equation_key, %{}) |> Map.get(theorem, %{})
+
+  def put_interface_method_span(interface, method, span) when is_atom(interface) and is_atom(method) do
+    key = {interface, method}
+    Process.put(@interface_method_key, Map.put(Process.get(@interface_method_key, %{}), key, span))
+    :ok
+  end
+
+  def interface_method_span(interface, method) when is_atom(interface) and is_atom(method),
+    do: Process.get(@interface_method_key, %{}) |> Map.get({interface, method})
 end

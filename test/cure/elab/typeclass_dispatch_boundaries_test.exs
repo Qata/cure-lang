@@ -59,7 +59,8 @@ defmodule Cure.Elab.TypeclassDispatchBoundariesTest do
       end
       """
 
-      assert {:error, {:ambiguous_method, :size, [:Eqs, :Ord]}} = Program.elaborate(src)
+      assert {:error, error} = Program.elaborate(src)
+      assert {:ambiguous_method, :size, [:Eqs, :Ord]} = Program.semantic_error(error)
     end
 
     test "distinct method names across two interfaces are fine" do

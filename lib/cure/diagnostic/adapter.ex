@@ -934,6 +934,10 @@ defmodule Cure.Diagnostic.Adapter do
     no_instance_failure(interface, head, context, Keyword.put_new(opts, :span, Map.get(context, :span)))
   end
 
+  def from_error({:source_context, {:ambiguous_method, method, interfaces}, context}, opts)
+      when is_map(context),
+      do: ambiguous_member(method, interfaces, context, opts)
+
   def from_error({:source_context, {:no_named_instance, name}, context}, opts) when is_map(context) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
 
@@ -6609,24 +6613,74 @@ defmodule Cure.Diagnostic.Adapter do
     {title, message, label}
   end
 
-  defp ambiguous_member(method, interfaces, opts) do
+  defp ambiguous_member(method, interfaces, opts), do: ambiguous_member(method, interfaces, %{}, opts)
+
+  defp ambiguous_member(method, interfaces, context, opts) do
     spelling = name_to_string(method)
     owners = Enum.map(interfaces, &name_to_string/1)
+    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    declarations =
+      context
+      |> Map.get(:method_declarations, [])
+      |> Enum.filter(&match?(%{span: %Span{}}, &1))
+
+    secondary =
+      declarations
+      |> Enum.reject(&(&1.span == primary_span))
+      |> Enum.map(fn declaration ->
+        %Label{
+          span: declaration.span,
+          style: :secondary,
+          message: "`#{spelling}` is also declared by `#{name_to_string(declaration.interface)}` here"
+        }
+      end)
+
+    primary_owner =
+      Enum.find_value(declarations, fn declaration ->
+        if declaration.span == primary_span, do: name_to_string(declaration.interface)
+      end)
+
+    owner_list = Enum.map_join(owners, " and ", &"`#{&1}`")
 
     Diagnostic.new(
       code: "E089",
       key: :ambiguous_name,
       severity: :error,
-      title: "Ambiguous interface method",
-      body: Doc.paragraph("Method `#{spelling}` is declared by more than one visible interface."),
-      primary: primary_label(opts, "qualify or disambiguate this method"),
+      title: "Method `#{spelling}` is declared by multiple interfaces",
+      body:
+        Doc.paragraph(
+          "Both #{owner_list} declare `#{spelling}`. Interface methods share one unqualified namespace, so Cure could not determine which declaration an unqualified `#{spelling}(...)` call should use."
+        ),
+      primary:
+        if(primary_span,
+          do: %Label{
+            span: primary_span,
+            style: :primary,
+            message:
+              if(primary_owner,
+                do: "`#{primary_owner}` repeats the interface method `#{spelling}`",
+                else: "this repeats the interface method `#{spelling}`"
+              )
+          },
+          else: primary_label(opts, "rename this interface method")
+        ),
+      secondary: secondary,
       suggestions: [
         %Suggestion{
-          message: "Choose one of #{Enum.map_join(owners, ", ", &"`#{&1}`")}",
+          message: "Rename `#{spelling}` in one interface so every interface method has a unique name",
           applicability: :manual
         }
       ],
-      payload: %{kind: :ambiguous_method, method: spelling, interfaces: owners}
+      payload: %{
+        kind: :ambiguous_method,
+        method: spelling,
+        interfaces: owners,
+        declarations:
+          Enum.map(declarations, fn declaration ->
+            %{interface: name_to_string(declaration.interface)}
+          end)
+      }
     )
   end
 

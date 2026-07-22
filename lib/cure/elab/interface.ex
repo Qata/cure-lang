@@ -50,8 +50,9 @@ defmodule Cure.Elab.Interface do
           super: super_interfaces
         })
 
-      with :ok <- check_method_names_free(desc, env),
+      with :ok <- check_method_names_free(desc, env, methods),
            {:ok, env1} <- declare_dictionary_former(desc, env) do
+        register_method_spans(desc.name, methods)
         {:ok, Env.put_interface(env1, name_atom, desc)}
       end
     end
@@ -68,7 +69,7 @@ defmodule Cure.Elab.Interface do
   # same-named method: an unqualified reference that cannot be disambiguated is a compile error,
   # never an arbitrary pick. Cure has no qualified method-call syntax, so the ambiguity can only
   # be reported where it is created.
-  defp check_method_names_free(desc, %Env{interfaces: ifaces}) do
+  defp check_method_names_free(desc, %Env{interfaces: ifaces}, methods) do
     desc.method_order
     |> Enum.find_value(fn m ->
       Enum.find_value(ifaces, fn {other, other_desc} ->
@@ -76,8 +77,57 @@ defmodule Cure.Elab.Interface do
       end)
     end)
     |> case do
-      nil -> :ok
-      {method, other} -> {:error, {:ambiguous_method, method, Enum.sort([desc.name, other])}}
+      nil ->
+        :ok
+
+      {method, other} ->
+        interfaces = Enum.sort([desc.name, other])
+        current_span = method_span(methods, method)
+        other_span = Cure.Elab.SourceMetadata.interface_method_span(other, method)
+
+        {:error,
+         {:source_context, {:ambiguous_method, method, interfaces},
+          %{
+            span: current_span,
+            method: method,
+            interfaces: interfaces,
+            method_declarations: [
+              %{interface: other, span: other_span},
+              %{interface: desc.name, span: current_span}
+            ],
+            checking: desc.name,
+            expectation_origin: :interface_declaration,
+            expression_category: :interface_method
+          }}}
+    end
+  end
+
+  defp register_method_spans(interface, methods) do
+    Enum.each(methods, fn
+      {:function_def, meta, _body} ->
+        method = meta |> Keyword.fetch!(:name) |> String.to_atom()
+        :ok = Cure.Elab.SourceMetadata.put_interface_method_span(interface, method, method_span(meta))
+
+      _other ->
+        :ok
+    end)
+  end
+
+  defp method_span(methods, method) when is_list(methods) do
+    Enum.find_value(methods, fn
+      {:function_def, meta, _body} ->
+        if String.to_atom(Keyword.fetch!(meta, :name)) == method, do: method_span(meta)
+
+      _other ->
+        nil
+    end)
+  end
+
+  defp method_span(meta) when is_list(meta) do
+    case Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: span} when not is_nil(span) -> span
+      %Cure.MetaAST.SourceInfo{whole: span} -> span
+      _ -> nil
     end
   end
 

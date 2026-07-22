@@ -118,6 +118,7 @@ defmodule Cure.Elab.Program do
   defp with_loader_session(fun) when is_function(fun, 0) do
     case Process.get(@loader_state_key, :no_loader_session) do
       :no_loader_session ->
+        :ok = Cure.Elab.SourceMetadata.reset()
         Process.put(@loader_state_key, %{modules: %{}, paths: %{}, prelude_bootstrap: nil})
 
         try do
