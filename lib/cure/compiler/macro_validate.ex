@@ -83,7 +83,11 @@ defmodule Cure.Compiler.MacroValidate do
               :computed_example_error,
               :expansion_ill_typed,
               :unsupported_hole_type,
-              :generated_hole_not_well_typed
+              :generated_hole_not_well_typed,
+              :invalid_macro_segment,
+              :unsupported_surface_filler,
+              :missing_hole_filler,
+              :invalid_repeated_hole_filler
             ] do
     {:error, {:source_context, reason, validation_source_context(reason, meta, rules)}}
   end
@@ -252,6 +256,28 @@ defmodule Cure.Compiler.MacroValidate do
       category: category,
       hole: hole,
       expression_category: :macro_proof_generator_invariant
+    }
+  end
+
+  defp validation_source_context({kind, detail}, meta, rules)
+       when kind in [
+              :invalid_macro_segment,
+              :unsupported_surface_filler,
+              :missing_hole_filler,
+              :invalid_repeated_hole_filler
+            ] do
+    rule_span =
+      rules
+      |> Enum.find_value(fn rule ->
+        if rule[:kind] in [:syntax, :computed], do: Map.get(rule, :source_span)
+      end)
+
+    %{
+      span: rule_span || macro_source_span(meta),
+      macro: Keyword.get(meta, :name),
+      hole: if(kind in [:missing_hole_filler, :invalid_repeated_hole_filler], do: detail),
+      expectation_origin: :macro_proof_input,
+      expression_category: :macro_rule
     }
   end
 

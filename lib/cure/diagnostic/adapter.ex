@@ -1321,7 +1321,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: contextual_type_failure(:bidirectional_erased_field, %{constructor: constructor}, opts)
 
   def from_error({:generated_hole_not_well_typed, term}, opts),
-    do: macro_validation_failure(:generated_hole_not_well_typed, %{term: term}, opts)
+    do: generated_hole_invariant_failure(%{term: term}, %{}, opts)
 
   def from_error({:example_use_site_not_fully_consumed, _unused, _ast}, opts),
     do: macro_validation_failure(:example_use_site_not_fully_consumed, %{}, opts)
@@ -1422,6 +1422,15 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({kind, _detail}, opts) when kind in [:invalid_macro_diagnostics, :invalid_macro_diagnostic],
     do: macro_diagnostic_schema_failure(kind, opts)
 
+  def from_error({kind, detail}, opts)
+      when kind in [
+             :invalid_macro_segment,
+             :unsupported_surface_filler,
+             :missing_hole_filler,
+             :invalid_repeated_hole_filler
+           ],
+      do: macro_fuzz_input_failure(kind, %{detail: detail}, opts)
+
   def from_error({kind, _detail}, opts)
       when kind in [
              :invalid_syntax_attr,
@@ -1471,9 +1480,6 @@ defmodule Cure.Diagnostic.Adapter do
                :invalid_driver_register,
                :duplicate_driver_register,
                :overlapping_driver_register,
-               :invalid_macro_segment,
-               :unsupported_surface_filler,
-               :missing_hole_filler,
                :unsupported_hole_type,
                :invalid_generated_syntax,
                :primitive_missing_builtin,
@@ -1525,7 +1531,6 @@ defmodule Cure.Diagnostic.Adapter do
       when kind in [
              :no_compatible_macro_input,
              :normalization_fuel_exhausted,
-             :not_a_nat,
              :invalid_driver_register,
              :duplicate_driver_register,
              :overlapping_driver_register
@@ -1534,6 +1539,10 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error(kind, opts) when kind in [:invalid_macro_diagnostics, :invalid_macro_diagnostic],
     do: macro_diagnostic_schema_failure(kind, opts)
+
+  def from_error(kind, opts)
+      when kind in [:not_a_nat, :invalid_macro_fuzz_rule, :invalid_macro_fuzz_bindings],
+      do: macro_fuzz_input_failure(kind, %{}, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -5233,6 +5242,70 @@ defmodule Cure.Diagnostic.Adapter do
       payload: %{kind: kind}
     )
   end
+
+  defp macro_fuzz_input_failure(kind, details, opts) do
+    {title, message, label, hint} = macro_fuzz_input_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_fuzz_input,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: macro_fuzz_payload(kind, details)
+    )
+  end
+
+  defp macro_fuzz_input_content(:invalid_macro_fuzz_rule, _details),
+    do:
+      {"Macro proof rule is malformed",
+       "Proof-input assembly needs a parsed macro rule with a textual keyword and segment list.",
+       "rewrite this macro rule", "Provide a parsed syntax or computed rule"}
+
+  defp macro_fuzz_input_content(:invalid_macro_fuzz_bindings, _details),
+    do:
+      {"Macro proof bindings are malformed",
+       "Generated hole bindings must map each textual hole name to its sampled value.",
+       "rewrite these generated bindings", "Provide a map from hole names to generated values"}
+
+  defp macro_fuzz_input_content(:invalid_macro_segment, _details),
+    do:
+      {"Macro rule contains an unsupported segment",
+       "Proof-input assembly encountered a rule segment that is not a literal, hole, repetition, optional group, raw hole, or declaration body.",
+       "replace this macro segment", "Use one of the supported macro rule segment forms"}
+
+  defp macro_fuzz_input_content(:missing_hole_filler, %{detail: name}),
+    do:
+      {"Generated macro input is missing a hole",
+       "The proof input has no generated value for the `#{name_to_string(name)}` hole required by this rule.",
+       "supply this generated hole", "Add a generated value for `#{name_to_string(name)}`"}
+
+  defp macro_fuzz_input_content(:invalid_repeated_hole_filler, %{detail: name}),
+    do:
+      {"Repeated macro hole needs a list",
+       "The `#{name_to_string(name)}` hole is repeated by the rule, but its generated filler is not a list of values.",
+       "replace this repeated-hole filler", "Provide a list of generated values for `#{name_to_string(name)}`"}
+
+  defp macro_fuzz_input_content(:unsupported_surface_filler, _details),
+    do:
+      {"Generated hole has no surface spelling",
+       "The proof generator produced a Core value that cannot be written as authored Cure macro input.",
+       "use a surface-encodable generator",
+       "Generate a literal, nullary constructor, raw text, natural, boolean, or supported type value"}
+
+  defp macro_fuzz_input_content(:not_a_nat, _details),
+    do:
+      {"Generated natural number is malformed",
+       "A sampled natural must be built only from `Z` and unary `S` constructors.",
+       "replace this natural-number sample", "Generate `Z` or `S(previous_nat)`"}
+
+  defp macro_fuzz_payload(kind, %{detail: detail})
+       when kind in [:missing_hole_filler, :invalid_repeated_hole_filler],
+       do: %{kind: kind, hole: name_to_string(detail)}
+
+  defp macro_fuzz_payload(kind, _details), do: %{kind: kind}
 
   defp macro_diagnostic_schema_content(:invalid_macro_diagnostics),
     do:
