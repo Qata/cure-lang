@@ -131,6 +131,46 @@ defmodule Cure.Compiler.MacroExampleTest do
     assert {:error, {:rule_unpinned, ["b"]}} = MacroValidate.check_rules_pinned(md)
   end
 
+  test "the program validation path labels every unpinned authored rule" do
+    source =
+      "macro M\n  syntax a becomes X\n  syntax b becomes Y\n  explain\n    keyword \"a\" => \"a\"\n    keyword \"b\" => \"b\"\n"
+
+    {:ok, tokens} = Lexer.tokenize(source, file: "unpinned.cure", emit_events: false)
+    {:ok, ast} = Parser.parse(tokens, emit_events: false)
+
+    assert {:error, {:source_context, {:rule_unpinned, ["a", "b"]}, context} = reason} =
+             MacroValidate.check_program(ast, Cure.Core.Env.empty())
+
+    assert %{span: %Cure.Diagnostic.Span{}, rule_spans: [%Cure.Diagnostic.Span{}, %Cure.Diagnostic.Span{}]} =
+             context
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "unpinned.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- MACRO RULE NEEDS A WORKED EXAMPLE [E092] ---------------------- unpinned.cure
+
+             These macro rules have no worked example: a, b.
+
+             at unpinned.cure:2:3
+             2 |   syntax a becomes X
+               |   ^^^^^^^^^^^^^^^^^^ add a worked example beneath this rule
+             3 |   syntax b becomes Y
+               |   ------------------ this rule also needs a worked example
+
+             Hint: Add `example use_site expands expected` beneath each listed rule
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 1, "character" => 2},
+             "end" => %{"line" => 1, "character" => 20}
+           }
+
+    assert length(lsp["relatedInformation"]) == 1
+  end
+
   test "an unpinned computed rule is also rule_unpinned" do
     md = macro_def!("macro Mk\n  syntax mk computed by build_it\n")
     assert {:error, {:rule_unpinned, ["mk"]}} = MacroValidate.check_rules_pinned(md)

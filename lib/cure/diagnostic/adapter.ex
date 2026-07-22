@@ -596,6 +596,12 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:missing_diagnosis, points}, opts), do: macro_validation_failure(:missing_diagnosis, points, opts)
   def from_error({:rule_unpinned, keywords}, opts), do: macro_validation_failure(:rule_unpinned, keywords, opts)
 
+  def from_error({:source_context, {:missing_diagnosis, points}, context}, opts) when is_map(context),
+    do: macro_validation_failure(:missing_diagnosis, points, opts, context)
+
+  def from_error({:source_context, {:rule_unpinned, keywords}, context}, opts) when is_map(context),
+    do: macro_validation_failure(:rule_unpinned, keywords, opts, context)
+
   def from_error({:example_mismatch, mismatches}, opts),
     do: macro_validation_failure(:example_mismatch, mismatches, opts)
 
@@ -4395,18 +4401,58 @@ defmodule Cure.Diagnostic.Adapter do
     |> Enum.map_join(", ", &Atom.to_string/1)
   end
 
-  defp macro_validation_failure(kind, details, opts) do
+  defp macro_validation_failure(kind, details, opts), do: macro_validation_failure(kind, details, opts, %{})
+
+  defp macro_validation_failure(kind, details, opts, context) do
+    span = Map.get(context, :span) || Keyword.get(opts, :span)
+
     Diagnostic.new(
       code: "E092",
       key: :macro_validation_failed,
       severity: :error,
-      title: "Macro validation failed",
+      title: macro_validation_title(kind),
       body: Doc.paragraph(macro_validation_message(kind, details)),
-      primary: primary_label(opts, "this macro declaration is incomplete or inconsistent"),
-      notes: ["Fix the authored macro rules or their pinned examples."],
-      payload: %{kind: kind, details: details}
+      primary: pickup_label(span, :primary, macro_validation_primary_label(kind)),
+      secondary: macro_validation_secondary_labels(kind, context, span),
+      suggestions: macro_validation_suggestions(kind),
+      payload: %{kind: kind, details: details, macro: Map.get(context, :macro)}
     )
   end
+
+  defp macro_validation_title(:missing_diagnosis), do: "Macro explanations are incomplete"
+  defp macro_validation_title(:rule_unpinned), do: "Macro rule needs a worked example"
+  defp macro_validation_title(_kind), do: "Macro validation failed"
+
+  defp macro_validation_primary_label(:missing_diagnosis), do: "add clauses for the unexplained failure points"
+  defp macro_validation_primary_label(:rule_unpinned), do: "add a worked example beneath this rule"
+  defp macro_validation_primary_label(_kind), do: "this macro declaration is incomplete or inconsistent"
+
+  defp macro_validation_secondary_labels(:missing_diagnosis, context, primary_span) do
+    context
+    |> Map.get(:rule_spans, [])
+    |> Enum.map(&pickup_label(&1, :secondary, "this rule declares an unexplained failure point"))
+    |> Enum.reject(&(&1.span == primary_span))
+  end
+
+  defp macro_validation_secondary_labels(:rule_unpinned, context, primary_span) do
+    context
+    |> Map.get(:rule_spans, [])
+    |> Enum.drop(1)
+    |> Enum.map(&pickup_label(&1, :secondary, "this rule also needs a worked example"))
+    |> Enum.reject(&(&1.span == primary_span))
+  end
+
+  defp macro_validation_secondary_labels(_kind, _context, _primary_span), do: []
+
+  defp macro_validation_suggestions(:missing_diagnosis),
+    do: [%Suggestion{message: "Add one `explain` clause for each listed failure point", applicability: :manual}]
+
+  defp macro_validation_suggestions(:rule_unpinned),
+    do: [
+      %Suggestion{message: "Add `example use_site expands expected` beneath each listed rule", applicability: :manual}
+    ]
+
+  defp macro_validation_suggestions(_kind), do: []
 
   defp macro_validation_message(:missing_diagnosis, points),
     do: "The macro does not explain every declared failure point: #{macro_failure_points(points)}."

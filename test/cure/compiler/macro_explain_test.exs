@@ -116,6 +116,52 @@ defmodule Cure.Compiler.MacroExplainTest do
     refute rendered =~ ":missing_diagnosis"
   end
 
+  test "the program validation path labels the explain block and rules for missing diagnoses" do
+    source =
+      "macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n  explain\n    keyword \"every\" => \"starts with every\"\n"
+
+    {:ok, tokens} = Lexer.tokenize(source, file: "missing_explain.cure", emit_events: false)
+    {:ok, ast} = Parser.parse(tokens, emit_events: false)
+
+    assert {:error, {:source_context, {:missing_diagnosis, [{:hole_kind, "Duration"}]}, context} = reason} =
+             MacroValidate.check_program(ast, Cure.Core.Env.empty())
+
+    assert %{
+             span: %Cure.Diagnostic.Span{},
+             explain_span: %Cure.Diagnostic.Span{},
+             macro_span: %Cure.Diagnostic.Span{},
+             rule_spans: [%Cure.Diagnostic.Span{}]
+           } = context
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "missing_explain.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- MACRO EXPLANATIONS ARE INCOMPLETE [E092] --------------- missing_explain.cure
+
+             The macro does not explain every declared failure point: Duration hole.
+
+             at missing_explain.cure:3:3
+             2 |   syntax every <t: Duration> becomes Timer.repeat(t)
+               |   -------------------------------------------------- this rule declares an unexplained failure point
+             3 |   explain
+               >   ^^^^^^^
+             4 |     keyword "every" => "starts with every"
+               > ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ add clauses for the unexplained failure points
+
+             Hint: Add one `explain` clause for each listed failure point
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 2, "character" => 2},
+             "end" => %{"line" => 3, "character" => 42}
+           }
+
+    assert length(lsp["relatedInformation"]) == 1
+  end
+
   test "a macro whose explain covers every structural point checks clean" do
     md =
       macro_def!(

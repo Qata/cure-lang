@@ -55,11 +55,78 @@ defmodule Cure.Compiler.MacroValidate do
   # enforce the complete self-proving contract; all macros still receive the
   # expansion soundness gate below.
   defp check_explain_if_declared({:macro_def, _meta, rules} = macro_def) do
-    if Enum.any?(rules, &(&1[:kind] == :explain)), do: check_explain_exhaustive(macro_def), else: :ok
+    if Enum.any?(rules, &(&1[:kind] == :explain)) do
+      contextualize_validation(check_explain_exhaustive(macro_def), macro_def)
+    else
+      :ok
+    end
   end
 
   defp check_pins_if_explainable({:macro_def, _meta, rules} = macro_def) do
-    if Enum.any?(rules, &(&1[:kind] == :explain)), do: check_rules_pinned(macro_def), else: :ok
+    if Enum.any?(rules, &(&1[:kind] == :explain)) do
+      contextualize_validation(check_rules_pinned(macro_def), macro_def)
+    else
+      :ok
+    end
+  end
+
+  defp contextualize_validation(:ok, _macro_def), do: :ok
+
+  defp contextualize_validation({:error, reason}, {:macro_def, meta, rules}) do
+    {:error, {:source_context, reason, validation_source_context(reason, meta, rules)}}
+  end
+
+  defp validation_source_context({:missing_diagnosis, points}, meta, rules) do
+    explain_span =
+      rules
+      |> Enum.find(&(&1[:kind] == :explain))
+      |> then(&(&1 && Map.get(&1, :source_span)))
+
+    rule_spans =
+      rules
+      |> Enum.filter(fn rule -> Enum.any?(points, &(&1 in rule_points(rule))) end)
+      |> Enum.map(&Map.get(&1, :source_span))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    macro_span = macro_source_span(meta)
+
+    %{
+      span: explain_span || List.first(rule_spans) || macro_span,
+      macro_span: macro_span,
+      explain_span: explain_span,
+      rule_spans: rule_spans,
+      related_spans: rule_spans,
+      macro: Keyword.get(meta, :name),
+      expression_category: :macro_validation
+    }
+  end
+
+  defp validation_source_context({:rule_unpinned, keywords}, meta, rules) do
+    rule_spans =
+      rules
+      |> Enum.filter(&(&1[:kind] in [:syntax, :computed] and &1.keyword in keywords))
+      |> Enum.map(&Map.get(&1, :source_span))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    macro_span = macro_source_span(meta)
+
+    %{
+      span: List.first(rule_spans) || macro_span,
+      macro_span: macro_span,
+      rule_spans: rule_spans,
+      related_spans: Enum.drop(rule_spans, 1),
+      macro: Keyword.get(meta, :name),
+      expression_category: :macro_validation
+    }
+  end
+
+  defp macro_source_span(meta) do
+    case Metadata.source_info(meta) do
+      %{whole: span} -> span
+      _ -> nil
+    end
   end
 
   # StreamData is a test-only dependency. Structural macro validation remains
@@ -151,6 +218,22 @@ defmodule Cure.Compiler.MacroValidate do
     end)
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
+  end
+
+  defp rule_points(rule) do
+    failure_points =
+      case rule do
+        %{kind: :fail, name: name} when is_binary(name) -> [{:failure, name}]
+        _ -> []
+      end
+
+    keyword_points =
+      case rule do
+        %{kind: :syntax, keyword: keyword} when is_binary(keyword) -> [{:keyword, keyword}]
+        _ -> []
+      end
+
+    failure_points ++ keyword_points ++ Enum.map(Map.get(rule, :segments, []), &segment_point/1)
   end
 
   defp segment_point({:hole, %{kind: k}}), do: {:hole_kind, k}
