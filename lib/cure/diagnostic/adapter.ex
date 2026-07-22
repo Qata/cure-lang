@@ -3225,16 +3225,44 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp macro_expansion_failure(kind, message, frames, opts) do
+    frame_maps = Enum.filter(frames, &is_map/1)
+
     provenance =
-      frames
-      |> Enum.filter(&is_map/1)
+      frame_maps
       |> Enum.map(fn frame ->
         %ProvenanceFrame{
           kind: :macro_expansion,
           name: Map.get(frame, :keyword, "macro"),
-          invocation: Keyword.get(opts, :span)
+          invocation: Map.get(frame, :invocation),
+          definition: Map.get(frame, :definition),
+          parent: Map.get(frame, :parent)
         }
       end)
+
+    invocation_spans =
+      frame_maps
+      |> Enum.map(&Map.get(&1, :invocation))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    primary_span = List.last(invocation_spans) || Keyword.get(opts, :span)
+
+    secondary =
+      invocation_spans
+      |> Enum.reject(&(&1 == primary_span))
+      |> Enum.map(&pickup_label(&1, :secondary, "this earlier invocation is in the expansion chain"))
+
+    suggestion =
+      case kind do
+        :cycle -> "Make recursive macro expansion consume input or terminate before invoking itself again"
+        {:budget, _limit} -> "Reduce the generated expansion depth or split this macro into smaller steps"
+      end
+
+    chain =
+      frames
+      |> Enum.filter(&is_map/1)
+      |> Enum.map(&Map.get(&1, :keyword))
+      |> Enum.reject(&is_nil/1)
 
     Diagnostic.new(
       code: "E092",
@@ -3242,9 +3270,19 @@ defmodule Cure.Diagnostic.Adapter do
       severity: :error,
       title: if(kind == :cycle, do: "Macro expansion cycle", else: "Macro expansion limit exceeded"),
       body: Doc.paragraph(message),
-      primary: primary_label(opts, "reduce or stop this macro expansion"),
+      primary:
+        pickup_label(
+          primary_span,
+          :primary,
+          if(kind == :cycle,
+            do: "this invocation closes the expansion cycle",
+            else: "the expansion limit is reached here"
+          )
+        ),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: suggestion, applicability: :manual}],
       provenance: provenance ++ Keyword.get(opts, :provenance, []),
-      payload: %{kind: kind, frames: frames}
+      payload: %{kind: kind, frames: frames, chain: chain}
     )
   end
 
