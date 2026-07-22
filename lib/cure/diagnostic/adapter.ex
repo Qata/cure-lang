@@ -1996,7 +1996,7 @@ defmodule Cure.Diagnostic.Adapter do
       )
 
   def from_error({:ambiguous_overload, name, owners}, opts),
-    do: contextual_type_failure(:ambiguous_overload, %{name: name, owners: owners}, opts)
+    do: ambiguous_overload_failure(name, owners, opts)
 
   def from_error({:ambiguous_method, method, interfaces}, opts),
     do: ambiguous_member(method, interfaces, opts)
@@ -5354,6 +5354,53 @@ defmodule Cure.Diagnostic.Adapter do
   defp instance_head_details(head) do
     surface = surface_type(head)
     %{kind: :concrete, surface: surface, id: surface}
+  end
+
+  defp ambiguous_overload_failure(name, owners, opts) do
+    name = name_to_string(name)
+    owners = owners |> List.wrap() |> Enum.map(&name_to_string/1) |> Enum.uniq() |> Enum.sort()
+    candidates = Enum.map(owners, &qualified_overload_candidate(&1, name))
+
+    {candidate_text, verb} =
+      case candidates do
+        [one] -> {"`#{one}`", "accepts"}
+        [one, two] -> {"Both `#{one}` and `#{two}`", "accept"}
+        many -> {"All of " <> Enum.map_join(many, ", ", &"`#{&1}`"), "accept"}
+      end
+
+    hint =
+      case candidates do
+        [one] -> "Qualify the call as `#{one}(...)`"
+        [one, two] -> "Choose `#{one}(...)` or `#{two}(...)`"
+        many -> "Qualify the call with one of: " <> Enum.map_join(many, ", ", &"`#{&1}(...)`")
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Call to `#{name}` is ambiguous",
+      body:
+        Doc.paragraph(
+          "#{candidate_text} #{verb} the arguments at this call site. Cure cannot choose one without changing the program's meaning."
+        ),
+      primary: primary_label(opts, "qualify this call with the module you intend"),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind: :ambiguous_overload,
+        name: name,
+        owners: owners,
+        qualified_candidates: candidates
+      }
+    )
+  end
+
+  defp qualified_overload_candidate(owner, name) do
+    if String.contains?(owner, ".#{name}") do
+      owner
+    else
+      "#{owner}.#{name}"
+    end
   end
 
   defp contextual_type_failure(kind, details, opts) do

@@ -732,7 +732,9 @@ defmodule Cure.Diagnostic.HostTest do
 
     assert overload =~ "[E093]"
     assert overload =~ "NO MATCHING OVERLOAD"
-    assert ambiguous =~ "OVERLOAD RESOLUTION IS AMBIGUOUS"
+    assert ambiguous =~ "CALL TO `MAP` IS AMBIGUOUS"
+    assert ambiguous =~ "List.map/2"
+    assert ambiguous =~ "Seq.map/2"
     assert projection =~ "RECORD PROJECTION REQUIRES A RECORD"
     assert pattern =~ "[E003]"
     assert index =~ "UNRESOLVED INDEX"

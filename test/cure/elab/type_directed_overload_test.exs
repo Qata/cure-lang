@@ -409,6 +409,45 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
 
     assert {:error, err} = compile_multi_error(dir, files)
     assert match?({:ambiguous_overload, :foo, _}, unwrap_inner(err))
+
+    assert {:compile_failed, {:codegen_error, diagnostic_error}} = err
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic(diagnostic_error, "main.cure", files["main.cure"])
+
+    assert Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- CALL TO `FOO` IS AMBIGUOUS [E093] --------------------------------- main.cure
+
+             Both `OvlAmbA.foo` and `OvlAmbB.foo` accept the arguments at this call site.
+             Cure cannot choose one without changing the program's meaning.
+
+             at main.cure:4:22
+             4 |   fn pick() -> Int = foo(1)
+               |                      ^^^^^^ qualify this call with the module you intend
+
+             Hint: Choose `OvlAmbA.foo(...)` or `OvlAmbB.foo(...)`
+             """)
+
+    lsp = Cure.Diagnostic.Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 3, "character" => 21},
+             "end" => %{"line" => 3, "character" => 27}
+           }
+
+    assert lsp["data"]["payload"] == %{
+             "kind" => "ambiguous_overload",
+             "name" => "foo",
+             "owners" => ["OvlAmbA", "OvlAmbB"],
+             "qualified_candidates" => ["OvlAmbA.foo", "OvlAmbB.foo"]
+           }
+
+    fixed_files =
+      Map.update!(files, "main.cure", &String.replace(&1, "foo(1)", "OvlAmbA.foo(1)"))
+
+    assert {:ok, module} = compile_multi(dir, fixed_files, "Cure.OvlAmbC")
+    assert apply(module, :pick, []) == 1
   end
 
   @tag :tmp_dir
