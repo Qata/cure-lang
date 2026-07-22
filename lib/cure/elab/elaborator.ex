@@ -284,7 +284,19 @@ defmodule Cure.Elab.Elaborator do
       values = Enum.map(converted, &elem(&1, 0))
       labels = Enum.map(converted, &elem(&1, 1))
       spans = Enum.map(converted, &elem(&1, 2))
-      {meta |> Keyword.put(:arg_labels, labels) |> Keyword.put(:arg_label_spans, spans), values}
+
+      meta = Keyword.put(meta, :arg_labels, labels)
+
+      meta =
+        case Cure.MetaAST.Metadata.source_info(meta) do
+          %Cure.MetaAST.SourceInfo{} = info ->
+            Cure.MetaAST.Metadata.put_source_info(meta, %{info | argument_labels: spans})
+
+          _ ->
+            meta
+        end
+
+      {meta, values}
     else
       {meta, args}
     end
@@ -306,7 +318,7 @@ defmodule Cure.Elab.Elaborator do
 
     [
       argument_spans: if(info, do: info.arguments, else: []),
-      label_spans: Keyword.get(meta, :arg_label_spans, [])
+      label_spans: if(info, do: info.argument_labels, else: [])
     ]
   end
 

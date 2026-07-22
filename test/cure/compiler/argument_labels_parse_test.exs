@@ -15,6 +15,7 @@ defmodule Cure.Compiler.ArgumentLabelsParseTest do
   use ExUnit.Case, async: true
 
   alias Cure.Compiler.{Lexer, Parser, Printer}
+  alias Cure.MetaAST.Metadata
 
   defp parse!(source) do
     {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
@@ -41,7 +42,7 @@ defmodule Cure.Compiler.ArgumentLabelsParseTest do
     assert Keyword.get(meta, :arg_labels) == ["to", "from"]
     # Argument expressions are the plain values, unchanged.
     assert [{:variable, _, "p"}, {:variable, _, "q"}] = args
-    assert [to_span, from_span] = Keyword.fetch!(meta, :arg_label_spans)
+    assert [to_span, from_span] = Metadata.source_info(meta).argument_labels
     assert to_span.start_column == 6
     assert from_span.start_column == 13
   end
@@ -56,6 +57,7 @@ defmodule Cure.Compiler.ArgumentLabelsParseTest do
     {:function_call, meta, _args} = parse!("h(a, b)")
     assert Keyword.get(meta, :arg_labels) == nil
     refute Keyword.has_key?(meta, :arg_label_spans)
+    assert Metadata.source_info(meta).argument_labels == [nil, nil]
   end
 
   test "printer preserves authored named-argument order and labels" do

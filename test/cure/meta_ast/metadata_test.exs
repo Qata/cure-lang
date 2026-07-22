@@ -61,6 +61,7 @@ defmodule Cure.MetaAST.MetadataTest do
       operator: Enum.at(spans, 3),
       operands: Enum.slice(spans, 4, 2),
       arguments: Enum.slice(spans, 6, 2),
+      argument_labels: [Enum.at(spans, 6), nil],
       annotation: Enum.at(spans, 8),
       body: Enum.at(spans, 9),
       condition: Enum.at(spans, 10),

@@ -103,6 +103,7 @@ defmodule Cure.MetaAST.Metadata do
       operator: Keyword.get(meta, :operator_span),
       operands: Keyword.get(meta, :operand_spans, []),
       arguments: Keyword.get(meta, :argument_spans, []),
+      argument_labels: Keyword.get(meta, :arg_label_spans, []),
       annotation: Keyword.get(meta, :annotation_span),
       body: Keyword.get(meta, :body_span),
       condition: Keyword.get(meta, :condition_span),

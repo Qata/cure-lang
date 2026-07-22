@@ -4346,9 +4346,15 @@ defmodule Cure.Compiler.Parser do
   defp prepend_pipe_label_metadata(meta) do
     case Keyword.get(meta, :arg_labels) do
       labels when is_list(labels) ->
-        meta
-        |> Keyword.put(:arg_labels, [nil | labels])
-        |> Keyword.update(:arg_label_spans, [nil], &[nil | &1])
+        meta = Keyword.put(meta, :arg_labels, [nil | labels])
+
+        case Metadata.source_info(meta) do
+          %SourceInfo{} = info ->
+            Metadata.put_source_info(meta, %{info | argument_labels: [nil | info.argument_labels]})
+
+          _ ->
+            meta
+        end
 
       _ ->
         meta
@@ -4377,9 +4383,7 @@ defmodule Cure.Compiler.Parser do
     # common all-positional call keeps its exact historical meta shape.
     meta =
       if Enum.any?(arg_labels) do
-        meta
-        |> Keyword.put(:arg_labels, arg_labels)
-        |> Keyword.put(:arg_label_spans, arg_label_spans)
+        Keyword.put(meta, :arg_labels, arg_labels)
       else
         meta
       end
@@ -4393,13 +4397,13 @@ defmodule Cure.Compiler.Parser do
         meta
       end
 
-    meta = put_call_source_info(meta, func, args, token, close_token)
+    meta = put_call_source_info(meta, func, args, arg_label_spans, token, close_token)
 
     ast = {:function_call, meta, args}
     {ast, state}
   end
 
-  defp put_call_source_info(meta, func, args, open_token, close_token) do
+  defp put_call_source_info(meta, func, args, argument_label_spans, open_token, close_token) do
     callee_span =
       case func do
         {_, func_meta, _} when is_list(func_meta) ->
@@ -4444,7 +4448,8 @@ defmodule Cure.Compiler.Parser do
         Keyword.put(meta, :source_info, %SourceInfo{
           whole: span,
           callee: callee_span,
-          arguments: argument_spans
+          arguments: argument_spans,
+          argument_labels: argument_label_spans
         })
 
       _ ->
