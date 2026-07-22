@@ -7523,9 +7523,19 @@ defmodule Cure.Compiler.Parser do
 
       %Token{type: :identifier} = token ->
         name = to_string(token.value)
-        state = advance(state) |> expect_where_binding_assign(where_token, token, name) |> skip_newlines()
+        {assign_token, state} = expect_where_binding_assign(advance(state), where_token, token, name)
+        state = skip_newlines(state)
         {expr, state} = parse_expr_or_block(state)
-        binding = {:where_value, [name: name, line: token.line, col: token.col], expr}
+
+        meta =
+          Metadata.put_source_info([name: name, line: token.line, col: token.col], %SourceInfo{
+            whole: through_spans(token.span, ast_source_span(expr)) || token.span,
+            name: token.span,
+            operator: assign_token && assign_token.span,
+            body: ast_source_span(expr)
+          })
+
+        binding = {:where_value, meta, expr}
         parse_where_bindings(state, [binding | acc], where_token)
 
       _ ->
@@ -7535,8 +7545,8 @@ defmodule Cure.Compiler.Parser do
 
   defp expect_where_binding_assign(state, where_token, name_token, name) do
     case expect_token(state, :assign) do
-      {:ok, _assign, next_state} ->
-        next_state
+      {:ok, assign, next_state} ->
+        {assign, next_state}
 
       {:error, next_state} ->
         [_generic | rest] = next_state.errors
@@ -7558,7 +7568,7 @@ defmodule Cure.Compiler.Parser do
              column: observed.col
            }}
 
-        %{next_state | errors: [error | rest]}
+        {nil, %{next_state | errors: [error | rest]}}
     end
   end
 

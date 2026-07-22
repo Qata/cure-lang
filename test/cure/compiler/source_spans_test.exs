@@ -400,6 +400,21 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.body) == "value + 1"
   end
 
+  test "declaration-local where values retain exact name, assignment, body, and whole ranges" do
+    source = "fn run() -> Int = answer\nwhere\n  answer = 42\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "where.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "where.cure", emit_events: false, prelude_macros: false)
+
+    {:function_def, function_meta, _} = find_node(ast, :function_def)
+    assert [{:where_value, where_meta, _}] = Keyword.fetch!(function_meta, :where)
+    info = Metadata.source_info(where_meta)
+
+    assert slice(source, info.whole) == "answer = 42"
+    assert slice(source, info.name) == "answer"
+    assert slice(source, info.operator) == "="
+    assert slice(source, info.body) == "42"
+  end
+
   test "match expressions retain their whole and branch-owned spans" do
     source = "fn choose(x: Int) -> Int = match x\n  n -> n\n  _ -> 0\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "match.cure", emit_events: false)
