@@ -1924,7 +1924,31 @@ defmodule Cure.Elab.Program do
 
   # Macro homes are ordinary module interfaces. Definition-site lookup therefore
   # observes exactly the same dependency graph and cache as a `use` import.
-  defp cached_macro_home_env(path), do: module_slice_env(path)
+  defp cached_macro_home_env(path) do
+    key = {__MODULE__, :macro_home_env, path}
+
+    case :persistent_term.get(key, :missing) do
+      :missing ->
+        case read_macro_home_cache(path) do
+          {:ok, %Env{}} = cached ->
+            :persistent_term.put(key, cached)
+            cached
+
+          nil ->
+            result = module_slice_env(path)
+
+            if match?({:ok, %Env{}}, result) do
+              :persistent_term.put(key, result)
+              write_macro_home_cache(path, result)
+            end
+
+            result
+        end
+
+      cached ->
+        cached
+    end
+  end
 
   # Path-only callers first read the declared identity, then enter the same
   # canonical loader as name-based imports. Paths are validated attributes and
@@ -2061,7 +2085,90 @@ defmodule Cure.Elab.Program do
   @spec invalidate_module_interface(String.t()) :: :ok
   def invalidate_module_interface(path) when is_binary(path) do
     :persistent_term.erase({__MODULE__, :module_interface, path})
+    :persistent_term.erase({__MODULE__, :macro_home_env, path})
+    :persistent_term.erase({__MODULE__, :macro_home_cache_fingerprint})
+    File.rm(macro_home_cache_path(path))
     :ok
+  end
+
+  # A definition-site macro environment is expensive to reconstruct from a
+  # cold VM (Std.Actor's closure is the largest example), while the ordinary
+  # persistent_term cache only survives for one `mix` invocation. Keep a small
+  # cross-process cache in the OS temporary directory. Its fingerprint covers
+  # every compiler BEAM and stdlib source, so changing either invalidates every
+  # entry conservatively. Only successful canonical module-interface results
+  # are stored; corrupt or stale files are ignored and replaced atomically.
+  defp read_macro_home_cache(path) do
+    with {:ok, binary} <- File.read(macro_home_cache_path(path)),
+         {:cure_macro_home, 1, fingerprint, expanded_path, {:ok, %Env{}} = result} <-
+           :erlang.binary_to_term(binary),
+         true <- fingerprint == macro_home_cache_fingerprint(),
+         true <- expanded_path == Path.expand(path) do
+      result
+    else
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp write_macro_home_cache(path, {:ok, %Env{}} = result) do
+    destination = macro_home_cache_path(path)
+    directory = Path.dirname(destination)
+    temporary = destination <> ".#{System.unique_integer([:positive])}.tmp"
+
+    payload =
+      {:cure_macro_home, 1, macro_home_cache_fingerprint(), Path.expand(path), result}
+      |> :erlang.term_to_binary(compressed: 6)
+
+    with :ok <- File.mkdir_p(directory),
+         :ok <- File.chmod(directory, 0o700),
+         :ok <- File.write(temporary, payload),
+         :ok <- File.chmod(temporary, 0o600),
+         :ok <- File.rename(temporary, destination) do
+      :ok
+    else
+      _ ->
+        File.rm(temporary)
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp macro_home_cache_path(path) do
+    basename = :crypto.hash(:sha256, Path.expand(path)) |> Base.url_encode64(padding: false)
+    Path.join([System.tmp_dir!(), "cure-macro-home-cache", basename <> ".etf"])
+  end
+
+  defp macro_home_cache_fingerprint do
+    key = {__MODULE__, :macro_home_cache_fingerprint}
+
+    case :persistent_term.get(key, :missing) do
+      :missing ->
+        beam_dir = __MODULE__ |> :code.which() |> List.to_string() |> Path.dirname()
+
+        paths =
+          (Path.wildcard(Path.join(beam_dir, "*.beam")) ++
+             Enum.flat_map(Paths.source_dirs(), &Path.wildcard(Path.join(&1, "*.cure"))))
+          |> Enum.map(&Path.expand/1)
+          |> Enum.uniq()
+          |> Enum.sort()
+
+        fingerprint =
+          Enum.reduce(paths, :crypto.hash_init(:sha256), fn file, hash ->
+            hash
+            |> :crypto.hash_update(file)
+            |> :crypto.hash_update(File.read!(file))
+          end)
+          |> :crypto.hash_final()
+
+        :persistent_term.put(key, fingerprint)
+        fingerprint
+
+      fingerprint ->
+        fingerprint
+    end
   end
 
   defp cached_module_interface(module_name, path) do
