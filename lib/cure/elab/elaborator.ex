@@ -672,7 +672,7 @@ defmodule Cure.Elab.Elaborator do
         end
 
       _ ->
-        {:error, :applied_non_function}
+        {:error, {:applied_non_function, %{actual: Quote.reify(type, Context.length(ctx)), argument_index: index}}}
     end
   end
 
@@ -803,12 +803,18 @@ defmodule Cure.Elab.Elaborator do
       # left "unknown"): elaborate the callee expression, then apply the outer
       # arguments to its (function-typed) result.
       callee = Keyword.get(meta, :callee) ->
-        with {:ok, head, head_type} <- elaborate_expr_typed(callee, names, ctx, env) do
-          check_app_args(head, head_type, args, names, ctx, env)
-        end
+        result =
+          with {:ok, head, head_type} <- elaborate_expr_typed(callee, names, ctx, env) do
+            check_app_args(head, head_type, args, names, ctx, env)
+          end
+
+        attach_application_context(result, meta, callee, args)
 
       true ->
         case elaborate_named_call(meta, args, names, ctx, env) do
+          {:error, {:applied_non_function, _details}} = error ->
+            attach_application_context(error, meta, nil, args)
+
           {:error, reason} when is_tuple(reason) ->
             if unresolved_call_reason?(reason) do
               {:error, attach_unresolved_call_context(reason, {:function_call, meta, args}, env)}
@@ -1244,6 +1250,33 @@ defmodule Cure.Elab.Elaborator do
     do: {:error, splice_outside_quote_error(tag, meta)}
 
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  defp attach_application_context(
+         {:error, {:applied_non_function, details} = reason},
+         meta,
+         callee,
+         args
+       ) do
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+    index = Map.get(details, :argument_index, 0)
+    callee_span = if(callee, do: surface_expression_span(callee), else: source_info && source_info.callee)
+    argument_span = args |> Enum.at(index) |> surface_expression_span()
+
+    {:error,
+     {:source_context, reason,
+      %{
+        span: if(index == 0, do: callee_span || argument_span, else: argument_span || callee_span),
+        application_span: source_info && source_info.whole,
+        callee_span: callee_span,
+        callee_name: Keyword.get(meta, :name),
+        argument_span: argument_span,
+        argument_index: index,
+        expectation_origin: :application,
+        expression_category: :function_call
+      }}}
+  end
+
+  defp attach_application_context(result, _meta, _callee, _args), do: result
 
   defp attach_projection_context({:error, {:source_context, reason, context}}, meta, inner, field) do
     {:error, {:source_context, reason, Map.merge(projection_context(meta, inner, field), context)}}
