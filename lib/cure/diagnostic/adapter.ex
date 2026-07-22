@@ -1419,6 +1419,9 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:invalid_syntax_attrs, _core}, opts),
     do: macro_syntax_decode_failure(:invalid_syntax_attrs, %{}, opts)
 
+  def from_error({kind, _detail}, opts) when kind in [:invalid_macro_diagnostics, :invalid_macro_diagnostic],
+    do: macro_diagnostic_schema_failure(kind, opts)
+
   def from_error({kind, _detail}, opts)
       when kind in [
              :invalid_syntax_attr,
@@ -1468,8 +1471,6 @@ defmodule Cure.Diagnostic.Adapter do
                :invalid_driver_register,
                :duplicate_driver_register,
                :overlapping_driver_register,
-               :invalid_macro_diagnostics,
-               :invalid_macro_diagnostic,
                :invalid_macro_segment,
                :unsupported_surface_filler,
                :missing_hole_filler,
@@ -1524,14 +1525,15 @@ defmodule Cure.Diagnostic.Adapter do
       when kind in [
              :no_compatible_macro_input,
              :normalization_fuel_exhausted,
-             :invalid_macro_diagnostics,
-             :invalid_macro_diagnostic,
              :not_a_nat,
              :invalid_driver_register,
              :duplicate_driver_register,
              :overlapping_driver_register
            ],
       do: macro_validation_failure(kind, %{}, opts)
+
+  def from_error(kind, opts) when kind in [:invalid_macro_diagnostics, :invalid_macro_diagnostic],
+    do: macro_diagnostic_schema_failure(kind, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -5216,6 +5218,33 @@ defmodule Cure.Diagnostic.Adapter do
       payload: Map.put(details, :kind, kind)
     )
   end
+
+  defp macro_diagnostic_schema_failure(kind, opts) do
+    {title, message, label, hint} = macro_diagnostic_schema_content(kind)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_diagnostic_schema,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{kind: kind}
+    )
+  end
+
+  defp macro_diagnostic_schema_content(:invalid_macro_diagnostics),
+    do:
+      {"Macro rejection list is malformed",
+       "A rejected macro result must contain one author diagnostic or a proper list of author diagnostics.",
+       "rebuild this macro rejection", "Return `Rejected([Failure(name, arguments), ...])`"}
+
+  defp macro_diagnostic_schema_content(:invalid_macro_diagnostic),
+    do:
+      {"Macro author diagnostic is malformed",
+       "A macro author diagnostic must be a reflected `Failure` value with an atom name and syntax arguments.",
+       "rebuild this author diagnostic", "Return `Failure(name, arguments)` inside `Rejected`"}
 
   defp macro_syntax_decode_content(:invalid_syntax_node, _details),
     do:

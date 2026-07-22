@@ -182,6 +182,46 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:rejected, [^repr]} = MacroSyntax.from_core_macro_result(error)
   end
 
+  test "malformed macro rejection values preserve their schema verdict" do
+    rejected = {:ctor, :"Std.Syntax#Rejected", [:not_a_diagnostic_list]}
+    assert {:error, :invalid_macro_diagnostics} = MacroSyntax.from_core_macro_result(rejected)
+  end
+
+  test "macro rejection schema failures have stable dedicated output" do
+    cases = [
+      {:invalid_macro_diagnostics,
+       """
+       -- MACRO REJECTION LIST IS MALFORMED [E092] ------------------------------------
+
+       A rejected macro result must contain one author diagnostic or a proper list of
+       author diagnostics.
+
+       Hint: Return `Rejected([Failure(name, arguments), ...])`
+       """},
+      {:invalid_macro_diagnostic,
+       """
+       -- MACRO AUTHOR DIAGNOSTIC IS MALFORMED [E092] ---------------------------------
+
+       A macro author diagnostic must be a reflected `Failure` value with an atom name
+       and syntax arguments.
+
+       Hint: Return `Failure(name, arguments)` inside `Rejected`
+       """}
+    ]
+
+    Enum.each(cases, fn {reason, expected} ->
+      {diagnostic, registry} = Errors.to_diagnostic(reason, "rejected.cure", "")
+
+      assert diagnostic.code == "E092"
+      assert diagnostic.key == :macro_diagnostic_schema
+      assert Renderer.plain(diagnostic, registry, width: 80) == String.trim_trailing(expected)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+      refute Map.has_key?(lsp, "range")
+      assert lsp["relatedInformation"] == []
+    end)
+  end
+
   test "Core-to-syntax decoding returns every malformed-value verdict without raising" do
     nil_list = {:ctor, :Nil, []}
     list = fn value -> {:ctor, :Cons, [value, nil_list]} end
