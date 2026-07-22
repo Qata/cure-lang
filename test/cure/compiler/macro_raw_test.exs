@@ -32,6 +32,54 @@ defmodule Cure.Compiler.MacroRawTest do
     assert {:error, {:missing_raw_delimiter, "dedent"}} = MacroRaw.capture([token], "dedent")
   end
 
+  test "malformed raw capture inputs return verdicts instead of raising" do
+    assert {:error, :invalid_raw_tokens} = MacroRaw.capture([42], "dedent")
+    assert {:error, :invalid_raw_tokens} = MacroRaw.capture(:tokens, "dedent")
+    assert {:error, {:invalid_raw_delimiter, :dedent}} = MacroRaw.capture([], :dedent)
+  end
+
+  test "every raw capture failure has stable macro-specific output" do
+    cases = [
+      {{:missing_raw_delimiter, "dedent"},
+       """
+       -- RAW MACRO INPUT IS NOT TERMINATED [E092] ------------------------------------
+
+       This raw macro capture reaches the end of its input without the `dedent`
+       delimiter.
+
+       Hint: Add the `dedent` delimiter after the raw input
+       """},
+      {{:invalid_raw_delimiter, :dedent},
+       """
+       -- RAW MACRO DELIMITER IS INVALID [E092] ---------------------------------------
+
+       A raw macro delimiter must be text, but this capture uses `dedent`.
+
+       Hint: Use a textual token or structural delimiter name
+       """},
+      {:invalid_raw_tokens,
+       """
+       -- RAW MACRO TOKEN STREAM IS MALFORMED [E092] ----------------------------------
+
+       Raw macro capture expected a list of lexer tokens.
+
+       Hint: Pass the lexer tokens belonging to the raw macro input
+       """}
+    ]
+
+    Enum.each(cases, fn {reason, expected} ->
+      {diagnostic, registry} = Errors.to_diagnostic(reason, "raw.cure", "")
+
+      assert diagnostic.code == "E092"
+      assert diagnostic.key == :macro_raw_validation
+      assert Renderer.plain(diagnostic, registry, width: 80) == String.trim_trailing(expected)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+      refute Map.has_key?(lsp, "range")
+      assert lsp["relatedInformation"] == []
+    end)
+  end
+
   test "computed macro uses bind raw spans without consuming the enclosing dedent" do
     source = """
     macro Datalog

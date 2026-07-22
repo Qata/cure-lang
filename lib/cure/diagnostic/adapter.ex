@@ -1380,6 +1380,12 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:left_recursive_parse_production, names}, opts),
     do: macro_parse_failure(:left_recursive_parse_production, %{names: names}, opts)
 
+  def from_error({:missing_raw_delimiter, delimiter}, opts),
+    do: macro_raw_failure(:missing_raw_delimiter, %{delimiter: delimiter}, opts)
+
+  def from_error({:invalid_raw_delimiter, delimiter}, opts),
+    do: macro_raw_failure(:invalid_raw_delimiter, %{delimiter: delimiter}, opts)
+
   def from_error({:unknown_reducer_constructor, constructors}, opts),
     do: macro_reducer_failure(:unknown_reducer_constructor, %{constructors: constructors}, opts)
 
@@ -1512,6 +1518,8 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error(kind, opts) when kind in [:invalid_check_property, :duplicate_check_property],
     do: macro_check_failure(kind, %{}, opts)
+
+  def from_error(:invalid_raw_tokens, opts), do: macro_raw_failure(:invalid_raw_tokens, %{}, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -3208,8 +3216,7 @@ defmodule Cure.Diagnostic.Adapter do
              :unsupported_block,
              :unknown_macro_failure,
              :unsolved_metavariable_in_type,
-             :lambda_expected_pi,
-             :missing_raw_delimiter
+             :lambda_expected_pi
            ],
       do: contextual_type_failure(kind, %{detail: detail}, opts)
 
@@ -5127,6 +5134,38 @@ defmodule Cure.Diagnostic.Adapter do
       payload: Map.put(details, :kind, kind)
     )
   end
+
+  defp macro_raw_failure(kind, details, opts) do
+    {title, message, label, hint} = macro_raw_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_raw_validation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp macro_raw_content(:missing_raw_delimiter, %{delimiter: delimiter}),
+    do:
+      {"Raw macro input is not terminated",
+       "This raw macro capture reaches the end of its input without the `#{name_to_string(delimiter)}` delimiter.",
+       "close this raw macro input", "Add the `#{name_to_string(delimiter)}` delimiter after the raw input"}
+
+  defp macro_raw_content(:invalid_raw_delimiter, %{delimiter: delimiter}),
+    do:
+      {"Raw macro delimiter is invalid",
+       "A raw macro delimiter must be text, but this capture uses `#{name_to_string(delimiter)}`.",
+       "replace this raw delimiter", "Use a textual token or structural delimiter name"}
+
+  defp macro_raw_content(:invalid_raw_tokens, _details),
+    do:
+      {"Raw macro token stream is malformed", "Raw macro capture expected a list of lexer tokens.",
+       "replace this raw token stream", "Pass the lexer tokens belonging to the raw macro input"}
 
   defp macro_module_failure(kind, details, opts) do
     {title, message, label, hint} = macro_module_content(kind, details)
