@@ -1355,6 +1355,12 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unknown_protocol_role, sender, receiver}, opts),
     do: macro_protocol_failure(:unknown_protocol_role, %{sender: sender, receiver: receiver}, opts)
 
+  def from_error({:invalid_parse_name, name}, opts),
+    do: macro_parse_failure(:invalid_parse_name, %{name: name}, opts)
+
+  def from_error({:left_recursive_parse_production, names}, opts),
+    do: macro_parse_failure(:left_recursive_parse_production, %{names: names}, opts)
+
   # Some trusted checking paths can return the bare verdict after their
   # declaration wrapper has been stripped. Keep that verdict contextual rather
   # than falling through to the unhelpful generic "Elaboration failed" title.
@@ -1391,7 +1397,6 @@ defmodule Cure.Diagnostic.Adapter do
                :invalid_syntax_string,
                :invalid_syntax_literal,
                :invalid_syntax_pair,
-               :left_recursive_parse_production,
                :invalid_macro_segment,
                :unsupported_surface_filler,
                :missing_hole_filler,
@@ -1482,8 +1487,6 @@ defmodule Cure.Diagnostic.Adapter do
       when kind in [
              :no_compatible_macro_input,
              :normalization_fuel_exhausted,
-             :invalid_parse_production,
-             :duplicate_parse_production,
              :invalid_macro_diagnostics,
              :invalid_macro_diagnostic,
              :invalid_syntax_attr,
@@ -1512,6 +1515,10 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error(kind, opts) when kind in [:invalid_check_property, :duplicate_check_property],
     do: macro_check_failure(kind, %{}, opts)
+
+  def from_error(kind, opts)
+      when kind in [:invalid_parse_productions, :invalid_parse_production, :duplicate_parse_production],
+      do: macro_parse_failure(kind, %{}, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -5066,6 +5073,53 @@ defmodule Cure.Diagnostic.Adapter do
       suggestions: [%Suggestion{message: hint, applicability: :manual}],
       payload: Map.put(details, :kind, kind)
     )
+  end
+
+  defp macro_parse_failure(kind, details, opts) do
+    {title, message, label, hint} = macro_parse_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_parse_validation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp macro_parse_content(:invalid_parse_name, %{name: name}),
+    do:
+      {"Parser grammar name is invalid",
+       "A generated parser grammar needs an atom or text name, but this grammar uses `#{name_to_string(name)}`.",
+       "replace this grammar name", "Use a stable grammar name such as `Command`"}
+
+  defp macro_parse_content(:invalid_parse_productions, _details),
+    do:
+      {"Parser productions are malformed", "A parser grammar's productions must be provided as an ordered list.",
+       "rewrite this production list", "Provide a list of named parser productions"}
+
+  defp macro_parse_content(:invalid_parse_production, _details),
+    do:
+      {"Parser production is malformed",
+       "Every parser production needs an atom or text name and a non-empty body of token or production names.",
+       "rewrite this parser production", "Provide `name` and a non-empty `body` list"}
+
+  defp macro_parse_content(:duplicate_parse_production, _details),
+    do:
+      {"Parser production name is repeated",
+       "Two productions in this grammar have the same name, so references to that production would be ambiguous.",
+       "rename or remove this production", "Give every production in the grammar a unique name"}
+
+  defp macro_parse_content(:left_recursive_parse_production, %{names: names}) do
+    rendered = Enum.map_join(names, ", ", &"`#{name_to_string(&1)}`")
+    {verb, reflexive} = if length(names) == 1, do: {"begins", "itself"}, else: {"begin", "themselves"}
+
+    {"Parser production is left-recursive",
+     "#{rendered} #{verb} by invoking #{reflexive}, so recursive descent would make no progress before recurring.",
+     "remove this leading self-reference", "Rewrite the production so it consumes a token before recurring"}
   end
 
   defp macro_protocol_content(:invalid_protocol_name, %{name: name}),
