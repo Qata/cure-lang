@@ -7,6 +7,7 @@ defmodule Cure.Elab.SourceMetadata do
   """
 
   @parameter_key {__MODULE__, :parameter_spans}
+  @declaration_key {__MODULE__, :declaration_spans}
   @equation_key {__MODULE__, :equations}
 
   def put_parameter_spans(name, spans) when is_atom(name) and is_list(spans) do
@@ -15,6 +16,14 @@ defmodule Cure.Elab.SourceMetadata do
   end
 
   def parameter_spans(name) when is_atom(name), do: Process.get(@parameter_key, %{}) |> Map.get(name, [])
+
+  def put_declaration_span(name, span) when is_atom(name) do
+    Process.put(@declaration_key, Map.put(Process.get(@declaration_key, %{}), name, span))
+    :ok
+  end
+
+  def declaration_span(name) when is_atom(name),
+    do: Process.get(@declaration_key, %{}) |> Map.get(name)
 
   def put_equation(theorem, metadata) when is_atom(theorem) and is_map(metadata) do
     Process.put(@equation_key, Map.put(Process.get(@equation_key, %{}), theorem, metadata))

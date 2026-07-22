@@ -545,6 +545,7 @@ defmodule Cure.Elab.Declarations do
         # the def (dropping this) and re-attaches its own copy.
         |> Env.put_labels(sig.name, param_label_vector(sig.params))
         |> register_parameter_spans(sig.name, sig.params)
+        |> register_declaration_span(sig.name, meta)
         |> maybe_register_lemma(sig, meta)
 
       env2 =
@@ -2040,6 +2041,17 @@ defmodule Cure.Elab.Declarations do
 
   defp register_parameter_spans(env, name, params) do
     :ok = Cure.Elab.SourceMetadata.put_parameter_spans(Env.owned_name(env, name), param_label_span_vector(params) || [])
+    env
+  end
+
+  defp register_declaration_span(env, name, meta) do
+    span =
+      case Cure.MetaAST.Metadata.source_info(meta) do
+        %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+        _source_info -> nil
+      end
+
+    :ok = Cure.Elab.SourceMetadata.put_declaration_span(Env.owned_name(env, name), span)
     env
   end
 

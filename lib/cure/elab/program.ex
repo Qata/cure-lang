@@ -3250,8 +3250,17 @@ defmodule Cure.Elab.Program do
     end)
     |> Enum.reduce_while(:ok, fn {{_owner, base}, members}, :ok ->
       case first_overlapping_pair(env, members) do
-        nil -> {:cont, :ok}
-        arity -> {:halt, {:error, {:overlapping_overload, String.to_atom(base), arity}}}
+        nil ->
+          {:cont, :ok}
+
+        overlap ->
+          {:halt,
+           {:error,
+            {:overlapping_overload,
+             Map.merge(overlap, %{
+               name: String.to_atom(base),
+               arity: length(overlap.first.parameters)
+             })}}}
       end
     end)
   end
@@ -3265,17 +3274,27 @@ defmodule Cure.Elab.Program do
   # apart and legally co-register; only a pair matching on both is a true overlap.
   defp first_overlapping_pair(env, members) do
     typed =
-      for {_key, def} <- members do
+      for {key, def} <- members do
         ptypes = param_types(def.type)
-        {ptypes, member_labels(def, length(ptypes))}
-      end
 
-    Enum.find_value(pairs(typed), fn {{ps, plabels}, {qs, qlabels}} ->
-      if length(ps) == length(qs) and plabels == qlabels and
-           Enum.all?(Enum.zip(ps, qs), fn {p, q} ->
+        %{
+          id: key,
+          parameters: ptypes,
+          labels: member_labels(def, length(ptypes)),
+          span: Cure.Elab.SourceMetadata.declaration_span(key)
+        }
+      end
+      |> Enum.sort_by(fn
+        %{span: %Cure.Diagnostic.Span{start_byte: byte}, id: id} -> {0, byte, id}
+        %{id: id} -> {1, 0, id}
+      end)
+
+    Enum.find_value(pairs(typed), fn {first, second} ->
+      if length(first.parameters) == length(second.parameters) and first.labels == second.labels and
+           Enum.all?(Enum.zip(first.parameters, second.parameters), fn {p, q} ->
              Cure.Elab.TypeConv.convertible?(env, p, q)
            end) do
-        length(ps)
+        %{first: first, second: second}
       end
     end)
   end

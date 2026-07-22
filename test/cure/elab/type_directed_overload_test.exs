@@ -92,7 +92,53 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     end
     """
 
-    assert {:error, {:overlapping_overload, :dup, 2}} = elaborate_error(src)
+    assert {:error, {:overlapping_overload, %{name: :dup, arity: 2} = details}} = elaborate_error(src)
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:overlapping_overload, details}, "overlap.cure", src)
+
+    assert Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- OVERLOADS OF `DUP` CANNOT BE DISTINGUISHED [E105] -------------- overlap.cure
+
+             Both declarations accept the same parameter types and required argument labels.
+             A call cannot provide enough information to choose between them.
+
+             at overlap.cure:3:3
+             2 |   fn dup(a: Int, b: Int) -> Int = a
+               |   --------------------------------- the first indistinguishable `dup` overload is here
+             3 |   fn dup(a: Int, b: Int) -> Int = b
+               |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this overload has the same callable signature as the first
+
+             Hint: Change a parameter type or required argument label, or rename one function
+             """)
+
+    lsp = Cure.Diagnostic.Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 2, "character" => 2},
+             "end" => %{"line" => 2, "character" => 35}
+           }
+
+    assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+             %{
+               "start" => %{"line" => 1, "character" => 2},
+               "end" => %{"line" => 1, "character" => 35}
+             }
+           ]
+
+    assert lsp["data"]["payload"] == %{
+             "arity" => 2,
+             "first_id" => "OverlapReject#dup~0",
+             "first_signature" => "dup(Int, Int)",
+             "kind" => "overlapping_overload",
+             "name" => "dup",
+             "second_id" => "OverlapReject#dup~1",
+             "second_signature" => "dup(Int, Int)"
+           }
+
+    fixed = String.replace(src, "fn dup(a: Int, b: Int) -> Int = b", "fn dup_other(a: Int, b: Int) -> Int = b")
+    assert {:ok, _environment} = Cure.Elab.Program.elaborate(fixed)
   end
 
   # Slice C — argument labels break an otherwise-overlapping pair. Both members
@@ -120,7 +166,7 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     end
     """
 
-    assert {:error, {:overlapping_overload, :move, 1}} = elaborate_error(src)
+    assert {:error, {:overlapping_overload, %{name: :move, arity: 1}}} = elaborate_error(src)
   end
 
   # Task 5 — call-site pruning failure. When no member's parameter types match
