@@ -32,6 +32,7 @@ defmodule Cure.Elab.HoleIdentityTest do
     ids = hole_ids(env)
 
     assert length(ids) == 3
+
     assert Enum.all?(ids, &(is_binary(&1) and &1 != "")),
            "every hole id must be a non-empty string: #{inspect(ids)}"
 

@@ -2,7 +2,7 @@ defmodule Cure.Compiler.Parser.RangeTest do
   use ExUnit.Case, async: true
 
   alias Cure.Compiler.Parser.Range
-  alias Cure.Compiler.Token
+  alias Cure.Compiler.{Lexer, Token}
   alias Cure.Diagnostic.Span
 
   test "marks, spans through delimiters, and preserves multiline unicode coordinates" do
@@ -42,6 +42,47 @@ defmodule Cure.Compiler.Parser.RangeTest do
 
     assert {:error, :different_source} = Range.through(left, right)
     assert {:error, :missing_span} = Range.mark(Token.new(:eof, nil, 1, 1))
+  end
+
+  test "real layout and EOF tokens provide honest insertion positions" do
+    source = "mod Omega\n  fn identity() -> String = \"Ω\"\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "unicode_layout.cure", emit_events: false)
+
+    newline = Enum.find(tokens, &(&1.type == :newline))
+    indent = Enum.find(tokens, &(&1.type == :indent))
+    dedent = Enum.find(tokens, &(&1.type == :dedent))
+    eof = List.last(tokens)
+
+    assert newline.span.end_byte > newline.span.start_byte
+
+    for token <- [indent, dedent, eof] do
+      assert {:ok, marked} = Range.mark(token)
+      assert marked.start_byte == marked.end_byte
+      assert {:ok, insertion} = Range.zero_at(token)
+      assert insertion.start_byte == insertion.end_byte
+      assert insertion.start_line == insertion.end_line
+      assert insertion.start_column == insertion.end_column
+    end
+
+    assert eof.type == :eof
+    assert eof.span.start_byte == byte_size(source)
+    assert {eof.span.start_line, eof.span.start_column} == {3, 1}
+  end
+
+  test "unicode token columns and bytes remain distinct and composable" do
+    source = "\"α\" + \"β\""
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "unicode.cure", emit_events: false)
+    [alpha, plus, beta | _layout] = tokens
+
+    assert {alpha.span.start_byte, alpha.span.end_byte, alpha.span.start_column, alpha.span.end_column} ==
+             {0, 4, 1, 4}
+
+    assert {beta.span.start_byte, beta.span.end_byte, beta.span.start_column, beta.span.end_column} ==
+             {7, 11, 7, 10}
+
+    assert {:ok, whole} = Range.through(alpha, beta)
+    assert {whole.start_byte, whole.end_byte, whole.start_column, whole.end_column} == {0, 11, 1, 10}
+    assert plus.span.start_byte == 5
   end
 
   defp token(value, line, column, start_byte, end_byte, end_line, end_column) do

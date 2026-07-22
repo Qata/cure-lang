@@ -177,6 +177,10 @@ defmodule Cure.Diagnostic.Adapter do
     declaration_conflict(:sibling_module_collision, %{name: name, owners: owners}, opts)
   end
 
+  def from_error({:sibling_module_collision, %{name: _name} = details}, opts) do
+    declaration_conflict(:sibling_module_collision, details, opts)
+  end
+
   def from_error({:precedence_cycle, %{groups: groups} = details}, opts) when is_list(groups) do
     operator_conflict(:precedence_cycle, details, opts)
   end
@@ -622,6 +626,39 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:codegen_error, {:unfilled_hole, _} = reason}, opts), do: from_error(reason, opts)
 
   def from_error({:codegen_error, {:implementation_scope, _} = reason}, opts), do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {:sibling_module_collision, _} = reason}, opts),
+    do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {kind, _} = reason}, opts)
+      when kind in [
+             :duplicate_type,
+             :duplicate_ctor,
+             :duplicate_constructor,
+             :duplicate_field,
+             :duplicate_parameter,
+             :duplicate_index,
+             :reserved_union_type_name,
+             :constructor_function_collision,
+             :duplicate_definition
+           ],
+      do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {kind, _} = reason}, opts)
+      when kind in [
+             :proof_chain_mismatch,
+             :rewrite_failed,
+             :simplification_failed,
+             :induction_failed,
+             :defining_equation_unavailable
+           ],
+      do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {:named_argument_mismatch, _, _} = reason}, opts),
+    do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {:proof_shape_mismatch, _, _} = reason}, opts),
+    do: from_error(reason, opts)
 
   def from_error({:codegen_failure, details}, opts) when is_map(details) do
     opts =
@@ -2170,7 +2207,7 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:expected_token, expected, actual_type, actual_value, line, column, %Span{} = span}, opts) do
     from_error(
       %SyntaxProblem{
-        kind: :unexpected_token,
+        kind: missing_delimiter_kind(expected, actual_type),
         expected: expected,
         observed: if(is_nil(actual_value), do: actual_type, else: actual_value),
         at: Keyword.get(opts, :span, span),
@@ -2429,7 +2466,7 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unexpected_token, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
-        kind: :unexpected_token,
+        kind: Map.get(details, :kind, :unexpected_token),
         expected: Map.get(details, :expected),
         observed: details.observed,
         at: Map.get(details, :span) || Keyword.get(opts, :span),
@@ -2452,6 +2489,181 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:function_parameters_unparenthesized, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: :function_parameters_unparenthesized,
+        expected: :lparen,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        previous: Map.get(details, :name_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:lambda_parameters_unparenthesized, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: :lambda_parameters_unparenthesized,
+        expected: :lparen,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :lambda_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:lambda_arrow_missing, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: :lambda_arrow_missing,
+        expected: :arrow,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :lambda_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:branch_arrow_missing, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: :branch_arrow_missing,
+        expected: Map.get(details, :expected, :arrow),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:refinement_type_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:sigma_type_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:declaration_separator_missing, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:indexed_type_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:invalid_parameter_name, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: :invalid_parameter_name,
+        expected: :identifier,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:variadic_parameter_name_missing, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: :variadic_parameter_name_missing,
+        expected: :identifier,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :marker_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:call_arguments_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:container_elements_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:lambda_block_unterminated, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -2460,6 +2672,7 @@ defmodule Cure.Diagnostic.Adapter do
         observed: Map.get(details, :observed, :eof),
         at: Map.get(details, :span) || Keyword.get(opts, :span),
         opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
         context: details
       },
       opts
@@ -3002,6 +3215,8 @@ defmodule Cure.Diagnostic.Adapter do
     value |> Tuple.to_list() |> Enum.take(4) |> Enum.map_join(": ", &human_reason/1)
   end
 
+  defp human_reason(%_{} = value), do: value |> Map.from_struct() |> human_reason()
+
   defp human_reason(value) when is_map(value) do
     value
     |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
@@ -3155,6 +3370,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp declaration_conflict_title(:duplicate_index), do: "Duplicate index"
   defp declaration_conflict_title(:duplicate_type), do: "Duplicate type declaration"
   defp declaration_conflict_title(:duplicate_constructor), do: "Duplicate constructor"
+  defp declaration_conflict_title(:sibling_module_collision), do: "Name repeated across sibling modules"
   defp declaration_conflict_title(_kind), do: "Declaration conflict"
 
   defp declaration_conflict_message(:duplicate_parameter, name, _detail),
@@ -3173,6 +3389,10 @@ defmodule Cure.Diagnostic.Adapter do
     do:
       "The constructor `#{name}` is declared more than once in this module. Rename or remove one declaration so pattern matching stays unambiguous."
 
+  defp declaration_conflict_message(:sibling_module_collision, name, detail),
+    do:
+      "The name `#{name}` is declared#{detail}. Sibling modules in one source file currently share an elaboration namespace, so one declaration would overwrite the other. Rename one declaration or move the modules into separate source files."
+
   defp declaration_conflict_message(_kind, name, detail),
     do: "The declaration `#{name}` conflicts with another visible declaration#{detail}."
 
@@ -3181,6 +3401,10 @@ defmodule Cure.Diagnostic.Adapter do
   defp duplicate_primary_label(:duplicate_index), do: "this index repeats an earlier name"
   defp duplicate_primary_label(:duplicate_type), do: "this type repeats an earlier declaration"
   defp duplicate_primary_label(:duplicate_constructor), do: "this constructor repeats an earlier declaration"
+
+  defp duplicate_primary_label(:sibling_module_collision),
+    do: "this name is already declared in another sibling module"
+
   defp duplicate_primary_label(_kind), do: "rename this declaration or make its identity unique"
 
   defp interface_failure(kind, details, opts) do
@@ -4881,8 +5105,403 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_malformed}), do: "Edition pragma is malformed"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_unknown}), do: "Edition is unknown"
   defp syntax_problem_title(%SyntaxProblem{kind: :missing_function_body}), do: "Function body is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :function_parameters_unparenthesized}),
+    do: "Function parameter list is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :lambda_parameters_unparenthesized}),
+    do: "Lambda parameter list is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :lambda_arrow_missing}), do: "Lambda arrow is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :induction_case}}),
+    do: "Induction case arrow is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
+    do: "Explanation clause arrow is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :match_arm}}),
+    do: "Pattern branch arrow is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: family}})
+       when family in [:pickup_clause, :pickup_else],
+       do: "Pickup branch arrow is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :function_clause}}),
+    do: "Function clause arrow is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: family}})
+       when family in [:with_arm, :with_rematch_arm],
+       do: "With branch arrow is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :refinement_binder_invalid}),
+    do: "Refinement binder needs a name"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :refinement_colon_missing}),
+    do: "Refinement binder needs a colon"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :refinement_bar_missing}),
+    do: "Refinement type needs a separator"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :refinement_unclosed}),
+    do: "Refinement type is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :sigma_binder_invalid}), do: "Sigma binder needs a name"
+  defp syntax_problem_title(%SyntaxProblem{kind: :sigma_colon_missing}), do: "Sigma binder needs a colon"
+  defp syntax_problem_title(%SyntaxProblem{kind: :sigma_comma_missing}), do: "Sigma type needs a separator"
+  defp syntax_problem_title(%SyntaxProblem{kind: :sigma_unclosed}), do: "Sigma type is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :gadt_constructor_colon_missing}),
+    do: "Constructor signature needs a colon"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :record_field_colon_missing}),
+    do: "Record field needs a colon"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :fixity_colon_missing}),
+    do: "Fixity declaration needs a colon"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :precedencegroup_field_colon_missing}),
+    do: "Precedence group field needs a colon"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :type_declaration_assign_missing,
+         context: %{family: :typealias}
+       }),
+       do: "Type alias needs an equals sign"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :type_declaration_assign_missing}),
+    do: "Type declaration needs an equals sign"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :type_indices_opener_missing}),
+    do: "Type indices need parentheses"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :assert_type_colon_missing}),
+    do: "Type assertion needs a colon"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :named_implicit_pattern_assign_missing}),
+    do: "Named implicit pattern needs an equals sign"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :local_binding_assign_missing,
+         context: %{family: :have}
+       }),
+       do: "Have binding needs an equals sign"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :local_binding_assign_missing}),
+    do: "Let binding needs an equals sign"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :where_block_indent_missing}),
+    do: "Local definitions must be indented"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :where_binding_assign_missing}),
+    do: "Local definition needs an equals sign"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{ambiguous: true, container: :record}
+       }),
+       do: "Record fields need a separator"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{ambiguous: true}
+       }),
+       do: "Map entries need a separator"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{container: :record}
+       }),
+       do: "Record entry needs an arrow"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :map_entry_separator_missing}),
+    do: "Map entry needs an arrow"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :binary_generator_arrow_missing}),
+    do: "Binary generator needs an arrow"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :send_comma_missing}),
+    do: "Send needs a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :lift_callback_body_separator_missing,
+         context: %{annotated: true}
+       }),
+       do: "Lifted callback needs an equals sign"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :lift_callback_body_separator_missing}),
+    do: "Lifted callback needs an arrow"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_opener_missing,
+         context: %{container: container}
+       })
+       when container in [:failure_parameters, :lift_callback_parameters],
+       do: "Macro parameter list is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_opener_missing,
+         context: %{container: :macro_obligation_capture}
+       }),
+       do: "Macro obligation needs parentheses"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :with_rematch_separator_missing}),
+    do: "With rematch needs a bar"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
+    do: "Lambda parameter needs a name"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name}), do: "Function parameter needs a name"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :variadic_parameter_name_missing}),
+    do: "Variadic parameter needs a name"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :call_unclosed}), do: "Function call is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :call_argument_separator_missing}),
+    do: "Call arguments need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :list}}),
+    do: "List is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :tuple}}),
+    do: "Tuple is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: container}})
+       when container in [:tuple_type, :tuple_type_sigil],
+       do: "Tuple type is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :grouped_type}}),
+    do: "Grouped type is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :grouped_expression}
+       }),
+       do: "Parenthesized expression is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :named_constructor_domain}
+       }),
+       do: "Named constructor domain is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :implicit_constructor_domain}
+       }),
+       do: "Implicit constructor domain is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :named_implicit_pattern}
+       }),
+       do: "Named implicit pattern is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :implicit_parameter}
+       }),
+       do: "Implicit parameter is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :binary_specifier_arguments}
+       }),
+       do: "Binary specifier argument is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :selective_import}
+       }),
+       do: "Selective import is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :failure_parameters}
+       }),
+       do: "Failure parameter list is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :lift_callback_parameters}
+       }),
+       do: "Lifted callback parameter list is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :macro_obligation_capture}
+       }),
+       do: "Macro obligation is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: container}
+       })
+       when container in [:splice, :splice_group],
+       do: "Syntax splice is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :branch_block, family: :match}
+       }),
+       do: "Pattern branch block is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :branch_block, family: family}
+       })
+       when family in [:with, :multi_with],
+       do: "With branch block is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :map}}),
+    do: "Map is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :record}}),
+    do: "Record is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :list_cons}}),
+    do: "List cons is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :comprehension}
+       }),
+       do: "List comprehension is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :parameters}
+       }),
+       do: "Function parameter list is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :type_arguments}
+       }),
+       do: "Type application is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :type_parameters}
+       }),
+       do: "Type parameter list is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :constructor_parameters}
+       }),
+       do: "Constructor parameter list is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :type_indices}
+       }),
+       do: "Type index list is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :lambda_parameters}
+       }),
+       do: "Lambda parameter list is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :binary_literal}}),
+    do: "Binary literal is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :binary_generator}
+       }),
+       do: "Binary generator is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :list}}),
+    do: "List elements need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :tuple}}),
+    do: "Tuple elements need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: container}})
+       when container in [:tuple_type, :tuple_type_sigil],
+       do: "Tuple type positions need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :grouped_type}
+       }),
+       do: "Grouped type positions need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :map}}),
+    do: "Map entries need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :record}
+       }),
+       do: "Record fields need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :parameters}
+       }),
+       do: "Function parameters need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_arguments}
+       }),
+       do: "Type arguments need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_parameters}
+       }),
+       do: "Type parameters need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :constructor_parameters}
+       }),
+       do: "Constructor parameters need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_indices}
+       }),
+       do: "Type indices need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :lambda_parameters}
+       }),
+       do: "Lambda parameters need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :selective_import}
+       }),
+       do: "Imported names need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_trailing_separator, context: %{container: :list}}),
+    do: "List ends with an extra comma"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_trailing_separator, context: %{container: :tuple}}),
+    do: "Tuple ends with an extra comma"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :bare_brace_expression}), do: "Brace cannot start an expression"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unmatched_closer}), do: "Closing delimiter has no opener"
+  defp syntax_problem_title(%SyntaxProblem{kind: :mismatched_closer}), do: "Closing delimiter does not match"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_parentheses}), do: "Parenthesized expression is not closed"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_brackets}), do: "Bracketed expression is not closed"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_braces}), do: "Braced expression is not closed"
   defp syntax_problem_title(%SyntaxProblem{expected: :explain_point}), do: "Explanation clause needs a failure point"
   defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :unterminated_lambda,
+         expected: :rbrace,
+         context: %{body_style: :brace}
+       }),
+       do: "This brace-delimited lambda body reaches the end of its container without the '}' that closes it."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :unterminated_lambda}),
     do: "This multi-statement lambda body reaches the end of its container without a closing delimiter."
@@ -4954,6 +5573,497 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :missing_function_body}),
     do: "This function declaration ends after `=`, but every function needs a body expression."
 
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :function_parameters_unparenthesized,
+         context: %{function: function}
+       }),
+       do:
+         "The function `#{function}` needs a parenthesized parameter list after its name. Write `()` when it takes no parameters."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :lambda_parameters_unparenthesized}),
+    do: "An anonymous function must put its parameters inside parentheses immediately after `fn`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :lambda_arrow_missing}),
+    do: "A lambda needs `->` between its parameter list and body expression."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :induction_case}}),
+    do: "An induction case needs `=>` between its pattern and body expression."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
+    do: "An explanation clause needs `=>` between its failure point and message."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: family}}),
+    do: "#{branch_family_name(family)} needs `->` between its head and body expression."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :refinement_binder_invalid, observed: observed}),
+    do:
+      "#{String.capitalize(syntax_name(observed))} cannot name the value refined by this type. Use a lower-case name such as `value`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :refinement_colon_missing}),
+    do: "A refinement binder must be followed by `:` and the base type whose values it describes."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :refinement_bar_missing}),
+    do: "A refinement type uses `|` between its base type and the proposition values must satisfy."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :refinement_unclosed}),
+    do: "This refinement type reaches the end of its container without the '}' that closes its proposition."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :sigma_binder_invalid, observed: observed}),
+    do:
+      "#{String.capitalize(syntax_name(observed))} cannot name the first value in this dependent pair. Use a lower-case binder such as `value`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :sigma_colon_missing}),
+    do: "A Sigma binder must be followed by `:` and the type of its first value."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :sigma_comma_missing}),
+    do: "A Sigma type uses `,` between the first value's type and the dependent type of its second value."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :sigma_unclosed}),
+    do: "This Sigma type reaches the end of the source without the ')' that closes its dependent pair."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :gadt_constructor_colon_missing,
+         context: %{declaration: constructor, family: family}
+       }),
+       do: "The constructor `#{constructor}` in `#{family}` needs `:` between its name and type signature."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :record_field_colon_missing,
+         context: %{declaration: field, family: record}
+       }),
+       do: "The field `#{field}` in record `#{record}` needs `:` between its name and declared type."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :fixity_colon_missing,
+         context: %{declaration: operator, family: fixity}
+       }),
+       do: "The `#{fixity}` declaration for `#{operator}` needs `:` between the operator and its precedence group."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :precedencegroup_field_colon_missing,
+         context: %{declaration: field, family: group}
+       }),
+       do: "The `#{field}` setting in precedence group `#{group}` needs `:` before its value."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :type_declaration_assign_missing,
+         context: %{declaration: name, family: :typealias}
+       }),
+       do: "The type alias `#{name}` needs `=` between its name and the type it expands to."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :type_declaration_assign_missing,
+         context: %{declaration: name}
+       }),
+       do: "The type `#{name}` needs `=` between its declaration head and its constructors or aliased type."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :type_indices_opener_missing,
+         context: %{declaration: declaration}
+       }),
+       do: "The indexed type `#{declaration}` must put its index telescope inside parentheses after `indices`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :assert_type_colon_missing}),
+    do: "The `assert_type` expression needs `:` between the asserted value and its expected type."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :named_implicit_pattern_assign_missing,
+         context: %{binder: binder}
+       }),
+       do: "The named implicit pattern for `#{binder}` needs `=` before the pattern that fixes its value."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :local_binding_assign_missing,
+         context: %{family: family, declaration: name}
+       }),
+       do: "The `#{family}` binding for `#{name}` needs `=` before the value it binds."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :where_block_indent_missing}),
+    do: "Definitions belonging to this `where` block must be indented beneath it."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :where_binding_assign_missing,
+         context: %{declaration: name}
+       }),
+       do: "The local definition `#{name}` needs `=` between its name and value."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{ambiguous: true, container: container, key: key}
+       }),
+       do:
+         "After `#{key}`, this could be another punned #{container} entry needing `,`, or the value of `#{key}` needing `=>`."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{container: :record}
+       }),
+       do: "This explicit record entry needs `=>` between its key and value."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :map_entry_separator_missing}),
+    do: "This explicit map entry needs `=>` between its key and value."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :binary_generator_arrow_missing}),
+    do: "This binary generator needs `<-` between its byte pattern and source expression."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :send_comma_missing}),
+    do: "The keyword `send` form needs `,` between its target and message."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :lift_callback_body_separator_missing,
+         context: %{declaration: name, annotated: true}
+       }),
+       do: "The lifted callback `#{name}` needs `=` between its declared return type and body."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :lift_callback_body_separator_missing,
+         context: %{declaration: name}
+       }),
+       do: "The lifted callback `#{name}` needs `->` between its parameter list and body."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_opener_missing,
+         context: %{container: container, declaration: declaration}
+       })
+       when container in [:failure_parameters, :lift_callback_parameters],
+       do: "The macro declaration `#{declaration}` must put its parameters inside parentheses."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_opener_missing,
+         context: %{container: :macro_obligation_capture, interface: interface}
+       }),
+       do: "The `#{interface}` obligation must put the capture it constrains inside parentheses."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :with_rematch_separator_missing,
+         context: %{parent_pattern_count: count}
+       }),
+       do: "These #{count} restated parent patterns need `|` before the pattern for the `with` value."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :invalid_parameter_name,
+         observed: observed,
+         context: %{lambda: true}
+       }),
+       do:
+         "#{String.capitalize(syntax_name(observed))} cannot name a lambda parameter. Use a lower-case name such as `value`."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :invalid_parameter_name,
+         observed: observed,
+         context: %{implicit: true}
+       }),
+       do:
+         "#{String.capitalize(syntax_name(observed))} cannot name an implicit parameter. Write a lower-case binder such as `{type}` or `{type: Type}`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :invalid_parameter_name, observed: observed}),
+    do:
+      "#{String.capitalize(syntax_name(observed))} cannot name a function parameter. Use a lower-case name such as `value`, optionally followed by `: Type`."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :variadic_parameter_name_missing,
+         context: %{kind: :keyword_variadic}
+       }),
+       do: "The `**` marker must be followed by the name that receives extra named arguments, for example `**options`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :variadic_parameter_name_missing}),
+    do: "The `*` marker must be followed by the name that receives extra positional arguments, for example `*values`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :call_unclosed, context: %{call: call}}),
+    do: "The call to `#{call}` reaches the end of the source without the ')' that closes its argument list."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :call_argument_separator_missing, context: %{call: call}}),
+    do: "The call to `#{call}` has another argument here, but consecutive arguments must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rbrace,
+         context: %{container: :map}
+       }),
+       do: "This map reaches the end of the source without the '}' that closes its entries."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rbrace,
+         context: %{container: :record}
+       }),
+       do: "This record reaches the end of the source without the '}' that closes its fields."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rbracket,
+         context: %{container: :list_cons}
+       }),
+       do: "This list cons reaches the end of the source without the ']' after its tail expression."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rbracket,
+         context: %{container: :comprehension}
+       }),
+       do: "This list comprehension reaches the end of the source without the ']' that closes its clauses."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :parameters}
+       }),
+       do: "This function's parameter list reaches the end of the source without its closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :type_arguments, type: type, token_type: :dedent}
+       }),
+       do: "The type application `#{type}` ends before the ')' that closes its arguments."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :type_arguments, type: type}
+       }),
+       do: "The type application `#{type}` reaches the end of the source without the ')' that closes its arguments."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :type_parameters, declaration: declaration}
+       }),
+       do: "The declaration of `#{declaration}` reaches the end of its type parameter list without the closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :constructor_parameters, constructor: constructor}
+       }),
+       do: "The constructor `#{constructor}` reaches the end of its parameter list without the closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :type_indices, declaration: declaration}
+       }),
+       do: "The indexed type `#{declaration}` reaches the end of its index telescope without the closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :lambda_parameters}
+       }),
+       do: "This lambda's parameter list reaches the end of the source without its closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: expected,
+         context: %{container: container}
+       })
+       when container in [:tuple_type, :tuple_type_sigil] and expected in [:rparen, :rbracket],
+       do:
+         "This tuple type reaches the end of the source without the '#{syntax_insertion(expected)}' that closes its positions."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :grouped_type}
+       }),
+       do: "This grouped type reaches the end of the source without the ')' that closes its positions."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :grouped_expression}
+       }),
+       do: "This parenthesized expression reaches the end of the source without its closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :named_constructor_domain}
+       }),
+       do: "This named constructor domain reaches the end of the declaration without its closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :implicit_constructor_domain}
+       }),
+       do: "This implicit constructor domain reaches the end of the declaration without its closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :named_implicit_pattern, binder: binder}
+       }),
+       do: "The named implicit pattern for `#{binder}` reaches the end of its value without the closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :implicit_parameter, binder: binder}
+       }),
+       do: "The implicit parameter `#{binder}` reaches the end of its annotation without the closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :binary_specifier_arguments, specifier: specifier}
+       }),
+       do: "The binary `#{specifier}` specifier reaches the end of its argument without the closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :selective_import, module: module}
+       }),
+       do: "The selective import from `#{module}` reaches the end of its names without the closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: container, declaration: declaration}
+       })
+       when container in [:failure_parameters, :lift_callback_parameters],
+       do: "The parameter list for `#{declaration}` reaches its body without the closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :macro_obligation_capture, interface: interface, capture: capture}
+       }),
+       do: "The `#{interface}` obligation for `#{capture}` is missing the ')' that closes its capture."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: container}
+       })
+       when container in [:splice, :splice_group] do
+    form = if container == :splice_group, do: "group splice", else: "splice"
+    "This #{form} reaches the end of its expression without the closing ')'."
+  end
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :branch_block, family: :match}
+       }),
+       do: "This inline `match` reaches the end of its branches without the closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :branch_block, family: :with}
+       }),
+       do: "This inline `with` reaches the end of its branches without the closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :branch_block, family: :multi_with}
+       }),
+       do: "This multi-scrutinee `with` reaches the end of its branches without the closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :binary_close,
+         context: %{container: :binary_literal}
+       }),
+       do: "This binary literal reaches the end of the source without the '>>' that closes its segments."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :binary_close,
+         context: %{container: :binary_generator}
+       }),
+       do: "This binary generator reaches the end of the source without the '>>' after its source expression."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :container_unclosed, context: %{container: container}}),
+    do: "This #{container} reaches the end of the source without the ']' that closes its elements."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :map}
+       }),
+       do: "This map has another entry here, but consecutive entries must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :record}
+       }),
+       do: "This record has another field here, but consecutive fields must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :parameters}
+       }),
+       do: "This function has another parameter here, but consecutive parameters must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_arguments, type: type}
+       }),
+       do:
+         "The type application `#{type}` has another argument here, but consecutive type arguments must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_parameters, declaration: declaration}
+       }),
+       do:
+         "The declaration of `#{declaration}` has another type parameter here, but consecutive parameters must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :constructor_parameters, constructor: constructor}
+       }),
+       do:
+         "The constructor `#{constructor}` has another parameter type here, but consecutive parameters must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_indices, declaration: declaration}
+       }),
+       do:
+         "The indexed type `#{declaration}` has another index here, but consecutive indices must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :lambda_parameters}
+       }),
+       do: "This lambda has another parameter here, but consecutive parameters must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :selective_import, module: module}
+       }),
+       do: "The import from `#{module}` has another name here, but imported names must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: container}
+       })
+       when container in [:tuple_type, :tuple_type_sigil, :grouped_type],
+       do: "This type has another position here, but consecutive type positions must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: container}
+       }),
+       do: "This #{container} has another element here, but consecutive elements must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_trailing_separator,
+         context: %{container: container}
+       }),
+       do: "This #{container} ends immediately after a comma, but every comma must be followed by another element."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :bare_brace_expression}),
+    do:
+      "A bare '{' does not begin a Cure expression. Write `Type{...}` for a record, `\#{...}` for a map, or use indentation for a block."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unmatched_closer, observed: observed}),
+    do: "#{syntax_name(observed)} closes a construct, but there is no matching opener here."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :mismatched_closer, expected: expected, observed: observed}),
+    do: "This construct needs #{syntax_name(expected)}, but it is closed with #{syntax_name(observed)} instead."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unclosed_parentheses}),
+    do: "This parenthesized expression reaches the end of the source without its closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unclosed_brackets}),
+    do: "This bracketed expression reaches the end of the source without its closing ']'."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unclosed_braces}),
+    do: "This braced expression reaches the end of the source without its closing '}'."
+
   defp syntax_problem_context(%SyntaxProblem{expected: :explain_point, observed: observed}),
     do:
       "#{String.capitalize(syntax_name(observed))} starts an explanation message, but each clause must first name a failure category or `keyword \"...\"`."
@@ -4969,6 +6079,19 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_expected_doc(%SyntaxProblem{expected: nil, alternatives: []}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{kind: :macro_use_mismatch}), do: Doc.empty()
+  defp syntax_expected_doc(%SyntaxProblem{kind: :mismatched_closer}), do: Doc.empty()
+  defp syntax_expected_doc(%SyntaxProblem{kind: :function_parameters_unparenthesized}), do: Doc.empty()
+  defp syntax_expected_doc(%SyntaxProblem{kind: :invalid_parameter_name}), do: Doc.empty()
+  defp syntax_expected_doc(%SyntaxProblem{kind: :variadic_parameter_name_missing}), do: Doc.empty()
+
+  defp syntax_expected_doc(%SyntaxProblem{kind: kind})
+       when kind in [:call_unclosed, :call_argument_separator_missing],
+       do: Doc.empty()
+
+  defp syntax_expected_doc(%SyntaxProblem{kind: kind})
+       when kind in [:container_unclosed, :container_separator_missing, :container_trailing_separator],
+       do: Doc.empty()
+
   defp syntax_expected_doc(%SyntaxProblem{expected: :explain_point}), do: Doc.empty()
 
   defp syntax_expected_doc(%SyntaxProblem{} = problem) do
@@ -5020,6 +6143,9 @@ defmodule Cure.Diagnostic.Adapter do
     |> String.replace("\t", "\\t")
   end
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_lambda, expected: :rbrace}),
+    do: "close this lambda body with `}`"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_lambda}), do: "the unclosed body reaches here"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unrecognized_pattern, observed: :range}),
@@ -5027,6 +6153,371 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unrecognized_pattern}), do: "this pattern form is not supported"
   defp syntax_problem_label(%SyntaxProblem{kind: :missing_function_body}), do: "write the function body after this `=`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :function_parameters_unparenthesized}),
+    do: "the parameter list belongs before this token"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :lambda_parameters_unparenthesized}),
+    do: "insert `(` before the first parameter"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :lambda_arrow_missing}),
+    do: "insert `->` before the lambda body"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :induction_case}}),
+    do: "insert `=>` before this induction case body"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
+    do: "insert `=>` before this explanation message"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing}),
+    do: "insert `->` before this branch body"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :refinement_binder_invalid}),
+    do: "write a lower-case refinement binder here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :refinement_colon_missing}),
+    do: "insert `:` before the base type"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :refinement_bar_missing}),
+    do: "insert `|` before the proposition"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :refinement_unclosed}),
+    do: "close this refinement type with `}`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :sigma_binder_invalid}),
+    do: "write a lower-case Sigma binder here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :sigma_colon_missing}),
+    do: "insert `:` before the first value's type"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :sigma_comma_missing}),
+    do: "insert `,` before the dependent result type"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :sigma_unclosed}),
+    do: "close this Sigma type with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :gadt_constructor_colon_missing}),
+    do: "insert `:` before this constructor signature"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :record_field_colon_missing}),
+    do: "insert `:` before this field type"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :fixity_colon_missing}),
+    do: "insert `:` before this precedence group"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :precedencegroup_field_colon_missing}),
+    do: "insert `:` before this setting value"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :type_declaration_assign_missing}),
+    do: "insert `=` before this type body"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :type_indices_opener_missing}),
+    do: "insert `(` before the first type index"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :assert_type_colon_missing}),
+    do: "insert `:` before this expected type"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :named_implicit_pattern_assign_missing}),
+    do: "insert `=` before this implicit pattern"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :local_binding_assign_missing}),
+    do: "insert `=` before this binding value"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :where_block_indent_missing}),
+    do: "indent this definition beneath `where`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :where_binding_assign_missing}),
+    do: "insert `=` before this local value"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{ambiguous: true}
+       }),
+       do: "separate these entries with `,`, or make this the value with `=>`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{container: :record}
+       }),
+       do: "insert `=>` before this record value"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :map_entry_separator_missing}),
+    do: "insert `=>` before this map value"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :binary_generator_arrow_missing}),
+    do: "insert `<-` before this generator source"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :send_comma_missing}),
+    do: "insert a comma before this message"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :lift_callback_body_separator_missing,
+         context: %{annotated: true}
+       }),
+       do: "insert `=` before this callback body"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :lift_callback_body_separator_missing}),
+    do: "insert `->` before this callback body"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_opener_missing,
+         context: %{container: container}
+       })
+       when container in [:failure_parameters, :lift_callback_parameters],
+       do: "open this parameter list with `(`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_opener_missing,
+         context: %{container: :macro_obligation_capture}
+       }),
+       do: "insert `(` before this capture"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :with_rematch_separator_missing}),
+    do: "insert `|` before this with-pattern"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
+    do: "write a lambda parameter name here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name}),
+    do: "write a parameter name here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :variadic_parameter_name_missing}),
+    do: "write the variadic parameter name here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :call_unclosed}), do: "close this call with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :call_argument_separator_missing}),
+    do: "insert a comma before this argument"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :parameters}
+       }),
+       do: "close this parameter list with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :type_arguments}
+       }),
+       do: "close these type arguments with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :type_parameters}
+       }),
+       do: "close these type parameters with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :constructor_parameters}
+       }),
+       do: "close this constructor's parameters with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :type_indices}
+       }),
+       do: "close these type indices with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :lambda_parameters}
+       }),
+       do: "close this lambda parameter list with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: container}
+       })
+       when container in [:failure_parameters, :lift_callback_parameters],
+       do: "close this macro parameter list with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :macro_obligation_capture}
+       }),
+       do: "close this obligation with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :binary_close,
+         context: %{container: :binary_literal}
+       }),
+       do: "close this binary literal with `>>`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :binary_close,
+         context: %{container: :binary_generator}
+       }),
+       do: "close this binary generator with `>>`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: expected,
+         context: %{container: container}
+       })
+       when container in [:tuple_type, :tuple_type_sigil],
+       do: "close this tuple type with `#{syntax_insertion(expected)}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :grouped_type}
+       }),
+       do: "close this grouped type with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :grouped_expression}
+       }),
+       do: "close this parenthesized expression with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :named_constructor_domain}
+       }),
+       do: "close this named constructor domain with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :implicit_constructor_domain}
+       }),
+       do: "close this implicit constructor domain with `}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :named_implicit_pattern}
+       }),
+       do: "close this named implicit pattern with `}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :implicit_parameter}
+       }),
+       do: "close this implicit parameter with `}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :binary_specifier_arguments}
+       }),
+       do: "close this binary specifier with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :selective_import}
+       }),
+       do: "close these imported names with `}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: container}
+       })
+       when container in [:splice, :splice_group],
+       do: "close this syntax splice with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :branch_block}
+       }),
+       do: "close this branch block with `}`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :container_unclosed, expected: expected}),
+    do: "close this container with `#{syntax_insertion(expected)}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :map}
+       }),
+       do: "insert a comma before this entry"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :record}
+       }),
+       do: "insert a comma before this field"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :parameters}
+       }),
+       do: "insert a comma before this parameter"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_arguments}
+       }),
+       do: "insert a comma before this type argument"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_parameters}
+       }),
+       do: "insert a comma before this type parameter"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :constructor_parameters}
+       }),
+       do: "insert a comma before this constructor parameter"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_indices}
+       }),
+       do: "insert a comma before this type index"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :lambda_parameters}
+       }),
+       do: "insert a comma before this lambda parameter"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :selective_import}
+       }),
+       do: "insert a comma before this imported name"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: container}
+       })
+       when container in [:tuple_type, :tuple_type_sigil, :grouped_type],
+       do: "insert a comma before this type position"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :container_separator_missing}),
+    do: "insert a comma before this element"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :container_trailing_separator}),
+    do: "this comma has no following element"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_string}),
+    do: "insert the closing `\"` here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_char}),
+    do: "insert the closing `'` here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_quoted_identifier}),
+    do: "insert the closing backtick here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :bare_brace_expression}),
+    do: "choose record, map, or block syntax here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :unmatched_closer}), do: "this delimiter has nothing to close"
+  defp syntax_problem_label(%SyntaxProblem{kind: :mismatched_closer}), do: "replace this mismatched delimiter"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: kind})
+       when kind in [:unclosed_parentheses, :unclosed_brackets, :unclosed_braces],
+       do: "the closing delimiter belongs here"
+
   defp syntax_problem_label(%SyntaxProblem{expected: :explain_point}), do: "name the failure point before this arrow"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :non_associative}),
@@ -5083,14 +6574,907 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_secondary_labels(
-         %SyntaxProblem{kind: :unterminated_lambda, opener: %Span{} = opener},
+         %SyntaxProblem{
+           kind: kind,
+           opener: opener,
+           previous: previous,
+           context: %{container: :macro_obligation_capture} = context
+         },
+         primary_span
+       )
+       when kind in [:container_opener_missing, :container_unclosed] do
+    open_label =
+      if kind == :container_unclosed do
+        pickup_label(opener, :secondary, "the capture starts here")
+      end
+
+    [
+      pickup_label(Map.get(context, :owner_span), :secondary, "this obligation starts here"),
+      pickup_label(Map.get(context, :interface_span) || previous, :secondary, "this is the required interface"),
+      open_label,
+      pickup_label(previous, :secondary, "the capture ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :unterminated_lambda,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: context
+         },
+         primary_span
+       ) do
+    opener_message =
+      if Map.get(context, :body_style) == :brace,
+        do: "this lambda body starts here",
+        else: "this lambda starts here"
+
+    [
+      pickup_label(opener, :secondary, opener_message),
+      pickup_label(previous, :secondary, "the previous body expression ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :variadic_parameter_name_missing, opener: %Span{} = marker},
+         primary_span
+       )
+       when marker != primary_span,
+       do: [%Label{span: marker, style: :secondary, message: "this variadic marker needs a binder"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :lambda_parameters_unparenthesized, opener: %Span{} = lambda},
+         primary_span
+       )
+       when lambda != primary_span,
+       do: [%Label{span: lambda, style: :secondary, message: "this lambda starts here"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :lambda_arrow_missing,
+           opener: %Span{} = lambda,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(lambda, :secondary, "this lambda starts here"),
+      pickup_label(previous, :secondary, "its parameter list ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :branch_arrow_missing,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{family: :induction_case}
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this induction case starts here"),
+      pickup_label(previous, :secondary, "the induction pattern ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :branch_arrow_missing,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{family: :explain_clause}
+         },
+         primary_span
+       ) do
+    labels =
+      if opener == previous do
+        [pickup_label(previous, :secondary, "this is the failure point")]
+      else
+        [
+          pickup_label(opener, :secondary, "this explanation clause starts here"),
+          pickup_label(previous, :secondary, "the failure point ends here")
+        ]
+      end
+
+    labels
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :branch_arrow_missing, previous: %Span{} = previous},
+         primary_span
+       )
+       when previous != primary_span,
+       do: [%Label{span: previous, style: :secondary, message: "this branch head ends here"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :gadt_constructor_colon_missing, previous: %Span{} = previous},
+         primary_span
+       )
+       when previous != primary_span,
+       do: [%Label{span: previous, style: :secondary, message: "this is the constructor name"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :type_indices_opener_missing, previous: %Span{} = previous},
+         primary_span
+       )
+       when previous != primary_span,
+       do: [%Label{span: previous, style: :secondary, message: "the index telescope follows this keyword"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :assert_type_colon_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this type assertion starts here"),
+      pickup_label(previous, :secondary, "the asserted expression ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :named_implicit_pattern_assign_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this named implicit pattern starts here"),
+      pickup_label(previous, :secondary, "this is the implicit binder")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :local_binding_assign_missing,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: context
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this #{Map.get(context, :family, :let)} binding starts here"),
+      pickup_label(Map.get(context, :pattern_span), :secondary, "this is the binding pattern"),
+      pickup_label(previous, :secondary, "the binding head ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :where_block_indent_missing,
+           opener: %Span{} = opener
+         },
          primary_span
        )
        when opener != primary_span,
-       do: [%Label{span: opener, style: :secondary, message: "this lambda starts here"}]
+       do: [pickup_label(opener, :secondary, "this local `where` block starts here")]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :where_binding_assign_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this local `where` block starts here"),
+      pickup_label(previous, :secondary, "this is the local definition name")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :map_entry_separator_missing,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: context
+         },
+         primary_span
+       ) do
+    container = Map.get(context, :container, :map)
+
+    [
+      pickup_label(opener, :secondary, "this #{container} starts here"),
+      pickup_label(Map.get(context, :entry_span), :secondary, "this #{container} entry starts here"),
+      pickup_label(previous, :secondary, "the #{container} key ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :binary_generator_arrow_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this binary generator starts here"),
+      pickup_label(previous, :secondary, "the binary pattern ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :send_comma_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this send starts here"),
+      pickup_label(previous, :secondary, "the send target ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :lift_callback_body_separator_missing,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: context
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this lifted callback starts here"),
+      pickup_label(Map.get(context, :name_span), :secondary, "this is the callback name"),
+      pickup_label(previous, :secondary, "the callback head ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :with_rematch_separator_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "the restated parent patterns start here"),
+      pickup_label(previous, :secondary, "the final parent pattern ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :record_field_colon_missing, previous: %Span{} = previous},
+         primary_span
+       )
+       when previous != primary_span,
+       do: [%Label{span: previous, style: :secondary, message: "this is the record field name"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :fixity_colon_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this starts the fixity declaration"),
+      pickup_label(previous, :secondary, "this is the operator being declared")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :precedencegroup_field_colon_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this is the precedence group"),
+      pickup_label(previous, :secondary, "this is the setting name")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :type_declaration_assign_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this starts the type declaration"),
+      pickup_label(previous, :secondary, "the declaration head ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: context
+         },
+         primary_span
+       )
+       when kind in [
+              :refinement_binder_invalid,
+              :refinement_colon_missing,
+              :refinement_bar_missing,
+              :refinement_unclosed
+            ] do
+    [
+      pickup_label(opener, :secondary, "this refinement type starts here"),
+      pickup_label(Map.get(context, :binder_span), :secondary, "this is the refinement binder"),
+      pickup_label(previous, :secondary, refinement_previous_label(kind))
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: container}
+         },
+         primary_span
+       )
+       when container in [:splice, :splice_group] do
+    [
+      pickup_label(opener, :secondary, "the syntax splice starts here"),
+      pickup_label(previous, :secondary, "the spliced expression ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :grouped_expression}
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this parenthesized expression starts here"),
+      pickup_label(previous, :secondary, "the grouped expression ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: container} = context
+         },
+         primary_span
+       )
+       when container in [:named_constructor_domain, :implicit_constructor_domain] do
+    implicit? = container == :implicit_constructor_domain
+
+    [
+      pickup_label(
+        opener,
+        :secondary,
+        if(implicit?,
+          do: "this implicit constructor domain starts here",
+          else: "this named constructor domain starts here"
+        )
+      ),
+      pickup_label(Map.get(context, :binder_span), :secondary, "this is the dependent argument binder"),
+      pickup_label(previous, :secondary, "the argument type ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :named_implicit_pattern} = context
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this named implicit pattern starts here"),
+      pickup_label(Map.get(context, :binder_span), :secondary, "this is the implicit binder"),
+      pickup_label(previous, :secondary, "the implicit pattern ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :implicit_parameter} = context
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this implicit parameter starts here"),
+      pickup_label(Map.get(context, :binder_span), :secondary, "this is the implicit parameter name"),
+      pickup_label(previous, :secondary, "the parameter annotation ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :binary_specifier_arguments} = context
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(Map.get(context, :specifier_span), :secondary, "this is the binary specifier"),
+      pickup_label(opener, :secondary, "its argument starts here"),
+      pickup_label(previous, :secondary, "the specifier argument ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :selective_import}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "the selective import list starts here"),
+      pickup_label(previous, :secondary, "the previous imported name ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: opener,
+           previous: previous,
+           context: %{container: container} = context
+         },
+         primary_span
+       )
+       when kind in [:container_opener_missing, :container_unclosed] and
+              container in [:failure_parameters, :lift_callback_parameters] do
+    owner = if container == :failure_parameters, do: "failure declaration", else: "lifted callback"
+
+    opener_labels =
+      if kind == :container_unclosed do
+        [pickup_label(opener, :secondary, "the parameter list starts here")]
+      else
+        []
+      end
+
+    (opener_labels ++
+       [
+         pickup_label(Map.get(context, :owner_span), :secondary, "this #{owner} starts here"),
+         pickup_label(Map.get(context, :name_span), :secondary, "this is its name"),
+         pickup_label(previous, :secondary, "the previous parameter ends here")
+       ])
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: context
+         },
+         primary_span
+       )
+       when kind in [:sigma_binder_invalid, :sigma_colon_missing, :sigma_comma_missing, :sigma_unclosed] do
+    [
+      pickup_label(opener, :secondary, "this Sigma type starts here"),
+      pickup_label(Map.get(context, :binder_span), :secondary, "this is the Sigma binder"),
+      pickup_label(previous, :secondary, sigma_previous_label(kind))
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: container}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] and
+              container in [:tuple_type, :tuple_type_sigil, :grouped_type] do
+    opener_message =
+      if container == :grouped_type, do: "this grouped type starts here", else: "this tuple type starts here"
+
+    [
+      pickup_label(opener, :secondary, opener_message),
+      pickup_label(previous, :secondary, "the previous type position ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :parameters}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "this parameter list starts here"),
+      pickup_label(previous, :secondary, "the previous parameter ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: container}
+         },
+         primary_span
+       )
+       when container in [:binary_literal, :binary_generator] do
+    {opener_message, previous_message} =
+      case container do
+        :binary_literal -> {"this binary literal starts here", "the previous binary segment ends here"}
+        :binary_generator -> {"this binary generator starts here", "its source expression ends here"}
+      end
+
+    [
+      pickup_label(opener, :secondary, opener_message),
+      pickup_label(previous, :secondary, previous_message)
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :lambda_parameters}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "this lambda parameter list starts here"),
+      pickup_label(previous, :secondary, "the previous lambda parameter ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :type_arguments}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "these type arguments start here"),
+      pickup_label(previous, :secondary, "the previous type argument ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :type_parameters}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "these type parameters start here"),
+      pickup_label(previous, :secondary, "the previous type parameter ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :constructor_parameters}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "this constructor's parameter list starts here"),
+      pickup_label(previous, :secondary, "the previous constructor parameter ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :branch_block, family: family}
+         },
+         primary_span
+       ) do
+    opener_message =
+      case family do
+        :match -> "this inline match's branch block starts here"
+        :with -> "this inline with's branch block starts here"
+        :multi_with -> "this multi-scrutinee with's branch block starts here"
+      end
+
+    [
+      pickup_label(opener, :secondary, opener_message),
+      pickup_label(previous, :secondary, "the final branch ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :type_indices}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "these type indices start here"),
+      pickup_label(previous, :secondary, "the previous type index ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       )
+       when kind in [:call_unclosed, :call_argument_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "this call's argument list starts here"),
+      pickup_label(previous, :secondary, "the previous argument ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: context
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing, :container_trailing_separator] do
+    item = container_item_name(Map.get(context, :container))
+
+    [
+      pickup_label(opener, :secondary, "this container starts here"),
+      pickup_label(previous, :secondary, "the previous #{item} ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
 
   defp syntax_secondary_labels(%SyntaxProblem{opener: %Span{} = opener}, primary_span) when opener != primary_span,
     do: [%Label{span: opener, style: :secondary, message: "the construct starts here"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :function_parameters_unparenthesized, previous: %Span{} = name},
+         primary_span
+       )
+       when name != primary_span,
+       do: [%Label{span: name, style: :secondary, message: "this function name needs a parameter list after it"}]
 
   defp syntax_secondary_labels(%SyntaxProblem{kind: kind, previous: %Span{} = previous}, primary_span)
        when kind in [:non_associative, :ambiguous_precedence] and previous != primary_span,
@@ -5119,24 +7503,548 @@ defmodule Cure.Diagnostic.Adapter do
     ]
   end
 
-  defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do
-    case syntax_insertion(expected) do
-      nil ->
-        []
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :function_parameters_unparenthesized, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type in [:arrow, :assign, :newline, :eof] do
+    insertion = %{span | end_byte: span.start_byte, end_line: span.start_line, end_column: span.start_column}
 
-      replacement ->
-        [
-          %Suggestion{
-            message: "Insert `#{replacement}` to close the construct",
-            applicability: :machine_applicable,
-            edits: [
-              %TextEdit{
-                span: %{span | end_byte: span.start_byte, end_line: span.start_line, end_column: span.start_column},
-                replacement: replacement
-              }
-            ]
-          }
-        ]
+    [
+      %Suggestion{
+        message: "Insert `()` after the function name",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: insertion, replacement: "()"}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :lambda_arrow_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `->` before the lambda body",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "-> "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :branch_arrow_missing,
+           context: %{family: :induction_case, token_type: type}
+         },
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `=>` before the induction case body",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "=> "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :branch_arrow_missing,
+           context: %{family: :explain_clause, token_type: type}
+         },
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `=>` before the explanation message",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "=> "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :branch_arrow_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `->` before the branch body",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "-> "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :gadt_constructor_colon_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline] do
+    [
+      %Suggestion{
+        message: "Insert `:` before the constructor signature",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ": "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :assert_type_colon_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `:` before the expected type",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ": "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :named_implicit_pattern_assign_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `=` before the implicit pattern",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "= "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :local_binding_assign_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `=` before the binding value",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "= "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :where_block_indent_missing}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Indent each local definition beneath `where`",
+        applicability: :manual
+      }
+    ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :where_binding_assign_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `=` before the local value",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "= "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :map_entry_separator_missing, context: %{ambiguous: true}},
+         %Span{}
+       ) do
+    [
+      %Suggestion{
+        message: "Choose `,` for two punned entries or `=>` for a key-value entry",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :map_entry_separator_missing,
+           context: %{token_type: type} = context
+         },
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    container = Map.get(context, :container, :map)
+
+    [
+      %Suggestion{
+        message: "Insert `=>` before the #{container} value",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "=> "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :binary_generator_arrow_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :binary_close, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `<-` before the generator source",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "<- "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :send_comma_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `,` before the send message",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ", "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :lift_callback_body_separator_missing,
+           expected: expected,
+           context: %{token_type: type}
+         },
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    separator = if expected == :assign, do: "=", else: "->"
+
+    [
+      %Suggestion{
+        message: "Insert `#{separator}` before the callback body",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "#{separator} "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_opener_missing,
+           observed: observed,
+           context: %{container: container, token_type: type}
+         },
+         %Span{} = span
+       )
+       when container in [:failure_parameters, :lift_callback_parameters] do
+    empty? = type in [:arrow, :assign, :newline, :dedent, :eof] or observed in ["returns", :returns]
+    insertion = if empty?, do: "()", else: "("
+    message = if empty?, do: "Insert an empty `()` parameter list", else: "Insert `(` before the first parameter"
+
+    [
+      %Suggestion{
+        message: message,
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: insertion}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_opener_missing,
+           context: %{container: :macro_obligation_capture}
+         },
+         %Span{} = span
+       ) do
+    [
+      %Suggestion{
+        message: "Insert `(` before the constrained capture",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "("}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :with_rematch_separator_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :arrow, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `|` before the with-pattern",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "| "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :type_indices_opener_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen] do
+    [
+      %Suggestion{
+        message: "Insert `(` before the type indices",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "("}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :record_field_colon_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline] do
+    [
+      %Suggestion{
+        message: "Insert `:` before the field type",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ": "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :fixity_colon_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline] do
+    [
+      %Suggestion{
+        message: "Insert `:` before the precedence group",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ": "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :precedencegroup_field_colon_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline] do
+    [
+      %Suggestion{
+        message: "Insert `:` before the setting value",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ": "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :type_declaration_assign_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent] do
+    [
+      %Suggestion{
+        message: "Insert `=` before the type body",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "= "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :refinement_colon_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `:` before the refinement's base type",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ": "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :refinement_bar_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `|` before the refinement proposition",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "| "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :refinement_binder_invalid}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Replace this with a descriptive lower-case binder",
+        applicability: :manual
+      }
+    ]
+
+  defp syntax_insertions(%SyntaxProblem{kind: :sigma_binder_invalid}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Replace this with a descriptive lower-case Sigma binder",
+        applicability: :manual
+      }
+    ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :sigma_colon_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen] do
+    [
+      %Suggestion{
+        message: "Insert `:` before the first value's type",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ": "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :sigma_comma_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen] do
+    [
+      %Suggestion{
+        message: "Insert `,` before the dependent result type",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ", "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_unclosed, expected: :rparen, context: %{container: :type_parameters}},
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(:rparen, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_unclosed, expected: :rparen, context: %{container: :type_indices}},
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(:rparen, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_unclosed, expected: :rbrace, context: %{container: :named_implicit_pattern}},
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(:rbrace, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_unclosed, expected: :rbrace, context: %{container: :implicit_parameter}},
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(:rbrace, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           expected: :rparen,
+           context: %{container: :binary_specifier_arguments}
+         },
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(:rparen, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           expected: :rbrace,
+           context: %{container: :selective_import}
+         },
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(:rbrace, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           expected: :rparen,
+           context: %{container: container}
+         },
+         %Span{} = span
+       )
+       when container in [:splice, :splice_group] do
+    closing_delimiter_insertion(:rparen, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           expected: :rparen,
+           context: %{container: container}
+         },
+         %Span{} = span
+       )
+       when container in [:failure_parameters, :lift_callback_parameters] do
+    closing_delimiter_insertion(:rparen, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           expected: :rparen,
+           context: %{container: :macro_obligation_capture}
+         },
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(:rparen, span)
+  end
+
+  defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do
+    closing_delimiter_insertion(expected, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_unclosed, expected: expected, context: %{token_type: token_type}},
+         %Span{} = span
+       )
+       when token_type in [:dedent, :newline] do
+    closing_delimiter_insertion(expected, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :mismatched_closer, expected: expected, observed: observed},
+         %Span{} = span
+       ) do
+    replacement = syntax_insertion(expected)
+
+    if replacement do
+      [
+        %Suggestion{
+          message: "Replace #{syntax_name(observed)} with `#{replacement}`",
+          applicability: :machine_applicable,
+          edits: [%TextEdit{span: span, replacement: replacement}]
+        }
+      ]
+    else
+      []
     end
   end
 
@@ -5165,6 +8073,170 @@ defmodule Cure.Diagnostic.Adapter do
       }
     ]
 
+  defp syntax_insertions(%SyntaxProblem{kind: :invalid_parameter_name}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Replace this with a descriptive lower-case parameter name",
+        applicability: :manual
+      }
+    ]
+
+  defp syntax_insertions(%SyntaxProblem{kind: :variadic_parameter_name_missing}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Add a descriptive lower-case name after the variadic marker",
+        applicability: :manual
+      }
+    ]
+
+  defp syntax_insertions(%SyntaxProblem{kind: :call_argument_separator_missing}, %Span{} = span),
+    do: [
+      %Suggestion{
+        message: "Insert `,` between these arguments",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ", "}]
+      }
+    ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :map}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these entries",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :record}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these fields",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :parameters}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these parameters",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :type_arguments}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these type arguments",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :type_parameters}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these type parameters",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :constructor_parameters}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these constructor parameters",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :type_indices}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these type indices",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :lambda_parameters}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these lambda parameters",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :selective_import}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these imported names",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: container}},
+         %Span{} = span
+       )
+       when container in [:tuple_type, :tuple_type_sigil, :grouped_type],
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these type positions",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(%SyntaxProblem{kind: :container_separator_missing}, %Span{} = span),
+    do: [
+      %Suggestion{
+        message: "Insert `,` between these elements",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ", "}]
+      }
+    ]
+
+  defp syntax_insertions(%SyntaxProblem{kind: :container_trailing_separator}, %Span{} = span),
+    do: [
+      %Suggestion{
+        message: "Remove the trailing comma",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ""}]
+      }
+    ]
+
   defp syntax_insertions(%SyntaxProblem{expected: :explain_point}, %Span{}),
     do: [
       %Suggestion{
@@ -5175,14 +8247,80 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_insertions(_problem, _span), do: []
 
+  defp closing_delimiter_insertion(expected, span) do
+    case syntax_insertion(expected) do
+      nil ->
+        []
+
+      replacement ->
+        [
+          %Suggestion{
+            message: "Insert `#{replacement}` to close the construct",
+            applicability: :machine_applicable,
+            edits: [
+              %TextEdit{
+                span: %{span | end_byte: span.start_byte, end_line: span.start_line, end_column: span.start_column},
+                replacement: replacement
+              }
+            ]
+          }
+        ]
+    end
+  end
+
+  defp branch_family_name(:match_arm), do: "A pattern branch"
+  defp branch_family_name(family) when family in [:pickup_clause, :pickup_else], do: "A pickup branch"
+  defp branch_family_name(:function_clause), do: "A function clause"
+  defp branch_family_name(family) when family in [:with_arm, :with_rematch_arm], do: "A with branch"
+
+  defp refinement_previous_label(:refinement_bar_missing), do: "the base type ends here"
+  defp refinement_previous_label(:refinement_unclosed), do: "the proposition ends here"
+  defp refinement_previous_label(_kind), do: "this is the refinement binder"
+
+  defp sigma_previous_label(:sigma_comma_missing), do: "the first value's type ends here"
+  defp sigma_previous_label(:sigma_unclosed), do: "the dependent result type ends here"
+  defp sigma_previous_label(_kind), do: "this is the Sigma binder"
+
+  defp container_item_name(:map), do: "entry"
+  defp container_item_name(:record), do: "field"
+  defp container_item_name(:list_cons), do: "tail expression"
+  defp container_item_name(:comprehension), do: "clause"
+  defp container_item_name(:parameters), do: "parameter"
+  defp container_item_name(:type_arguments), do: "type argument"
+  defp container_item_name(:type_parameters), do: "type parameter"
+  defp container_item_name(:constructor_parameters), do: "constructor parameter"
+  defp container_item_name(:branch_block), do: "branch"
+  defp container_item_name(:selective_import), do: "imported name"
+  defp container_item_name(:type_indices), do: "type index"
+  defp container_item_name(:lambda_parameters), do: "lambda parameter"
+
+  defp container_item_name(container) when container in [:tuple_type, :tuple_type_sigil, :grouped_type],
+    do: "type position"
+
+  defp container_item_name(:binary_literal), do: "binary segment"
+  defp container_item_name(:binary_generator), do: "source expression"
+  defp container_item_name(_container), do: "element"
+
   defp syntax_insertion(:rparen), do: ")"
   defp syntax_insertion(:rbracket), do: "]"
   defp syntax_insertion(:rbrace), do: "}"
+  defp syntax_insertion(:binary_close), do: ">>"
+
   defp syntax_insertion(:end), do: "end"
   defp syntax_insertion(:double_quote), do: "\""
   defp syntax_insertion(:single_quote), do: "'"
   defp syntax_insertion(:backtick), do: "`"
   defp syntax_insertion(_expected), do: nil
+
+  defp missing_delimiter_kind(:rparen, :eof), do: :unclosed_parentheses
+  defp missing_delimiter_kind(:rbracket, :eof), do: :unclosed_brackets
+  defp missing_delimiter_kind(:rbrace, :eof), do: :unclosed_braces
+
+  defp missing_delimiter_kind(expected, observed)
+       when expected in [:rparen, :rbracket, :rbrace] and observed in [:rparen, :rbracket, :rbrace],
+       do: :mismatched_closer
+
+  defp missing_delimiter_kind(_expected, _observed), do: :unexpected_token
 
   defp lex_problem({:tab_not_allowed, line, column}, opts),
     do: syntax_problem(:tab_not_allowed, nil, :tab, line, column, opts)

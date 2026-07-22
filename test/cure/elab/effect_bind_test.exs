@@ -65,7 +65,8 @@ defmodule Cure.Elab.EffectBindTest do
       assert {:ok, env} = Program.elaborate(src)
 
       assert {:effect_bind, _mkref1,
-              {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:effect_bind, _mkref2, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, _inner}}}} = body(env, :h)
+              {:lam, @omega, {:data, :"Std.Int#Int", [], []},
+               {:effect_bind, _mkref2, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, _inner}}}} = body(env, :h)
     end
   end
 

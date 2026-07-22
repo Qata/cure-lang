@@ -134,7 +134,7 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
     assert meta[:source_provenance].file == "nofile"
 
     assert [{:function_def, _, [{:literal, [subtype: :symbol], :"Cure.Generated.Worker"}]}] =
-             meta[:declarations]
+             Cure.MetaAST.Metadata.strip_diagnostics(meta[:declarations])
   end
 
   test "a delayed callback body expands beam_ops after the callback context is introduced" do
@@ -177,7 +177,7 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
     assert [
              {:function_def, module_meta, [{:literal, [subtype: :symbol], :"Cure.Generated.Worker"}]},
              {:function_def, helper_meta, [{:literal, _, 42}]}
-           ] = meta[:declarations]
+           ] = Cure.MetaAST.Metadata.strip_diagnostics(meta[:declarations])
 
     assert module_meta[:name] == "module_name"
     assert helper_meta[:name] == "helper"

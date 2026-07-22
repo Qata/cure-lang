@@ -194,7 +194,7 @@ defmodule Cure.Core.Env do
         # owner-qualified key whose base it is — via an index, because
         # rediscovering it by walking every key made this O(table) on every
         # unresolved lookup.
-        case Map.get(alias_index(table), Atom.to_string(name), []) do
+        case Map.get(name_indexes(table).aliases, Atom.to_string(name), []) do
           [key] -> key
           _ -> name
         end
@@ -218,12 +218,12 @@ defmodule Cure.Core.Env do
   # tables at different addresses simply miss and rebuild, which is correct and
   # costs the same O(table) walk the fallback used to pay unconditionally. So
   # this is never the slower choice, and never the wrong one.
-  defp alias_index(table) do
+  defp name_indexes(table) do
     cache = Process.get(@alias_index_key, [])
 
     case cached_index(cache, table) do
       nil ->
-        index = build_alias_index(table)
+        index = build_name_indexes(table)
         Process.put(@alias_index_key, Enum.take([{table, index} | cache], @alias_index_slots))
         index
 
@@ -237,13 +237,33 @@ defmodule Cure.Core.Env do
   defp cached_index([{cached, index} | rest], table),
     do: if(:erts_debug.same(cached, table), do: index, else: cached_index(rest, table))
 
-  defp build_alias_index(table) do
-    Enum.reduce(Map.keys(table), %{}, fn key, acc ->
+  defp build_name_indexes(table) do
+    Enum.reduce(Map.keys(table), %{aliases: %{}, providers: %{}}, fn key, indexes ->
       case owned_base(key) do
-        nil -> acc
-        base -> Map.update(acc, base, [key], &[key | &1])
+        nil ->
+          put_provider(indexes, key)
+
+        base ->
+          indexes
+          |> Map.update!(:aliases, &Map.update(&1, base, [key], fn keys -> [key | keys] end))
+          |> put_provider(key)
       end
     end)
+  end
+
+  defp put_provider(indexes, key) when is_atom(key) do
+    base = Cure.Elab.Name.overload_base(key)
+    Map.update!(indexes, :providers, &Map.update(&1, base, [key], fn keys -> [key | keys] end))
+  end
+
+  defp put_provider(indexes, _key), do: indexes
+
+  @doc "Return canonical and overload keys supplied by a bare spelling."
+  @spec provider_keys(map(), atom() | String.t()) :: [atom()]
+  def provider_keys(table, bare) when is_atom(bare), do: provider_keys(table, Atom.to_string(bare))
+
+  def provider_keys(table, bare) when is_map(table) and is_binary(bare) do
+    Map.get(name_indexes(table).providers, bare, [])
   end
 
   # The base of an owner-qualified key, or nil for anything else. Non-atom keys

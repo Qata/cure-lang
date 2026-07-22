@@ -48,4 +48,28 @@ defmodule Cure.Compiler.TupleTypeSigilTest do
     {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
     assert {:ok, _ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
   end
+
+  test "tuple type spellings retain exact authored delimiters and argument ranges" do
+    src = "mod M\n  typealias P = Tuple(Int, Bool)\n  typealias Q = %[Int, Bool]\n"
+    {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, file: "tuple_meta.cure", emit_events: false)
+    assert {:ok, {:container, _, declarations}} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
+
+    infos =
+      Enum.map(declarations, fn {:type_annotation, _, [{:tuple_type, meta, _}]} ->
+        Keyword.fetch!(meta, :source_info)
+      end)
+
+    assert [named, sigil] = infos
+
+    assert {named.whole.start_column, named.whole.end_column} == {17, 33}
+    assert {named.name.start_column, named.name.end_column} == {17, 22}
+    assert {named.opener.start_column, named.opener.end_column} == {22, 23}
+    assert {named.closer.start_column, named.closer.end_column} == {32, 33}
+    assert Enum.map(named.arguments, &{&1.start_column, &1.end_column}) == [{23, 26}, {28, 32}]
+
+    assert {sigil.whole.start_column, sigil.whole.end_column} == {17, 29}
+    assert sigil.name == nil
+    assert {sigil.opener.start_column, sigil.opener.end_column} == {17, 19}
+    assert {sigil.closer.start_column, sigil.closer.end_column} == {28, 29}
+  end
 end

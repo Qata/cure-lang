@@ -66,6 +66,18 @@ defmodule Cure.Compiler.MacroExampleCheckTest do
     assert :ok = MacroValidate.check_examples(md)
   end
 
+  test "example validation is invariant under recursive source decoration" do
+    md =
+      macro_def!("macro M\n  syntax m <x: Code> becomes f(x)\n    example m 1 expands f(1)\n")
+
+    decorated = Cure.MetaAST.SourceDecorator.decorate(md)
+    stripped = Cure.MetaAST.Metadata.strip_diagnostics(decorated)
+
+    assert :ok = MacroValidate.check_examples(md)
+    assert :ok = MacroValidate.check_examples(decorated)
+    assert :ok = MacroValidate.check_examples(stripped)
+  end
+
   test "a correct example pinning a <fresh> BINDER (not just a reference) checks clean" do
     # The template's `<fresh h>` marker sits in BINDER position (the LHS of
     # `let`). Its own {:fresh_name, meta, name} node was parsed with only

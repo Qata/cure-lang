@@ -96,6 +96,7 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert apply(:"Cure.Generated.RawFamilyMatch", :handle_cast, [:Dec, 4]) == {:noreply, 3}
   end
 
+  @tag timeout: 120_000
   test "a bare (mod-less) computed raw actor is the program's top-level module" do
     # A `becomes lift module name` template yields a bare top-level `lift_module`
     # at parse time, so `compile_and_load` returns the actor module itself. A

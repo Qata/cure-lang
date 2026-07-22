@@ -443,7 +443,7 @@ defmodule Cure.Compiler.Errors do
 
   defp exact_error_span_without_hole(error, source, source_id, registry) do
     if insertion_at_eof?(error) do
-      ending = byte_size(source)
+      ending = source |> String.replace(~r/(?:\r\n|\r|\n)+\z/, "") |> byte_size()
       Cure.Diagnostic.SourceRegistry.span(registry, source_id, ending, ending)
     else
       case embedded_span(error) do

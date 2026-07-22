@@ -37,7 +37,8 @@ defmodule Cure.Elab.BitwiseOpsTest do
   test "`band` lowers to an int_band global spine (Int-directed)" do
     b = body("  fn f(x: Int) -> Int = x band 6\n", :f)
 
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Int#Int", [], []}, app2(bop(:int_band), {:var, 0}, {:int_lit, 6})} ==
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Int#Int", [], []},
+            app2(bop(:int_band), {:var, 0}, {:int_lit, 6})} ==
              b
   end
 

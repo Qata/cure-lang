@@ -17,6 +17,17 @@ defmodule Cure.Compiler.RefinementTypeSurfaceTest do
     """
 
     ast = parse!(source)
+    {:block, _, [{:container, _, [{:type_annotation, _, [{:refinement_type, refinement_meta, _}]} | _]} | _]} = ast
+
+    assert %Cure.MetaAST.SourceInfo{
+             whole: %Cure.Diagnostic.Span{},
+             name: %Cure.Diagnostic.Span{},
+             annotation: %Cure.Diagnostic.Span{},
+             body: %Cure.Diagnostic.Span{},
+             opener: %Cure.Diagnostic.Span{},
+             closer: %Cure.Diagnostic.Span{}
+           } = Keyword.fetch!(refinement_meta, :source_info)
+
     printed = Printer.quoted_to_string(ast)
     assert printed =~ "{value: Nat | IsPositive(value)}"
     reparsed = parse!(printed)

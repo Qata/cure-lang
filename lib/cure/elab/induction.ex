@@ -3,7 +3,7 @@ defmodule Cure.Elab.Induction do
 
   alias Cure.Core.{Env, Inductive}
   alias Cure.Diagnostic.InductionProblem
-  alias Cure.MetaAST.Metadata
+  alias Cure.MetaAST.{Metadata, SourceInfo}
 
   @doc "Lift non-parameter induction subjects into private ordinary declarations."
   @spec lift_declarations([term()]) :: {:ok, [term()]} | {:error, term()}
@@ -117,7 +117,7 @@ defmodule Cure.Elab.Induction do
         line: Keyword.get(meta, :line, Keyword.get(function_meta, :line, 0)),
         col: Keyword.get(meta, :col, Keyword.get(function_meta, :col, 0)),
         generated_induction_helper: true,
-        induction_origin: Keyword.get(meta, :construct_span)
+        induction_origin: source_whole(meta)
       ]
 
       call_args =
@@ -205,7 +205,7 @@ defmodule Cure.Elab.Induction do
       Enum.map(cases, fn {:induction_case, case_meta, [pattern, body]} ->
         name = pattern_constructor_name(pattern) |> Cure.Elab.Name.base()
         info = Map.get(constructors, name)
-        case_meta = if info && info.span, do: Keyword.put(case_meta, :constructor_span, info.span), else: case_meta
+        case_meta = if info && info.span, do: put_constructor_range(case_meta, info.span), else: case_meta
         {:induction_case, case_meta, [pattern, body]}
       end)
 
@@ -307,7 +307,7 @@ defmodule Cure.Elab.Induction do
   defp induction_error(kind, meta, fields) do
     attrs =
       Map.merge(
-        %{kind: kind, construct: Keyword.get(meta, :construct_span), subject_range: Keyword.get(meta, :subject_span)},
+        %{kind: kind, construct: source_whole(meta), subject_range: source_subject(meta)},
         Map.new(fields)
       )
 
@@ -333,7 +333,7 @@ defmodule Cure.Elab.Induction do
           pattern = Keyword.get(arm_meta, :pattern)
 
           if pattern_constructor_name(pattern) |> Cure.Elab.Name.base() == Cure.Elab.Name.base(constructor),
-            do: Keyword.get(arm_meta, :pattern_span)
+            do: source_pattern(arm_meta)
 
         _ ->
           nil
@@ -408,21 +408,21 @@ defmodule Cure.Elab.Induction do
   end
 
   defp case_indent([{:induction_case, case_meta, _} | _], _meta) do
-    case Keyword.get(case_meta, :pattern_span) do
+    case source_pattern(case_meta) do
       %Cure.Diagnostic.Span{start_column: column} -> max(column - 6, 0)
       _ -> 0
     end
   end
 
   defp case_indent([], meta) do
-    case Keyword.get(meta, :construct_span) do
+    case source_whole(meta) do
       %Cure.Diagnostic.Span{start_column: column} -> max(column + 1, 0)
       _ -> 0
     end
   end
 
   defp insertion_span(meta) do
-    case Keyword.get(meta, :construct_span) do
+    case source_whole(meta) do
       %Cure.Diagnostic.Span{} = span ->
         %{span | start_byte: span.end_byte, start_line: span.end_line, start_column: span.end_column}
 
@@ -494,7 +494,7 @@ defmodule Cure.Elab.Induction do
     end)
     |> List.last()
     |> case do
-      {:induction_case, case_meta, _} -> Keyword.get(case_meta, :pattern_span)
+      {:induction_case, case_meta, _} -> source_pattern(case_meta)
       _ -> nil
     end
   end
@@ -551,8 +551,8 @@ defmodule Cure.Elab.Induction do
         {:error,
          induction_error(:unknown_case, meta,
            subject: pattern,
-           pattern_range: Keyword.get(meta, :pattern_span),
-           constructor_range: Keyword.get(meta, :constructor_span)
+           pattern_range: source_pattern(meta),
+           constructor_range: constructor_range(meta)
          )}
 
       actual when is_atom(actual) ->
@@ -560,8 +560,8 @@ defmodule Cure.Elab.Induction do
          induction_error(:unknown_case, meta,
            constructor: actual,
            required: family,
-           pattern_range: Keyword.get(meta, :pattern_span),
-           constructor_range: Keyword.get(meta, :constructor_span)
+           pattern_range: source_pattern(meta),
+           constructor_range: constructor_range(meta)
          )}
 
       {:error, _} = error ->
@@ -648,8 +648,8 @@ defmodule Cure.Elab.Induction do
        expected_fields: expected,
        observed_fields: length(fields),
        recursive_fields: positions,
-       pattern_range: Keyword.get(meta, :pattern_span),
-       constructor_range: Keyword.get(meta, :constructor_span)
+       pattern_range: source_pattern(meta),
+       constructor_range: constructor_range(meta)
      )}
   end
 
@@ -707,5 +707,38 @@ defmodule Cure.Elab.Induction do
       node ->
         node
     end)
+  end
+
+  defp source_whole(meta) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{whole: span} -> span
+      _ -> nil
+    end
+  end
+
+  defp source_subject(meta) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{operands: [span | _]} -> span
+      _ -> nil
+    end
+  end
+
+  defp source_pattern(meta) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{pattern: span} -> span
+      _ -> nil
+    end
+  end
+
+  defp put_constructor_range(meta, span) do
+    info = Metadata.source_info(meta) || %SourceInfo{}
+    Metadata.put_source_info(meta, %{info | fields: Map.put(info.fields, :constructor_declaration, span)})
+  end
+
+  defp constructor_range(meta) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{fields: fields} -> Map.get(fields, :constructor_declaration)
+      _ -> nil
+    end
   end
 end

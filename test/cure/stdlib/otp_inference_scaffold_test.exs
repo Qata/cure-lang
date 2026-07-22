@@ -18,6 +18,7 @@ defmodule Cure.Stdlib.OtpInferenceScaffoldTest do
 
   defp elaborates?(file) do
     path = Path.join([File.cwd!(), @scaffold_dir, file])
+
     case Program.elaborate(File.read!(path)) do
       {:ok, _} -> true
       {:error, _} -> false

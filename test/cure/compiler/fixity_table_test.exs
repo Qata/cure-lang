@@ -15,7 +15,7 @@ defmodule Cure.Compiler.FixityTableTest do
 
     {lp_plus, _} = FixityTable.infix_bp(t, "+")
     {lp_star, _} = FixityTable.infix_bp(t, "*")
-    {lp_lt, _}  = FixityTable.infix_bp(t, "<")
+    {lp_lt, _} = FixityTable.infix_bp(t, "<")
     assert lp_lt < lp_plus and lp_plus < lp_star
     assert FixityTable.non_assoc?(t, "<")
     assert FixityTable.infix_bp(t, "unknown") == :not_infix

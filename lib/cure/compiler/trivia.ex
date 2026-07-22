@@ -48,6 +48,7 @@ defmodule Cure.Compiler.Trivia do
   """
 
   alias Cure.Compiler.Trivia.UnplacedTriviaError
+  alias Cure.MetaAST.{Metadata, SourceInfo}
 
   @trivia_keys [:leading, :trailing, :trailer]
 
@@ -194,9 +195,15 @@ defmodule Cure.Compiler.Trivia do
   defp points(_), do: []
 
   defp own_point(meta) do
-    case Keyword.get(meta, :line) do
-      nil -> []
-      line -> [{line, Keyword.get(meta, :col, 0)}]
+    case Metadata.source_info(meta) do
+      %SourceInfo{whole: %Cure.Diagnostic.Span{} = span} ->
+        [{span.start_line, span.start_column}, {span.end_line, span.end_column}]
+
+      _ ->
+        case Keyword.get(meta, :line) do
+          nil -> []
+          line -> [{line, Keyword.get(meta, :col, 0)}]
+        end
     end
   end
 

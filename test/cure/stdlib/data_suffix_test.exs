@@ -119,5 +119,4 @@ defmodule Cure.Stdlib.DataSuffixTest do
 
     assert verdict(definition) == :accept
   end
-
 end

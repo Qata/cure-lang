@@ -46,24 +46,41 @@ defmodule Cure.Elab.CrossModuleNamesTest do
   describe "sibling modules in ONE compilation unit may not share a name" do
     test "a shared function name is rejected, naming both owners" do
       src = "mod A\n  fn foo(x: Int) -> Int = x\nend\nmod B\n  fn foo(x: Int) -> Int = 99\nend\n"
-      assert {:error, {:sibling_module_collision, :foo, [:A, :B]}} = check(src)
+
+      assert {:error, {:sibling_module_collision, %{name: :foo, owners: [:A, :B], spans: [first, second]}} = error} =
+               check(src)
+
+      assert {first.start_line, first.start_column, first.end_column} == {2, 6, 9}
+      assert {second.start_line, second.start_column, second.end_column} == {5, 6, 9}
+
+      assert Program.semantic_result({:error, error}) ==
+               {:error, {:sibling_module_collision, :foo, [:A, :B]}}
     end
 
     test "a shared type name is rejected" do
       src = "mod A\n  type Foo = MkA\nend\nmod B\n  type Foo = MkB\nend\n"
-      assert {:error, {:sibling_module_collision, :Foo, [:A, :B]}} = check(src)
+      assert {:error, {:sibling_module_collision, %{name: :Foo, owners: [:A, :B], spans: [first, second]}}} = check(src)
+
+      assert {first.start_line, first.start_column} == {2, 8}
+      assert {second.start_line, second.start_column} == {5, 8}
     end
 
     test "a shared constructor name is rejected even across different families" do
       src = "mod A\n  type Foo = C\nend\nmod B\n  type Bar = C\nend\n"
-      assert {:error, {:sibling_module_collision, :C, [:A, :B]}} = check(src)
+      assert {:error, {:sibling_module_collision, %{name: :C, owners: [:A, :B], spans: [first, second]}}} = check(src)
+
+      assert {first.start_line, first.start_column} == {2, 14}
+      assert {second.start_line, second.start_column} == {5, 14}
     end
 
     test "a function in one sibling colliding with a constructor in another is rejected" do
       # `fn` names and constructor names share one bare-atom namespace, exactly as
       # `check_no_fn_ctor_collision` establishes within a single module.
       src = "mod A\n  fn C(x: Int) -> Int = x\nend\nmod B\n  type Bar = C\nend\n"
-      assert {:error, {:sibling_module_collision, :C, [:A, :B]}} = check(src)
+      assert {:error, {:sibling_module_collision, %{name: :C, owners: [:A, :B], spans: [first, second]}}} = check(src)
+
+      assert {first.start_line, first.start_column} == {2, 6}
+      assert {second.start_line, second.start_column} == {5, 14}
     end
 
     test "siblings with disjoint names are fine, and may still call each other by bare name" do

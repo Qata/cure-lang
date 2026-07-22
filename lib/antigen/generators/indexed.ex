@@ -534,7 +534,9 @@ defmodule Antigen.Generators.Indexed do
   # by the DELETION rule (r == s ⇒ consistent, kernel.ex `unify_one`). The branch
   # is therefore REACHABLE with no refinement.
   defp ixn_family,
-    do: {Inductive.family(:IxN, [], [{:i, {:data, :Int, [], []}}], 0), [Inductive.ctor(:wrapn, [{:p, @dec}], [{:int_lit, 3}])]}
+    do:
+      {Inductive.family(:IxN, [], [{:i, {:data, :Int, [], []}}], 0),
+       [Inductive.ctor(:wrapn, [{:p, @dec}], [{:int_lit, 3}])]}
 
   @doc """
   Deletion-rule obligation. `:well_typed`: the reachable-via-deletion branch has a

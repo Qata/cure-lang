@@ -6,6 +6,7 @@ defmodule Cure.Compiler.WithParseTest do
   """
   use ExUnit.Case, async: true
   alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Diagnostic.Renderer
 
   defp parse(src) do
     {:ok, toks} = Lexer.tokenize(src, emit_events: false)
@@ -171,6 +172,67 @@ defmodule Cure.Compiler.WithParseTest do
     assert length(pps) == 2
     assert [{:function_call, pm, _}, {:variable, _, "w"}] = pps
     assert Keyword.get(pm, :name) == "S"
+  end
+
+  test "restated parent patterns get an exact missing-bar diagnostic" do
+    source = "with a\n  Z(), Z() VZ() -> 1"
+    file = "with_rematch_bar.cure"
+    {:ok, tokens} = Lexer.tokenize(source, file: file, emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+    error =
+      Enum.find(errors, &match?({:declaration_separator_missing, %{kind: :with_rematch_separator_missing}}, &1))
+
+    assert {:declaration_separator_missing,
+            %{
+              kind: :with_rematch_separator_missing,
+              parent_pattern_count: 2,
+              observed: "VZ"
+            }} = error
+
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, file, source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- WITH REMATCH NEEDS A BAR [E094] ----------------------- with_rematch_bar.cure
+
+             These 2 restated parent patterns need `|` before the pattern for the `with`
+             value.
+
+             A valid continuation here starts with '|'.
+
+             at with_rematch_bar.cure:2:12
+             2 |   Z(), Z() VZ() -> 1
+               |   ---  --- ^ the restated parent patterns start here; the final parent pattern ends here; insert `|` before this with-pattern
+
+             Hint: Insert `|` before the with-pattern
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "| ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert {insertion.start_line, insertion.start_column} == {2, 12}
+    assert insertion.start_byte == insertion.end_byte
+
+    assert [%{"newText" => "| ", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 1, "character" => 11},
+             "end" => %{"line" => 1, "character" => 11}
+           }
+  end
+
+  test "a rematch with no with-pattern gets no partial bar edit" do
+    source = "with a\n  Z(), Z() -> 1"
+    {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+    error =
+      Enum.find(errors, &match?({:declaration_separator_missing, %{kind: :with_rematch_separator_missing}}, &1))
+
+    {diagnostic, _registry} = Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "nofile", source)
+    assert diagnostic.suggestions == []
   end
 
   test "no-rematch `with` clause (no `|` prefix) stays a :match_arm" do

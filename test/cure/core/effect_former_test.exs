@@ -104,7 +104,8 @@ defmodule Cure.Core.EffectFormerTest do
     test "bind never applies its continuation — pure's payload is not substituted" do
       # If `bind` reduced, the nf would mention `3` where `k` uses its arg; it
       # must instead keep `bind`/`pure`/`λ` structurally intact.
-      assert {:effect_bind, {:effect_pure, {:int_lit, 3}}, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:effect_pure, {:var, 0}}}} =
+      assert {:effect_bind, {:effect_pure, {:int_lit, 3}},
+              {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:effect_pure, {:var, 0}}}} =
                Kernel.normalize(empty(), bind_ok())
     end
   end
@@ -178,9 +179,11 @@ defmodule Cure.Core.EffectFormerTest do
     test "substitution and shifting recurse through pure and bind" do
       term = {:effect_bind, {:effect_pure, {:var, 0}}, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:var, 1}}}
 
-      assert {:effect_bind, {:effect_pure, {:var, 1}}, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:var, 2}}} = Subst.shift(term, 1, 0)
+      assert {:effect_bind, {:effect_pure, {:var, 1}}, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:var, 2}}} =
+               Subst.shift(term, 1, 0)
 
-      assert {:effect_bind, {:effect_pure, {:int_lit, 7}}, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:int_lit, 7}}} =
+      assert {:effect_bind, {:effect_pure, {:int_lit, 7}},
+              {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:int_lit, 7}}} =
                Subst.instantiate(term, [{:int_lit, 7}])
     end
 

@@ -4,12 +4,13 @@ defmodule Cure.Std.OperatorsModuleTest do
   alias Cure.Compiler.Parser.FixityTable
 
   test "assembled built-in table matches legacy relative order" do
-    t = Cure.Stdlib.Preload.builtin_fixity_table()   # new accessor: table from Std.Operators
+    # new accessor: table from Std.Operators
+    t = Cure.Stdlib.Preload.builtin_fixity_table()
     {and_lp, _} = FixityTable.infix_bp(t, "and")
-    {or_lp, _}  = FixityTable.infix_bp(t, "or")
+    {or_lp, _} = FixityTable.infix_bp(t, "or")
     {plus_lp, _} = FixityTable.infix_bp(t, "+")
     {star_lp, _} = FixityTable.infix_bp(t, "*")
-    {lt_lp, _}  = FixityTable.infix_bp(t, "<")
+    {lt_lp, _} = FixityTable.infix_bp(t, "<")
     assert or_lp < and_lp
     assert and_lp < lt_lp
     assert lt_lp < plus_lp

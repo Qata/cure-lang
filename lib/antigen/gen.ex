@@ -21,6 +21,7 @@ defmodule Antigen.Gen do
   def resize(n, g) when is_integer(n) and n >= 0, do: {:resize, n, g}
   def tag(g, t) when t in [:unsized, :size_monotonic], do: {:tagged, t, g}
   def int(lo, hi) when lo <= hi, do: member_of(Enum.to_list(lo..hi))
+
   def integer(lo, hi) when is_integer(lo) and is_integer(hi) and lo <= hi,
     do: {:integer, lo, hi}
 

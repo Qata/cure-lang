@@ -35,15 +35,36 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert Cure.Compiler.Errors.catalog_entries() == Registry.catalog_entries()
   end
 
-  test "registry records the real producer for operational documentation warnings" do
+  test "registry records the operational producer for documentation warnings" do
     assert {:ok, entry} = Registry.fetch("E008")
-    assert entry.producers == [:doctor]
+    assert entry.producers == [:operational]
     assert entry.converter == Cure.Diagnostic.Operational
+  end
+
+  test "optimistic legacy ownership is retired or narrowed to source-backed producers" do
+    e002 = Registry.fetch!("E002")
+    assert e002.status == :retired
+    assert e002.producers == []
+    assert e002.producer_fixtures == %{}
+    assert e002.retirement_reason =~ "E091"
+    assert {:ok, explanation} = Registry.explain("E002")
+    assert explanation =~ "Unbound Variable"
+
+    e003 = Registry.fetch!("E003")
+    assert e003.producers == [:elaboration]
+    assert e003.producer_fixtures == %{elaboration: :arity_mismatch_elaboration}
+    assert File.read!("lib/cure/elab/unify.ex") =~ "{:error, {:arity_mismatch"
+
+    e090 = Registry.fetch!("E090")
+    assert e090.producers == [:elaboration]
+    assert e090.producer_fixtures == %{elaboration: :unrecognized_pattern_elaboration}
+    assert File.read!("lib/cure/elab/elaborator.ex") =~ "{:error, {:unsupported_pattern"
   end
 
   test "retired codes remain explainable but are excluded from reachable coverage" do
     retired_codes = Enum.map(Registry.retired(), & &1.code)
     assert "E015" in retired_codes
+    assert "E002" in retired_codes
     assert "E018" in retired_codes
     assert "E063" in retired_codes
     assert "W088" in retired_codes
@@ -129,6 +150,40 @@ defmodule Cure.Diagnostic.RegistryTest do
 
     assert {:error, {:producer_branches_without_catalog_fixture, [{"E094", :lexer}]}} =
              Registry.validate_producer_catalog([without_lexer])
+  end
+
+  test "exercised producer validation rejects missing, duplicate, and invented fixture IDs" do
+    operational_ids =
+      Registry.producer_fixture_inventory()
+      |> Enum.flat_map(fn
+        {id, {_code, :operational}} -> [id]
+        _ -> []
+      end)
+      |> Enum.sort()
+
+    assert operational_ids != []
+
+    assert :ok =
+             Registry.validate_exercised_producer_fixtures(operational_ids,
+               only_producers: [:operational]
+             )
+
+    [missing | incomplete] = operational_ids
+
+    assert {:error, {:unexercised_producer_fixtures, [^missing]}} =
+             Registry.validate_exercised_producer_fixtures(incomplete,
+               only_producers: [:operational]
+             )
+
+    assert {:error, {:duplicate_exercised_producer_fixture, [^missing]}} =
+             Registry.validate_exercised_producer_fixtures([missing | operational_ids],
+               only_producers: [:operational]
+             )
+
+    assert {:error, {:unknown_exercised_producer_fixture, [:invented_fixture]}} =
+             Registry.validate_exercised_producer_fixtures([:invented_fixture | operational_ids],
+               only_producers: [:operational]
+             )
   end
 
   test "inventory rejects new production calls to the legacy compiler formatter" do

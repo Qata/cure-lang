@@ -169,8 +169,34 @@ defmodule Cure.Diagnostic.HostTest do
     assert diagnostic.payload.context.token_type == :rbracket
 
     rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry)
-    assert rendered =~ "']'"
-    assert rendered =~ "')'"
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- CLOSING DELIMITER DOES NOT MATCH [E094] ------------------------- syntax.cure
+
+             This construct needs ')', but it is closed with ']' instead.
+
+             at syntax.cure:1:8
+             1 | fn run(] -> Int = 1
+               |        ^ replace this mismatched delimiter
+
+             Hint: Replace ']' with `)`
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{span: edit_span, replacement: ")"}]}] =
+             diagnostic.suggestions
+
+    assert edit_span == token.span
+
+    assert [%{"newText" => ")", "range" => range}] =
+             Cure.Diagnostic.Renderer.lsp(diagnostic, registry)["data"]["suggestions"]
+             |> hd()
+             |> Map.fetch!("edits")
+
+    assert range == %{
+             "start" => %{"line" => 0, "character" => 7},
+             "end" => %{"line" => 0, "character" => 8}
+           }
   end
 
   test "parser-owned expected-token spans survive the compiler boundary" do
@@ -259,6 +285,26 @@ defmodule Cure.Diagnostic.HostTest do
              "demo.cure",
              "fn run() -> Int = 1\n"
            ) =~ "[E101]"
+  end
+
+  test "E101 fallback describes structured reasons containing source spans without crashing" do
+    span = %Cure.Diagnostic.Span{
+      source_id: "demo.cure",
+      path: "demo.cure",
+      start_byte: 0,
+      end_byte: 2,
+      start_line: 1,
+      start_column: 1,
+      end_line: 1,
+      end_column: 3
+    }
+
+    rendered = Host.render({:codegen_error, {:unexpected_backend_state, %{span: span}}}, "demo.cure")
+
+    assert rendered =~ "CODE GENERATION FAILED [E101]"
+    assert rendered =~ "unexpected_backend_state"
+    assert rendered =~ "end_line=1"
+    refute rendered =~ "Protocol.UndefinedError"
   end
 
   test "includes the unresolved stdlib module in E101 code-generation failures" do

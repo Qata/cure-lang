@@ -20,8 +20,11 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
      "mod PatternInvariant\n  type Maybe = None | Some(Int)\n  fn value(m: Maybe) -> Int = match m\n    None() -> 0\n    Some(x) -> x\nend\n"},
     {"guarded branches",
      "mod GuardInvariant\n  fn sign(n: Int) -> Int = match n\n    x when x > 0 -> 1\n    x -> 0\nend\n"},
+    {"multi-clause branches", "mod ClauseInvariant\n  fn sign(n: Int) -> Int\n    | 0 -> 0\n    | _ -> -1\nend\n"},
     {"interface descriptor",
-     "mod InterfaceInvariant\n  interface Sized(a)\n    fn size(value: a) -> Int\n  fn keep(x: Int) -> Int = x\nend\n"}
+     "mod InterfaceInvariant\n  interface Sized(a)\n    fn size(value: a) -> Int\n  fn keep(x: Int) -> Int = x\nend\n"},
+    {"syntax macro expansion",
+     "mod MacroInvariant\n  macro Identity\n    syntax identity <value: Code> becomes value\n  fn keep(x: Int) -> Int = identity x\nend\n"}
   ]
 
   @rejected_programs [
@@ -29,7 +32,14 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
     {"annotation mismatch", "mod RejectAnnotation\n  fn bad() -> Int = true\n"},
     {"record field", "mod RejectRecord\n  rec R\n    x: Int\n  fn bad(r: R) -> Int = r.missing\nend\n"},
     {"branch mismatch",
-     "mod RejectBranch\n  type Maybe = None | Some(Int)\n  fn bad(m: Maybe) -> Int = match m\n    None() -> 0\n    Some(x) -> true\nend\n"}
+     "mod RejectBranch\n  type Maybe = None | Some(Int)\n  fn bad(m: Maybe) -> Int = match m\n    None() -> 0\n    Some(x) -> true\nend\n"},
+    {"positivity", "mod RejectPositivity\n  type Nat = Z | S(Nat)\n  type Bad = MkBad((Bad) -> Nat)\nend\n"},
+    {"relevance",
+     "mod RejectRelevance\n  type Nat = Z | S(Nat)\n  type SNat indices (n: Nat)\n    szero : SNat(Z)\n    ssuc : SNat(n) -> SNat(S(n))\n  type NV indices (n: Nat)\n    vz : NV(Z)\n    vs : SNat(n) -> NV(S(n))\n  fn bad({n: Nat}, value: NV(n)) -> Nat = n\nend\n"},
+    {"totality",
+     "mod RejectTotality\n  type Dec = Dcoupled | Causal\n  type Sig = CSig | ESig\n  type SVDesc = SVNil | SVCons(Sig, SVDesc)\n  fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)\n  type SF indices (as: SVDesc, bs: SVDesc, d: Dec)\n    prim : SF(as, bs, Causal)\n    seq : SF(as, bs, d1) -> SF(bs, cs, d2) -> SF(as, cs, andd(d1, d2))\nend\n"},
+    {"coverage",
+     "mod RejectCoverage\n  fn bad(value: Int | Bool) -> Int = match value\n    integer: Int -> integer\nend\n"}
   ]
 
   test "recursive source decoration preserves an accepted program verdict and semantics" do
@@ -100,6 +110,29 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
     assert semantic_digest(plain) == semantic_digest(stripped)
   end
 
+  test "source roles nested in structural metadata maps are stripped recursively" do
+    span =
+      Cure.Diagnostic.Span.new(
+        source_id: "clause.cure",
+        path: "clause.cure",
+        start_byte: 0,
+        end_byte: 1,
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 2
+      )
+
+    clause = %{
+      params: [],
+      guard: nil,
+      body: [],
+      source_info: %Cure.MetaAST.SourceInfo{whole: span, operator: span}
+    }
+
+    assert Metadata.strip_diagnostics(clause) == %{params: [], guard: nil, body: []}
+  end
+
   test "computed-macro hygiene is invariant under recursive source decoration" do
     generated =
       {:tuple, [],
@@ -138,6 +171,8 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
       assert plain_env == decorated_env, family
       assert plain_env == stripped_env, family
       assert diagnostic_leaks(plain_env) == []
+      assert diagnostic_leaks(decorated_env) == []
+      assert diagnostic_leaks(stripped_env) == []
 
       assert Program.check_ast_elixir_core(plain) == {:ok, plain_env}, family
       assert Program.check_ast(plain, diagnostic_metadata: :sentinel) == {:ok, plain_env}, family
@@ -151,6 +186,8 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
       assert normalize_form_vars(plain_forms) == normalize_form_vars(decorated_forms), family
       assert normalize_form_vars(plain_forms) == normalize_form_vars(stripped_forms), family
       assert diagnostic_leaks(plain_forms) == []
+      assert diagnostic_leaks(decorated_forms) == []
+      assert diagnostic_leaks(stripped_forms) == []
     end)
   end
 

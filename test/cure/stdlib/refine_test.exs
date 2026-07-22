@@ -56,5 +56,4 @@ defmodule Cure.Stdlib.RefineTest do
 
     assert {:ok, _environment} = Program.elaborate(source)
   end
-
 end

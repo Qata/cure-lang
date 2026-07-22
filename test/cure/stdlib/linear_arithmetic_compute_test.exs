@@ -38,7 +38,17 @@ defmodule Cure.Stdlib.LinearArithmeticComputeTest do
 
   test "candidate checker accepts the Farkas witness and rejects forged/malformed inputs" do
     assert {:ok, env} = Program.elaborate(@source)
-    roots = [:accepted, :forged, :short_witness, :wrong_dimension, :short_valuation, :valid_evaluation, :boundary_sample]
+
+    roots = [
+      :accepted,
+      :forged,
+      :short_witness,
+      :wrong_dimension,
+      :short_valuation,
+      :valid_evaluation,
+      :boundary_sample
+    ]
+
     functions = Program.reachable_def_names(env, roots)
     assert {:ok, module} = Emit.compile_and_load(env, module: :"Cure.LiaComputeRuntime", functions: functions)
 

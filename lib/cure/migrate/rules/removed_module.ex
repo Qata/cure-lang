@@ -91,5 +91,10 @@ defmodule Cure.Migrate.Rules.RemovedModule do
 
   defp removed_qualified?(_), do: false
 
-  defp line(meta), do: Keyword.get(meta, :line)
+  defp line(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{start_line: line}} -> line
+      _ -> Keyword.get(meta, :line)
+    end
+  end
 end

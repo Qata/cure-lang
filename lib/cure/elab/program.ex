@@ -30,6 +30,10 @@ defmodule Cure.Elab.Program do
   @spec semantic_error(term()) :: term()
   def semantic_error({:source_context, reason, _context}), do: semantic_error(reason)
   def semantic_error({:codegen_error, reason}), do: {:codegen_error, semantic_error(reason)}
+
+  def semantic_error({:sibling_module_collision, %{name: name, owners: owners}}),
+    do: {:sibling_module_collision, name, owners}
+
   def semantic_error(reason), do: reason
 
   @doc "Project diagnostic context away from an elaboration result while preserving its verdict."
@@ -317,10 +321,31 @@ defmodule Cure.Elab.Program do
       else
         name = Keyword.get(meta, :name)
 
-        {:error,
-         {:proof_shape_mismatch,
-          "E026: binding '#{name}' in a proof container must inhabit a " <>
-            "propositional-equality type Equivalent(T, a, b)", name}}
+        span =
+          case Cure.MetaAST.Metadata.source_info(meta) do
+            %Cure.MetaAST.SourceInfo{annotation: %Cure.Diagnostic.Span{} = annotation} -> annotation
+            %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = name_span} -> name_span
+            %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = whole} -> whole
+            _ -> nil
+          end
+
+        reason =
+          {:proof_shape_mismatch,
+           "E026: binding '#{name}' in a proof container must inhabit a " <>
+             "propositional-equality type Equivalent(T, a, b)", name}
+
+        if span do
+          {:error,
+           {:source_context, reason,
+            %{
+              span: span,
+              checking: name,
+              expectation_origin: :proof_container,
+              expression_category: :proof_binding
+            }}}
+        else
+          {:error, reason}
+        end
       end
     end)
   end
@@ -376,35 +401,60 @@ defmodule Cure.Elab.Program do
         # `fn` names and constructor names share one bare-atom namespace, so they collide with
         # each other across siblings exactly as `check_no_fn_ctor_collision` says they do
         # within one. Type names live in `env.families`, their own namespace.
-        with :ok <- first_sibling_collision(mods, &value_names/1),
-             do: first_sibling_collision(mods, &type_names/1)
+        with :ok <- first_sibling_collision(mods, &value_bindings/1),
+             do: first_sibling_collision(mods, &type_bindings/1)
     end
   end
 
   defp first_sibling_collision(mods, extract) do
-    mods
-    |> Enum.flat_map(fn mod ->
-      owner = module_name_atom(mod)
-      for name <- mod |> declarations() |> Enum.flat_map(extract) |> Enum.uniq(), do: {name, owner}
-    end)
-    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-    |> Enum.find(fn {_name, owners} -> length(owners) > 1 end)
-    |> case do
-      nil -> :ok
-      {name, owners} -> {:error, {:sibling_module_collision, name, Enum.sort(owners)}}
+    bindings =
+      Enum.flat_map(mods, fn mod ->
+        owner = module_name_atom(mod)
+
+        mod
+        |> declarations()
+        |> Enum.flat_map(extract)
+        |> Enum.uniq_by(&elem(&1, 0))
+        |> Enum.map(fn {name, span} -> %{name: name, owner: owner, span: span} end)
+      end)
+
+    collision_name =
+      Enum.find_value(bindings, fn %{name: name} ->
+        owners = bindings |> Enum.filter(&(&1.name == name)) |> Enum.map(& &1.owner) |> Enum.uniq()
+        if length(owners) > 1, do: name
+      end)
+
+    case collision_name do
+      nil ->
+        :ok
+
+      name ->
+        collisions = Enum.filter(bindings, &(&1.name == name))
+
+        details = %{
+          name: name,
+          owners: collisions |> Enum.map(& &1.owner) |> Enum.uniq() |> Enum.sort(),
+          spans: collisions |> Enum.map(& &1.span) |> Enum.reject(&is_nil/1)
+        }
+
+        {:error, {:sibling_module_collision, details}}
     end
   end
 
-  defp value_names(decl), do: fn_names(decl) ++ ctor_names(decl)
+  defp value_bindings(decl), do: function_bindings(decl) ++ constructor_bindings(decl)
 
-  defp fn_names({:function_def, meta, _body}) when is_list(meta) do
+  defp function_bindings({:function_def, meta, _body} = decl) when is_list(meta) do
     case Keyword.get(meta, :name) do
-      name when is_binary(name) -> [String.to_atom(name)]
+      name when is_binary(name) -> [{String.to_atom(name), declaration_name_span(decl)}]
       _ -> []
     end
   end
 
-  defp fn_names(_decl), do: []
+  defp function_bindings(_decl), do: []
+
+  defp type_bindings(decl) do
+    Enum.map(type_names(decl), &{&1, declaration_name_span(decl)})
+  end
 
   defp module_name_atom({:container, meta, _body}) when is_list(meta) do
     case Keyword.get(meta, :name) do

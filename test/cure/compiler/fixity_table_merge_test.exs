@@ -20,6 +20,7 @@ defmodule Cure.Compiler.FixityTableMergeTest do
 
   test "merge_op with a different group in the same slot conflicts" do
     {:ok, t1} = FixityTable.merge_op(base(), "<?>", :infix, :Additive)
+
     assert {:error, {:conflicting_operator_fixity, {"<?>", :Additive, :Multiplicative}}} =
              FixityTable.merge_op(t1, "<?>", :infix, :Multiplicative)
   end
@@ -41,6 +42,7 @@ defmodule Cure.Compiler.FixityTableMergeTest do
 
   test "merge_group with a different body conflicts" do
     {:ok, t1} = FixityTable.merge_group(FixityTable.new(), :G, assoc: :left)
+
     assert {:error, {:conflicting_precedence_group, {:G, _existing, _new}}} =
              FixityTable.merge_group(t1, :G, assoc: :right)
   end

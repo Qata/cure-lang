@@ -60,9 +60,7 @@ defmodule Cure.Elab.Name do
   @doc "Append an overload discriminator (`~<ordinal>`) to the base of a key."
   @spec overload_key(atom() | String.t(), non_neg_integer()) :: atom()
   def overload_key(base_key, ordinal) when is_integer(ordinal) and ordinal >= 0 do
-    String.to_atom(
-      normalize_base(base_key) <> @overload_separator <> Integer.to_string(ordinal)
-    )
+    String.to_atom(normalize_base(base_key) <> @overload_separator <> Integer.to_string(ordinal))
   end
 
   @doc "Whether a key's base part carries an overload discriminator."

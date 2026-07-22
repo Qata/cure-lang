@@ -65,11 +65,20 @@ defmodule Cure.Stdlib.OpticCompositionRunTest do
     {:ok, env} = Program.elaborate(@src)
 
     fns = [
-      :v3, :take2, :drop2,
-      :outer, :inner,
-      :view_composed, :set_composed,
-      :idlens, :idt,
-      :both_rebuild, :both_ext, :both, :collect, :bump
+      :v3,
+      :take2,
+      :drop2,
+      :outer,
+      :inner,
+      :view_composed,
+      :set_composed,
+      :idlens,
+      :idt,
+      :both_rebuild,
+      :both_ext,
+      :both,
+      :collect,
+      :bump
     ]
 
     {:ok, m} = Emit.compile_and_load(env, module: :"Cure.Test.OpticComposition", functions: fns)

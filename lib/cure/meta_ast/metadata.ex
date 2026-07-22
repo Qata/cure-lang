@@ -70,7 +70,9 @@ defmodule Cure.MetaAST.Metadata do
   end
 
   def strip_diagnostics(map) when is_map(map) and not is_struct(map) do
-    Map.new(map, fn {key, value} -> {strip_diagnostics(key), strip_diagnostics(value)} end)
+    map
+    |> Enum.reject(fn {key, _value} -> diagnostic_key?(key) end)
+    |> Map.new(fn {key, value} -> {strip_diagnostics(key), strip_diagnostics(value)} end)
   end
 
   def strip_diagnostics(%_{} = struct), do: struct
@@ -103,6 +105,7 @@ defmodule Cure.MetaAST.Metadata do
       operator: Keyword.get(meta, :operator_span),
       operands: Keyword.get(meta, :operand_spans, []),
       arguments: Keyword.get(meta, :argument_spans, []),
+      argument_labels: Keyword.get(meta, :arg_label_spans, []),
       annotation: Keyword.get(meta, :annotation_span),
       body: Keyword.get(meta, :body_span),
       condition: Keyword.get(meta, :condition_span),

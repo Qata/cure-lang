@@ -291,11 +291,12 @@ defmodule Cure.Diagnostic.ProofChainDiagnosticTest do
     end
     """
 
-    assert {:error, {:codegen_error, reason}} =
+    assert {:error, {:codegen_error, _reason} = wrapped_reason} =
              Cure.Compiler.compile_string(source, file: "bad_induction_fields.cure", emit_events: false)
 
-    {diagnostic, registry} = Errors.to_diagnostic(reason, "bad_induction_fields.cure", source)
+    {diagnostic, registry} = Errors.to_diagnostic(wrapped_reason, "bad_induction_fields.cure", source)
     assert diagnostic.code == "E113"
+    refute Renderer.plain(diagnostic, registry) =~ "CODE GENERATION FAILED"
     assert diagnostic.key == :induction_failed
     assert diagnostic.payload.kind == :wrong_case_fields
     assert diagnostic.payload.expected_fields == 2

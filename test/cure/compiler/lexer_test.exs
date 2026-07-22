@@ -520,13 +520,13 @@ defmodule Cure.Compiler.LexerTest do
 
       produced =
         Enum.map(returned, fn expected ->
-          assert_receive {Cure.Pipeline.Events, :lexer, :token_produced, token, _meta}
+          assert_receive {Cure.Pipeline.Events, :lexer, :token_produced, token, %{file: "events.cure"}}
           assert token == expected
           assert %Cure.Diagnostic.Span{} = token.span
           token
         end)
 
-      assert_receive {Cure.Pipeline.Events, :lexer, :lex_complete, completed, _meta}
+      assert_receive {Cure.Pipeline.Events, :lexer, :lex_complete, completed, %{file: "events.cure"}}
       assert produced == completed
     end
 

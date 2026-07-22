@@ -66,6 +66,33 @@ defmodule Cure.Compiler.DepGraphTest do
       assert Enum.sort(paths) == Enum.sort([a, b])
     end
 
+    test "real graph failures exercise every dependency-graph diagnostic producer", %{tmp_dir: dir} do
+      duplicate_a = write!(dir, "duplicate_a.cure", "mod Repeated\n  fn left() -> Int = 1\n")
+      duplicate_b = write!(dir, "duplicate_b.cure", "mod Repeated\n  fn right() -> Int = 2\n")
+
+      assert {:error, duplicate_reason} = DepGraph.scan([duplicate_a, duplicate_b])
+
+      {duplicate_diagnostic, _registry} =
+        Cure.Compiler.Errors.to_diagnostic(duplicate_reason, duplicate_a, File.read!(duplicate_a))
+
+      assert duplicate_diagnostic.code == "E087"
+
+      cycle_a = write!(dir, "cycle_a.cure", "mod CycleA\n  use CycleB\n  fn left() -> Int = 1\n")
+      cycle_b = write!(dir, "cycle_b.cure", "mod CycleB\n  use CycleA\n  fn right() -> Int = 2\n")
+      assert {:ok, graph} = DepGraph.scan([cycle_a, cycle_b])
+      assert {:ok, _order, [hops]} = DepGraph.order(graph)
+
+      {cycle_diagnostic, _registry} =
+        Cure.Compiler.Errors.to_diagnostic({:import_cycle, hops}, cycle_a, File.read!(cycle_a))
+
+      assert cycle_diagnostic.code == "W086"
+
+      assert :ok =
+               Cure.Diagnostic.Registry.validate_exercised_producer_fixtures([:duplicate_module, :import_cycle],
+                 only_producers: [:dependency_graph]
+               )
+    end
+
     test "out-of-set use targets impose no ordering", %{tmp_dir: dir} do
       a = write!(dir, "a.cure", "mod OnlyOne\n  use Std.List\n  use NotInSet\n  fn f() -> Int = 1\n")
 

@@ -155,24 +155,27 @@ defmodule Cure.Compiler.MacroFamily do
             fields
             |> Enum.flat_map(fn
               %{grammar: %{name: nested_name, fields: nested_fields}} ->
-                [record_declaration(syntax_type(nested_name), Enum.map(nested_fields, & &1.name), meta, %{}, %{
-                   syntax_repeated_fields: [],
-                   syntax_family: %{fields: nested_fields}
-                 })]
+                [
+                  record_declaration(syntax_type(nested_name), Enum.map(nested_fields, & &1.name), meta, %{}, %{
+                    syntax_repeated_fields: [],
+                    syntax_family: %{fields: nested_fields}
+                  })
+                ]
 
               _ ->
                 []
             end)
 
-          nested ++ [
-            record_declaration(
-              syntax_type(name),
-              Enum.map(fields, & &1.name),
-              meta,
-              %{},
-              %{syntax_repeated_fields: repeated_fields, syntax_family: %{fields: fields}}
-            )
-          ]
+          nested ++
+            [
+              record_declaration(
+                syntax_type(name),
+                Enum.map(fields, & &1.name),
+                meta,
+                %{},
+                %{syntax_repeated_fields: repeated_fields, syntax_family: %{fields: fields}}
+              )
+            ]
 
         _ ->
           []
@@ -334,11 +337,13 @@ defmodule Cure.Compiler.MacroFamily do
         case Map.get(family_map, field.shape) do
           %{productions: [_ | _]} = nested ->
             nested_fields = production_fields(nested.productions) ++ Map.get(nested, :fields, [])
+
             nested =
               nested
               |> Map.put(:fields, nested_fields)
               |> Map.put(:name, field.shape)
               |> Map.put(:family, field.shape)
+
             Map.put(field, :grammar, nested)
 
           _ ->

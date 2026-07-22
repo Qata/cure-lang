@@ -415,7 +415,8 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp do_register_signature({:function_def, meta, _body}, env) do
-    with {:ok, sig} <- function_signature(meta, env) do
+    with :ok <- validate_extern_typed_head(meta),
+         {:ok, sig} <- function_signature(meta, env) do
       env1 =
         env
         |> Env.add_def(sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
@@ -451,7 +452,8 @@ defmodule Cure.Elab.Declarations do
         # builtin_op, which is overloaded). emit lowers it to a remote call;
         # TotalityClosure skips it. Do NOT call elaborate_body / Kernel.check /
         # Relevance.check (no term exists).
-        with {:ok, sig} <- function_signature(meta, env),
+        with :ok <- reject_extern_body(meta, body),
+             {:ok, sig} <- function_signature(meta, env),
              :ok <- check_extern_arity(sig, arity),
              :ok <- check_extern_not_union(sig, env) do
           final =
@@ -465,6 +467,80 @@ defmodule Cure.Elab.Declarations do
 
       _ ->
         elaborate_real_body(meta, body, env)
+    end
+  end
+
+  defp validate_extern_typed_head(meta) do
+    if Keyword.has_key?(meta, :extern) do
+      untyped_param =
+        meta
+        |> Keyword.get(:params, [])
+        |> Enum.find(fn
+          {:param, param_meta, _name} when is_list(param_meta) -> not Keyword.has_key?(param_meta, :type)
+          _ -> false
+        end)
+
+      cond do
+        untyped_param ->
+          {:param, param_meta, _name} = untyped_param
+          extern_source_error(:extern_untyped_head, "Every `@extern` parameter needs an explicit type.", param_meta)
+
+        not Keyword.has_key?(meta, :return_type) ->
+          extern_source_error(:extern_untyped_head, "Every `@extern` function needs an explicit result type.", meta)
+
+        true ->
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp reject_extern_body(_meta, []), do: :ok
+
+  defp reject_extern_body(meta, [first | _]) do
+    body_meta = if match?({_tag, child_meta, _children} when is_list(child_meta), first), do: elem(first, 1), else: meta
+
+    extern_source_error(
+      :extern_has_body,
+      "An `@extern` declaration is supplied by its foreign target and cannot also define a Cure body.",
+      body_meta
+    )
+  end
+
+  defp reject_extern_body(meta, _body) do
+    extern_source_error(
+      :extern_has_body,
+      "An `@extern` declaration is supplied by its foreign target and cannot also define a Cure body.",
+      meta
+    )
+  end
+
+  defp extern_source_error(kind, message, meta) do
+    span =
+      case Cure.MetaAST.Metadata.source_info(meta) do
+        %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = name} -> name
+        %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = whole} -> whole
+        _ -> nil
+      end
+
+    location =
+      if span,
+        do: [line: span.start_line, col: span.start_column, length: max(1, span.end_byte - span.start_byte)],
+        else: []
+
+    reason = {kind, message, location}
+
+    if span do
+      {:error,
+       {:source_context, reason,
+        %{
+          span: span,
+          expectation_origin: :ffi_boundary,
+          expression_category: :extern_declaration
+        }}}
+    else
+      {:error, reason}
     end
   end
 
@@ -601,11 +677,17 @@ defmodule Cure.Elab.Declarations do
   defp clause_scrutinee(formals, fmeta),
     do: {:tuple, fmeta, Enum.map(formals, fn {:param, _pm, pname} -> {:variable, [scope: :local] ++ fmeta, pname} end)}
 
-  defp clause_to_arm(%{guard: guard, params: pats, body: cbody}, arity, fmeta) do
+  defp clause_to_arm(%{guard: guard, params: pats, body: cbody} = clause, arity, fmeta) do
     pattern = if arity == 1, do: hd(pats), else: {:tuple, fmeta, pats}
     arm_meta = [pattern: pattern] ++ if(guard, do: [guard: guard], else: [])
+    arm_meta = put_clause_source_info(arm_meta, Map.get(clause, :source_info))
     {:match_arm, arm_meta, cbody}
   end
+
+  defp put_clause_source_info(meta, %Cure.MetaAST.SourceInfo{} = info),
+    do: Cure.MetaAST.Metadata.put_source_info(meta, info)
+
+  defp put_clause_source_info(meta, _), do: meta
 
   defp elaborate_real_body(meta, body, env) do
     body_expr = single_body(body)

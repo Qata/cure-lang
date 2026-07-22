@@ -90,6 +90,54 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert related["location"]["range"]["start"]["character"] == 7
   end
 
+  test "a sibling-module collision survives codegen wrapping and labels both declarations" do
+    source = "mod A\n  fn helper(x: Int) -> Int = x\nend\nmod B\n  fn helper(x: Int) -> Int = x\nend\n"
+
+    assert {:error, {:codegen_error, {:sibling_module_collision, details}} = reason} =
+             Cure.Compiler.compile_string(source,
+               file: "siblings.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "siblings.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E105"
+    assert diagnostic.title == "Name repeated across sibling modules"
+    assert details.name == :helper
+    assert details.owners == [:A, :B]
+    assert diagnostic.primary.span.start_line == 5
+    assert diagnostic.primary.span.start_column == 6
+    assert diagnostic.primary.message == "this name is already declared in another sibling module"
+
+    assert [%{span: first, message: "the name was first declared here", style: :secondary}] =
+             diagnostic.secondary
+
+    assert {first.start_line, first.start_column} == {2, 6}
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- NAME REPEATED ACROSS SIBLING MODULES [E105] ------------------- siblings.cure
+
+             The name `helper` is declared across modules A, B. Sibling modules in one source
+             file currently share an elaboration namespace, so one declaration would
+             overwrite the other. Rename one declaration or move the modules into separate
+             source files.
+
+             at siblings.cure:5:6
+             2 |   fn helper(x: Int) -> Int = x
+               |      ------ the name was first declared here
+             3 | end
+             4 | mod B
+             5 |   fn helper(x: Int) -> Int = x
+               |      ^^^^^^ this name is already declared in another sibling module
+             """)
+
+    assert [related] = Renderer.lsp(diagnostic, registry)["relatedInformation"]
+    assert related["message"] == "the name was first declared here"
+    assert related["location"]["range"]["start"] == %{"line" => 1, "character" => 5}
+  end
+
   test "a duplicate record field labels both authored declarations" do
     source = "mod DupField\n  rec Point\n    x: Int\n    x: Bool\nend\n"
 
@@ -352,6 +400,80 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
 
     lsp = Renderer.lsp(diagnostic, registry)
     assert lsp["range"]["start"] == %{"line" => 1, "character" => 24}
+  end
+
+  test "an extern without a fully typed head points at the missing annotation" do
+    source = "mod ExternUntyped\n  @extern(:erlang, :hd, 1)\n  fn head(xs) -> Int\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "extern_untyped.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "extern_untyped.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E056"
+    assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {3, 11}
+    assert rendered =~ "3 |   fn head(xs) -> Int"
+    assert rendered =~ "Every `@extern` parameter needs an explicit type"
+
+    missing_result = "mod ExternResult\n  @extern(:erlang, :self, 0)\n  fn me()\nend\n"
+
+    assert {:error, {:codegen_error, result_reason}} =
+             Cure.Compiler.compile_string(missing_result,
+               file: "extern_result.cure",
+               emit_events: false
+             )
+
+    {result_diagnostic, result_registry} =
+      Errors.to_diagnostic(result_reason, "extern_result.cure", missing_result)
+
+    assert result_diagnostic.code == "E056"
+    assert {result_diagnostic.primary.span.start_line, result_diagnostic.primary.span.start_column} == {3, 6}
+
+    assert Renderer.plain(result_diagnostic, result_registry) =~
+             "Every `@extern` function needs an explicit result type"
+  end
+
+  test "an extern with a Cure body points at that body" do
+    source = "mod ExternBody\n  @extern(:erlang, :self, 0)\n  fn me() -> Atom = :oops\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "extern_body.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "extern_body.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E057"
+    assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {3, 21}
+    assert rendered =~ "3 |   fn me() -> Atom = :oops"
+    assert rendered =~ "cannot also"
+    assert rendered =~ "define a Cure body"
+  end
+
+  test "unsupported spawn points at the complete authored operation" do
+    source = "mod SpawnUnsupported\n  fn bad() -> Int = spawn 1\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "spawn.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "spawn.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E107"
+    assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {2, 21}
+    assert diagnostic.primary.span.end_column == 28
+    assert rendered =~ "2 |   fn bad() -> Int = spawn 1"
+    assert rendered =~ "^^^^^^^ use a supported asynchronous boundary"
+    assert rendered =~ "`spawn` is not supported by the dependent runtime yet"
   end
 
   test "under-saturated calls report the callee arity without rejecting valid partial application" do

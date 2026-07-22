@@ -235,23 +235,55 @@ defmodule Cure.Elab.MacroExpand do
     info = Metadata.source_info(meta) || %SourceInfo{}
     invocation = expansion_info && expansion_info.whole
 
-    frames =
-      Enum.map(chain, fn frame ->
-        %ProvenanceFrame{
+    {chain_frames, _parent} =
+      Enum.map_reduce(chain, nil, fn chain_frame, parent ->
+        frame = %ProvenanceFrame{
           kind: :macro_expansion,
-          name: Map.get(frame, :keyword, "macro"),
-          invocation: invocation,
-          parent: Map.get(frame, :parent)
+          name: Map.get(chain_frame, :keyword, "macro"),
+          invocation: Map.get(chain_frame, :invocation) || invocation,
+          definition: Map.get(chain_frame, :definition),
+          parent: Map.get(chain_frame, :parent) || parent
         }
+
+        {frame, provenance_parent(frame)}
       end)
 
-    frame = %ProvenanceFrame{kind: kind, name: Keyword.get(meta, :name, "generated"), invocation: invocation}
+    authored_frames =
+      case expansion_info do
+        %SourceInfo{provenance: provenance} -> provenance
+        _ -> []
+      end
+
+    parent =
+      case List.last(chain_frames ++ authored_frames) do
+        %ProvenanceFrame{} = frame -> provenance_parent(frame)
+        _ -> nil
+      end
+
+    frame = %ProvenanceFrame{
+      kind: kind,
+      name: Keyword.get(meta, :name, "generated"),
+      invocation: invocation,
+      parent: parent
+    }
+
+    provenance =
+      ([frame] ++ chain_frames ++ authored_frames ++ info.provenance)
+      |> Enum.uniq_by(&provenance_identity/1)
 
     Metadata.put_source_info(meta, %{
       info
-      | provenance: Enum.uniq_by([frame | frames ++ info.provenance], &{&1.kind, &1.name})
+      | provenance: provenance
     })
   end
+
+  defp provenance_parent(%ProvenanceFrame{} = frame),
+    do: %{kind: frame.kind, name: frame.name, invocation: frame.invocation}
+
+  defp provenance_identity(%ProvenanceFrame{} = frame),
+    do: {frame.kind, frame.name, frame.invocation, frame.definition, frame.generated}
+
+  defp provenance_identity(other), do: other
 
   defp over_limit?(_value, :infinity), do: false
   defp over_limit?(value, limit) when is_integer(limit), do: value > limit
@@ -269,10 +301,16 @@ defmodule Cure.Elab.MacroExpand do
   defp expansion_key(node), do: node
 
   defp expansion_frame({:computed_use, meta, _}) do
+    info = Metadata.source_info(meta)
+    source_frame = info && Enum.find(info.provenance, &match?(%ProvenanceFrame{kind: :macro_expansion}, &1))
+
     %{
       keyword: Keyword.get(meta, :keyword),
       line: Keyword.get(meta, :line),
-      col: Keyword.get(meta, :col)
+      col: Keyword.get(meta, :col),
+      invocation: (source_frame && source_frame.invocation) || (info && info.whole),
+      definition: source_frame && source_frame.definition,
+      parent: source_frame && source_frame.parent
     }
   end
 

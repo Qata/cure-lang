@@ -284,7 +284,19 @@ defmodule Cure.Elab.Elaborator do
       values = Enum.map(converted, &elem(&1, 0))
       labels = Enum.map(converted, &elem(&1, 1))
       spans = Enum.map(converted, &elem(&1, 2))
-      {meta |> Keyword.put(:arg_labels, labels) |> Keyword.put(:arg_label_spans, spans), values}
+
+      meta = Keyword.put(meta, :arg_labels, labels)
+
+      meta =
+        case Cure.MetaAST.Metadata.source_info(meta) do
+          %Cure.MetaAST.SourceInfo{} = info ->
+            Cure.MetaAST.Metadata.put_source_info(meta, %{info | argument_labels: spans})
+
+          _ ->
+            meta
+        end
+
+      {meta, values}
     else
       {meta, args}
     end
@@ -306,7 +318,7 @@ defmodule Cure.Elab.Elaborator do
 
     [
       argument_spans: if(info, do: info.arguments, else: []),
-      label_spans: Keyword.get(meta, :arg_label_spans, [])
+      label_spans: if(info, do: info.argument_labels, else: [])
     ]
   end
 
@@ -1156,6 +1168,9 @@ defmodule Cure.Elab.Elaborator do
   # expression and check that against the expected type (`Syntax`).
   def elaborate_expr_typed({:quoted_syntax, _meta, [inner]}, names, ctx, env),
     do: elaborate_expr_typed(Cure.Compiler.MacroSyntax.lower_quote(inner), names, ctx, env)
+
+  def elaborate_expr_typed({:async_operation, meta, _children}, _names, _ctx, _env),
+    do: {:error, {:unsupported_async, "`spawn` is not supported by the dependent runtime yet.", meta}}
 
   def elaborate_expr_typed({tag, meta, _}, _names, _ctx, _env) when tag in [:splice, :splice_group],
     do: {:error, {:splice_outside_quote, tag, meta}}
@@ -10035,6 +10050,9 @@ defmodule Cure.Elab.Elaborator do
   # ordinary elaborator (TCB delta 0).
   def elaborate_expr({:quoted_syntax, _meta, [inner]}, scope, env),
     do: elaborate_expr(Cure.Compiler.MacroSyntax.lower_quote(inner), scope, env)
+
+  def elaborate_expr({:async_operation, meta, _children}, _scope, _env),
+    do: {:error, {:unsupported_async, "`spawn` is not supported by the dependent runtime yet.", meta}}
 
   # A `$(e)` / `$(e ...)` splice reaching the elaborator as a bare node means it
   # sits outside any enclosing `quote` — a category error. Inside a quote,

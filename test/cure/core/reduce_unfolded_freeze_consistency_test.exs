@@ -47,9 +47,11 @@ defmodule Cure.Core.ReduceUnfoldedFreezeConsistencyTest do
     {:lam, @u, @m,
      {:lam, @u, @m,
       {:case, {:var, 1}, {:lam, @u, @m, @m},
-       [{:MkM, 1,
-         {:case, {:var, 1}, {:lam, @u, @m, @m},
-          [{:MkM, 1, mkm({:app, {:app, {:global, :plus}, {:var, 1}}, {:var, 0}})}]}}]}}}
+       [
+         {:MkM, 1,
+          {:case, {:var, 1}, {:lam, @u, @m, @m},
+           [{:MkM, 1, mkm({:app, {:app, {:global, :plus}, {:var, 1}}, {:var, 0}})}]}}
+       ]}}}
   end
 
   defp combine_type, do: {:pi, @u, @m, {:pi, @u, @m, @m}}
@@ -57,8 +59,7 @@ defmodule Cure.Core.ReduceUnfoldedFreezeConsistencyTest do
   # f n = case n { Z -> Z | S k -> h k }   and   h n = case n { Z -> Z | S k -> f k }  (MUTUAL)
   defp f_body(callee) do
     {:lam, @u, @nat,
-     {:case, {:var, 0}, {:lam, @u, @nat, @nat},
-      [{:Z, 0, @z}, {:S, 1, {:app, {:global, callee}, {:var, 0}}}]}}
+     {:case, {:var, 0}, {:lam, @u, @nat, @nat}, [{:Z, 0, @z}, {:S, 1, {:app, {:global, callee}, {:var, 0}}}]}}
   end
 
   defp env do

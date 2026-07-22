@@ -6,6 +6,9 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
   alias Cure.Elab.Program
   alias Cure.MetaAST.Metadata
 
+  defp source_slice(source, span),
+    do: binary_part(source, span.start_byte, span.end_byte - span.start_byte)
+
   @source """
   mod M
     use Std.Syntax
@@ -35,13 +38,22 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert meta[:source_provenance] == %{file: "generated.cure", line: 9, col: 3, macro: "make"}
     assert [%{keyword: "make", line: 9, col: 3}] = meta[:expansion_provenance]
 
-    assert [%{kind: :generated_declaration, name: "generated"}, %{kind: :macro_expansion, name: "make"}] =
-             Metadata.source_info(meta).provenance
+    info = Metadata.source_info(meta)
+
+    assert [generated, macro] = info.provenance
+    assert %{kind: :generated_declaration, name: "generated"} = generated
+    assert %{kind: :macro_expansion, name: "make"} = macro
+    assert source_slice(@source, info.whole) =~ "lift module Cure.DeclarationMacroActor"
+    assert source_slice(@source, macro.invocation) =~ "make lift module Cure.DeclarationMacroActor"
+    assert source_slice(@source, macro.definition) == "syntax make <x: Code> computed by id"
 
     assert Enum.all?(meta[:declarations], fn {_tag, declaration_meta, _children} ->
+             declaration_info = Metadata.source_info(declaration_meta)
+
              declaration_meta[:source_provenance] == meta[:source_provenance] and
                declaration_meta[:expansion_provenance] == meta[:expansion_provenance] and
-               Enum.any?(Metadata.source_info(declaration_meta).provenance, &(&1.kind == :generated_declaration))
+               Enum.any?(declaration_info.provenance, &(&1.kind == :generated_declaration)) and
+               source_slice(@source, declaration_info.whole) != ""
            end)
   end
 
