@@ -372,6 +372,23 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.body) == "1"
   end
 
+  test "local bindings retain exact keyword, pattern, annotation, assignment, and value ranges" do
+    source = "fn run(value: Int) -> Int =\n  let next: Int = value + 1\n  next\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "binding.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "binding.cure", emit_events: false, prelude_macros: false)
+
+    {:assignment, meta, _} = find_node(ast, :assignment)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "let next: Int = value + 1"
+    assert slice(source, info.opener) == "let"
+    assert slice(source, info.pattern) == "next"
+    assert slice(source, info.name) == "next"
+    assert slice(source, info.annotation) == ": Int"
+    assert slice(source, info.operator) == "="
+    assert slice(source, info.body) == "value + 1"
+  end
+
   test "match expressions retain their whole and branch-owned spans" do
     source = "fn choose(x: Int) -> Int = match x\n  n -> n\n  _ -> 0\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "match.cure", emit_events: false)

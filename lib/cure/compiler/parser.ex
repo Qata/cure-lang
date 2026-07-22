@@ -5904,7 +5904,7 @@ defmodule Cure.Compiler.Parser do
         state
       end
 
-    state = expect_local_binding_assign(state, token, pattern, annotation_span, kind, let_name)
+    {assign_token, state} = expect_local_binding_assign(state, token, pattern, annotation_span, kind, let_name)
     state = skip_newlines(state)
 
     # Parse value (RHS) -- might be an indented block
@@ -5914,7 +5914,7 @@ defmodule Cure.Compiler.Parser do
     meta = if kind == :have, do: Keyword.put(meta, :have, true), else: meta
     meta = if type_ann, do: Keyword.put(meta, :type_annotation, type_ann), else: meta
     meta = if grade, do: Keyword.put(meta, :grade, grade), else: meta
-    meta = put_let_source_info(meta, token, pattern, value, annotation_span, state)
+    meta = put_let_source_info(meta, token, pattern, value, annotation_span, assign_token)
 
     assignment = {:assignment, meta, [pattern, value]}
 
@@ -5939,8 +5939,8 @@ defmodule Cure.Compiler.Parser do
 
   defp expect_local_binding_assign(state, binding_token, pattern, annotation_span, kind, name) do
     case expect_token(state, :assign) do
-      {:ok, _assign, next_state} ->
-        next_state
+      {:ok, assign, next_state} ->
+        {assign, next_state}
 
       {:error, next_state} ->
         [_generic | rest] = next_state.errors
@@ -5965,7 +5965,7 @@ defmodule Cure.Compiler.Parser do
              column: observed.col
            }}
 
-        %{next_state | errors: [error | rest]}
+        {nil, %{next_state | errors: [error | rest]}}
     end
   end
 
@@ -7693,30 +7693,21 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp put_let_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = first}, pattern, body, annotation, state) do
-    case authored_token(state) do
-      %Token{span: %Cure.Diagnostic.Span{} = last} ->
-        case Range.through(first, last) do
-          {:ok, whole} ->
-            info = %SourceInfo{
-              whole: whole,
-              name: ast_source_span(pattern),
-              annotation: annotation,
-              body: ast_source_span(body)
-            }
+  defp put_let_source_info(meta, %Token{} = token, pattern, body, annotation, assign_token) do
+    body_span = ast_source_span(body)
 
-            Keyword.put(meta, :source_info, info)
-
-          _ ->
-            meta
-        end
-
-      _ ->
-        meta
-    end
+    Metadata.put_source_info(meta, %SourceInfo{
+      whole: through_spans(token.span, body_span) || token.span,
+      opener: token.span,
+      name: ast_source_span(pattern),
+      pattern: ast_source_span(pattern),
+      operator: assign_token && assign_token.span,
+      annotation: annotation,
+      body: body_span
+    })
   end
 
-  defp put_let_source_info(meta, _token, _pattern, _body, _annotation, _state), do: meta
+  defp put_let_source_info(meta, _token, _pattern, _body, _annotation, _assign_token), do: meta
 
   # -- Typed Parameters  name: Type [= default] ------------------------------
 
