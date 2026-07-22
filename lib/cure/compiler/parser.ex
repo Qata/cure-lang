@@ -9059,14 +9059,14 @@ defmodule Cure.Compiler.Parser do
     # Optional head params, parsed permissively (typed `a: Type` or bare `a`).
     # The ordinary-ADT path projects out just the names; the indexed-family path
     # (`type NAME(params) indices (idx)`) keeps the full typed telescope.
-    {head_params, state} =
+    {head_params, type_parameter_span, state} =
       case peek(state) do
         %Token{type: :lparen} ->
           open_token = peek(state)
           state = advance(state)
           {tp, state} = parse_typed_params(state)
 
-          {state, _close_token} =
+          {state, close_token} =
             expect_container_close(state, :rparen, :type_parameters, open_token, tp, true, %{
               declaration: name,
               declaration_kind: :type,
@@ -9074,10 +9074,11 @@ defmodule Cure.Compiler.Parser do
               closing_values: [:indices]
             })
 
-          {tp, state}
+          span = through_spans(open_token.span, close_token && close_token.span) || open_token.span
+          {tp, span, state}
 
         _ ->
-          {[], state}
+          {[], nil, state}
       end
 
     cond do
@@ -9089,8 +9090,16 @@ defmodule Cure.Compiler.Parser do
         meta = [container_type: :opaque, name: name, line: token.line, col: token.col]
         meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
         meta = if head_params != [], do: Keyword.put(meta, :params, head_params), else: meta
-        ast = {:container, meta, []}
-        {put_type_decl_source_info(ast, token, name_token, state), state}
+
+        meta =
+          Metadata.put_source_info(meta, %SourceInfo{
+            whole: through_spans(token.span, type_parameter_span || name_token.span) || token.span,
+            opener: token.span,
+            name: name_token.span,
+            fields: maybe_put_source_field(%{}, :type_parameters, type_parameter_span)
+          })
+
+        {{:container, meta, []}, state}
 
       match?(%Token{type: :keyword, value: :indices}, peek(state)) ->
         {ast, state} = parse_indexed_family(state, name, head_params, token)

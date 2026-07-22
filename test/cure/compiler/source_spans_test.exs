@@ -279,6 +279,19 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.name) == "Word"
   end
 
+  test "opaque type declarations own their complete parameterized headers" do
+    source = "opaque type Handle(resource: Type)\nfn keep(x: Int) -> Int = x\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "opaque.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "opaque.cure", emit_events: false, prelude_macros: false)
+
+    {:block, _, [{:container, meta, []}, _function]} = ast
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == "type Handle(resource: Type)"
+    assert slice(source, info.opener) == "type"
+    assert slice(source, info.name) == "Handle"
+    assert slice(source, Map.fetch!(info.fields, :type_parameters)) == "(resource: Type)"
+  end
+
   test "ADT variants retain exact constructor names and extents" do
     source = "type Maybe = None | Some(Int)\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "variants.cure", emit_events: false)
