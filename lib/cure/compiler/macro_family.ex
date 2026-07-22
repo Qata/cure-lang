@@ -16,6 +16,12 @@ defmodule Cure.Compiler.MacroFamily do
   """
   @spec validate([map()]) :: :ok | {:error, term()}
   def validate(rules) when is_list(rules) do
+    if valid_structured_rules?(rules), do: validate_structured_rules(rules), else: {:error, :invalid_macro_rules}
+  end
+
+  def validate(_rules), do: {:error, :invalid_macro_rules}
+
+  defp validate_structured_rules(rules) do
     families = Enum.filter(rules, &(&1[:kind] == :syntax_family))
     accepts = Enum.filter(rules, &(&1[:kind] == :accepts))
     expanders = Enum.filter(rules, &(&1[:kind] == :expands_with))
@@ -27,11 +33,15 @@ defmodule Cure.Compiler.MacroFamily do
     end
   end
 
-  def validate(_rules), do: {:error, :invalid_macro_rules}
-
   @doc "Build the ordinary computed rule represented by a structured macro."
   @spec computed_rule(keyword(), [map()]) :: {:ok, map()} | :none | {:error, term()}
   def computed_rule(meta, rules) when is_list(meta) and is_list(rules) do
+    if valid_structured_rules?(rules), do: build_computed_rule(meta, rules), else: {:error, :invalid_macro_rules}
+  end
+
+  def computed_rule(_meta, _rules), do: :none
+
+  defp build_computed_rule(meta, rules) do
     families = Enum.filter(rules, &(&1[:kind] == :syntax_family))
     accepts = Enum.filter(rules, &(&1[:kind] == :accepts))
     expanders = Enum.filter(rules, &(&1[:kind] == :expands_with))
@@ -98,7 +108,24 @@ defmodule Cure.Compiler.MacroFamily do
     end
   end
 
-  def computed_rule(_meta, _rules), do: :none
+  defp valid_structured_rules?(rules), do: Enum.all?(rules, &valid_structured_rule?/1)
+
+  defp valid_structured_rule?(%{kind: :syntax_family, name: name, fields: fields} = family)
+       when (is_atom(name) or is_binary(name)) and is_list(fields) do
+    includes = Map.get(family, :includes, [])
+
+    is_list(includes) and
+      Enum.all?(fields, fn
+        %{name: field_name} when is_atom(field_name) or is_binary(field_name) -> true
+        _ -> false
+      end)
+  end
+
+  defp valid_structured_rule?(%{kind: :accepts, family: family}) when is_atom(family) or is_binary(family), do: true
+  defp valid_structured_rule?(%{kind: :expands_with, expander: _expander}), do: true
+  defp valid_structured_rule?(%{kind: kind}) when kind in [:syntax_family, :accepts, :expands_with], do: false
+  defp valid_structured_rule?(%{}), do: true
+  defp valid_structured_rule?(_rule), do: false
 
   defp family_obligations(fields) do
     Enum.flat_map(fields, fn field ->

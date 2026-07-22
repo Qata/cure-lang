@@ -10758,6 +10758,38 @@ defmodule Cure.Compiler.Parser do
 
           {List.last(spans) || token.span, spans |> Enum.drop(-1)}
 
+        {:duplicate_syntax_family, names} ->
+          spans =
+            families
+            |> Enum.filter(&(&1.name in names))
+            |> Enum.map(&(Map.get(&1, :name_span) || Map.get(&1, :source_span)))
+            |> Enum.reject(&is_nil/1)
+
+          {List.last(spans) || token.span, Enum.drop(spans, -1)}
+
+        reason
+        when reason in [
+               :accepts_without_syntax_family,
+               :accepts_without_expander,
+               :multiple_accepts_declarations
+             ] ->
+          spans =
+            rules
+            |> Enum.filter(&(&1[:kind] == :accepts))
+            |> Enum.map(&(Map.get(&1, :name_span) || Map.get(&1, :source_span)))
+            |> Enum.reject(&is_nil/1)
+
+          {List.last(spans) || token.span, Enum.drop(spans, -1)}
+
+        reason when reason in [:expander_without_accepts, :multiple_expands_declarations] ->
+          spans =
+            rules
+            |> Enum.filter(&(&1[:kind] == :expands_with))
+            |> Enum.map(&Map.get(&1, :source_span))
+            |> Enum.reject(&is_nil/1)
+
+          {List.last(spans) || token.span, Enum.drop(spans, -1)}
+
         _ ->
           {token.span, []}
       end
@@ -11107,6 +11139,7 @@ defmodule Cure.Compiler.Parser do
     {%{
        kind: :accepts,
        family: family,
+       name_span: family_span,
        line: token.line,
        col: token.col,
        source_span: macro_rule_source_span(token, family_span)
@@ -11163,6 +11196,7 @@ defmodule Cure.Compiler.Parser do
         {%{
            kind: :syntax_family,
            name: name,
+           name_span: name_token.span,
            fields: fields,
            includes: includes,
            productions: productions,
@@ -11192,6 +11226,7 @@ defmodule Cure.Compiler.Parser do
         {%{
            kind: :syntax_family,
            name: name,
+           name_span: name_token.span,
            fields: [],
            line: family_token.line,
            col: family_token.col,
