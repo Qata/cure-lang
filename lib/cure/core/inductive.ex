@@ -121,7 +121,7 @@ defmodule Cure.Core.Env do
   @type def_body :: Cure.Core.Term.t() | nil | {:extern, {module(), atom(), arity()}}
 
   @spec add_def(t(), atom(), Cure.Core.Term.t(), def_body()) :: t()
-  def add_def(env, name, type_term, body_term), do: add_def(env, name, type_term, body_term, nil)
+  def add_def(env, name, type_term, body_term), do: add_def(env, name, type_term, body_term, nil, nil)
 
   @doc """
   Register a global function definition with per-parameter {0,ω} quantities
@@ -129,7 +129,10 @@ defmodule Cure.Core.Env do
   erasure (M8.3 / M9).
   """
   @spec add_def(t(), atom(), Cure.Core.Term.t(), def_body(), [atom()] | nil) :: t()
-  def add_def(%__MODULE__{} = env, name, type_term, body_term, quantities) do
+  def add_def(env, name, type_term, body_term, quantities),
+    do: add_def(env, name, type_term, body_term, quantities, nil)
+
+  def add_def(%__MODULE__{} = env, name, type_term, body_term, quantities, plicities) do
     name = owned_name(env, name)
 
     %{
@@ -139,7 +142,8 @@ defmodule Cure.Core.Env do
             name: name,
             type: type_term,
             body: body_term,
-            quantities: quantities
+            quantities: quantities,
+            plicities: plicities
           })
     }
   end

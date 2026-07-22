@@ -43,6 +43,10 @@ defmodule Cure.Stdlib.CharStringBehaviorTest do
     assert char(:is_punctuation, [?!])
     assert char(:is_newline, [0x2028])
     assert char(:is_whitespace, [0xA0])
+    assert char(:is_horizontal_space, [0x2007])
+    refute char(:is_horizontal_space, [0x2028])
+    assert char(:is_vertical_space, [0x2028])
+    refute char(:is_vertical_space, [0x2007])
     assert char(:is_symbol, [?©])
     assert char(:is_math_symbol, [?+])
     assert char(:is_currency_symbol, [?€])
@@ -105,6 +109,10 @@ defmodule Cure.Stdlib.CharStringBehaviorTest do
                whole_value = char(:whole_number_value, [cp])
                hex_value = char(:hex_digit_value, [cp])
                expected_space = cp in [9, 10, 11, 12, 13, 0x85] or category in [:Zs, :Zl, :Zp]
+               expected_horizontal =
+                 cp in [0x0009, 0x0020, 0x00A0, 0x1680, 0x180E, 0x202F, 0x205F, 0x3000] or
+                   cp in 0x2000..0x200A
+               expected_vertical = cp in [0x000A, 0x000B, 0x000C, 0x000D, 0x0085, 0x2028, 0x2029]
 
                char(:same, [cp, cp]) and
                  char(:is_ascii, [cp]) == (cp <= 0x7F) and
@@ -117,6 +125,8 @@ defmodule Cure.Stdlib.CharStringBehaviorTest do
                  char(:is_punctuation, [cp]) == (category in [:Pc, :Pd, :Pe, :Pf, :Pi, :Po, :Ps]) and
                  char(:is_newline, [cp]) == (cp in [10, 11, 12, 13, 0x85, 0x2028, 0x2029]) and
                  char(:is_whitespace, [cp]) == expected_space and
+                 char(:is_horizontal_space, [cp]) == expected_horizontal and
+                 char(:is_vertical_space, [cp]) == expected_vertical and
                  char(:is_symbol, [cp]) == (category in [:Sc, :Sk, :Sm, :So]) and
                  char(:is_math_symbol, [cp]) == (:math in properties) and
                  char(:is_currency_symbol, [cp]) == (category == :Sc) and

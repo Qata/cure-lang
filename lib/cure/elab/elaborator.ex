@@ -824,7 +824,7 @@ defmodule Cure.Elab.Elaborator do
   # benefit and would change its Core lowering (breaking the parity with the
   # `and`/`or` connectives, which stay `{:global, :and/:or}`). It keeps its direct
   # application of the `Std.Bool` prelude def, unchanged.
-  def elaborate_expr_typed({:unary_op, meta, [operand]} = expr, names, ctx, env) do
+  def elaborate_expr_typed({:unary_op, meta, [operand]}, names, ctx, env) do
     case Keyword.fetch!(meta, :operator) do
       :not ->
         result =
@@ -878,8 +878,13 @@ defmodule Cure.Elab.Elaborator do
           attach_unary_operand_context(result, operand, :-)
         end
 
-      _ ->
-        {:error, {:unsupported_expression, expr}}
+      op ->
+        elaborate_expr_typed(
+          {:function_call, [name: Atom.to_string(op)], [operand]},
+          names,
+          ctx,
+          env
+        )
     end
   end
 
@@ -1139,49 +1144,83 @@ defmodule Cure.Elab.Elaborator do
   # infer its type; on `{:unsupported_operand_type, _}` fall back to the
   # typeclass method desugar (Phase 2). Extracted verbatim from the former
   # `{:binary_op}` body so the `:overloaded` and `<>` routes sit beside it.
-  defp elaborate_binop(op, l, r, expr, names, ctx, env) do
-    case elaborate_expr_typed(l, names, ctx, env) do
-      {:error, reason} ->
-        {:error, attach_operator_operand_context(reason, l, 0, op)}
+  defp elaborate_binop(op, l, r, _expr, names, ctx, env) do
+    case elaborate_binop_operands(l, r, names, ctx, env) do
+      {:error, index, reason} ->
+        operand = if index == 0, do: l, else: r
+        {:error, attach_operator_operand_context(reason, operand, index, op)}
 
-      {:ok, l_core, l_type} ->
-        case elaborate_expr_typed(r, names, ctx, env) do
+      {:ok, l_core, l_type, r_core} ->
+        with {:ok, term} <- build_binop(op, l_core, r_core, l_type, ctx),
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        else
+          {:error, {:unsupported_operand_type, :+}} ->
+            combine_call(l, r, names, ctx, env)
+
+          {:error, {:unsupported_operand_type, cmp}}
+          when cmp in [:<, :>, :<=, :>=] ->
+            op_method_call(cmp, l, r, names, ctx, env)
+
+          # `==`/`!=` on a non-primitive operand (String, ADT, abstract/rigid type
+          # variable) — `build_binop`'s `{:==,:!=}` clause reports the operand has no
+          # primitive twin, and the SOLE route is the `Equatable` method desugar. A
+          # rigid type variable with no in-scope dictionary rejects here as
+          # `{:no_instance, :Equatable, {:rigid, _}}`, the intended sole-route error.
+          {:error, {:unsupported_operand_type, eq}}
+          when eq in [:==, :!=] ->
+            op_method_call(eq, l, r, names, ctx, env)
+
+          :unsupported_op ->
+            overloaded_op_call(op, l, r, names, ctx, env)
+
           {:error, reason} ->
             {:error, attach_operator_operand_context(reason, r, 1, op)}
 
-          {:ok, r_core, _rt} ->
-            with {:ok, term} <- build_binop(op, l_core, r_core, l_type, ctx),
-                 {:ok, type} <- Kernel.infer(ctx, term) do
-              {:ok, term, type}
-            else
-              {:error, {:unsupported_operand_type, :+}} ->
-                combine_call(l, r, names, ctx, env)
-
-              {:error, {:unsupported_operand_type, cmp}}
-              when cmp in [:<, :>, :<=, :>=] ->
-                op_method_call(cmp, l, r, names, ctx, env)
-
-              # `==`/`!=` on a non-primitive operand (String, ADT, abstract/rigid type
-              # variable) — `build_binop`'s `{:==,:!=}` clause reports the operand has no
-              # primitive twin, and the SOLE route is the `Equatable` method desugar. A
-              # rigid type variable with no in-scope dictionary rejects here as
-              # `{:no_instance, :Equatable, {:rigid, _}}`, the intended sole-route error.
-              {:error, {:unsupported_operand_type, eq}}
-              when eq in [:==, :!=] ->
-                op_method_call(eq, l, r, names, ctx, env)
-
-              :unsupported_op ->
-                {:error, {:unsupported_expression, expr}}
-
-              {:error, reason} ->
-                {:error, attach_operator_operand_context(reason, r, 1, op)}
-
-              other ->
-                other
-            end
+          other ->
+            other
         end
     end
   end
+
+  # Binary operators are homogeneous. Infer one operand, then CHECK the other at
+  # that type so contextual literal protocols participate (`char == 12`). If the
+  # left operand is itself an integer spelling and the right is not, infer from
+  # the right instead (`12 == char`); two bare numerals retain the Int default.
+  defp elaborate_binop_operands(l, r, names, ctx, env) do
+    if integer_literal_ast?(l) and not integer_literal_ast?(r) do
+      case elaborate_expr_typed(r, names, ctx, env) do
+        {:ok, r_core, r_type} ->
+          expected = r_type |> Quote.reify(Context.length(ctx)) |> resplit_data(env)
+
+          case elaborate_expr_checked(l, expected, names, ctx, env) do
+            {:ok, l_core} -> {:ok, l_core, r_type, r_core}
+            {:error, reason} -> {:error, 0, reason}
+          end
+
+        {:error, reason} ->
+          {:error, 1, reason}
+      end
+    else
+      case elaborate_expr_typed(l, names, ctx, env) do
+        {:ok, l_core, l_type} ->
+          expected = l_type |> Quote.reify(Context.length(ctx)) |> resplit_data(env)
+
+          case elaborate_expr_checked(r, expected, names, ctx, env) do
+            {:ok, r_core} -> {:ok, l_core, l_type, r_core}
+            {:error, reason} -> {:error, 1, reason}
+          end
+
+        {:error, reason} ->
+          {:error, 0, reason}
+      end
+    end
+  end
+
+  defp integer_literal_ast?({:literal, meta, value}),
+    do: Keyword.get(meta, :subtype) == :integer and is_integer(value)
+
+  defp integer_literal_ast?(_), do: false
 
   defp attach_operator_operand_context({:source_context, reason, context}, operand, index, op)
        when is_map(context) do
@@ -1337,15 +1376,15 @@ defmodule Cure.Elab.Elaborator do
 
   defp occurs_below?(_other, _arity, _depth), do: false
 
-  # Surface operator symbols (from `Precedence.operator_symbol/1`) to the
-  # builtin-op key the type-directed dispatch maps onto a monomorphic global
+  # Authored operator names to the builtin-op key the type-directed dispatch
+  # maps onto a monomorphic global
   # (K2). Only the ops with registered globals are mapped; `<>` (string
   # concat), `..`, and the like are left unsupported here.
   defp prim_op(:+), do: {:ok, :add}
   defp prim_op(:-), do: {:ok, :sub}
   defp prim_op(:*), do: {:ok, :mul}
   defp prim_op(:/), do: {:ok, :div}
-  defp prim_op(:rem), do: {:ok, :rem}
+  defp prim_op(:%), do: {:ok, :rem}
   defp prim_op(:<), do: {:ok, :lt}
   defp prim_op(:>), do: {:ok, :gt}
   defp prim_op(:<=), do: {:ok, :le}
@@ -1731,6 +1770,28 @@ defmodule Cure.Elab.Elaborator do
   """
   @spec elaborate_expr_checked(term(), term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
+  def elaborate_expr_checked(
+        {:unary_op, meta, [{:literal, literal_meta, value}]},
+        expected_core,
+        names,
+        ctx,
+        env
+      )
+      when is_integer(value) and value >= 0 do
+    if Keyword.get(meta, :operator) == :- and Keyword.get(literal_meta, :subtype) == :integer and
+         literal_protocol_available?(env) do
+      elaborate_contextual_integer_literal(-value, expected_core, names, ctx, env)
+    else
+      elaborate_expr_checked_fallback(
+        {:unary_op, meta, [{:literal, literal_meta, value}]},
+        expected_core,
+        names,
+        ctx,
+        env
+      )
+    end
+  end
+
   def elaborate_expr_checked({:record_update, meta, children}, expected_core, names, ctx, env) do
     case desugar_record_update(meta, children, env) do
       {:ok, positional} ->
@@ -2118,6 +2179,8 @@ defmodule Cure.Elab.Elaborator do
   # one becomes compact. Every other case defers to the ordinary checked path.
   def elaborate_expr_checked({:literal, meta, value} = expr, expected_core, names, ctx, env) do
     int? = Keyword.get(meta, :subtype) == :integer and is_integer(value) and value >= 0
+    signed_int? = Keyword.get(meta, :subtype) == :integer and is_integer(value)
+    literal_protocol = Keyword.get(meta, :literal_protocol)
     string? = Keyword.get(meta, :subtype) == :string and is_binary(value)
     bytes? = Keyword.get(meta, :subtype) == :bytes and is_list(value)
     union_ctor = union_literal_ctor(meta, value, expected_core, ctx, env)
@@ -2143,21 +2206,31 @@ defmodule Cure.Elab.Elaborator do
           elaborate_expr_checked(surface, expected_core, names, ctx, env)
         end
 
-      int? and nat_expected?(expected_core, ctx) ->
+      signed_int? and refinement_return?(expected_core, ctx, env) ->
+        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
+      literal_protocol == :natural_argument and int? and nat_expected?(expected_core, ctx) ->
         {:ok, {:nat_lit, value}}
 
-      # Type-directed compact-Bounded literal: an integer literal checked against a
-      # `Bounded(n)` type (e.g. `Char = Bounded(0x110000)`) is the value `k` itself,
-      # a single compact node, iff `0 <= k < n`. This is the surface `let c: Char =
-      # 97` — a codepoint is ONE integer, never a `Next(...First)` tower. The kernel
-      # independently re-checks the bound (`check/3`), so this early check is only for
-      # a clear error message.
-      int? ->
-        case bounded_expected(expected_core, ctx) do
-          {:ok, n} when value < n -> {:ok, {:bounded_lit, value}}
-          {:ok, n} -> {:error, {:bounded_lit_out_of_range, value, n}}
-          :no -> elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
-        end
+      literal_protocol == :integer_argument and signed_int? and int_expected?(expected_core, ctx) ->
+        {:ok, {:int_lit, value}}
+
+      not literal_protocol_available?(env) and int? and nat_expected?(expected_core, ctx) ->
+        {:ok, {:nat_lit, value}}
+
+      not literal_protocol_available?(env) and signed_int? and int_expected?(expected_core, ctx) ->
+        {:ok, {:int_lit, value}}
+
+      # Contextual numerals are language-level conversions. A non-negative
+      # spelling first asks `ExpressibleByNaturalLiteral`; if that expected type
+      # has no natural implementation, it falls back to
+      # `ExpressibleByIntegerLiteral`. Negative spellings use only the signed
+      # interface. The selected total initializer returns `LiteralResult(t)`;
+      # normalization must expose `LiteralValue(value)` or `InvalidLiteral` at
+      # compile time, so no dictionary or conversion wrapper reaches emitted
+      # runtime code.
+      signed_int? and literal_protocol_available?(env) ->
+        elaborate_contextual_integer_literal(value, expected_core, names, ctx, env)
 
       true ->
         elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
@@ -2504,6 +2577,91 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # True iff the (meta-free) expected type evaluates to the canonical `Nat` family.
+  defp elaborate_contextual_integer_literal(value, expected_core, names, ctx, env) when value >= 0 do
+    case elaborate_literal_protocol(:from_natural_literal, :natural_argument, value, expected_core, names, ctx, env) do
+      {:error, {:no_instance, :ExpressibleByNaturalLiteral, _}} ->
+        case elaborate_literal_protocol(:from_integer_literal, :integer_argument, value, expected_core, names, ctx, env) do
+          {:error, {:no_instance, :ExpressibleByIntegerLiteral, _}} ->
+            elaborate_bounded_literal_fallback(value, expected_core, ctx, env)
+
+          result ->
+            result
+        end
+
+      result ->
+        result
+    end
+  end
+
+  defp elaborate_contextual_integer_literal(value, expected_core, names, ctx, env),
+    do: elaborate_literal_protocol(:from_integer_literal, :integer_argument, value, expected_core, names, ctx, env)
+
+  # Prelude bootstrap modules are elaborated before the literal interfaces can
+  # be ambiently imported. Preserve the ordinary infer-and-convert path there;
+  # once the provider is in scope every contextual numeral routes through the
+  # language-level protocols below.
+  defp literal_protocol_available?(env) do
+    result_family = Env.resolve_key(env, env.families, :LiteralResult)
+
+    Map.has_key?(env.families, result_family) and
+      Cure.Elab.Resolve.method?(env, :from_integer_literal) and
+      Cure.Elab.Resolve.method?(env, :from_natural_literal)
+  end
+
+  # Compatibility for indexed `Bounded(n)` until coherence keys retain indices
+  # (today every `Bounded(n)` implementation shares the `Bounded` head). Char's
+  # ordinary protocol instance wins before this path; arbitrary bounds keep the
+  # existing compact representation and range check instead of materializing a
+  # constructor tower or silently selecting Char's differently-indexed instance.
+  defp elaborate_bounded_literal_fallback(value, expected_core, ctx, _env) do
+    bounded_family = Inductive.builtin(Context.signature(ctx), :bounded)
+
+    case Kernel.normalize(ctx, expected_core) do
+      {:data, ^bounded_family, [], [{:nat_lit, bound}]} when value < bound ->
+        {:ok, {:bounded_lit, value}}
+
+      {:data, ^bounded_family, [], [{:nat_lit, _bound}]} ->
+        {:error, {:bounded_literal_out_of_range, value, expected_core}}
+
+      _ ->
+        case Kernel.check(ctx, {:int_lit, value}, Eval.eval(expected_core, Context.env(ctx))) do
+          :ok -> {:ok, {:int_lit, value}}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp elaborate_literal_protocol(method, argument_kind, value, expected_core, names, ctx, env) do
+    result_family = Env.resolve_key(env, env.families, :LiteralResult)
+
+    if Map.has_key?(env.families, result_family) and Cure.Elab.Resolve.method?(env, method) do
+      result_type = {:data, result_family, [expected_core], []}
+      argument = {:literal, [subtype: :integer, literal_protocol: argument_kind], value}
+      value_ctor = resolve_ctor_key(env, :LiteralValue)
+      invalid_ctor = resolve_ctor_key(env, :InvalidLiteral)
+
+      with {:ok, conversion} <-
+             Cure.Elab.Resolve.method_call_checked(env, method, [argument], result_type, names, ctx) do
+        case Normalise.nf(ctx, conversion, delta: :certified, fuel: 5_000_000) do
+          {:ctor, ^value_ctor, [literal]} ->
+            case Kernel.check(ctx, literal, Eval.eval(expected_core, Context.env(ctx))) do
+              :ok -> {:ok, literal}
+              {:error, reason} -> {:error, {:invalid_literal_implementation, method, reason}}
+            end
+
+          {:ctor, ^invalid_ctor, []} ->
+            {:error, {:literal_out_of_range, method, value, expected_core}}
+
+          other ->
+            {:error, {:literal_initializer_not_compile_time_value, method, other}}
+        end
+      end
+    else
+      iface = if method == :from_natural_literal, do: :ExpressibleByNaturalLiteral, else: :ExpressibleByIntegerLiteral
+      {:error, {:no_instance, iface, expected_core}}
+    end
+  end
+
   defp nat_expected?(expected_core, ctx) do
     sig = Context.signature(ctx)
     nat_fid = Cure.Core.Inductive.builtin(sig, :nat)
@@ -2512,45 +2670,13 @@ defmodule Cure.Elab.Elaborator do
       match?({:vdata, ^nat_fid, []}, Eval.eval(expected_core, Context.env(ctx)))
   end
 
-  # `{:ok, n}` iff the expected type δ-unfolds to the `Bounded` family with a
-  # concrete bound `n` (a full `Bounded(n)` with `n` a closed Nat) — `:no`
-  # otherwise (metavariable, non-Bounded, or symbolic bound). Sees through a
-  # `typealias` (e.g. `Char`) because `whnf_value` δ-unfolds the certified alias.
-  defp bounded_expected(expected_core, ctx) do
+  defp int_expected?(expected_core, ctx) do
     sig = Context.signature(ctx)
-    bounded_fid = Inductive.builtin(sig, :bounded)
+    int_fid = Cure.Core.Inductive.builtin(sig, :int)
 
-    if is_nil(bounded_fid) or Unify.has_meta?(expected_core) do
-      :no
-    else
-      value = Normalise.whnf_value(Eval.eval(expected_core, Context.env(ctx)), sig)
-
-      case value do
-        {:vdata, ^bounded_fid, [bound_val]} ->
-          case bound_to_int(Normalise.whnf_value(bound_val, sig)) do
-            {:ok, n} -> {:ok, n}
-            :error -> :no
-          end
-
-        _ ->
-          :no
-      end
-    end
+    not is_nil(int_fid) and not Unify.has_meta?(expected_core) and
+      match?({:vdata, ^int_fid, []}, Eval.eval(expected_core, Context.env(ctx)))
   end
-
-  # Peel a concrete Nat bound value (compact `{:vnat, _}` or `Z`/`S` tower) to an
-  # integer; `:error` for a symbolic/neutral bound.
-  defp bound_to_int({:vnat, n}) when is_integer(n) and n >= 0, do: {:ok, n}
-  defp bound_to_int({:vctor, :Z, []}), do: {:ok, 0}
-
-  defp bound_to_int({:vctor, :S, [pred]}) do
-    case bound_to_int(pred) do
-      {:ok, n} -> {:ok, n + 1}
-      :error -> :error
-    end
-  end
-
-  defp bound_to_int(_other), do: :error
 
   # The type of every character literal: Char = Bounded(0x110000). A char literal
   # is a codepoint value; the bound 0x110000 (= 1_114_112) is intrinsic, not from
@@ -6082,18 +6208,81 @@ defmodule Cure.Elab.Elaborator do
   defp compile_matrix([v | vs], rows) do
     col = Enum.map(rows, fn {[p | _ps], _g, _b} -> p end)
 
-    if Enum.all?(col, &match?({:variable, _m, _n}, &1)) do
-      # All-variable column: bind each row's variable to `v`, drop the column.
-      rows2 =
-        Enum.map(rows, fn {[{:variable, _m, x} | ps], g, body} ->
-          repl = {:variable, [], v}
-          {ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}
+    cond do
+      Enum.all?(col, &match?({:variable, _m, _n}, &1)) ->
+        # All-variable column: bind each row's variable to `v`, drop the column.
+        rows2 =
+          Enum.map(rows, fn {[{:variable, _m, x} | ps], g, body} ->
+            repl = {:variable, [], v}
+            {ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}
+          end)
+
+        compile_matrix(vs, rows2)
+
+      Enum.all?(col, &match?({kind, _m, _v} when kind in [:literal, :variable], &1)) ->
+        compile_matrix_literal_split(v, vs, rows, col)
+
+      true ->
+        compile_matrix_split(v, vs, rows, col)
+    end
+  end
+
+  # Literal columns cannot become Core constructor branches, but an ordinary
+  # surface `match` already has a checked literal-dispatch path. Build that
+  # nested match directly, specializing each literal exactly as the constructor
+  # splitter does and retaining variable rows as fall-through rows. This keeps
+  # literal bodies in check mode (important for polymorphic values such as `[]`)
+  # and preserves row priority without turning matching into Equatable guards.
+  defp compile_matrix_literal_split(v, vs, rows, col) do
+    literals =
+      col
+      |> Enum.filter(&match?({:literal, _m, _value}, &1))
+      |> Enum.uniq_by(fn {:literal, meta, value} -> {Keyword.get(meta, :subtype), value} end)
+
+    with {:ok, literal_arms} <- split_literal_arms(literals, v, vs, rows) do
+      if Enum.any?(col, &match?({:variable, _m, _name}, &1)) do
+        with {:ok, default_inner} <- split_default(v, vs, rows) do
+          default = {:match_arm, [pattern: {:variable, [], v <> "_d"}], default_inner}
+          {:ok, {:pattern_match, [], [{:variable, [], v} | literal_arms ++ [default]]}}
+        end
+      else
+        {:ok, {:pattern_match, [], [{:variable, [], v} | literal_arms]}}
+      end
+    end
+  end
+
+  defp split_literal_arms(literals, v, vs, rows) do
+    Enum.reduce_while(literals, {:ok, []}, fn literal, {:ok, acc} ->
+      {:literal, literal_meta, literal_value} = literal
+      literal_key = {Keyword.get(literal_meta, :subtype), literal_value}
+
+      sub_rows =
+        Enum.flat_map(rows, fn {[p | ps], guard, body} ->
+          case p do
+            {:literal, meta, value} ->
+              if {Keyword.get(meta, :subtype), value} == literal_key,
+                do: [{ps, guard, body}],
+                else: []
+
+            {:variable, _meta, name} ->
+              replacement = {:variable, [], v}
+
+              [
+                {ps, subst_guard(guard, name, replacement),
+                 subst_surface_var(body, name, replacement)}
+              ]
+          end
         end)
 
-      compile_matrix(vs, rows2)
-    else
-      compile_matrix_split(v, vs, rows, col)
-    end
+      case compile_matrix(vs, sub_rows) do
+        {:ok, inner} ->
+          arm = {:match_arm, [pattern: literal], inner}
+          {:cont, {:ok, acc ++ [arm]}}
+
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
   end
 
   # Fold the rows reaching a matrix leaf into an `if`-chain. An unguarded row is
@@ -7931,19 +8120,31 @@ defmodule Cure.Elab.Elaborator do
   # downstream pattern pass runs (the pattern-position half of desugar_list/1).
   defp desugar_list_patterns(arms) do
     Enum.map(arms, fn
-      {:match_arm, meta, body} = arm ->
-        case Keyword.get(meta, :pattern) do
-          {:list, _, _} = lp ->
-            {:match_arm, Keyword.put(meta, :pattern, desugar_list(lp)), body}
-
-          _ ->
-            arm
-        end
+      {:match_arm, meta, body} ->
+        pattern = meta |> Keyword.fetch!(:pattern) |> desugar_pattern_lists()
+        {:match_arm, Keyword.put(meta, :pattern, pattern), body}
 
       other ->
         other
     end)
   end
+
+  # List sugar may occur at any depth in a constructor pattern. Rewriting only
+  # a top-level `:list` leaves e.g. `Parsed(_, ['*' | _])` opaque to the pattern
+  # matrix: it sees neither a constructor nor a variable in that column and
+  # drops the row while constructing the fallback branch. Normalize recursively
+  # so every downstream pattern pass receives the same Cons/Nil representation.
+  defp desugar_pattern_lists({:list, _, _} = pattern), do: desugar_list(pattern)
+
+  defp desugar_pattern_lists({:function_call, meta, args}) do
+    {:function_call, meta, Enum.map(args, &desugar_pattern_lists/1)}
+  end
+
+  defp desugar_pattern_lists({:named_implicit_pat, meta, children}) do
+    {:named_implicit_pat, meta, Enum.map(children, &desugar_pattern_lists/1)}
+  end
+
+  defp desugar_pattern_lists(pattern), do: pattern
 
   # Typed constructor payloads (`Some(value: Int)`) are a surface ascription on
   # an ordinary constructor binder. Remove the annotation before the existing
@@ -9496,7 +9697,7 @@ defmodule Cure.Elab.Elaborator do
   # present slots unify against the supplied arguments. Returns the applied term
   # and its result type (the codomain instantiated with the solved arguments).
   defp elaborate_global_app(env, name, present_args, ctx, expected \\ nil) do
-    %{type: pi_type, quantities: quantities} = Env.get_def(env, name)
+    %{type: pi_type, quantities: quantities} = defn = Env.get_def(env, name)
     {domains, codomain} = peel_pi(pi_type, length(quantities))
 
     # A global def has no relevant-implicit surface (that is a constructor-index
@@ -9504,10 +9705,10 @@ defmodule Cure.Elab.Elaborator do
     # else :explicit (positional) — preserving the pre-plicity `solve_arg`
     # behavior now that the slot carries an explicit plicity.
     slot_plicities =
-      Enum.map(quantities, fn
-        :erased -> :implicit
-        _ -> :explicit
-      end)
+      case Map.get(defn, :plicities) do
+        ps when is_list(ps) -> ps
+        _ -> Enum.map(quantities, fn :erased -> :implicit; _ -> :explicit end)
+      end
 
     telescope = Enum.zip([Enum.map(domains, &{:_, &1}), quantities, slot_plicities])
     init = {:ok, MetaCtx.new(), [], present_args}

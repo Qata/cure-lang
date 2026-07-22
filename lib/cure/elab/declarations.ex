@@ -418,7 +418,7 @@ defmodule Cure.Elab.Declarations do
     with {:ok, sig} <- function_signature(meta, env) do
       env1 =
         env
-        |> Env.add_def(sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
+        |> Env.add_def(sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities, sig.plicities)
         # Labels must ride the record from the SIGNATURE pass on: overlap legality
         # (`check_overload_legality`) runs between the signature and body passes and
         # needs them to tell `move(to:)` from `move(from:)`. The body pass re-adds
@@ -455,7 +455,7 @@ defmodule Cure.Elab.Declarations do
              :ok <- check_extern_not_union(sig, env) do
           final =
             env
-            |> Env.add_def(sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)
+            |> Env.add_def(sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities, sig.plicities)
             |> Env.put_labels(sig.name, param_label_vector(sig.params))
 
           {:ok, final}
@@ -604,11 +604,27 @@ defmodule Cure.Elab.Declarations do
     with {:ok, body_expr} <-
            MacroExpand.expand(body_expr, env, callback_context: Keyword.get(meta, :callback_context)),
          {:ok, sig} <- function_signature(meta, env) do
-      ctx = build_context(env, sig.telescope)
+      # Expansion identifiers retain definition-site identity. Merge each
+      # stamped macro-home interface into the body environment so a generated
+      # fully-qualified call such as `Std.Regex.configured(...)` resolves even
+      # when the caller did not explicitly `use Std.Regex`. `merge_env/2` keeps
+      # caller declarations authoritative, while import filtering still prevents
+      # the home module's bare names from becoming caller-visible.
+      body_env =
+        body_expr
+        |> macro_home_sources()
+        |> Enum.reduce(env, &Cure.Elab.Program.env_with_macro_home(&2, &1))
+        |> Cure.Elab.Program.env_with_generated_dependencies(body_expr)
+        # Generated code needs definition-site declarations for qualified
+        # references, but a macro use must not open the home module in the
+        # caller. Preserve only the caller's lexical import set.
+        |> Map.put(:import_modules, env.import_modules)
+
+      ctx = build_context(body_env, sig.telescope)
       # Qualify any hole minted while elaborating THIS body by its enclosing def
       # (`hole_id/2`) — local to this call, never merged back into `final` below,
       # so it cannot leak into another def's elaboration.
-      def_env = Env.with_current_def(env, sig.name)
+      def_env = Env.with_current_def(body_env, sig.name)
 
       with {:ok, body_term, return_core, _return_value} <-
              elaborate_body_typed(body_expr, sig, ctx, def_env),
@@ -617,12 +633,12 @@ defmodule Cure.Elab.Declarations do
            # `ignore`-style constrained function): the same criterion the relevance
            # check enforces, so erasure (dropping it) stays sound. Only demotion,
            # never promotion.
-           quantities = demote_unused_dicts(env, sig, body_term),
+           quantities = demote_unused_dicts(body_env, sig, body_term),
            # {0,ω} relevance check (M8.3): erasure will drop the `:erased` parameter
            # slots, so reject any body that uses one relevantly (returned / passed
            # in a present position / scrutinised / applied). E-layer; the kernel
            # stays quantity-blind. See `Cure.Elab.Relevance`.
-           :ok <- Relevance.check(env, sig.name, quantities, body_term),
+           :ok <- Relevance.check(body_env, sig.name, quantities, body_term),
            # The Pi is the single source of truth (slice 6). `sig.pi` was built from
            # the ORIGINAL quantities; `demote_unused_dicts/3` may have lowered a dict
            # since, so rebuild the stored type from the DEMOTED vector — otherwise the
@@ -648,8 +664,8 @@ defmodule Cure.Elab.Declarations do
            # clause is the trusted backstop for an aliased effect type, §8.)
            :ok <- assert_no_erased_effect_binder(final_pi, sig.name) do
         final =
-          env
-          |> Env.add_def(sig.name, final_pi, lambda, quantities)
+          body_env
+          |> Env.add_def(sig.name, final_pi, lambda, quantities, sig.plicities)
           |> Env.put_labels(sig.name, param_label_vector(sig.params))
 
         # Best-effort totality certification, eagerly and in declaration order, so a
@@ -662,6 +678,24 @@ defmodule Cure.Elab.Declarations do
       end
     end
   end
+
+  defp macro_home_sources(ast), do: ast |> collect_macro_home_sources(MapSet.new()) |> MapSet.to_list()
+
+  defp collect_macro_home_sources({tag, meta, children}, homes)
+       when is_atom(tag) and is_list(meta) and is_list(children) do
+    homes =
+      case Keyword.get(meta, :macro_home_source) do
+        home when is_binary(home) -> MapSet.put(homes, home)
+        _ -> homes
+      end
+
+    Enum.reduce(children, homes, &collect_macro_home_sources/2)
+  end
+
+  defp collect_macro_home_sources(list, homes) when is_list(list),
+    do: Enum.reduce(list, homes, &collect_macro_home_sources/2)
+
+  defp collect_macro_home_sources(_other, homes), do: homes
 
   # Elaborate the body and settle the return type + its Core form. With a DECLARED
   # return, check the body against it (the long-standing behavior). With NONE
@@ -946,6 +980,7 @@ defmodule Cure.Elab.Declarations do
          params: params,
          telescope: telescope,
          quantities: quantities,
+         plicities: Enum.map(params, fn {:param, pmeta, _} -> if Keyword.get(pmeta, :implicit, false), do: :implicit, else: :explicit end),
          scope: scope,
          return_core: return_core,
          inferred_return: is_nil(return_expr),
@@ -1311,6 +1346,26 @@ defmodule Cure.Elab.Declarations do
   # checked path to the same infer-and-convert behavior as before.
   defp elaborate_body({:literal, _meta, _value} = expr, return_core, scope, ctx, env, _params),
     do: Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+
+  # A negative integer spelling parses as unary `-` over a positive literal.
+  # Keep this whole-body form in checking mode so the declared result can select
+  # `ExpressibleByIntegerLiteral`; inference would prematurely default the
+  # operand and the negation to Int.
+  defp elaborate_body(
+         {:unary_op, meta, [{:literal, literal_meta, value}]} = expr,
+         return_core,
+         scope,
+         ctx,
+         env,
+         _params
+       )
+       when is_integer(value) and value >= 0 do
+    if Keyword.get(meta, :operator) == :- and Keyword.get(literal_meta, :subtype) == :integer do
+      Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+    else
+      elaborate_body_infer(expr, return_core, scope, ctx, env)
+    end
+  end
 
   # The general body: elaborated in INFER mode. `coerce_union/5` is a strict no-op
   # unless the declared return type is a generated anonymous-union family — in which
@@ -1841,7 +1896,7 @@ defmodule Cure.Elab.Declarations do
       impl_names = Enum.map(implicits, &elem(&1, 0))
 
       case build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
-        {:ok, expl_tele, expl_names, expl_plicities} ->
+        {:ok, expl_tele, expl_names, expl_plicities, expl_quantities} ->
           full_scope = Enum.reverse(impl_names ++ expl_names) ++ param_scope
           {param_exprs, index_exprs} = Enum.split(applied_exprs, param_count)
 
@@ -1861,7 +1916,7 @@ defmodule Cure.Elab.Declarations do
             # `{k:T}` — is runtime-relevant (quantity ω). See M8.3 / M9.
             quantities =
               List.duplicate(:erased, length(impl_tele)) ++
-                List.duplicate(:unrestricted, length(expl_tele))
+                expl_quantities
 
             # Plicity decouples from quantity: inferred indices AND relevant
             # implicits `{k:T}` are :implicit (non-positional); explicit doms are
@@ -1893,12 +1948,14 @@ defmodule Cure.Elab.Declarations do
   # implicit `{k: Nat}` binder by its inner type (`Nat`); the binder name itself
   # is handled as a source-position arg, not an inferred index.
   defp strip_named_dom({:named_dom, _name, inner}), do: inner
+  defp strip_named_dom({:named_dom, _name, inner, _grade}), do: inner
   defp strip_named_dom({:implicit_dom, _name, inner}), do: inner
   defp strip_named_dom(other), do: other
 
   # The name a domain binds into the constructor's local scope, or `nil` for an
   # anonymous positional argument. Both `(k: T)` and `{k: T}` bind `k`.
   defp bound_dom_name({:named_dom, name, _inner}), do: name
+  defp bound_dom_name({:named_dom, name, _inner, _grade}), do: name
   defp bound_dom_name({:implicit_dom, name, _inner}), do: name
   defp bound_dom_name(_other), do: nil
 
@@ -1936,30 +1993,31 @@ defmodule Cure.Elab.Declarations do
   defp build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
     dom_exprs
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, [], []}, fn {dom, i},
-                                                                                        {:ok, tele, scope, names, plics} ->
+    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, [], [], []}, fn {dom, i},
+                                                                                            {:ok, tele, scope, names, plics, quantities} ->
       # A NAMED / IMPLICIT dependent binder uses its declared name (so later
       # domains and the result index can reference it); an unnamed arg keeps its
       # anonymous `_aN` name byte-for-byte. Either way the scope is threaded so
       # the next domain's de Bruijn indices resolve this binder.
-      {argname, type_expr, plicity} =
+      {argname, type_expr, plicity, quantity} =
         case dom do
-          {:named_dom, name, inner} -> {name, inner, :explicit}
-          {:implicit_dom, name, inner} -> {name, inner, :implicit}
-          _ -> {"_a#{i}", dom, :explicit}
+          {:named_dom, name, inner} -> {name, inner, :explicit, :unrestricted}
+          {:named_dom, name, inner, grade} -> {name, inner, :explicit, grade}
+          {:implicit_dom, name, inner} -> {name, inner, :implicit, :unrestricted}
+          _ -> {"_a#{i}", dom, :explicit, :unrestricted}
         end
 
       case idx_to_core(type_expr, scope, fam, env) do
         {:ok, core} ->
           {:cont,
-           {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname], plics ++ [plicity]}}
+           {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname], plics ++ [plicity], quantities ++ [quantity]}}
 
         {:error, _} = err ->
           {:halt, err}
       end
     end)
     |> case do
-      {:ok, tele, _scope, names, plics} -> {:ok, tele, names, plics}
+      {:ok, tele, _scope, names, plics, quantities} -> {:ok, tele, names, plics, quantities}
       {:error, _} = err -> err
     end
   end
@@ -2522,6 +2580,12 @@ defmodule Cure.Elab.Declarations do
     case Keyword.get(meta, :subtype) do
       :integer -> {:ok, {:int_lit, value}}
       :float -> {:ok, {:float_lit, value}}
+      :char when is_integer(value) and value >= 0 and value <= 0x10FFFF ->
+        {:ok, {:bounded_lit, value}}
+
+      :char ->
+        {:error, {:char_literal_out_of_range, value}}
+
       other -> {:error, {:unsupported_index_literal, other}}
     end
   end
@@ -2563,14 +2627,16 @@ defmodule Cure.Elab.Declarations do
   defp index_binop_global(op, _), do: {:error, {:unsupported_index_operator, op}}
 
   # Wrap a `Bool`-typed refinement clause in `IsTrue(·)` (§3a level 1). Only
-  # comparison and boolean-connective operators reflect (they produce `Bool`);
+  # operators with a Bool-producing index lowering reflect;
   # every other clause — a `Type`-valued predicate application, an already-explicit
   # `IsTrue(…)`, or an arithmetic misuse that should be rejected as ill-sorted —
   # passes through untouched. The wrapper node is exactly what the parser yields
   # for an explicit `IsTrue(φ)`, so lowering (and `IsTrue` name resolution) is
   # shared verbatim.
   defp reflect_boolean_proposition({:binary_op, meta, _} = prop) do
-    if Keyword.get(meta, :category) in [:comparison, :boolean] do
+    op = Keyword.fetch!(meta, :operator)
+
+    if match?({:ok, _global}, index_binop_global(op, false)) do
       {:function_call, [name: "IsTrue"], [prop]}
     else
       prop

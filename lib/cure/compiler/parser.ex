@@ -7389,15 +7389,22 @@ defmodule Cure.Compiler.Parser do
     la2 = peek_at(state, 2)
 
     case {peek(state), la2} do
-      {%Token{type: :lparen}, %Token{type: :colon}} ->
+      {%Token{type: :lparen}, %Token{type: kind, value: value}}
+      when kind == :colon or (kind == :atom and value in @grade_atoms) ->
         state = advance(state)
         name_token = peek(state)
         name = to_string(name_token.value)
         state = advance(state)
-        state = expect(state, :colon)
+        {grade, state} =
+          case parse_grade(state) do
+            {:grade, grade, next} -> {grade, next}
+            {:unknown, bad, tok, next} -> {nil, add_error(next, {:unknown_grade, bad, tok.line, tok.col})}
+            {:none, next} -> {nil, expect(next, :colon)}
+          end
         {inner, state} = parse_type_atom(state)
         state = expect(state, :rparen)
-        {{:named_dom, name, inner}, state}
+        dom = if grade == nil, do: {:named_dom, name, inner}, else: {:named_dom, name, inner, grade}
+        {dom, state}
 
       # A RELEVANT IMPLICIT domain `{k: Type}` (Idris `{k : Nat}`): implicit at
       # application/pattern (solved by unification, never positional) but
@@ -7449,6 +7456,12 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
 
     case token.type do
+      # Constructor result indices use this arrow-free parser rather than the
+      # general type-expression ladder. Preserve character terms here as well;
+      # otherwise `Witness('a')` becomes the Nat-shaped name "97".
+      :char ->
+        {literal(:char, token), advance(state)}
+
       :lbrace ->
         parse_refinement_type(state)
 
@@ -7519,16 +7532,18 @@ defmodule Cure.Compiler.Parser do
   defp paren_arrow_ast(parts) do
     {domains, [ret]} = Enum.split(parts, length(parts) - 1)
 
-    if Enum.any?(domains, &match?({:named_dom, _, _}, &1)) do
+    if Enum.any?(domains, &(match?({:named_dom, _, _}, &1) or match?({:named_dom, _, _, _}, &1))) do
       binders =
         Enum.map(domains, fn
           {:named_dom, name, _} -> name
+          {:named_dom, name, _, _} -> name
           _ -> nil
         end)
 
       doms =
         Enum.map(domains, fn
           {:named_dom, _, inner} -> inner
+          {:named_dom, _, inner, _} -> inner
           other -> other
         end)
 
@@ -9148,6 +9163,13 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_type_arrow_dispatch(state, token) do
     case token.type do
+      # Character literals in dependent indices are terms, not type names. The
+      # generic simple-type branch stringifies the decoded codepoint (`'a'` ->
+      # "97"), which loses the literal kind and later lowers it as Nat. Preserve
+      # the literal AST so index elaboration can produce `:bounded_lit`.
+      :char ->
+        {literal(:char, token), advance(state)}
+
       :lbrace ->
         parse_refinement_type(state)
 

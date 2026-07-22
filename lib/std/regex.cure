@@ -9,6 +9,7 @@ mod Std.Regex
 
   use Std.Char
   use Std.Option
+  use Std.Syntax
 
   ## Cure does not otherwise expose a general-purpose Either in the current
   ## prelude. Keep the branch witness local to the typed regex result universe;
@@ -166,12 +167,609 @@ mod Std.Regex
     PatternConcat : Pattern(left) -> Pattern(right) -> Pattern(PairC(left, right))
     PatternGroup : Pattern(inner) -> Pattern(StringC)
     PatternAlternate : Pattern(left) -> Pattern(right) -> Pattern(ChoiceC(left, right))
+    PatternAlternateMode : Pattern(left) -> Pattern(right) -> Bool -> Pattern(ChoiceC(left, right))
     PatternRepeat : Pattern(inner) -> Pattern(ListC(inner))
+    PatternRepeatMode : Pattern(inner) -> Bool -> Pattern(ListC(inner))
+    PatternBoundary : BoundaryConstraint -> Pattern(UnitC)
+
+  ## State identifiers are naturals below `state_count`. Thompson construction
+  ## allocates disjoint contiguous ranges and preserves that invariant by
+  ## shifting the right machine by the left machine's count. `Accepted` is an
+  ## accepting edge (the paper's `Nothing`), not an allocated state. The runtime
+  ## transition relation is ordered and epsilon-free.
+  type EvidenceInstruction =
+    | EmitChar(Char)
+    | EmitUnit
+    | EmitPair
+    | EmitLeft
+    | EmitRight
+    | BeginList
+    | EndList
+    | BeginCapture
+    | EndCapture
+
+  type BoundaryConstraint = BoundaryConstraint(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)
+  type Boundary = Boundary(Bool, Bool, Bool, Bool, Bool, Bool, Bool)
+  type MachineState = Active(Nat, List(EvidenceInstruction), List(BoundaryConstraint)) | Accepted(List(EvidenceInstruction), List(BoundaryConstraint))
+  type PatternMachine = PatternMachine(Nat, List(MachineState), Nat -> Char -> List(MachineState))
+
+  fn append_routine(left: List(EvidenceInstruction), right: List(EvidenceInstruction)) -> List(EvidenceInstruction) = match left
+    [] -> right
+    [head | rest] -> [head | append_routine(rest, right)]
+
+  fn append_states(left: List(MachineState), right: List(MachineState)) -> List(MachineState) = match left
+    [] -> right
+    [head | rest] -> [head | append_states(rest, right)]
+
+  fn append_constraints(left: List(BoundaryConstraint), right: List(BoundaryConstraint)) -> List(BoundaryConstraint) = match left
+    [] -> right
+    [head | rest] -> [head | append_constraints(rest, right)]
+
+  fn shift_states(offset: Nat, states: List(MachineState)) -> List(MachineState) = match states
+    [] -> []
+    [Accepted(routine, constraints) | rest] -> [Accepted(routine, constraints) | shift_states(offset, rest)]
+    [Active(state, routine, constraints) | rest] -> [Active(plus(offset, state), routine, constraints) | shift_states(offset, rest)]
+
+  fn nat_less(left: Nat, right: Nat) -> Bool = match left
+    Z() -> match right
+      Z() -> false
+      S(_) -> true
+    S(left_rest) -> match right
+      Z() -> false
+      S(right_rest) -> nat_less(left_rest, right_rest)
+
+  fn nat_subtract(value: Nat, amount: Nat) -> Nat = match amount
+    Z() -> value
+    S(amount_rest) -> match value
+      Z() -> Z()
+      S(value_rest) -> nat_subtract(value_rest, amount_rest)
+
+  fn enter_right_with_constraints(offset: Nat, left_routine: List(EvidenceInstruction), left_constraints: List(BoundaryConstraint), right_starts: List(MachineState)) -> List(MachineState) = match right_starts
+    [] -> []
+    [Accepted(right_routine, right_constraints) | rest] ->
+      [Accepted(append_routine(append_routine(left_routine, right_routine), [EmitPair()]), append_constraints(left_constraints, right_constraints)) | enter_right_with_constraints(offset, left_routine, left_constraints, rest)]
+    [Active(state, right_routine, right_constraints) | rest] ->
+      [Active(plus(offset, state), append_routine(left_routine, right_routine), append_constraints(left_constraints, right_constraints)) | enter_right_with_constraints(offset, left_routine, left_constraints, rest)]
+
+  fn enter_right(offset: Nat, left_routine: List(EvidenceInstruction), right_starts: List(MachineState)) -> List(MachineState) =
+    enter_right_with_constraints(offset, left_routine, [], right_starts)
+
+  fn continue_with_right(offset: Nat, left_states: List(MachineState), right_starts: List(MachineState)) -> List(MachineState) = match left_states
+    [] -> []
+    [Accepted(left_routine, constraints) | rest] -> append_states(enter_right_with_constraints(offset, left_routine, constraints, right_starts), continue_with_right(offset, rest, right_starts))
+    [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | continue_with_right(offset, rest, right_starts)]
+
+  fn finish_pair(states: List(MachineState)) -> List(MachineState) = match states
+    [] -> []
+    [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [EmitPair()]), constraints) | finish_pair(rest)]
+    [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | finish_pair(rest)]
+
+  fn mark_branch(states: List(MachineState), marker: EvidenceInstruction) -> List(MachineState) = match states
+    [] -> []
+    [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [marker]), constraints) | mark_branch(rest, marker)]
+    [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | mark_branch(rest, marker)]
+
+  fn prefix_routine(instruction: EvidenceInstruction, states: List(MachineState)) -> List(MachineState) = match states
+    [] -> []
+    [Accepted(routine, constraints) | rest] -> [Accepted([instruction | routine], constraints) | prefix_routine(instruction, rest)]
+    [Active(state, routine, constraints) | rest] -> [Active(state, [instruction | routine], constraints) | prefix_routine(instruction, rest)]
+
+  fn finish_capture(states: List(MachineState)) -> List(MachineState) = match states
+    [] -> []
+    [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [EndCapture()]), constraints) | finish_capture(rest)]
+    [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | finish_capture(rest)]
+
+  fn repeat_accepting(routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint)) -> List(MachineState) =
+    [Accepted(append_routine(routine, [EndList()]), constraints)]
+
+  fn repeat_destination_order(routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState), lazy: Bool) -> List(MachineState) = pickup
+    lazy -> append_states(repeat_accepting(routine, constraints), enter_repeat_with_constraints(routine, constraints, starts))
+    else -> append_states(enter_repeat_with_constraints(routine, constraints, starts), repeat_accepting(routine, constraints))
+
+  fn repeat_destinations(destinations: List(MachineState), starts: List(MachineState), lazy: Bool) -> List(MachineState) = match destinations
+    [] -> []
+    [Accepted(routine, constraints) | rest] ->
+      append_states(repeat_destination_order(routine, constraints, starts, lazy), repeat_destinations(rest, starts, lazy))
+    [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | repeat_destinations(rest, starts, lazy)]
+
+  fn enter_repeat_with_constraints(routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState)) -> List(MachineState) = match starts
+    [] -> []
+    [Accepted(_, _) | rest] -> enter_repeat_with_constraints(routine, constraints, rest)
+    [Active(state, next_routine, next_constraints) | rest] ->
+      [Active(state, append_routine(routine, next_routine), append_constraints(constraints, next_constraints)) | enter_repeat_with_constraints(routine, constraints, rest)]
+
+  fn enter_repeat(routine: List(EvidenceInstruction), starts: List(MachineState)) -> List(MachineState) =
+    enter_repeat_with_constraints(routine, [], starts)
+
+  fn predicate_machine_next(test: Char -> Bool, _state: Nat, char: Char) -> List(MachineState) = pickup
+    test(char) -> [Accepted([EmitChar(char)], [])]
+    else -> []
+
+  fn concat_machine_next(left_count: Nat, left_next: Nat -> Char -> List(MachineState), right_starts: List(MachineState), right_next: Nat -> Char -> List(MachineState), state: Nat, char: Char) -> List(MachineState) = pickup
+    nat_less(state, left_count) -> continue_with_right(left_count, left_next(state)(char), right_starts)
+    else -> shift_states(left_count, finish_pair(right_next(nat_subtract(state, left_count))(char)))
+
+  fn alternate_machine_next(left_count: Nat, left_next: Nat -> Char -> List(MachineState), right_next: Nat -> Char -> List(MachineState), state: Nat, char: Char) -> List(MachineState) = pickup
+    nat_less(state, left_count) -> mark_branch(left_next(state)(char), EmitLeft())
+    else -> shift_states(left_count, mark_branch(right_next(nat_subtract(state, left_count))(char), EmitRight()))
+
+  fn alternate_machine_starts(left_count: Nat, left_starts: List(MachineState), right_starts: List(MachineState), prefer_right: Bool) -> List(MachineState) =
+    let marked_left = mark_branch(left_starts, EmitLeft())
+    let marked_right = shift_states(left_count, mark_branch(right_starts, EmitRight()))
+    pickup
+      prefer_right -> append_states(marked_right, marked_left)
+      else -> append_states(marked_left, marked_right)
+
+  fn repeat_machine_starts(starts: List(MachineState), lazy: Bool) -> List(MachineState) =
+    let empty = [Accepted([BeginList(), EndList()], [])]
+    let consuming = enter_repeat([BeginList()], starts)
+    pickup
+      lazy -> append_states(empty, consuming)
+      else -> append_states(consuming, empty)
+
+  fn compile_pattern({shape: ShapeCode}, pattern: Pattern(shape)) -> PatternMachine = match pattern
+    PatternEmpty() -> PatternMachine(Z(), [Accepted([EmitUnit()], [])], fn(_state, _char) -> [])
+    PatternPredicate(test) -> PatternMachine(S(Z()), [Active(Z(), [], [])], fn(state, char) -> predicate_machine_next(test, state, char))
+    PatternBoundary(constraint) -> PatternMachine(Z(), [Accepted([EmitUnit()], [constraint])], fn(_state, _char) -> [])
+    PatternConcat(left, right) -> match compile_pattern(left)
+      PatternMachine(left_count, left_starts, left_next) -> match compile_pattern(right)
+        PatternMachine(right_count, right_starts, right_next) ->
+          PatternMachine(
+            plus(left_count, right_count),
+            continue_with_right(left_count, left_starts, right_starts),
+            fn(state, char) -> concat_machine_next(left_count, left_next, right_starts, right_next, state, char)
+          )
+    PatternGroup(inner) -> match compile_pattern(inner)
+      PatternMachine(count, starts, next) ->
+        PatternMachine(
+          count,
+          finish_capture(prefix_routine(BeginCapture(), starts)),
+          fn(state, char) -> finish_capture(next(state)(char))
+        )
+    PatternAlternate(left, right) -> match compile_pattern(left)
+      PatternMachine(left_count, left_starts, left_next) -> match compile_pattern(right)
+        PatternMachine(right_count, right_starts, right_next) ->
+          PatternMachine(
+            plus(left_count, right_count),
+            append_states(mark_branch(left_starts, EmitLeft()), shift_states(left_count, mark_branch(right_starts, EmitRight()))),
+            fn(state, char) -> alternate_machine_next(left_count, left_next, right_next, state, char)
+          )
+    PatternAlternateMode(left, right, prefer_right) -> match compile_pattern(left)
+      PatternMachine(left_count, left_starts, left_next) -> match compile_pattern(right)
+        PatternMachine(right_count, right_starts, right_next) ->
+          PatternMachine(
+            plus(left_count, right_count),
+            alternate_machine_starts(left_count, left_starts, right_starts, prefer_right),
+            fn(state, char) -> alternate_machine_next(left_count, left_next, right_next, state, char)
+          )
+    PatternRepeat(inner) -> match compile_pattern(inner)
+      PatternMachine(count, starts, next) ->
+        PatternMachine(
+          count,
+          repeat_machine_starts(starts, false),
+          fn(state, char) -> repeat_destinations(next(state)(char), starts, false)
+        )
+    PatternRepeatMode(inner, lazy) -> match compile_pattern(inner)
+      PatternMachine(count, starts, next) ->
+        PatternMachine(
+          count,
+          repeat_machine_starts(starts, lazy),
+          fn(state, char) -> repeat_destinations(next(state)(char), starts, lazy)
+        )
+
+  fn machine_has_accept(states: List(MachineState)) -> Bool = match states
+    [] -> false
+    [Accepted(_, _) | _] -> true
+    [Active(_, _, _) | rest] -> machine_has_accept(rest)
+
+  fn machine_step_one(next: Nat -> Char -> List(MachineState), char: Char, current: MachineState) -> List(MachineState) = match current
+    Accepted(_, _) -> []
+    Active(state, _, _) -> next(state)(char)
+
+  fn machine_step(next: Nat -> Char -> List(MachineState), char: Char, current: List(MachineState)) -> List(MachineState) = match current
+    [] -> []
+    [head | rest] -> append_states(machine_step_one(next, char, head), machine_step(next, char, rest))
+
+  fn constraint_holds(constraint: BoundaryConstraint, boundary: Boundary) -> Bool = match boundary
+    Boundary(subject_start, subject_end, strict_subject_end, line_start, line_end, ascii_boundary, unicode_boundary) -> match constraint
+      BoundaryConstraint(require_subject_start, require_subject_end, require_strict_end, require_line_start, require_line_end, check_ascii, expected_ascii, check_unicode, expected_unicode) ->
+        (not require_subject_start or subject_start) and
+          (not require_subject_end or subject_end) and
+          (not require_strict_end or strict_subject_end) and
+          (not require_line_start or line_start) and
+          (not require_line_end or line_end) and
+          (not check_ascii or ascii_boundary == expected_ascii) and
+          (not check_unicode or unicode_boundary == expected_unicode)
+
+  fn subject_start_constraint() -> BoundaryConstraint =
+    BoundaryConstraint(true, false, false, false, false, false, false, false, false)
+
+  fn subject_end_constraint() -> BoundaryConstraint =
+    BoundaryConstraint(false, true, false, false, false, false, false, false, false)
+
+  fn strict_end_constraint() -> BoundaryConstraint =
+    BoundaryConstraint(false, false, true, false, false, false, false, false, false)
+
+  fn line_start_constraint() -> BoundaryConstraint =
+    BoundaryConstraint(false, false, false, true, false, false, false, false, false)
+
+  fn line_end_constraint() -> BoundaryConstraint =
+    BoundaryConstraint(false, false, false, false, true, false, false, false, false)
+
+  fn ascii_word_constraint(expected: Bool) -> BoundaryConstraint =
+    BoundaryConstraint(false, false, false, false, false, true, expected, false, false)
+
+  fn unicode_word_constraint(expected: Bool) -> BoundaryConstraint =
+    BoundaryConstraint(false, false, false, false, false, false, false, true, expected)
+
+  fn constraints_hold(constraints: List(BoundaryConstraint), boundary: Boundary) -> Bool = match constraints
+    [] -> true
+    [head | rest] -> constraint_holds(head, boundary) and constraints_hold(rest, boundary)
+
+  fn filter_boundary_states(states: List(MachineState), boundary: Boundary) -> List(MachineState) = match states
+    [] -> []
+    [Accepted(routine, constraints) | rest] -> pickup
+      constraints_hold(constraints, boundary) -> [Accepted(routine, []) | filter_boundary_states(rest, boundary)]
+      else -> filter_boundary_states(rest, boundary)
+    [Active(state, routine, constraints) | rest] -> pickup
+      constraints_hold(constraints, boundary) -> [Active(state, routine, []) | filter_boundary_states(rest, boundary)]
+      else -> filter_boundary_states(rest, boundary)
+
+  fn position_line_end(input: String) -> Bool = match input
+    [] -> true
+    [char | _] -> Std.Char.is_newline(char)
+
+  fn position_subject_end(input: String) -> Bool = match input
+    [] -> true
+    [char] -> Std.Char.is_newline(char)
+    _ -> false
+
+  fn next_ascii_word(input: String) -> Bool = match input
+    [] -> false
+    [char | _] -> ascii_word(char)
+
+  fn next_unicode_word(input: String) -> Bool = match input
+    [] -> false
+    [char | _] -> option_word(char, true)
+
+  fn position_boundary(subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool, input: String) -> Boundary =
+    Boundary(
+      subject_start,
+      position_subject_end(input),
+      position_strict_subject_end(input),
+      line_start,
+      position_line_end(input),
+      previous_ascii_word != next_ascii_word(input),
+      previous_unicode_word != next_unicode_word(input)
+    )
+
+  fn position_strict_subject_end(input: String) -> Bool = match input
+    [] -> true
+    _ -> false
+
+  fn machine_accepts_chars(next: Nat -> Char -> List(MachineState), input: String, current: List(MachineState)) -> Bool = match input
+    [] -> machine_has_accept(current)
+    [char | rest] ->
+      machine_accepts_chars(next, rest, filter_boundary_states(machine_step(next, char, current), position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)))
+
+  fn pattern_accepts({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Bool =
+    match compile_pattern(pattern)
+      PatternMachine(_count, starts, next) -> machine_accepts_chars(next, input, filter_boundary_states(starts, position_boundary(true, true, false, false, input)))
+
+  ## Evidence is a postfix program result stored in reverse order, so emitting
+  ## is constant-time. Pair/branch/list markers precede their operands in the
+  ## final list, which lets the total extractor consume it in one pass.
+  type Evidence =
+    | CharacterEvidence(Char)
+    | UnitEvidence
+    | PairEvidence
+    | LeftEvidence
+    | RightEvidence
+    | BeginListEvidence
+    | EndListEvidence
+    | StringEvidence(String)
+
+  ## A suffix-indexed intrinsic grammar. `Encodes(shape, input, rest)` proves
+  ## that one value of `shape` consumes a prefix of `input` and leaves `rest`.
+  ## This is the context-threaded formulation from the thesis: concatenation and
+  ## repetition compose by sharing a middle suffix, with no append theorem or
+  ## runtime boundary witness.
+  type Encodes indices (shape: ShapeCode, input: List(Evidence), rest: List(Evidence))
+    EncodesUnit : Encodes(UnitC, Cons(UnitEvidence(), rest), rest)
+    EncodesCharacter : (char: Char) -> Encodes(CharC, Cons(CharacterEvidence(char), rest), rest)
+    EncodesString : (value: String) -> Encodes(StringC, Cons(StringEvidence(value), rest), rest)
+    EncodesPair : (right :erased Encodes(right_shape, pair_evidence, left_evidence)) -> (left :erased Encodes(left_shape, left_evidence, rest)) -> Encodes(PairC(left_shape, right_shape), Cons(PairEvidence(), pair_evidence), rest)
+    EncodesLeft : (branch :erased Encodes(left, branch_evidence, rest)) -> Encodes(ChoiceC(left, right), Cons(LeftEvidence(), branch_evidence), rest)
+    EncodesRight : (branch :erased Encodes(right, branch_evidence, rest)) -> Encodes(ChoiceC(left, right), Cons(RightEvidence(), branch_evidence), rest)
+    EncodesList : (items :erased EncodesMany(inner, items_evidence, rest)) -> Encodes(ListC(inner), Cons(EndListEvidence(), items_evidence), rest)
+
+  type EncodesMany indices (shape: ShapeCode, input: List(Evidence), rest: List(Evidence))
+    EncodesManyEmpty : EncodesMany(shape, Cons(BeginListEvidence(), rest), rest)
+    EncodesManyItem : (item :erased Encodes(shape, item_evidence, prior_evidence)) -> (prior :erased EncodesMany(shape, prior_evidence, rest)) -> EncodesMany(shape, item_evidence, rest)
+
+  ## A successful decoding existentially exposes the evidence prefix consumed
+  ## for one Pattern and proves that the untouched suffix reconstructs the
+  ## original evidence stream. This is the proof-producing boundary between
+  ## the unindexed VM representation and total, shape-indexed extraction.
+  type EvidenceDecoding indices (shape: ShapeCode, input: List(Evidence))
+    EvidenceDecoded : (rest: List(Evidence)) -> (value: Sem(shape)) -> (encoding :erased Encodes(shape, input, rest)) -> EvidenceDecoding(shape, input)
+
+  fn decode_atomic_evidence({shape: ShapeCode}, pattern: Pattern(shape), evidence: List(Evidence)) -> Option(EvidenceDecoding(shape, evidence)) = match pattern
+    PatternEmpty() -> match evidence
+      [UnitEvidence() | rest] -> Some(EvidenceDecoded(rest, (), EncodesUnit()))
+      _ -> None()
+    PatternPredicate(_) -> match evidence
+      [CharacterEvidence(char) | rest] -> Some(EvidenceDecoded(rest, char, EncodesCharacter(char)))
+      _ -> None()
+    PatternGroup(_) -> match evidence
+      [StringEvidence(value) | rest] -> Some(EvidenceDecoded(rest, value, EncodesString(value)))
+      _ -> None()
+    PatternBoundary(_) -> match evidence
+      [UnitEvidence() | rest] -> Some(EvidenceDecoded(rest, (), EncodesUnit()))
+      _ -> None()
+    _ -> None()
+
+  type ManyEvidenceDecoding indices (shape: ShapeCode, input: List(Evidence))
+    ManyEvidenceDecoded : (rest: List(Evidence)) -> (values: List(Sem(shape))) -> (encoding :erased EncodesMany(shape, input, rest)) -> ManyEvidenceDecoding(shape, input)
+
+  fn decode_many_evidence({shape: ShapeCode}, pattern: Pattern(shape), evidence: List(Evidence)) -> Option(ManyEvidenceDecoding(shape, evidence)) = with evidence
+    [] -> None()
+    [BeginListEvidence() | rest] -> Some(ManyEvidenceDecoded(rest, [], EncodesManyEmpty()))
+    [head | tail] -> decode_many_item(pattern, [head | tail], decode_pattern_encoding(pattern, [head | tail]))
+
+  fn decode_many_item({shape: ShapeCode}, pattern: Pattern(shape), evidence: List(Evidence), decoded: Option(EvidenceDecoding(shape, evidence))) -> Option(ManyEvidenceDecoding(shape, evidence)) = match decoded
+    None() -> None()
+    Some(item) -> decode_many_item_tail(pattern, item)
+
+  fn decode_many_item_tail({shape: ShapeCode}, pattern: Pattern(shape), {evidence: List(Evidence)}, decoded: EvidenceDecoding(shape, evidence)) -> Option(ManyEvidenceDecoding(shape, evidence)) = match decoded
+    EvidenceDecoded(after_item, item_value, item) -> decode_many_prior(pattern, item_value, item, decode_many_evidence(pattern, after_item))
+
+  fn decode_many_prior({shape: ShapeCode}, pattern: Pattern(shape), {evidence: List(Evidence)}, {after_item: List(Evidence)}, item_value: Sem(shape), item :erased Encodes(shape, evidence, after_item), decoded: Option(ManyEvidenceDecoding(shape, after_item))) -> Option(ManyEvidenceDecoding(shape, evidence)) = match decoded
+    None() -> None()
+    Some(ManyEvidenceDecoded(final_rest, prior_values, prior)) -> Some(ManyEvidenceDecoded(final_rest, [item_value | prior_values], EncodesManyItem(item, prior)))
+
+  fn reverse_sem_values({shape: ShapeCode}, values: List(Sem(shape))) -> List(Sem(shape)) = reverse_sem_values_into(values, [])
+  fn reverse_sem_values_into({shape: ShapeCode}, values: List(Sem(shape)), output: List(Sem(shape))) -> List(Sem(shape)) = match values
+    [] -> output
+    [head | tail] -> reverse_sem_values_into(tail, [head | output])
+
+  fn decoded_left_value({left: ShapeCode}, {right: ShapeCode}, value: Sem(left)) -> Sem(ChoiceC(left, right)) =
+    let choice = assert_type ChoseLeft(value) : Choice(Sem(left), Sem(right))
+    choice
+  fn decoded_right_value({left: ShapeCode}, {right: ShapeCode}, value: Sem(right)) -> Sem(ChoiceC(left, right)) =
+    let choice = assert_type ChoseRight(value) : Choice(Sem(left), Sem(right))
+    choice
+
+  fn decode_pattern_encoding({shape: ShapeCode}, pattern: Pattern(shape), evidence: List(Evidence)) -> Option(EvidenceDecoding(shape, evidence)) = match pattern
+    PatternEmpty() -> decode_atomic_evidence(pattern, evidence)
+    PatternPredicate(_) -> decode_atomic_evidence(pattern, evidence)
+    PatternGroup(_) -> decode_atomic_evidence(pattern, evidence)
+    PatternBoundary(_) -> decode_atomic_evidence(pattern, evidence)
+    PatternConcat(left, right) -> match evidence
+      [PairEvidence() | pair_evidence] -> match decode_pattern_encoding(right, pair_evidence)
+        None() -> None()
+        Some(EvidenceDecoded(after_right, right_value, right_proof)) -> match decode_pattern_encoding(left, after_right)
+          None() -> None()
+          Some(EvidenceDecoded(rest, left_value, left_proof)) -> Some(EvidenceDecoded(rest, %[left_value, right_value], EncodesPair(right_proof, left_proof)))
+      _ -> None()
+    PatternAlternate(left, right) -> match evidence
+      [LeftEvidence() | branch_evidence] -> match decode_pattern_encoding(left, branch_evidence)
+        None() -> None()
+        Some(EvidenceDecoded(rest, value, branch)) -> Some(EvidenceDecoded(rest, decoded_left_value(value), EncodesLeft(branch)))
+      [RightEvidence() | branch_evidence] -> match decode_pattern_encoding(right, branch_evidence)
+        None() -> None()
+        Some(EvidenceDecoded(rest, value, branch)) -> Some(EvidenceDecoded(rest, decoded_right_value(value), EncodesRight(branch)))
+      _ -> None()
+    PatternAlternateMode(left, right, _) -> match evidence
+      [LeftEvidence() | branch_evidence] -> match decode_pattern_encoding(left, branch_evidence)
+        None() -> None()
+        Some(EvidenceDecoded(rest, value, branch)) -> Some(EvidenceDecoded(rest, decoded_left_value(value), EncodesLeft(branch)))
+      [RightEvidence() | branch_evidence] -> match decode_pattern_encoding(right, branch_evidence)
+        None() -> None()
+        Some(EvidenceDecoded(rest, value, branch)) -> Some(EvidenceDecoded(rest, decoded_right_value(value), EncodesRight(branch)))
+      _ -> None()
+    PatternRepeat(inner) -> match evidence
+      [EndListEvidence() | list_evidence] -> match decode_many_evidence(inner, list_evidence)
+        None() -> None()
+        Some(ManyEvidenceDecoded(rest, values, items)) -> Some(EvidenceDecoded(rest, reverse_sem_values(values), EncodesList(items)))
+      _ -> None()
+    PatternRepeatMode(inner, _) -> match evidence
+      [EndListEvidence() | list_evidence] -> match decode_many_evidence(inner, list_evidence)
+        None() -> None()
+        Some(ManyEvidenceDecoded(rest, values, items)) -> Some(EvidenceDecoded(rest, reverse_sem_values(values), EncodesList(items)))
+      _ -> None()
+
+  fn extract_complete_encoding({shape: ShapeCode}, {evidence: List(Evidence)}, decoded: Option(EvidenceDecoding(shape, evidence))) -> Option(Sem(shape)) = match decoded
+    None() -> None()
+    Some(value) -> extract_complete_decoding(value)
+
+  fn extract_complete_decoding({shape: ShapeCode}, {evidence: List(Evidence)}, decoded: EvidenceDecoding(shape, evidence)) -> Option(Sem(shape)) = match decoded
+    EvidenceDecoded(rest, value, _) -> extract_if_no_evidence(rest, value)
+
+  fn extract_if_no_evidence({shape: ShapeCode}, rest: List(Evidence), value: Sem(shape)) -> Option(Sem(shape)) = match rest
+    [] -> Some(value)
+    _ -> None()
+
+  type CaptureFrame = CaptureFrame(String, List(Evidence))
+  type EvidenceExecution = EvidenceExecution(List(Evidence), List(CaptureFrame))
+  type ThreadState = ThreadActive(Nat) | ThreadAccepted
+  type EvidenceThread = EvidenceThread(ThreadState, List(Evidence), List(CaptureFrame))
+  type EvidencePrefix = EvidencePrefix(List(Evidence), String)
+
+  type Match(result: Type) = Match(result, String, String, String)
+
+  fn evidence_reverse_chars(input: String) -> String = evidence_reverse_chars_into(input, [])
+  fn evidence_reverse_chars_into(input: String, output: String) -> String = match input
+    [] -> output
+    [head | rest] -> evidence_reverse_chars_into(rest, [head | output])
+
+  fn record_capture_char(frames: List(CaptureFrame), char: Char) -> List(CaptureFrame) = match frames
+    [] -> []
+    [CaptureFrame(chars, saved) | rest] -> [CaptureFrame([char | chars], saved) | record_capture_char(rest, char)]
+
+  fn execute_instruction(instruction: EvidenceInstruction, evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceExecution = match instruction
+    EmitChar(char) -> EvidenceExecution([CharacterEvidence(char) | evidence], captures)
+    EmitUnit() -> EvidenceExecution([UnitEvidence() | evidence], captures)
+    EmitPair() -> EvidenceExecution([PairEvidence() | evidence], captures)
+    EmitLeft() -> EvidenceExecution([LeftEvidence() | evidence], captures)
+    EmitRight() -> EvidenceExecution([RightEvidence() | evidence], captures)
+    BeginList() -> EvidenceExecution([BeginListEvidence() | evidence], captures)
+    EndList() -> EvidenceExecution([EndListEvidence() | evidence], captures)
+    BeginCapture() -> EvidenceExecution(evidence, [CaptureFrame([], evidence) | captures])
+    EndCapture() -> match captures
+      [] -> EvidenceExecution(evidence, [])
+      [CaptureFrame(chars, saved) | rest] -> EvidenceExecution([StringEvidence(evidence_reverse_chars(chars)) | saved], rest)
+
+  fn execute_routine(routine: List(EvidenceInstruction), evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceExecution = match routine
+    [] -> EvidenceExecution(evidence, captures)
+    [instruction | rest] -> match execute_instruction(instruction, evidence, captures)
+      EvidenceExecution(next_evidence, next_captures) -> execute_routine(rest, next_evidence, next_captures)
+
+  fn initial_thread(destination: MachineState) -> EvidenceThread = match destination
+    Active(state, routine, _) -> match execute_routine(routine, [], [])
+      EvidenceExecution(evidence, captures) -> EvidenceThread(ThreadActive(state), evidence, captures)
+    Accepted(routine, _) -> match execute_routine(routine, [], [])
+      EvidenceExecution(evidence, captures) -> EvidenceThread(ThreadAccepted(), evidence, captures)
+
+  fn initial_threads(starts: List(MachineState)) -> List(EvidenceThread) = match starts
+    [] -> []
+    [head | rest] -> [initial_thread(head) | initial_threads(rest)]
+
+  fn destination_thread(destination: MachineState, evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceThread = match destination
+    Active(state, routine, _) -> match execute_routine(routine, evidence, captures)
+      EvidenceExecution(next_evidence, next_captures) -> EvidenceThread(ThreadActive(state), next_evidence, next_captures)
+    Accepted(routine, _) -> match execute_routine(routine, evidence, captures)
+      EvidenceExecution(next_evidence, next_captures) -> EvidenceThread(ThreadAccepted(), next_evidence, next_captures)
+
+  fn destination_threads(destinations: List(MachineState), evidence: List(Evidence), captures: List(CaptureFrame)) -> List(EvidenceThread) = match destinations
+    [] -> []
+    [head | rest] -> [destination_thread(head, evidence, captures) | destination_threads(rest, evidence, captures)]
+
+  fn step_evidence_thread(next: Nat -> Char -> List(MachineState), char: Char, boundary: Boundary, thread: EvidenceThread) -> List(EvidenceThread) = match thread
+    EvidenceThread(ThreadAccepted(), _, _) -> []
+    EvidenceThread(ThreadActive(state), evidence, captures) ->
+      destination_threads(filter_boundary_states(next(state)(char), boundary), evidence, record_capture_char(captures, char))
+
+  fn append_threads(left: List(EvidenceThread), right: List(EvidenceThread)) -> List(EvidenceThread) = match left
+    [] -> right
+    [head | rest] -> [head | append_threads(rest, right)]
+
+  fn step_evidence_threads(next: Nat -> Char -> List(MachineState), char: Char, boundary: Boundary, threads: List(EvidenceThread)) -> List(EvidenceThread) = match threads
+    [] -> []
+    [head | rest] -> append_threads(step_evidence_thread(next, char, boundary, head), step_evidence_threads(next, char, boundary, rest))
+
+  fn nat_same(left: Nat, right: Nat) -> Bool = match left
+    Z() -> match right
+      Z() -> true
+      S(_) -> false
+    S(left_rest) -> match right
+      Z() -> false
+      S(right_rest) -> nat_same(left_rest, right_rest)
+
+  fn same_thread_state(left: ThreadState, right: ThreadState) -> Bool = match left
+    ThreadAccepted() -> match right
+      ThreadAccepted() -> true
+      ThreadActive(_) -> false
+    ThreadActive(left_state) -> match right
+      ThreadAccepted() -> false
+      ThreadActive(right_state) -> nat_same(left_state, right_state)
+
+  fn contains_thread_state(state: ThreadState, threads: List(EvidenceThread)) -> Bool = match threads
+    [] -> false
+    [EvidenceThread(other, _, _) | rest] -> pickup
+      same_thread_state(state, other) -> true
+      else -> contains_thread_state(state, rest)
+
+  fn distinct_threads(threads: List(EvidenceThread)) -> List(EvidenceThread) = distinct_threads_seen(threads, [])
+  fn distinct_threads_seen(threads: List(EvidenceThread), seen: List(EvidenceThread)) -> List(EvidenceThread) = match threads
+    [] -> []
+    [EvidenceThread(state, evidence, captures) | rest] -> pickup
+      contains_thread_state(state, seen) -> distinct_threads_seen(rest, seen)
+      else -> [EvidenceThread(state, evidence, captures) | distinct_threads_seen(rest, [EvidenceThread(state, evidence, captures) | seen])]
+
+  fn first_accepted_evidence(threads: List(EvidenceThread)) -> Option(List(Evidence)) = match threads
+    [] -> None()
+    [EvidenceThread(ThreadAccepted(), evidence, _) | _] -> Some(evidence)
+    [_ | rest] -> first_accepted_evidence(rest)
+
+  fn run_evidence(next: Nat -> Char -> List(MachineState), input: String, threads: List(EvidenceThread)) -> Option(List(Evidence)) = match input
+    [] -> first_accepted_evidence(threads)
+    [char | rest] ->
+      let boundary = position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)
+      run_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)))
+
+  fn run_first_prefix_evidence(next: Nat -> Char -> List(MachineState), input: String, threads: List(EvidenceThread)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
+    Some(evidence) -> Some(EvidencePrefix(evidence, input))
+    None() -> match input
+      [] -> None()
+      [char | rest] ->
+        let boundary = position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)
+        run_first_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)))
+
+  fn remember_prefix(threads: List(EvidenceThread), rest: String, previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
+    Some(evidence) -> Some(EvidencePrefix(evidence, rest))
+    None() -> previous
+
+  fn run_last_prefix_evidence(next: Nat -> Char -> List(MachineState), input: String, threads: List(EvidenceThread), previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) =
+    let remembered = remember_prefix(threads, input, previous)
+    match input
+      [] -> remembered
+      [char | rest] -> match threads
+        [] -> remembered
+        _ ->
+          let boundary = position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)
+          run_last_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)), remembered)
+
+  fn pattern_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Option(List(Evidence)) = match compile_pattern(pattern)
+    PatternMachine(_count, starts, next) ->
+      run_evidence(next, input, distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(true, true, false, false, input)))))
+
+  fn pattern_prefix_evidence_at({shape: ShapeCode}, pattern: Pattern(shape), input: String, greedy: Bool, subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool) -> Option(EvidencePrefix) = match compile_pattern(pattern)
+    PatternMachine(_count, starts, next) ->
+      let threads = distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(subject_start, line_start, previous_ascii_word, previous_unicode_word, input))))
+      pickup
+        greedy -> run_last_prefix_evidence(next, input, threads, None())
+        else -> run_first_prefix_evidence(next, input, threads)
+
+  fn pattern_prefix_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: String, greedy: Bool) -> Option(EvidencePrefix) =
+    pattern_prefix_evidence_at(pattern, input, greedy, true, true, false, false)
+
+  fn parse_pattern_full({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Option(Sem(shape)) = match pattern_evidence(pattern, input)
+    None() -> None()
+    Some(evidence) -> extract_complete_encoding(decode_pattern_encoding(pattern, evidence))
 
   ## Public typed combinator layer. `Mapped` is the semantic bridge from a
   ## structurally extracted Pattern value to the user-facing result type. It is
   ## one-way: regex parsing does not imply an unparser.
   type OneOrMore(value: Type) = OneOrMore(value, List(value))
+
+  type CharacterRange = CharacterRange(Char, Char)
+  type ClassKinds = ClassKinds(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)
+  type ClassKind = DigitKind | NotDigitKind | WordKind | NotWordKind | SpaceKind | NotSpaceKind | HorizontalKind | NotHorizontalKind | VerticalKind | NotVerticalKind
+
+  fn no_class_kinds() -> ClassKinds =
+    ClassKinds(false, false, false, false, false, false, false, false, false, false)
+
+  fn enable_class_kind(kind: ClassKind, kinds: ClassKinds) -> ClassKinds = match kinds
+    ClassKinds(d, nd, w, nw, s, ns, h, nh, v, nv) -> match kind
+      DigitKind -> ClassKinds(true, nd, w, nw, s, ns, h, nh, v, nv)
+      NotDigitKind -> ClassKinds(d, true, w, nw, s, ns, h, nh, v, nv)
+      WordKind -> ClassKinds(d, nd, true, nw, s, ns, h, nh, v, nv)
+      NotWordKind -> ClassKinds(d, nd, w, true, s, ns, h, nh, v, nv)
+      SpaceKind -> ClassKinds(d, nd, w, nw, true, ns, h, nh, v, nv)
+      NotSpaceKind -> ClassKinds(d, nd, w, nw, s, true, h, nh, v, nv)
+      HorizontalKind -> ClassKinds(d, nd, w, nw, s, ns, true, nh, v, nv)
+      NotHorizontalKind -> ClassKinds(d, nd, w, nw, s, ns, h, true, v, nv)
+      VerticalKind -> ClassKinds(d, nd, w, nw, s, ns, h, nh, true, nv)
+      NotVerticalKind -> ClassKinds(d, nd, w, nw, s, ns, h, nh, v, true)
+
+  ## Elixir-compatible literal modifiers, in `i m s x u f U` order. Repeated
+  ## letters are idempotent and modifier order is irrelevant. No accepted flag
+  ## is metadata-only: each one must affect parsing or machine execution.
+  type RegexOptions = RegexOptions(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)
+
+  fn default_options() -> RegexOptions =
+    RegexOptions(false, false, false, false, false, false, false, false)
 
   type Regex indices (result: Type)
     FromPattern : (shape: ShapeCode) -> Pattern(shape) -> Regex(Sem(shape))
@@ -185,6 +783,215 @@ mod Std.Regex
     SameAlternative : Regex(a) -> Regex(a) -> Regex(a)
     OptionalRegex : Regex(a) -> Regex(Option(a))
     OneOrMoreRegex : Regex(a) -> Regex(OneOrMore(a))
+    SimplifiedRegex : (shape: ShapeCode) -> Regex(Sem(shape)) -> Regex(Sem(Simplify(shape)))
+    OptionalPattern : Regex(a) -> Regex(Choice(a, Unit))
+    PlusPattern : Regex(a) -> Regex(List(a))
+    RepeatedPattern : Regex(a) -> Bool -> Regex(List(a))
+    OneOrMorePattern : Regex(a) -> Bool -> Regex(List(a))
+    OptionalLiteral : Regex(a) -> Bool -> Regex(Choice(a, Unit))
+    ConfiguredRegex : RegexOptions -> Regex(a) -> Regex(a)
+    StartAnchor : Bool -> Regex(Unit)
+    EndAnchor : Bool -> Regex(Unit)
+    StrictEndAnchor : Regex(Unit)
+
+  type Conversion indices (raw: Type, result: Type)
+    IdentityConversion : Conversion(value, value)
+    ApplyConversion : (raw -> result) -> Conversion(raw, result)
+    ComposedConversion : Conversion(raw, middle) -> Conversion(middle, result) -> Conversion(raw, result)
+    PairConversion : Conversion(left_raw, left_result) -> Conversion(right_raw, right_result) -> Conversion(Tuple(left_raw, right_raw), Tuple(left_result, right_result))
+    ChoiceConversion : Conversion(left_raw, left_result) -> Conversion(right_raw, right_result) -> Conversion(Choice(left_raw, right_raw), Choice(left_result, right_result))
+    ListConversion : Conversion(raw, result) -> Conversion(List(raw), List(result))
+    LeftPairConversion : Conversion(left_raw, left_result) -> Conversion(right_raw, right_result) -> Conversion(Tuple(left_raw, right_raw), left_result)
+    RightPairConversion : Conversion(left_raw, left_result) -> Conversion(right_raw, right_result) -> Conversion(Tuple(left_raw, right_raw), right_result)
+    SameChoiceConversion : Conversion(left_raw, result) -> Conversion(right_raw, result) -> Conversion(Choice(left_raw, right_raw), result)
+    OptionalConversion : Conversion(raw, result) -> Conversion(Choice(raw, Unit), Option(result))
+    OneOrMoreConversion : Conversion(raw, result) -> Conversion(Tuple(raw, List(raw)), OneOrMore(result))
+    PrependConversion : Conversion(raw, result) -> Conversion(Tuple(raw, List(raw)), List(result))
+    SimplifyConversion : (shape: ShapeCode) -> Conversion(Sem(shape), Sem(Simplify(shape)))
+
+  type RegexProgram indices (result: Type)
+    BuiltRegex : (shape: ShapeCode) -> Pattern(shape) -> Conversion(Sem(shape), result) -> RegexProgram(result)
+
+  fn execute_left_choice_conversion({left_raw: Type}, {left_result: Type}, {right_raw: Type}, {right_result: Type}, left: Conversion(left_raw, left_result), _right: Conversion(right_raw, right_result), value: left_raw) -> Choice(left_result, right_result) =
+    assert_type ChoseLeft(execute_conversion(left, value)) : Choice(left_result, right_result)
+
+  fn execute_right_choice_conversion({left_raw: Type}, {left_result: Type}, {right_raw: Type}, {right_result: Type}, _left: Conversion(left_raw, left_result), right: Conversion(right_raw, right_result), value: right_raw) -> Choice(left_result, right_result) =
+    assert_type ChoseRight(execute_conversion(right, value)) : Choice(left_result, right_result)
+
+  fn execute_conversion({raw: Type}, {result: Type}, conversion: Conversion(raw, result), value: raw) -> result = match conversion
+    IdentityConversion() -> value
+    ApplyConversion(transform) -> transform(value)
+    ComposedConversion(first, second) -> execute_conversion(second, execute_conversion(first, value))
+    PairConversion(left, right) -> %[execute_conversion(left, value.1), execute_conversion(right, value.2)]
+    ChoiceConversion(left, right) -> match value
+      ChoseLeft(left_value) -> execute_left_choice_conversion(left, right, left_value)
+      ChoseRight(right_value) -> execute_right_choice_conversion(left, right, right_value)
+    ListConversion(inner) -> execute_list_conversion(inner, value)
+    LeftPairConversion(left, _right) -> execute_conversion(left, value.1)
+    RightPairConversion(_left, right) -> execute_conversion(right, value.2)
+    SameChoiceConversion(left, right) -> match value
+      ChoseLeft(left_value) -> execute_conversion(left, left_value)
+      ChoseRight(right_value) -> execute_conversion(right, right_value)
+    OptionalConversion(inner) -> match value
+      ChoseLeft(inner_value) -> Some(execute_conversion(inner, inner_value))
+      ChoseRight(_) -> None()
+    OneOrMoreConversion(inner) -> OneOrMore(execute_conversion(inner, value.1), execute_list_conversion(inner, value.2))
+    PrependConversion(inner) -> [execute_conversion(inner, value.1) | execute_list_conversion(inner, value.2)]
+    SimplifyConversion(shape) -> simplify_value(shape, value)
+
+  fn execute_list_conversion({raw: Type}, {result: Type}, conversion: Conversion(raw, result), values: List(raw)) -> List(result) = match values
+    [] -> []
+    [head | rest] -> [execute_conversion(conversion, head) | execute_list_conversion(conversion, rest)]
+
+  fn simplify_program(shape: ShapeCode, program: RegexProgram(Sem(shape))) -> RegexProgram(Sem(Simplify(shape))) = match program
+    BuiltRegex(raw_shape, pattern, conversion) ->
+      BuiltRegex(raw_shape, pattern, ComposedConversion(conversion, SimplifyConversion(shape)))
+
+  fn simplify_compiled(shape: ShapeCode, program: Option(RegexProgram(Sem(shape)))) -> Option(RegexProgram(Sem(Simplify(shape)))) = match program
+    None() -> None()
+    Some(compiled) -> Some(simplify_program(shape, compiled))
+
+  fn sem_identity_conversion(shape: ShapeCode) -> Conversion(Sem(shape), Sem(shape)) = IdentityConversion()
+  fn string_identity_conversion() -> Conversion(String, String) = IdentityConversion()
+  fn unit_identity_conversion() -> Conversion(Unit, Unit) = IdentityConversion()
+
+  fn compile_regex({result: Type}, regex: Regex(result)) -> Option(RegexProgram(result)) = match regex
+    FromPattern(shape, pattern) -> Some(BuiltRegex(shape, pattern, sem_identity_conversion(shape)))
+    Mapped(transform, inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) -> Some(BuiltRegex(shape, pattern, ComposedConversion(convert, ApplyConversion(transform))))
+    Concatenated(left, right) -> match compile_regex(left)
+      None() -> None()
+      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        None() -> None()
+        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          Some(BuiltRegex(PairC(left_shape, right_shape), PatternConcat(left_pattern, right_pattern), PairConversion(left_convert, right_convert)))
+    Alternated(left, right) -> match compile_regex(left)
+      None() -> None()
+      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        None() -> None()
+        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          Some(BuiltRegex(ChoiceC(left_shape, right_shape), PatternAlternate(left_pattern, right_pattern), ChoiceConversion(left_convert, right_convert)))
+    Repeated(inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) -> Some(BuiltRegex(ListC(shape), PatternRepeat(pattern), ListConversion(convert)))
+    MatchedText(inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(_shape, pattern, _convert)) -> Some(BuiltRegex(StringC, PatternGroup(pattern), string_identity_conversion()))
+    KeptRight(left, right) -> match compile_regex(left)
+      None() -> None()
+      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        None() -> None()
+        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          Some(BuiltRegex(PairC(left_shape, right_shape), PatternConcat(left_pattern, right_pattern), RightPairConversion(left_convert, right_convert)))
+    KeptLeft(left, right) -> match compile_regex(left)
+      None() -> None()
+      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        None() -> None()
+        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          Some(BuiltRegex(PairC(left_shape, right_shape), PatternConcat(left_pattern, right_pattern), LeftPairConversion(left_convert, right_convert)))
+    SameAlternative(left, right) -> match compile_regex(left)
+      None() -> None()
+      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        None() -> None()
+        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          Some(BuiltRegex(ChoiceC(left_shape, right_shape), PatternAlternate(left_pattern, right_pattern), SameChoiceConversion(left_convert, right_convert)))
+    OptionalRegex(inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternate(pattern, PatternEmpty()), OptionalConversion(convert)))
+    OneOrMoreRegex(inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(PairC(shape, ListC(shape)), PatternConcat(pattern, PatternRepeat(pattern)), OneOrMoreConversion(convert)))
+    SimplifiedRegex(shape, inner) -> simplify_compiled(shape, compile_regex(inner))
+    OptionalPattern(inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternate(pattern, PatternEmpty()), ChoiceConversion(convert, unit_identity_conversion())))
+    PlusPattern(inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(PairC(shape, ListC(shape)), PatternConcat(pattern, PatternRepeat(pattern)), PrependConversion(convert)))
+    RepeatedPattern(inner, lazy) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(ListC(shape), PatternRepeatMode(pattern, lazy), ListConversion(convert)))
+    OneOrMorePattern(inner, lazy) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(PairC(shape, ListC(shape)), PatternConcat(pattern, PatternRepeatMode(pattern, lazy)), PrependConversion(convert)))
+    OptionalLiteral(inner, lazy) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternateMode(pattern, PatternEmpty(), lazy), ChoiceConversion(convert, unit_identity_conversion())))
+    ConfiguredRegex(_options, inner) -> compile_regex(inner)
+    StartAnchor(multiline) -> pickup
+      multiline -> Some(BuiltRegex(UnitC, PatternBoundary(line_start_constraint()), unit_identity_conversion()))
+      else -> Some(BuiltRegex(UnitC, PatternBoundary(subject_start_constraint()), unit_identity_conversion()))
+    EndAnchor(multiline) -> pickup
+      multiline -> Some(BuiltRegex(UnitC, PatternBoundary(line_end_constraint()), unit_identity_conversion()))
+      else -> Some(BuiltRegex(UnitC, PatternBoundary(subject_end_constraint()), unit_identity_conversion()))
+    StrictEndAnchor() -> Some(BuiltRegex(UnitC, PatternBoundary(strict_end_constraint()), unit_identity_conversion()))
+
+  fn convert_complete_extraction({shape: ShapeCode}, {result: Type}, pattern: Pattern(shape), conversion: Conversion(Sem(shape), result), evidence: List(Evidence)) -> Option(result) = match extract_complete_encoding(decode_pattern_encoding(pattern, evidence))
+    None() -> None()
+    Some(value) -> Some(execute_conversion(conversion, value))
+
+  fn parse_program_full({result: Type}, program: RegexProgram(result), input: String) -> Option(result) = match program
+    BuiltRegex(_shape, pattern, conversion) -> match pattern_evidence(pattern, input)
+      None() -> None()
+      Some(evidence) -> convert_complete_extraction(pattern, conversion, evidence)
+
+  fn parse_full({result: Type}, regex: Regex(result), input: String) -> Option(result) = match compile_regex(regex)
+    None() -> None()
+    Some(program) -> parse_program_full(program, input)
+
+  fn convert_prefix_extraction({shape: ShapeCode}, {result: Type}, pattern: Pattern(shape), conversion: Conversion(Sem(shape), result), prefix: EvidencePrefix) -> Option(Tuple(result, String)) = match prefix
+    EvidencePrefix(evidence, rest) -> match convert_complete_extraction(pattern, conversion, evidence)
+      None() -> None()
+      Some(value) -> Some(%[value, rest])
+
+  fn parse_prefix_with({result: Type}, regex: Regex(result), input: String, greedy: Bool) -> Option(Tuple(result, String)) = match compile_regex(regex)
+    None() -> None()
+    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence(pattern, input, greedy)
+      None() -> None()
+      Some(prefix) -> convert_prefix_extraction(pattern, conversion, prefix)
+
+  fn parse_prefix_at({result: Type}, regex: Regex(result), input: String, subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool) -> Option(Tuple(result, String)) = match compile_regex(regex)
+    None() -> None()
+    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence_at(pattern, input, true, subject_start, line_start, previous_ascii_word, previous_unicode_word)
+      None() -> None()
+      Some(prefix) -> convert_prefix_extraction(pattern, conversion, prefix)
+
+  fn parse_prefix({result: Type}, regex: Regex(result), input: String) -> Option(Tuple(result, String)) =
+    parse_prefix_with(regex, input, true)
+
+  fn options_firstline(options: RegexOptions) -> Bool = match options
+    RegexOptions(_, _, _, _, _, firstline, _, _) -> firstline
+
+  fn regex_firstline({result: Type}, regex: Regex(result)) -> Bool = match regex
+    ConfiguredRegex(options, _) -> options_firstline(options)
+    _ -> false
+
+  fn search({result: Type}, regex: Regex(result), input: String) -> Option(Match(result)) =
+    search_from(regex, input, [], true, true, false, false, regex_firstline(regex))
+
+  fn search_from({result: Type}, regex: Regex(result), candidate: String, reversed_prefix: String, subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool, firstline_only: Bool) -> Option(Match(result)) =
+    match parse_prefix_at(regex, candidate, subject_start, line_start, previous_ascii_word, previous_unicode_word)
+      Some(found) ->
+        let rest = found.2
+        let matched = Std.String.drop_last(candidate, Std.String.length(rest))
+        Some(Match(found.1, Std.String.reverse(reversed_prefix), matched, rest))
+      None() -> match candidate
+        [] -> None()
+        [char | rest] -> pickup
+          firstline_only and Std.Char.is_newline(char) -> None()
+          else -> search_from(regex, rest, [char | reversed_prefix], false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), firstline_only)
+
+  fn matches({result: Type}, regex: Regex(result), input: String) -> Bool = match search(regex, input)
+    Some(_) -> true
+    None() -> false
 
   fn empty() -> Regex(Unit) = FromPattern(UnitC, PatternEmpty())
 
@@ -221,6 +1028,43 @@ mod Std.Regex
 
   fn as_string({a: Type}, regex: Regex(a)) -> Regex(String) = MatchedText(regex)
 
+  fn simplified(shape: ShapeCode, regex: Regex(Sem(shape))) -> Regex(Sem(Simplify(shape))) =
+    SimplifiedRegex(shape, regex)
+
+  fn optional_pattern({a: Type}, regex: Regex(a)) -> Regex(Choice(a, Unit)) = OptionalPattern(regex)
+
+  fn plus_pattern({a: Type}, regex: Regex(a)) -> Regex(List(a)) = PlusPattern(regex)
+
+  fn repeated_pattern({a: Type}, regex: Regex(a), lazy: Bool) -> Regex(List(a)) =
+    RepeatedPattern(regex, lazy)
+
+  fn one_or_more_pattern({a: Type}, regex: Regex(a), lazy: Bool) -> Regex(List(a)) =
+    OneOrMorePattern(regex, lazy)
+
+  fn optional_literal({a: Type}, regex: Regex(a), lazy: Bool) -> Regex(Choice(a, Unit)) =
+    OptionalLiteral(regex, lazy)
+
+  fn configured({a: Type}, options: RegexOptions, regex: Regex(a)) -> Regex(a) =
+    ConfiguredRegex(options, regex)
+
+  fn start_anchor() -> Regex(Unit) = StartAnchor(false)
+
+  fn start_anchor_with_options(multiline: Bool) -> Regex(Unit) = StartAnchor(multiline)
+
+  fn end_anchor() -> Regex(Unit) = EndAnchor(false)
+
+  fn end_anchor_with_options(multiline: Bool) -> Regex(Unit) = EndAnchor(multiline)
+
+  fn strict_end_anchor() -> Regex(Unit) = StrictEndAnchor()
+
+  fn word_boundary(unicode: Bool, negated: Bool) -> Regex(Unit) = pickup
+    unicode -> pickup
+      negated -> FromPattern(UnitC, PatternBoundary(unicode_word_constraint(false)))
+      else -> FromPattern(UnitC, PatternBoundary(unicode_word_constraint(true)))
+    else -> pickup
+      negated -> FromPattern(UnitC, PatternBoundary(ascii_word_constraint(false)))
+      else -> FromPattern(UnitC, PatternBoundary(ascii_word_constraint(true)))
+
   fn always(_char: Char) -> Bool = true
 
   fn any_char() -> Regex(Char) = predicate(always)
@@ -233,11 +1077,50 @@ mod Std.Regex
 
   fn exactly(expected: Char) -> Regex(Unit) = map(predicate(exact_test(expected)), discard_char)
 
+  fn same_chars(left: String, right: String) -> Bool = match left
+    [] -> match right
+      [] -> true
+      _ -> false
+    [left_char | left_rest] -> match right
+      [] -> false
+      [right_char | right_rest] -> pickup
+        Std.Char.same(left_char, right_char) -> same_chars(left_rest, right_rest)
+        else -> false
+
+  fn caseless_same(expected: Char, actual: Char, unicode: Bool) -> Bool = pickup
+    unicode -> same_chars(Std.Char.lowercased(expected), Std.Char.lowercased(actual))
+    else -> Std.Char.same(Std.Char.ascii_lowercased(expected), Std.Char.ascii_lowercased(actual))
+
+  fn option_exact_predicate(expected: Char, caseless: Bool, unicode: Bool, actual: Char) -> Bool = pickup
+    caseless -> caseless_same(expected, actual, unicode)
+    else -> Std.Char.same(expected, actual)
+
+  fn option_exact_test(expected: Char, caseless: Bool, unicode: Bool) -> Char -> Bool =
+    fn(actual) -> option_exact_predicate(expected, caseless, unicode, actual)
+
+  fn exactly_with_options(expected: Char, caseless: Bool, unicode: Bool) -> Regex(Unit) =
+    map(predicate(option_exact_test(expected, caseless, unicode)), discard_char)
+
+  fn dot_predicate(dotall: Bool, char: Char) -> Bool = pickup
+    dotall -> true
+    Std.Char.is_newline(char) -> false
+    else -> true
+
+  fn dot_test(dotall: Bool) -> Char -> Bool = fn(char) -> dot_predicate(dotall, char)
+  fn dot_with_options(dotall: Bool) -> Regex(Char) = predicate(dot_test(dotall))
+
   fn contains_char(chars: List(Char), actual: Char) -> Bool = match chars
     [] -> false
     [head | rest] -> pickup
       Std.Char.same(head, actual) -> true
       else -> contains_char(rest, actual)
+
+  fn contains_char_with_options(chars: List(Char), actual: Char, caseless: Bool, unicode: Bool) -> Bool = match chars
+    [] -> false
+    [head | rest] -> pickup
+      caseless and caseless_same(head, actual, unicode) -> true
+      Std.Char.same(head, actual) -> true
+      else -> contains_char_with_options(rest, actual, caseless, unicode)
 
   fn set_test(chars: List(Char)) -> Char -> Bool = fn(actual) -> contains_char(chars, actual)
 
@@ -250,3 +1133,148 @@ mod Std.Regex
     fn(actual) -> range_predicate(first, last, actual)
 
   fn range(first: Char, last: Char) -> Regex(Char) = predicate(range_test(first, last))
+
+  fn in_ranges(ranges: List(CharacterRange), actual: Char) -> Bool = match ranges
+    [] -> false
+    [CharacterRange(first, last) | rest] -> pickup
+      Std.Char.between(actual, first, last) -> true
+      else -> in_ranges(rest, actual)
+
+  fn folded_range_match(first: Char, last: Char, actual: Char, unicode: Bool) -> Bool = pickup
+    Std.Char.between(actual, first, last) -> true
+    unicode -> match Std.Char.lowercased(actual)
+      [folded] -> Std.Char.between(folded, first, last)
+      _ -> false
+    else -> Std.Char.between(Std.Char.ascii_lowercased(actual), Std.Char.ascii_lowercased(first), Std.Char.ascii_lowercased(last))
+
+  fn in_ranges_with_options(ranges: List(CharacterRange), actual: Char, caseless: Bool, unicode: Bool) -> Bool = match ranges
+    [] -> false
+    [CharacterRange(first, last) | rest] -> pickup
+      caseless and folded_range_match(first, last, actual, unicode) -> true
+      Std.Char.between(actual, first, last) -> true
+      else -> in_ranges_with_options(rest, actual, caseless, unicode)
+
+  fn class_predicate(chars: List(Char), ranges: List(CharacterRange), negated: Bool, actual: Char) -> Bool =
+    let found = contains_char(chars, actual) or in_ranges(ranges, actual)
+    pickup
+      found == negated -> false
+      else -> true
+
+  fn class_test(chars: List(Char), ranges: List(CharacterRange), negated: Bool) -> Char -> Bool =
+    fn(actual) -> class_predicate(chars, ranges, negated, actual)
+
+  fn character_class(chars: List(Char), ranges: List(CharacterRange), negated: Bool) -> Regex(Char) =
+    predicate(class_test(chars, ranges, negated))
+
+  fn option_class_predicate(chars: List(Char), ranges: List(CharacterRange), negated: Bool, caseless: Bool, unicode: Bool, actual: Char) -> Bool =
+    let found = contains_char_with_options(chars, actual, caseless, unicode) or in_ranges_with_options(ranges, actual, caseless, unicode)
+    pickup
+      found == negated -> false
+      else -> true
+
+  fn option_class_test(chars: List(Char), ranges: List(CharacterRange), negated: Bool, caseless: Bool, unicode: Bool) -> Char -> Bool =
+    fn(actual) -> option_class_predicate(chars, ranges, negated, caseless, unicode, actual)
+
+  fn character_class_with_options(chars: List(Char), ranges: List(CharacterRange), negated: Bool, caseless: Bool, unicode: Bool) -> Regex(Char) =
+    predicate(option_class_test(chars, ranges, negated, caseless, unicode))
+
+  fn class_kinds_match(kinds: ClassKinds, actual: Char, unicode: Bool) -> Bool = match kinds
+    ClassKinds(digit, not_digit, word, not_word, space, not_space, horizontal, not_horizontal, vertical, not_vertical) ->
+      (digit and option_digit(actual, unicode)) or
+        (not_digit and not option_digit(actual, unicode)) or
+        (word and option_word(actual, unicode)) or
+        (not_word and not option_word(actual, unicode)) or
+        (space and option_space(actual, unicode)) or
+        (not_space and not option_space(actual, unicode)) or
+        (horizontal and Std.Char.is_horizontal_space(actual)) or
+        (not_horizontal and not Std.Char.is_horizontal_space(actual)) or
+        (vertical and Std.Char.is_vertical_space(actual)) or
+        (not_vertical and not Std.Char.is_vertical_space(actual))
+
+  fn extended_class_predicate(chars: List(Char), ranges: List(CharacterRange), kinds: ClassKinds, negated: Bool, caseless: Bool, unicode: Bool, actual: Char) -> Bool =
+    let found =
+      contains_char_with_options(chars, actual, caseless, unicode) or
+        in_ranges_with_options(ranges, actual, caseless, unicode) or
+        class_kinds_match(kinds, actual, unicode)
+    found != negated
+
+  fn extended_class_test(chars: List(Char), ranges: List(CharacterRange), kinds: ClassKinds, negated: Bool, caseless: Bool, unicode: Bool) -> Char -> Bool =
+    fn(actual) -> extended_class_predicate(chars, ranges, kinds, negated, caseless, unicode, actual)
+
+  fn extended_character_class(chars: List(Char), ranges: List(CharacterRange), kinds: ClassKinds, negated: Bool, caseless: Bool, unicode: Bool) -> Regex(Char) =
+    predicate(extended_class_test(chars, ranges, kinds, negated, caseless, unicode))
+
+  fn ascii_digit(char: Char) -> Bool = Std.Char.between(char, '0', '9')
+
+  fn ascii_word(char: Char) -> Bool =
+    Std.Char.between(char, 'a', 'z') or
+      Std.Char.between(char, 'A', 'Z') or
+      Std.Char.between(char, '0', '9') or
+      Std.Char.same(char, '_')
+
+  fn ascii_space(char: Char) -> Bool =
+    Std.Char.same(char, ' ') or Std.Char.same(char, '\t') or
+      Std.Char.same(char, '\n') or Std.Char.same(char, '\r')
+
+  fn negate_test(test: Char -> Bool) -> Char -> Bool = fn(char) -> not test(char)
+
+  fn digit_class(negated: Bool) -> Regex(Char) = pickup
+    negated -> predicate(negate_test(ascii_digit))
+    else -> predicate(ascii_digit)
+
+  fn option_digit(char: Char, unicode: Bool) -> Bool = pickup
+    unicode -> Std.Char.is_unicode_digit(char)
+    else -> ascii_digit(char)
+
+  fn option_word(char: Char, unicode: Bool) -> Bool = pickup
+    unicode -> Std.Char.is_unicode_word(char)
+    else -> ascii_word(char)
+
+  fn option_space(char: Char, unicode: Bool) -> Bool = pickup
+    unicode -> Std.Char.is_unicode_space(char)
+    else -> ascii_space(char)
+
+  fn option_class_negated(test: Char -> Bool, negated: Bool, char: Char) -> Bool = pickup
+    negated -> not test(char)
+    else -> test(char)
+
+  fn digit_option_predicate(negated: Bool, unicode: Bool, char: Char) -> Bool = pickup
+    negated -> not option_digit(char, unicode)
+    else -> option_digit(char, unicode)
+
+  fn word_option_predicate(negated: Bool, unicode: Bool, char: Char) -> Bool = pickup
+    negated -> not option_word(char, unicode)
+    else -> option_word(char, unicode)
+
+  fn space_option_predicate(negated: Bool, unicode: Bool, char: Char) -> Bool = pickup
+    negated -> not option_space(char, unicode)
+    else -> option_space(char, unicode)
+
+  fn digit_options_test(negated: Bool, unicode: Bool) -> Char -> Bool = fn(char) -> digit_option_predicate(negated, unicode, char)
+  fn word_options_test(negated: Bool, unicode: Bool) -> Char -> Bool = fn(char) -> word_option_predicate(negated, unicode, char)
+  fn space_options_test(negated: Bool, unicode: Bool) -> Char -> Bool = fn(char) -> space_option_predicate(negated, unicode, char)
+
+  fn digit_class_with_options(negated: Bool, unicode: Bool) -> Regex(Char) = predicate(digit_options_test(negated, unicode))
+  fn word_class_with_options(negated: Bool, unicode: Bool) -> Regex(Char) = predicate(word_options_test(negated, unicode))
+  fn space_class_with_options(negated: Bool, unicode: Bool) -> Regex(Char) = predicate(space_options_test(negated, unicode))
+
+  fn horizontal_predicate(negated: Bool, char: Char) -> Bool = pickup
+    negated -> not Std.Char.is_horizontal_space(char)
+    else -> Std.Char.is_horizontal_space(char)
+
+  fn vertical_predicate(negated: Bool, char: Char) -> Bool = pickup
+    negated -> not Std.Char.is_vertical_space(char)
+    else -> Std.Char.is_vertical_space(char)
+
+  fn horizontal_test(negated: Bool) -> Char -> Bool = fn(char) -> horizontal_predicate(negated, char)
+  fn vertical_test(negated: Bool) -> Char -> Bool = fn(char) -> vertical_predicate(negated, char)
+  fn horizontal_class(negated: Bool) -> Regex(Char) = predicate(horizontal_test(negated))
+  fn vertical_class(negated: Bool) -> Regex(Char) = predicate(vertical_test(negated))
+
+  fn word_class(negated: Bool) -> Regex(Char) = pickup
+    negated -> predicate(negate_test(ascii_word))
+    else -> predicate(ascii_word)
+
+  fn space_class(negated: Bool) -> Regex(Char) = pickup
+    negated -> predicate(negate_test(ascii_space))
+    else -> predicate(ascii_space)

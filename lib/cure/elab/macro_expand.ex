@@ -222,12 +222,18 @@ defmodule Cure.Elab.MacroExpand do
   defp stamp_declaration_provenance(other, _source, _chain), do: other
 
   defp stamp_canonical_provenance(meta, expansion_meta, kind) when is_list(meta) do
-    stamp_canonical_provenance_from_chain(
-      meta,
-      Keyword.get(expansion_meta, :provenance, []),
-      kind,
-      Metadata.source_info(expansion_meta)
-    )
+    meta =
+      stamp_canonical_provenance_from_chain(
+        meta,
+        Keyword.get(expansion_meta, :provenance, []),
+        kind,
+        Metadata.source_info(expansion_meta)
+      )
+
+    case Keyword.get(expansion_meta, :home_source) do
+      home when is_binary(home) -> Keyword.put(meta, :macro_home_source, home)
+      _ -> meta
+    end
   end
 
   defp stamp_canonical_provenance_from_chain(meta, chain, kind, expansion_info \\ nil)
@@ -286,6 +292,13 @@ defmodule Cure.Elab.MacroExpand do
   end
 
   defp execute_after_obligations(meta, elab_ast, input_ast, env, fresh_counter) do
+    case execute_compiled_stdlib_macro(meta, elab_ast, input_ast, fresh_counter) do
+      :unavailable -> execute_after_obligations_core(meta, elab_ast, input_ast, env, fresh_counter)
+      result -> result
+    end
+  end
+
+  defp execute_after_obligations_core(meta, elab_ast, input_ast, env, fresh_counter) do
     # Definition-site (ambient) macro hygiene, as a ZERO-OVERHEAD FALLBACK. A
     # stdlib computed/family macro's expander is a global of its HOME module. If
     # the use-site has `use Std.X` (or the macro is lexical), the expander already
@@ -312,6 +325,78 @@ defmodule Cure.Elab.MacroExpand do
 
       ok ->
         ok
+    end
+  end
+
+  # A current stdlib BEAM has already passed elaboration, kernel checking,
+  # totality, and code generation. Execute that checked implementation directly
+  # at compile time instead of rebuilding its complete source interface in each
+  # fresh compiler VM. User macros and stale/unbuilt stdlib macros retain the
+  # Core evaluator path below. Expansion output still crosses the ordinary K3
+  # re-elaboration firewall, and no dispatcher or interpreter enters runtime
+  # program code.
+  defp execute_compiled_stdlib_macro(meta, {:variable, _elab_meta, name}, input_ast, fresh_counter)
+       when is_binary(name) do
+    with home when is_binary(home) <- Keyword.get(meta, :home_source),
+         true <- stdlib_macro_home?(home),
+         {:ok, module} <- declared_runtime_module(home),
+         true <- current_compiled_module?(module, home),
+         function = String.to_atom(name),
+         true <- function_exported?(module, function, 1) do
+      input =
+        input_ast
+        |> MacroSyntax.to_syntax()
+        |> MacroSyntax.with_context(Keyword.get(meta, :expansion_context))
+        |> MacroSyntax.to_runtime()
+
+      result = apply(module, function, [input])
+
+      case MacroSyntax.from_runtime_macro_result(result) do
+        {:expanded, repr} ->
+          with {:ok, ast} <- validate_expansion(repr),
+               {ast, next_counter} <- Parser.freshen_generated(ast, fresh_counter) do
+            {:ok, ast, next_counter}
+          end
+
+        {:rejected, diagnostics} ->
+          {:error,
+           {:computed_macro_error, meta,
+            {:author_diagnostics, Enum.map(diagnostics, &MacroSyntax.from_syntax/1)}}}
+
+        :not_macro_result ->
+          :unavailable
+      end
+    else
+      _ -> :unavailable
+    end
+  rescue
+    error -> {:error, {:computed_macro_error, meta, {:host_exception, error.__struct__}}}
+  end
+
+  defp execute_compiled_stdlib_macro(_meta, _elab_ast, _input_ast, _fresh_counter), do: :unavailable
+
+  defp stdlib_macro_home?(home) do
+    stdlib = Path.expand("../../std", __DIR__)
+    String.starts_with?(Path.expand(home), stdlib <> "/")
+  end
+
+  defp declared_runtime_module(home) do
+    with {:ok, source} <- File.read(home),
+         [_, declared] <- Regex.run(~r/^\s*mod\s+([A-Za-z_][\w\.]*)/m, source) do
+      {:ok, String.to_atom("Cure." <> declared)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp current_compiled_module?(module, source) do
+    with {:module, ^module} <- Code.ensure_loaded(module),
+         beam when is_list(beam) <- :code.which(module),
+         {:ok, source_stat} <- File.stat(source),
+         {:ok, beam_stat} <- File.stat(List.to_string(beam)) do
+      beam_stat.mtime >= source_stat.mtime
+    else
+      _ -> false
     end
   end
 

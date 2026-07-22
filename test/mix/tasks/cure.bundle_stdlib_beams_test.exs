@@ -112,8 +112,9 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
     # already cover end-to-end. Keeping this test module focused on
     # the pure helpers keeps it fast and isolated.
 
-    test "a later module can cross-call an @extern fn of an earlier module" do
-      # Regression: `bundle/2` compiles files in sorted order and each
+    test "dependency order wins over filename order for cross-module calls" do
+      # Regression: `bundle/2` must compile in dependency order, not filename
+      # order, and each
       # module's import resolver (`module_exports?`) probes the *loaded*
       # version of an imported module. If a freshly-compiled beam is not
       # loaded into the VM before the next module compiles, the probe hits
@@ -124,13 +125,13 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
       src = make_tmp!()
       dst = make_tmp!()
 
-      write_cure!(src, "a_helper.cure", """
+      write_cure!(src, "z_helper.cure", """
       mod Std.TcaHelper
         @extern(:erlang, :abs, 1)
         fn ext_helper(x: Int) -> Int
       """)
 
-      write_cure!(src, "b_user.cure", """
+      write_cure!(src, "a_user.cure", """
       mod Std.TcaUser
         use Std.TcaHelper
         fn use_it(x: Int) -> Int = ext_helper(x)

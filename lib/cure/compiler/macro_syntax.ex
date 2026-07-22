@@ -136,6 +136,84 @@ defmodule Cure.Compiler.MacroSyntax do
 
   def to_syntax(other), do: {:syn_raw, synlit(other)}
 
+  @doc "Convert the host reflection representation to the native constructor representation used by compiled Cure code."
+  @spec to_runtime(repr()) :: term()
+  def to_runtime({:syn_node, tag, attrs, kids}),
+    do: {:Node, tag, runtime_attrs(attrs), Enum.map(kids, &to_runtime/1)}
+
+  def to_runtime({:syn_leaf, tag, attrs, lit}),
+    do: {:Leaf, tag, runtime_attrs(attrs), synlit_to_runtime(lit)}
+
+  def to_runtime({:syn_raw, lit}), do: {:Raw, synlit_to_runtime(lit)}
+  def to_runtime({:syn_quoted, inner}), do: {:Quoted, to_runtime(inner)}
+  def to_runtime({:syn_failure, name, args}), do: {:Failure, name, Enum.map(args, &to_runtime/1)}
+
+  @doc "Decode a native compiled Cure `MacroResult` into the host reflection representation."
+  @spec from_runtime_macro_result(term()) :: {:expanded, repr()} | {:rejected, [repr()]} | :not_macro_result
+  def from_runtime_macro_result({:Expanded, syntax}), do: {:expanded, from_runtime(syntax)}
+
+  def from_runtime_macro_result({:Rejected, diagnostics}) when is_list(diagnostics),
+    do: {:rejected, Enum.map(diagnostics, &from_runtime/1)}
+
+  def from_runtime_macro_result(_other), do: :not_macro_result
+
+  @doc "Convert native compiled `Std.Syntax` constructors back to the host representation."
+  @spec from_runtime(term()) :: repr() | {:error, term()}
+  def from_runtime({:Node, tag, attrs, kids}) when is_atom(tag) and is_list(attrs) and is_list(kids),
+    do: {:syn_node, tag, runtime_attrs_from(attrs), Enum.map(kids, &from_runtime/1)}
+
+  def from_runtime({:Leaf, tag, attrs, lit}) when is_atom(tag) and is_list(attrs),
+    do: {:syn_leaf, tag, runtime_attrs_from(attrs), synlit_from_runtime(lit)}
+
+  def from_runtime({:Raw, lit}), do: {:syn_raw, synlit_from_runtime(lit)}
+  def from_runtime({:Quoted, inner}), do: {:syn_quoted, from_runtime(inner)}
+
+  def from_runtime({:Failure, name, args}) when is_atom(name) and is_list(args),
+    do: {:syn_failure, name, Enum.map(args, &from_runtime/1)}
+
+  def from_runtime(other), do: {:error, {:invalid_runtime_syntax, other}}
+
+  defp runtime_attrs(attrs), do: Enum.map(attrs, fn {key, value} -> {:KV, key, synlit_to_runtime(value)} end)
+
+  defp runtime_attrs_from(attrs) do
+    Enum.map(attrs, fn
+      {:KV, key, value} when is_atom(key) -> {key, synlit_from_runtime(value)}
+      other -> {:invalid_runtime_attr, {:s_str, inspect(other)}}
+    end)
+  end
+
+  defp synlit_to_runtime({:s_int, value}), do: {:SInt, value}
+  defp synlit_to_runtime({:s_char, value}), do: {:SChar, value}
+  defp synlit_to_runtime({:s_float, value}), do: {:SFloat, value}
+  defp synlit_to_runtime({:s_str, value}) when is_binary(value), do: {:SStr, String.to_charlist(value)}
+  defp synlit_to_runtime({:s_bool, value}), do: {:SBool, value}
+  defp synlit_to_runtime({:s_atom, value}), do: {:SAtom, value}
+  defp synlit_to_runtime({:s_list, values}), do: {:SList, Enum.map(values, &synlit_to_runtime/1)}
+  defp synlit_to_runtime({:s_syntax, value}), do: {:SSyntax, to_runtime(value)}
+
+  defp synlit_to_runtime({:s_map, pairs}),
+    do: {:SMap, Enum.map(pairs, fn {key, value} -> {:SPair, synlit_to_runtime(key), synlit_to_runtime(value)} end)}
+
+  defp synlit_to_runtime(:s_opaque), do: :SOpaque
+
+  defp synlit_from_runtime({:SInt, value}), do: {:s_int, value}
+  defp synlit_from_runtime({:SChar, value}), do: {:s_char, value}
+  defp synlit_from_runtime({:SFloat, value}), do: {:s_float, value}
+  defp synlit_from_runtime({:SStr, value}) when is_list(value), do: {:s_str, List.to_string(value)}
+  defp synlit_from_runtime({:SStr, value}) when is_binary(value), do: {:s_str, value}
+  defp synlit_from_runtime({:SBool, value}), do: {:s_bool, value}
+  defp synlit_from_runtime({:SAtom, value}), do: {:s_atom, value}
+  defp synlit_from_runtime({:SList, values}), do: {:s_list, Enum.map(values, &synlit_from_runtime/1)}
+  defp synlit_from_runtime({:SSyntax, value}), do: {:s_syntax, from_runtime(value)}
+
+  defp synlit_from_runtime({:SMap, pairs}) do
+    {:s_map,
+     Enum.map(pairs, fn {:SPair, key, value} -> {synlit_from_runtime(key), synlit_from_runtime(value)} end)}
+  end
+
+  defp synlit_from_runtime(:SOpaque), do: :s_opaque
+  defp synlit_from_runtime(other), do: {:s_str, inspect(other)}
+
   # -- quote lowering: quoted form -> Std.Syntax builder surface AST ----------
 
   @doc """

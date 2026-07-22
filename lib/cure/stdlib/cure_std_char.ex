@@ -90,4 +90,14 @@ defmodule :cure_std_char do
   @doc "Whether a code point belongs to PCRE's Unicode whitespace class."
   def unicode_space?(cp) when cp in [9, 10, 11, 12, 13, 0x85], do: true
   def unicode_space?(cp) when is_integer(cp), do: Unicode.category(cp) in [:Zs, :Zl, :Zp]
+
+  @doc "Whether a code point belongs to PCRE's horizontal-whitespace class."
+  def horizontal_space?(cp) when is_integer(cp) do
+    cp in [0x0009, 0x0020, 0x00A0, 0x1680, 0x180E, 0x202F, 0x205F, 0x3000] or
+      cp in 0x2000..0x200A
+  end
+
+  @doc "Whether a code point belongs to PCRE's vertical-whitespace class."
+  def vertical_space?(cp) when is_integer(cp),
+    do: cp in [0x000A, 0x000B, 0x000C, 0x000D, 0x0085, 0x2028, 0x2029]
 end
