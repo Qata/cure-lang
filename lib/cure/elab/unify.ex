@@ -226,7 +226,10 @@ defmodule Cure.Elab.Unify do
   end
 
   defp contains_term?(term, target) when term == target, do: true
-  defp contains_term?(term, target) when is_tuple(term), do: term |> Tuple.to_list() |> Enum.any?(&contains_term?(&1, target))
+
+  defp contains_term?(term, target) when is_tuple(term),
+    do: term |> Tuple.to_list() |> Enum.any?(&contains_term?(&1, target))
+
   defp contains_term?(term, target) when is_list(term), do: Enum.any?(term, &contains_term?(&1, target))
   defp contains_term?(_term, _target), do: false
 
@@ -235,19 +238,15 @@ defmodule Cure.Elab.Unify do
   defp abstract_exact_term({:var, _} = variable, _target, _depth), do: variable
 
   defp abstract_exact_term({:pi, grade, domain, codomain}, target, depth),
-    do:
-      {:pi, grade, abstract_exact_term(domain, target, depth),
-       abstract_exact_term(codomain, target, depth + 1)}
+    do: {:pi, grade, abstract_exact_term(domain, target, depth), abstract_exact_term(codomain, target, depth + 1)}
 
   defp abstract_exact_term({:lam, grade, domain, body}, target, depth),
-    do:
-      {:lam, grade, abstract_exact_term(domain, target, depth),
-       abstract_exact_term(body, target, depth + 1)}
+    do: {:lam, grade, abstract_exact_term(domain, target, depth), abstract_exact_term(body, target, depth + 1)}
 
   defp abstract_exact_term({:let, grade, type, value, body}, target, depth),
     do:
-      {:let, grade, abstract_exact_term(type, target, depth),
-       abstract_exact_term(value, target, depth), abstract_exact_term(body, target, depth + 1)}
+      {:let, grade, abstract_exact_term(type, target, depth), abstract_exact_term(value, target, depth),
+       abstract_exact_term(body, target, depth + 1)}
 
   defp abstract_exact_term({:app, function, argument}, target, depth),
     do: {:app, abstract_exact_term(function, target, depth), abstract_exact_term(argument, target, depth)}
@@ -389,7 +388,7 @@ defmodule Cure.Elab.Unify do
   # ever tried. So on a congruence failure, fall back to deciding the WHOLE applications by
   # δ/ι-convertibility (sound: `conv?` is the trusted decision, and only meta-free terms qualify).
   defp do_unify_struct({:app, f1, x1} = t1, {:app, f2, x2} = t2, ctx, sig, depth) do
-    case (with {:ok, ctx} <- unify_d(f1, f2, ctx, sig, depth), do: unify_d(x1, x2, ctx, sig, depth)) do
+    case with {:ok, ctx} <- unify_d(f1, f2, ctx, sig, depth), do: unify_d(x1, x2, ctx, sig, depth) do
       {:ok, _} = ok ->
         ok
 

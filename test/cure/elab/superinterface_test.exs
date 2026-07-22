@@ -16,6 +16,7 @@ defmodule Cure.Elab.SuperinterfaceTest do
         fn big(a: Color) -> Bool = True()
     end
     """
+
     # `head_key` (Tasks 1.1/1.2) keys the coherence head on the module-qualified
     # type name, so `Color` in `mod M` keys as `:"M#Color"`. Both anon instances
     # key identically, which is why the success path (test below) resolves.
@@ -38,6 +39,7 @@ defmodule Cure.Elab.SuperinterfaceTest do
         fn big(a: Color) -> Bool = True()
     end
     """
+
     assert {:ok, _env} = Program.elaborate(src)
   end
 
@@ -59,6 +61,7 @@ defmodule Cure.Elab.SuperinterfaceTest do
         fn small(a: Color) -> Bool = True()
     end
     """
+
     assert {:ok, _env} = Program.elaborate(src)
   end
 end

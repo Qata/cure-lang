@@ -47,6 +47,7 @@ defmodule Cure.Stdlib.OtpSubjectTest do
       """
 
       {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
+
       # run/0 performs the effects and returns the received Option(Cmd). Inc() -> :Inc; Cure Option is lowercase: Some(x) -> {:some, x}.
       assert apply(mod, :run, []) == {:some, :Inc}
     end

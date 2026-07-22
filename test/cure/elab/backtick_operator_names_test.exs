@@ -10,6 +10,7 @@ defmodule Cure.Elab.BacktickOperatorNamesTest do
       fn use_it(x: Int) -> Int = `+`(x, x)
     end
     """
+
     assert {:ok, _env} = Program.elaborate(src)
   end
 end

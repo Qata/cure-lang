@@ -67,10 +67,7 @@ defmodule Antigen.UnifyInjectivitySymmetryAntibodyTest do
 
   # Nat + the identity family `Eqv` with a reflexivity constructor `refl`.
   defp eqv_sig,
-    do:
-      elaborate!(
-        "mod E\n  type Nat = Z | S(Nat)\n  type Eqv indices (a: Nat, b: Nat)\n    refl : Eqv(x, x)\nend\n"
-      )
+    do: elaborate!("mod E\n  type Nat = Z | S(Nat)\n  type Eqv indices (a: Nat, b: Nat)\n    refl : Eqv(x, x)\nend\n")
 
   # A context with one outer Nat var (`a`) in scope.
   defp ctx1(sig),

@@ -590,7 +590,8 @@ defmodule Cure.Compiler.IncrementalTest do
     Application.put_env(:cure, :stdlib_source_dir, src)
 
     on_exit(fn ->
-      if prior, do: Application.put_env(:cure, :stdlib_source_dir, prior),
+      if prior,
+        do: Application.put_env(:cure, :stdlib_source_dir, prior),
         else: Application.delete_env(:cure, :stdlib_source_dir)
     end)
 

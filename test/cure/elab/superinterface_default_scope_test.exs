@@ -21,6 +21,7 @@ defmodule Cure.Elab.SuperinterfaceDefaultScopeTest do
         fn big(a: Color) -> Bool = True()
     end
     """
+
     assert {:ok, _env} = Program.elaborate(src)
   end
 end

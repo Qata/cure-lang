@@ -74,15 +74,12 @@ defmodule Antigen.GuardedLambdaSizeChangeAntibodyTest do
   # + y lambda shifts +1:      var0=y, var1=g, var2=e, var3=f, var4=m
   defp total_body do
     inner_lam =
-      {:lam, g(), dec(),
-       {:app, {:app, {:global, :bind}, {:app, {:var, 1}, {:var, 0}}}, {:var, 3}}}
+      {:lam, g(), dec(), {:app, {:app, {:global, :bind}, {:app, {:var, 1}, {:var, 0}}}, {:var, 3}}}
 
     bind_branch = {:ctor, :Bind, [{:var, 1}, inner_lam]}
 
     {:lam, g(), dec(),
-     {:lam, g(), dec(),
-      {:case, {:var, 1}, motive(),
-       [{:Pure, 1, pure_branch()}, {:Bind, 2, bind_branch}]}}}
+     {:lam, g(), dec(), {:case, {:var, 1}, motive(), [{:Pure, 1, pure_branch()}, {:Bind, 2, bind_branch}]}}}
   end
 
   # --- CONTROL: Bind(e,g) -> Bind(e, fn(y) -> bind(Bind(e,g), f)) ------------
@@ -90,15 +87,12 @@ defmodule Antigen.GuardedLambdaSizeChangeAntibodyTest do
   # returned continuation calls bind on the identical Bind(e,g) forever.
   defp diverging_body do
     div_inner_lam =
-      {:lam, g(), dec(),
-       {:app, {:app, {:global, :bind}, {:ctor, :Bind, [{:var, 2}, {:var, 1}]}}, {:var, 3}}}
+      {:lam, g(), dec(), {:app, {:app, {:global, :bind}, {:ctor, :Bind, [{:var, 2}, {:var, 1}]}}, {:var, 3}}}
 
     div_bind_branch = {:ctor, :Bind, [{:var, 1}, div_inner_lam]}
 
     {:lam, g(), dec(),
-     {:lam, g(), dec(),
-      {:case, {:var, 1}, motive(),
-       [{:Pure, 1, pure_branch()}, {:Bind, 2, div_bind_branch}]}}}
+     {:lam, g(), dec(), {:case, {:var, 1}, motive(), [{:Pure, 1, pure_branch()}, {:Bind, 2, div_bind_branch}]}}}
   end
 
   test "REACH: total guarded-lambda bind certifies" do

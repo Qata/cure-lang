@@ -102,6 +102,7 @@ defmodule Cure.Core.Conv do
 
   defp conv_struct?({:vctor, _, _} = c, {:vint, n}, depth, sig),
     do: conv_struct?(c, Eval.int_to_ctor({:vint, n}), depth, sig)
+
   defp conv_struct?({:vfloat_type}, {:vfloat_type}, _depth, _sig), do: true
   defp conv_struct?({:vbinary_type}, {:vbinary_type}, _depth, _sig), do: true
   defp conv_struct?({:vatom_type}, {:vatom_type}, _depth, _sig), do: true

@@ -46,6 +46,7 @@ defmodule Cure.Elab.PositivitySolverTest do
 
   test "IsPositive(S(n)) is discharged by the untagged successor lemma via positivity" do
     assert {:ok, env} = Program.elaborate(@successor)
+
     assert :ok = Program.check_codegen_ready(env),
            "the successor positivity rule must fill the hole so codegen is ready"
   end

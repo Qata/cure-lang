@@ -107,26 +107,26 @@ defmodule Cure.Stdlib.CharStringBehaviorTest do
                expected_space = cp in [9, 10, 11, 12, 13, 0x85] or category in [:Zs, :Zl, :Zp]
 
                char(:same, [cp, cp]) and
-                 char(:is_ascii, [cp]) == (cp <= 0x7F) and
+                 char(:is_ascii, [cp]) == cp <= 0x7F and
                  ascii_value == if(cp <= 0x7F, do: {:some, cp}, else: :none) and
-                 char(:less_than, [cp, 0x10FFFF]) == (cp < 0x10FFFF) and
+                 char(:less_than, [cp, 0x10FFFF]) == cp < 0x10FFFF and
                  char(:between, [cp, 0, 0x10FFFF]) and
                  char(:lowercased, [cp]) == :string.lowercase([cp]) and
                  char(:uppercased, [cp]) == :string.uppercase([cp]) and
-                 char(:is_letter, [cp]) == (:alphabetic in properties) and
-                 char(:is_punctuation, [cp]) == (category in [:Pc, :Pd, :Pe, :Pf, :Pi, :Po, :Ps]) and
-                 char(:is_newline, [cp]) == (cp in [10, 11, 12, 13, 0x85, 0x2028, 0x2029]) and
+                 char(:is_letter, [cp]) == :alphabetic in properties and
+                 char(:is_punctuation, [cp]) == category in [:Pc, :Pd, :Pe, :Pf, :Pi, :Po, :Ps] and
+                 char(:is_newline, [cp]) == cp in [10, 11, 12, 13, 0x85, 0x2028, 0x2029] and
                  char(:is_whitespace, [cp]) == expected_space and
-                 char(:is_symbol, [cp]) == (category in [:Sc, :Sk, :Sm, :So]) and
-                 char(:is_math_symbol, [cp]) == (:math in properties) and
+                 char(:is_symbol, [cp]) == category in [:Sc, :Sk, :Sm, :So] and
+                 char(:is_math_symbol, [cp]) == :math in properties and
                  char(:is_currency_symbol, [cp]) == (category == :Sc) and
-                 char(:is_cased, [cp]) == (:cased in properties) and
-                 char(:is_uppercase, [cp]) == (:uppercase in properties) and
-                 char(:is_lowercase, [cp]) == (:lowercase in properties) and
-                 char(:is_number, [cp]) == (category in [:Nd, :Nl, :No]) and
+                 char(:is_cased, [cp]) == :cased in properties and
+                 char(:is_uppercase, [cp]) == :uppercase in properties and
+                 char(:is_lowercase, [cp]) == :lowercase in properties and
+                 char(:is_number, [cp]) == category in [:Nd, :Nl, :No] and
                  char(:is_whole_number, [cp]) == match?({:some, _}, whole_value) and
-                 char(:is_hex_digit, [cp]) == (:hex_digit in properties) and
-                 match?({:some, value} when value in 0..15, hex_value) == (:hex_digit in properties)
+                 char(:is_hex_digit, [cp]) == :hex_digit in properties and
+                 match?({:some, value} when value in 0..15, hex_value) == :hex_digit in properties
              end)
   end
 

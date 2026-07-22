@@ -118,6 +118,7 @@ defmodule Cure.Elab.ProofSearchTest do
       fn cyc_step({n: Nat}, prev: Cyc(n)) -> Cyc(n) = MkCyc(prev)
     end
     """
+
     {:ok, env} = Cure.Elab.Program.elaborate(source)
 
     cyc_family = Cure.Core.Env.resolve_key(env, env.families, :Cyc)
