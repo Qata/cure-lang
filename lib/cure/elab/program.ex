@@ -2715,7 +2715,7 @@ defmodule Cure.Elab.Program do
     do: declaration_role_span(items, name, :erases_decorator, :erasure_annotation)
 
   defp trusted_declaration_span({:non_strictly_positive, constructor}, items),
-    do: constructor_role_span(items, constructor)
+    do: positivity_source_context(items, constructor)
 
   defp trusted_declaration_span(
          {:erased_used_relevantly, %{def: name, binder: binder}},
@@ -2803,6 +2803,106 @@ defmodule Cure.Elab.Program do
 
   defp ast_role_span(_ast, _role), do: nil
 
+  defp positivity_source_context(items, qualified_constructor) do
+    constructor = qualified_constructor |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {:container, container_meta, variants} when is_list(container_meta) and is_list(variants) ->
+        family = container_meta |> Keyword.get(:name) |> to_string()
+
+        Enum.find_value(variants, fn
+          {:function_def, ctor_meta, _body} when is_list(ctor_meta) ->
+            if to_string(Keyword.get(ctor_meta, :name)) == constructor do
+              constructor_span = ast_role_span({:function_def, ctor_meta, []}, :name)
+
+              negative_spans =
+                ctor_meta
+                |> Keyword.get(:params, [])
+                |> Enum.flat_map(&negative_recursive_spans(&1, family))
+                |> Enum.uniq()
+
+              {span, precise?} =
+                case negative_spans do
+                  [span] -> {span, true}
+                  _ -> {constructor_span, false}
+                end
+
+              if span do
+                %{
+                  span: span,
+                  constructor_span: constructor_span,
+                  family_name: family,
+                  checking: qualified_constructor,
+                  expression_category: :constructor_declaration,
+                  precise_occurrence: precise?
+                }
+              end
+            end
+
+          _ ->
+            nil
+        end)
+
+      _ ->
+        nil
+    end)
+  end
+
+  # Cure's strict-positivity rule rejects every recursive occurrence in a
+  # function domain, including occurrences nested further inside that domain.
+  # Continue through the codomain because it may itself contain another arrow.
+  # Other surface type constructors are covariant here, so search their children
+  # for nested arrows without marking ordinary recursive arguments as negative.
+  defp negative_recursive_spans(
+         {:function_call, meta, args},
+         family
+       )
+       when is_list(meta) and is_list(args) do
+    if Keyword.get(meta, :function_type, false) do
+      {domains, codomain} = Enum.split(args, max(length(args) - 1, 0))
+
+      Enum.flat_map(domains, &recursive_type_spans(&1, family)) ++
+        Enum.flat_map(codomain, &negative_recursive_spans(&1, family))
+    else
+      Enum.flat_map(args, &negative_recursive_spans(&1, family))
+    end
+  end
+
+  defp negative_recursive_spans({_tag, _meta, children}, family),
+    do: negative_recursive_spans(children, family)
+
+  defp negative_recursive_spans(list, family) when is_list(list),
+    do: Enum.flat_map(list, &negative_recursive_spans(&1, family))
+
+  defp negative_recursive_spans(tuple, family) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.flat_map(&negative_recursive_spans(&1, family))
+  end
+
+  defp negative_recursive_spans(_other, _family), do: []
+
+  defp recursive_type_spans({:variable, meta, family}, family) when is_list(meta) do
+    case ast_role_span({:variable, meta, family}, :name) do
+      %Cure.Diagnostic.Span{} = span -> [span]
+      _ -> []
+    end
+  end
+
+  defp recursive_type_spans({_tag, _meta, children}, family),
+    do: recursive_type_spans(children, family)
+
+  defp recursive_type_spans(list, family) when is_list(list),
+    do: Enum.flat_map(list, &recursive_type_spans(&1, family))
+
+  defp recursive_type_spans(tuple, family) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.flat_map(&recursive_type_spans(&1, family))
+  end
+
+  defp recursive_type_spans(_other, _family), do: []
+
   defp declaration_role_span(items, qualified_name, role, category) do
     bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
 
@@ -2831,43 +2931,6 @@ defmodule Cure.Elab.Program do
     do: Map.get(info, role)
 
   defp source_role_span(_info, _role), do: nil
-
-  defp constructor_role_span(items, constructor) do
-    spelling = constructor |> to_string() |> String.split("#") |> List.last()
-
-    Enum.find_value(items, fn
-      {:container, _meta, variants} when is_list(variants) ->
-        Enum.find_value(variants, fn
-          {:function_def, meta, _} when is_list(meta) ->
-            if to_string(Keyword.get(meta, :name)) == spelling do
-              case Cure.MetaAST.Metadata.source_info(meta) do
-                %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} ->
-                  {span, constructor, :constructor_declaration}
-
-                _ ->
-                  nil
-              end
-            end
-
-          {:variable, meta, name} when is_list(meta) ->
-            if to_string(name) == spelling do
-              case Cure.MetaAST.Metadata.source_info(meta) do
-                %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} ->
-                  {span, constructor, :constructor_declaration}
-
-                _ ->
-                  nil
-              end
-            end
-
-          _ ->
-            nil
-        end)
-
-      _ ->
-        nil
-    end)
-  end
 
   defp expand_where_declarations(items) when is_list(items) do
     {expanded, _counter} =
