@@ -8621,52 +8621,74 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
     state = skip_newlines(state)
 
-    {fields, state} = parse_precedencegroup_body(state, name, name_token)
+    {fields, field_spans, source_fields, state} = parse_precedencegroup_body(state, name, name_token)
     meta = [name: name, line: kw.line, col: kw.col] ++ fields
-    meta = put_container_source_info(meta, kw, name_token, name_token, state)
+
+    meta =
+      Metadata.put_source_info(meta, %SourceInfo{
+        whole: through_spans(kw.span, List.last(field_spans) || name_token.span) || kw.span,
+        opener: kw.span,
+        name: name_token.span,
+        branches: field_spans,
+        fields: source_fields
+      })
+
     {{:precedencegroup, meta, []}, state}
   end
 
   defp parse_precedencegroup_body(state, group, group_token) do
     case peek(state) do
-      %Token{type: :indent} -> collect_precedencegroup_fields(advance(state), [], group, group_token)
-      _ -> {[], state}
+      %Token{type: :indent} -> collect_precedencegroup_fields(advance(state), [], [], %{}, group, group_token)
+      _ -> {[], [], %{}, state}
     end
   end
 
-  defp collect_precedencegroup_fields(state, acc, group, group_token) do
+  defp collect_precedencegroup_fields(state, acc, span_acc, source_fields, group, group_token) do
     state = skip_newlines(state)
 
     case peek(state) do
       %Token{type: :dedent} ->
-        {Enum.reverse(acc), advance(state)}
+        {Enum.reverse(acc), Enum.reverse(span_acc), source_fields, advance(state)}
 
       %Token{type: :eof} ->
-        {Enum.reverse(acc), state}
+        {Enum.reverse(acc), Enum.reverse(span_acc), source_fields, state}
 
       %Token{type: :identifier, value: field} ->
         field_token = peek(state)
-        state = expect_precedencegroup_field_colon(advance(state), field_token, group, group_token)
-        {value, state} = parse_precedencegroup_value(field, state)
+        {state, colon_token} = expect_precedencegroup_field_colon(advance(state), field_token, group, group_token)
+        {value, value_span, state} = parse_precedencegroup_value(field, state)
 
-        acc =
+        field_span =
+          through_spans(field_token.span, value_span || (colon_token && colon_token.span) || field_token.span)
+
+        {acc, span_acc, source_fields} =
           case precedencegroup_field_key(field) do
-            nil -> acc
-            key -> [{key, value} | acc]
+            nil ->
+              {acc, [field_span | span_acc], source_fields}
+
+            key ->
+              fields =
+                source_fields
+                |> Map.put({key, :whole}, field_span)
+                |> Map.put({key, :name}, field_token.span)
+                |> maybe_put_source_field({key, :separator}, colon_token)
+                |> maybe_put_source_field({key, :value}, value_span)
+
+              {[{key, value} | acc], [field_span | span_acc], fields}
           end
 
-        collect_precedencegroup_fields(state, acc, group, group_token)
+        collect_precedencegroup_fields(state, acc, span_acc, source_fields, group, group_token)
 
       _ ->
         # Unrecognised line: skip to the block's end rather than loop.
-        {Enum.reverse(acc), skip_to_dedent(state)}
+        {Enum.reverse(acc), Enum.reverse(span_acc), source_fields, skip_to_dedent(state)}
     end
   end
 
   defp expect_precedencegroup_field_colon(state, field_token, group, group_token) do
     case expect_token(state, :colon) do
-      {:ok, _colon, next_state} ->
-        next_state
+      {:ok, colon, next_state} ->
+        {next_state, colon}
 
       {:error, next_state} ->
         [_generic | rest] = next_state.errors
@@ -8689,7 +8711,7 @@ defmodule Cure.Compiler.Parser do
              column: observed.col
            }}
 
-        %{next_state | errors: [error | rest]}
+        {%{next_state | errors: [error | rest]}, nil}
     end
   end
 
@@ -8700,25 +8722,25 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_precedencegroup_value("associativity", state) do
     case peek(state) do
-      %Token{type: :identifier, value: v} -> {String.to_atom(v), advance(state)}
-      _ -> {nil, state}
+      %Token{type: :identifier, value: v} = token -> {String.to_atom(v), token.span, advance(state)}
+      _ -> {nil, nil, state}
     end
   end
 
-  defp parse_precedencegroup_value(_field, state), do: collect_group_names(state, [])
+  defp parse_precedencegroup_value(_field, state), do: collect_group_names(state, [], nil, nil)
 
   # Collect group-name identifiers on the current line, tolerating `[ ]` and `,`.
   # Stops at the first non-name, non-delimiter token (newline/dedent/eof).
-  defp collect_group_names(state, acc) do
+  defp collect_group_names(state, acc, first_span, last_span) do
     case peek(state) do
-      %Token{type: :identifier, value: v} ->
-        collect_group_names(advance(state), [String.to_atom(v) | acc])
+      %Token{type: :identifier, value: v} = token ->
+        collect_group_names(advance(state), [String.to_atom(v) | acc], first_span || token.span, token.span)
 
-      %Token{type: t} when t in [:comma, :lbracket, :rbracket] ->
-        collect_group_names(advance(state), acc)
+      %Token{type: t} = token when t in [:comma, :lbracket, :rbracket] ->
+        collect_group_names(advance(state), acc, first_span || token.span, token.span)
 
       _ ->
-        {Enum.reverse(acc), state}
+        {Enum.reverse(acc), through_spans(first_span, last_span) || first_span || last_span, state}
     end
   end
 
@@ -8783,22 +8805,6 @@ defmodule Cure.Compiler.Parser do
 
     ast = {:container, meta, fields}
     {ast, state}
-  end
-
-  defp put_container_source_info(meta, %Token{} = first, %Token{} = name_start, %Token{} = name_end, state) do
-    case {first.span, name_start.span, name_end.span, authored_token(state)} do
-      {%Cure.Diagnostic.Span{} = first_span, %Cure.Diagnostic.Span{} = name_start_span,
-       %Cure.Diagnostic.Span{} = name_end_span, %Token{span: %Cure.Diagnostic.Span{} = last_span}} ->
-        with {:ok, whole} <- Range.through(first_span, last_span),
-             {:ok, name} <- Range.through(name_start_span, name_end_span) do
-          Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name})
-        else
-          _ -> meta
-        end
-
-      _ ->
-        meta
-    end
   end
 
   defp parse_record_fields(state, record) do

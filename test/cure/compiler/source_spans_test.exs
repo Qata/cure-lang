@@ -429,12 +429,41 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, Map.fetch!(import_info.fields, :alias_keyword)) == "as"
     assert slice(source, Map.fetch!(import_info.fields, :alias)) == "L"
     assert slice(source, group_info.whole) == "precedencegroup additive"
+    assert slice(source, group_info.opener) == "precedencegroup"
     assert slice(source, group_info.name) == "additive"
     assert slice(source, fixity_info.whole) == "infix <+> : additive"
     assert slice(source, fixity_info.opener) == "infix"
     assert slice(source, fixity_info.operator) == "<+>"
     assert slice(source, Map.fetch!(fixity_info.fields, :separator)) == ":"
     assert slice(source, fixity_info.name) == "additive"
+  end
+
+  test "precedence groups own each field name, separator, value, and whole range" do
+    source =
+      "precedencegroup comparison\n" <>
+        "  associativity: left\n" <>
+        "  higher_than: [addition, relation]\n" <>
+        "  lower_than: composition\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "precedence.cure", emit_events: false)
+
+    assert {:ok, {:precedencegroup, meta, []}} =
+             Parser.parse(tokens, file: "precedence.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == String.trim_trailing(source)
+
+    assert Enum.map(info.branches, &slice(source, &1)) == [
+             "associativity: left",
+             "higher_than: [addition, relation]",
+             "lower_than: composition"
+           ]
+
+    assert slice(source, Map.fetch!(info.fields, {:assoc, :name})) == "associativity"
+    assert slice(source, Map.fetch!(info.fields, {:assoc, :separator})) == ":"
+    assert slice(source, Map.fetch!(info.fields, {:assoc, :value})) == "left"
+    assert slice(source, Map.fetch!(info.fields, {:higher_than, :value})) == "[addition, relation]"
+    assert slice(source, Map.fetch!(info.fields, {:lower_than, :whole})) == "lower_than: composition"
   end
 
   test "selective imports retain their exact path, selection, alias, and whole ranges" do
