@@ -7511,7 +7511,21 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         observed = peek(state)
-        error = {:expected, :fn, :got, observed.type, observed.line, observed.col, observed.span}
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :local_function_keyword_missing,
+             expected: :fn,
+             observed: macro_separator_observed(observed),
+             token_type: observed.type,
+             span: observed.span,
+             opener_span: token.span,
+             previous_span: token.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
         state = add_error(state, error)
         {error_node(token), state}
     end

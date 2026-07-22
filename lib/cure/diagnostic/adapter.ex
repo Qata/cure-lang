@@ -5278,6 +5278,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :macro_explain_point_invalid}),
     do: "Macro explanation point is invalid"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :local_function_keyword_missing}),
+    do: "Local function needs `fn`"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "Explanation clause arrow is missing"
 
@@ -5853,6 +5856,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :macro_explain_point_invalid, observed: observed}),
     do:
       "#{authored_syntax(observed)} cannot name a macro failure point. Use a failure category such as `Duration`, or `keyword \"every\"` for a literal token."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :local_function_keyword_missing}),
+    do: "A private function declaration must put `fn` between `local` and the function name."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "An explanation clause needs `=>` between its failure point and message."
@@ -6495,6 +6501,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :macro_explain_point_invalid}),
     do: "name the failure point before `=>`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :local_function_keyword_missing}),
+    do: "insert `fn` before this function name"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "insert `=>` before this explanation message"
@@ -7453,6 +7462,13 @@ defmodule Cure.Diagnostic.Adapter do
        )
        when previous != primary_span,
        do: [%Label{span: previous, style: :secondary, message: "this is the record field name"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :local_function_keyword_missing, opener: %Span{} = opener},
+         primary_span
+       )
+       when opener != primary_span,
+       do: [%Label{span: opener, style: :secondary, message: "this starts a private declaration"}]
 
   defp syntax_secondary_labels(
          %SyntaxProblem{
@@ -8491,6 +8507,30 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Insert `(` before the type indices",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: "("}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :local_function_keyword_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline] do
+    [
+      %Suggestion{
+        message: "Insert `fn` before the local function name",
+        applicability: :machine_applicable,
+        edits: [
+          %TextEdit{
+            span: %{
+              span
+              | end_byte: span.start_byte,
+                end_line: span.start_line,
+                end_column: span.start_column
+            },
+            replacement: "fn "
+          }
+        ]
       }
     ]
   end
