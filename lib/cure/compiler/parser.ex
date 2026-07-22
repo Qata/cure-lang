@@ -612,7 +612,9 @@ defmodule Cure.Compiler.Parser do
   defp expand_literal_rule(rule, num, state) do
     [{:hole, %{name: hole_name}} | rest] = rule.segments
 
-    case match_segments(state, rest, %{hole_name => num}, 1) do
+    bindings = put_macro_binding(%{}, hole_name, num)
+
+    case match_segments(state, rest, bindings, 1) do
       {:ok, bindings, _progress, state} ->
         {expanded, state} = expand_rule(rule, bindings, state)
 
@@ -621,7 +623,7 @@ defmodule Cure.Compiler.Parser do
             Map.get(rule, :suffix, "literal"),
             first_node_source_span(num),
             Map.get(rule, :source_span),
-            state
+            macro_match_span(bindings)
           )
 
         {append_macro_provenance(expanded, frame), state}
@@ -652,7 +654,7 @@ defmodule Cure.Compiler.Parser do
             keyword,
             keyword_token.span,
             Map.get(rule, :source_span),
-            state
+            macro_match_span(bindings)
           )
 
         {append_macro_provenance(expanded, frame), state}
@@ -736,7 +738,7 @@ defmodule Cure.Compiler.Parser do
           col: keyword_token.col
         ]
 
-        meta = put_computed_use_source_info(meta, keyword_token, rule, state)
+        meta = put_computed_use_source_info(meta, keyword_token, rule, bindings)
 
         meta =
           case computed_use_obligations(rule, bindings) do
@@ -958,11 +960,15 @@ defmodule Cure.Compiler.Parser do
   # the next token's value; a `{:hole, %{name}}` binds `name` to a parsed
   # expression. Returns `{:ok, bindings, progress, state}` or
   # `{:error, progress, state}` (progress = segments consumed before the miss).
+  @macro_match_span_key :__cure_macro_match_span__
+
   defp match_segments(state, [], bindings, progress), do: {:ok, bindings, progress, state}
 
   defp match_segments(state, [{:lit, w} | rest], bindings, progress) do
-    if lit_token_matches?(peek(state), w) do
-      match_segments(advance(state), rest, bindings, progress + 1)
+    token = peek(state)
+
+    if lit_token_matches?(token, w) do
+      match_segments(advance(state), rest, advance_macro_match(bindings, token.span), progress + 1)
     else
       {:error, progress, state}
     end
@@ -970,15 +976,18 @@ defmodule Cure.Compiler.Parser do
 
   defp match_segments(state, [{:hole, %{name: name, kind: "Type"}} | rest], bindings, progress) do
     {arg, state} = parse_type_expr(state)
-    match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
+    match_segments(state, rest, put_macro_binding(bindings, name, arg), progress + 1)
   end
 
   defp match_segments(state, [{:hole, %{name: name, kind: "ModuleName"}} | rest], bindings, progress) do
     case peek(state) do
       %Token{type: :identifier} ->
-        {module_name, state} = parse_dotted_name(state)
-        module = {:literal, [subtype: :symbol], String.to_atom(module_name)}
-        match_segments(state, rest, Map.put(bindings, name, module), progress + 1)
+        module_start = peek(state)
+        {module_name, module_end, state} = parse_dotted_name_owned(state)
+        module_span = through_spans(module_start.span, module_end.span) || module_start.span
+        module_meta = Metadata.put_source_info([subtype: :symbol], %SourceInfo{whole: module_span})
+        module = {:literal, module_meta, String.to_atom(module_name)}
+        match_segments(state, rest, put_macro_binding(bindings, name, module), progress + 1)
 
       _ ->
         {:error, progress, state}
@@ -989,7 +998,7 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :identifier} = token ->
         name_ast = variable(token)
-        match_segments(advance(state), rest, Map.put(bindings, name, name_ast), progress + 1)
+        match_segments(advance(state), rest, put_macro_binding(bindings, name, name_ast), progress + 1)
 
       _ ->
         {:error, progress, state}
@@ -1001,14 +1010,14 @@ defmodule Cure.Compiler.Parser do
   # typed, graded, implicit, and multiple binders without a bespoke parser.
   defp match_segments(state, [{:hole, %{name: name, kind: "Parameters"}} | rest], bindings, progress) do
     {params, state} = parse_typed_params(state)
-    match_segments(state, rest, Map.put(bindings, name, params), progress + 1)
+    match_segments(state, rest, put_macro_binding(bindings, name, params), progress + 1)
   end
 
   defp match_segments(state, [{:hole, %{name: name, kind: kind}} | rest], bindings, progress)
        when kind in ["Int", "Float", "Atom", "Bool"] do
     {arg, state} = parse_expr(state, 0)
     state = validate_primitive_capture(arg, kind, state)
-    match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
+    match_segments(state, rest, put_macro_binding(bindings, name, arg), progress + 1)
   end
 
   # Code holes may introduce an indented expression block after their marker
@@ -1017,7 +1026,7 @@ defmodule Cure.Compiler.Parser do
   defp match_segments(state, [{:hole, %{name: name, kind: "Code"}} | rest], bindings, progress) do
     state = skip_newlines(state)
     {arg, state} = parse_expr(state, 0)
-    match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
+    match_segments(state, rest, put_macro_binding(bindings, name, arg), progress + 1)
   end
 
   # A delimiter-aware Code hole is still parsed by the ordinary expression
@@ -1031,7 +1040,7 @@ defmodule Cure.Compiler.Parser do
        ) do
     case parse_code_until(state, delimiter) do
       {:ok, arg, state} ->
-        match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
+        match_segments(state, rest, put_macro_binding(bindings, name, arg), progress + 1)
     end
   end
 
@@ -1058,7 +1067,7 @@ defmodule Cure.Compiler.Parser do
         token = peek(scan_state)
         {stmts, after_state} = parse_definition_block(scan_state)
         node = {:declarations_block, [line: token.line, col: token.col], stmts}
-        match_segments(after_state, rest, Map.put(bindings, name, node), progress + 1)
+        match_segments(after_state, rest, put_macro_binding(bindings, name, node), progress + 1)
 
       _ ->
         {:error, progress, state}
@@ -1067,7 +1076,7 @@ defmodule Cure.Compiler.Parser do
 
   defp match_segments(state, [{:hole, %{name: name}} | rest], bindings, progress) do
     {arg, state} = parse_expr(state, 0)
-    match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
+    match_segments(state, rest, put_macro_binding(bindings, name, arg), progress + 1)
   end
 
   # A structured family consumes the indented body as one grammar unit. The
@@ -1100,7 +1109,7 @@ defmodule Cure.Compiler.Parser do
                   fresh_counter: parsed_state.fresh_counter
               }
 
-              match_segments(state, rest, Map.put(bindings, family_meta.name, family_value), progress + 1)
+              match_segments(state, rest, put_macro_binding(bindings, family_meta.name, family_value), progress + 1)
             else
               {:error, progress, state}
             end
@@ -1132,7 +1141,7 @@ defmodule Cure.Compiler.Parser do
         raw_meta = [line: raw_line(captured, state), delimiter: delimiter]
         raw_meta = if hole_meta[:delayed], do: Keyword.put(raw_meta, :delayed, true), else: raw_meta
         raw = {:raw_tokens, raw_meta, captured}
-        match_segments(state, rest, Map.put(bindings, name, raw), progress + 1)
+        match_segments(state, rest, put_macro_binding(bindings, name, raw), progress + 1)
 
       {:error, {:missing_raw_delimiter, "dedent"}} ->
         # A top-level built-in macro may end at EOF without an indentation
@@ -1143,7 +1152,7 @@ defmodule Cure.Compiler.Parser do
         raw_meta = [line: raw_line(captured, state), delimiter: delimiter]
         raw_meta = if hole_meta[:delayed], do: Keyword.put(raw_meta, :delayed, true), else: raw_meta
         raw = {:raw_tokens, raw_meta, captured}
-        match_segments(state, rest, Map.put(bindings, name, raw), progress + 1)
+        match_segments(state, rest, put_macro_binding(bindings, name, raw), progress + 1)
 
       {:error, _} ->
         {:error, progress, state}
@@ -1151,8 +1160,9 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp match_segments(state, [{:repeat, segment} | rest], bindings, progress) do
-    {values, state} = match_repeated_segment(state, segment, bindings, [])
+    {values, state, repeated_span} = match_repeated_segment(state, segment, bindings, [], nil)
     bindings = put_repeated_binding(bindings, segment, values)
+    bindings = advance_macro_match(bindings, repeated_span)
     match_segments(state, rest, bindings, progress + 1)
   end
 
@@ -1191,29 +1201,76 @@ defmodule Cure.Compiler.Parser do
 
   defp optional_group_present?(_state, []), do: false
 
-  defp match_repeated_segment(state, {:hole, %{name: name}}, bindings, acc) do
+  defp match_repeated_segment(state, {:hole, %{name: name}}, bindings, acc, last_span) do
     case peek(state) do
       %Token{type: type} when type in [:newline, :dedent, :eof] ->
-        {Enum.reverse(acc), state}
+        {Enum.reverse(acc), state, last_span}
 
       _ ->
         {arg, state} = parse_expr(state, 0)
-        match_repeated_segment(state, {:hole, %{name: name}}, bindings, [arg | acc])
+        match_repeated_segment(state, {:hole, %{name: name}}, bindings, [arg | acc], macro_value_span(arg) || last_span)
     end
   end
 
-  defp match_repeated_segment(state, {:lit, word}, _bindings, acc) do
-    if lit_token_matches?(peek(state), word) do
-      match_repeated_segment(advance(state), {:lit, word}, %{}, [word | acc])
+  defp match_repeated_segment(state, {:lit, word}, _bindings, acc, last_span) do
+    token = peek(state)
+
+    if lit_token_matches?(token, word) do
+      match_repeated_segment(advance(state), {:lit, word}, %{}, [word | acc], token.span)
     else
-      {Enum.reverse(acc), state}
+      {Enum.reverse(acc), state, last_span}
     end
   end
 
-  defp match_repeated_segment(state, _segment, _bindings, acc), do: {Enum.reverse(acc), state}
+  defp match_repeated_segment(state, _segment, _bindings, acc, last_span),
+    do: {Enum.reverse(acc), state, last_span}
 
   defp put_repeated_binding(bindings, {:hole, %{name: name}}, values), do: Map.put(bindings, name, values)
   defp put_repeated_binding(bindings, _segment, _values), do: bindings
+
+  defp put_macro_binding(bindings, name, value) do
+    bindings
+    |> Map.put(name, value)
+    |> advance_macro_match(macro_value_span(value))
+  end
+
+  defp advance_macro_match(bindings, nil), do: bindings
+
+  defp advance_macro_match(bindings, %Cure.Diagnostic.Span{} = span) do
+    case Map.get(bindings, @macro_match_span_key) do
+      %Cure.Diagnostic.Span{end_byte: end_byte} when end_byte >= span.end_byte -> bindings
+      _ -> Map.put(bindings, @macro_match_span_key, span)
+    end
+  end
+
+  defp macro_match_span(bindings), do: Map.get(bindings, @macro_match_span_key)
+
+  defp macro_value_span({:raw_tokens, _meta, tokens}) when is_list(tokens), do: token_list_span(tokens)
+
+  defp macro_value_span({:declarations_block, _meta, declarations}) when is_list(declarations),
+    do: source_values_span(declarations)
+
+  defp macro_value_span(value) when is_list(value), do: source_values_span(value)
+
+  defp macro_value_span(%Cure.Diagnostic.Span{} = span), do: span
+
+  defp macro_value_span(value) when is_map(value) do
+    value
+    |> Map.values()
+    |> source_values_span()
+  end
+
+  defp macro_value_span(value), do: ast_source_span(value)
+
+  defp source_values_span(values) do
+    spans = values |> Enum.map(&macro_value_span/1) |> Enum.reject(&is_nil/1)
+    through_spans(List.first(spans), List.last(spans)) || List.last(spans)
+  end
+
+  defp token_list_span(tokens) do
+    spans = tokens |> Enum.map(& &1.span) |> Enum.reject(&is_nil/1)
+    through_spans(List.first(spans), List.last(spans)) || List.last(spans)
+  end
 
   defp capture_family_body(state) do
     remaining = tokens_from(state, state.pos)
@@ -1797,13 +1854,13 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp put_computed_use_source_info(meta, %Token{} = keyword_token, rule, state) do
+  defp put_computed_use_source_info(meta, %Token{} = keyword_token, rule, bindings) do
     frame =
       macro_expansion_frame(
         Map.get(rule, :keyword, keyword_token.value),
         keyword_token.span,
         Map.get(rule, :source_span),
-        state
+        macro_match_span(bindings)
       )
 
     case frame.invocation do
@@ -1819,18 +1876,8 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp macro_expansion_frame(name, %Cure.Diagnostic.Span{} = first, definition, state) do
-    invocation =
-      case authored_token(state) do
-        %Token{span: %Cure.Diagnostic.Span{} = last} ->
-          case Range.through(first, last) do
-            {:ok, span} -> span
-            _ -> first
-          end
-
-        _ ->
-          first
-      end
+  defp macro_expansion_frame(name, %Cure.Diagnostic.Span{} = first, definition, last_span) do
+    invocation = through_spans(first, last_span) || first
 
     %ProvenanceFrame{
       kind: :macro_expansion,
@@ -1840,7 +1887,7 @@ defmodule Cure.Compiler.Parser do
     }
   end
 
-  defp macro_expansion_frame(name, _first, definition, _state) do
+  defp macro_expansion_frame(name, _first, definition, _last_span) do
     %ProvenanceFrame{kind: :macro_expansion, name: name || "macro", definition: definition}
   end
 
