@@ -182,6 +182,80 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:rejected, [^repr]} = MacroSyntax.from_core_macro_result(error)
   end
 
+  test "Core-to-syntax decoding returns every malformed-value verdict without raising" do
+    nil_list = {:ctor, :Nil, []}
+    list = fn value -> {:ctor, :Cons, [value, nil_list]} end
+    raw = fn literal -> {:ctor, :Raw, [literal]} end
+
+    cases = [
+      {{:ctor, :Node, [{:atom_lit, :block}, :bad_attributes, :bad_children]}, :invalid_syntax_node},
+      {{:ctor, :Leaf, [{:atom_lit, :literal}, nil_list, :bad_literal]}, :invalid_syntax_leaf},
+      {{:ctor, :Failure, [{:atom_lit, :rejected}, :bad_arguments]}, :invalid_syntax_failure},
+      {{:ctor, :Node, :bad_arguments}, :unsupported_syntax_core},
+      {{:data, :Bad, :bad_parameters, :bad_indices}, :unsupported_syntax_core},
+      {raw.({:ctor, :SList, [:bad_list]}), :invalid_syntax_list},
+      {raw.({:ctor, :SStr, [:bad_string]}), :invalid_syntax_string},
+      {raw.({:ctor, :NotALiteral, []}), :invalid_syntax_literal},
+      {raw.({:ctor, :SMap, [list.(:bad_pair)]}), :invalid_syntax_pair}
+    ]
+
+    Enum.each(cases, fn {core, expected_kind} ->
+      assert {:error, reason} = MacroSyntax.from_core(core)
+      actual_kind = if is_tuple(reason), do: elem(reason, 0), else: reason
+      assert actual_kind == expected_kind
+    end)
+  end
+
+  test "every Core-to-syntax decoder branch has dedicated diagnostic content" do
+    cases = [
+      {{:invalid_syntax_node, :attrs}, "Generated syntax node is malformed",
+       "A reflected `Node` must contain an atom tag, an attribute list, and a list of syntax children.",
+       "Construct `Node(tag, attributes, children)` with valid values"},
+      {{:invalid_syntax_leaf, :literal}, "Generated syntax leaf is malformed",
+       "The `literal` reflected `Leaf` does not contain a valid attribute list and syntax literal.",
+       "Construct `Leaf(tag, attributes, literal)` with valid values"},
+      {{:invalid_syntax_failure, :rejected}, "Macro failure value is malformed",
+       "The `rejected` failure does not contain a valid list of reflected syntax arguments.",
+       "Construct `Failure(name, arguments)` with valid syntax arguments"},
+      {{:unsupported_syntax_core, :core}, "Macro returned a non-syntax value",
+       "The computed macro returned a Core value that is not a `Std.Syntax` constructor.",
+       "Return `Node`, `Leaf`, `Raw`, `Quoted`, or `Failure` from the macro"},
+      {{:invalid_syntax_attrs, :core}, "Generated syntax attributes are malformed",
+       "Syntax attributes must be a `Std.List` of atom-keyed `KV` entries.",
+       "Use `KV(atom_key, syntax_literal)` for every attribute"},
+      {:invalid_syntax_attr, "Generated syntax attribute is malformed",
+       "A syntax attribute must be an atom-keyed `KV` entry containing a valid syntax literal.",
+       "Use `KV(atom_key, syntax_literal)`"},
+      {:invalid_syntax_list, "Generated syntax list is malformed",
+       "A reflected syntax list must use the `Std.List` `Nil` and `Cons` constructors.",
+       "Construct a proper `Std.List` value"},
+      {:invalid_syntax_string, "Generated syntax string is malformed",
+       "A reflected syntax string must contain a proper list of bounded character literals.",
+       "Construct `SStr` from valid character values"},
+      {:invalid_syntax_literal, "Generated syntax literal is malformed",
+       "This value is not one of the supported `Std.Syntax` literal constructors.",
+       "Use `SInt`, `SFloat`, `SStr`, `SBool`, `SAtom`, `SList`, `SSyntax`, `SMap`, or `SOpaque`"},
+      {:invalid_syntax_pair, "Generated syntax-map pair is malformed",
+       "Every entry in an `SMap` must be an `SPair` containing two valid syntax literals.",
+       "Use `SPair(key, value)` inside `SMap`"}
+    ]
+
+    Enum.each(cases, fn {reason, title, body, hint} ->
+      {diagnostic, registry} = Errors.to_diagnostic(reason, "decode.cure", "")
+      output = Renderer.plain(diagnostic, registry, width: 80)
+
+      assert diagnostic.code == "E092"
+      assert diagnostic.key == :macro_syntax_decode
+      assert diagnostic.title == title
+      assert String.replace(output, ~r/\s+/, " ") =~ String.replace(body, ~r/\s+/, " ")
+      assert output =~ "Hint: " <> hint
+
+      lsp = Renderer.lsp(diagnostic, registry)
+      refute Map.has_key?(lsp, "range")
+      assert lsp["message"] == title <> "\n\n" <> body
+    end)
+  end
+
   test "expansion validation rejects reflection-only raw and quoted values" do
     assert {:error, {:raw_syntax_in_expansion, []}} =
              MacroSyntax.validate_expansion({:syn_raw, {:s_int, 1}})

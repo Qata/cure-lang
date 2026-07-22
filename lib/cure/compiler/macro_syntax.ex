@@ -1068,7 +1068,7 @@ defmodule Cure.Compiler.MacroSyntax do
 
   defp canonical_ctor(name), do: Cure.Elab.Name.qualify("Std.Syntax", name)
 
-  defp canonicalize_core({:ctor, name, args}) do
+  defp canonicalize_core({:ctor, name, args}) when is_atom(name) and is_list(args) do
     base = Cure.Elab.Name.base(name) |> String.to_atom()
     canonical_name = if syntax_ctor?(base), do: canonical_ctor(base), else: name
     {:ctor, canonical_name, Enum.map(args, &canonicalize_core/1)}
@@ -1078,7 +1078,7 @@ defmodule Cure.Compiler.MacroSyntax do
   defp canonicalize_core({:lam, g, d, b}), do: {:lam, g, canonicalize_core(d), canonicalize_core(b)}
   defp canonicalize_core({:pi, g, d, c}), do: {:pi, g, canonicalize_core(d), canonicalize_core(c)}
 
-  defp canonicalize_core({:data, n, ps, is}),
+  defp canonicalize_core({:data, n, ps, is}) when is_list(ps) and is_list(is),
     do: {:data, n, Enum.map(ps, &canonicalize_core/1), Enum.map(is, &canonicalize_core/1)}
 
   defp canonicalize_core(other), do: other
