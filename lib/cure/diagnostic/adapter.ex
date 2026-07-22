@@ -1144,6 +1144,15 @@ defmodule Cure.Diagnostic.Adapter do
     unknown_name(namespace, name, Keyword.put(opts, :checking, Map.get(context, :checking)))
   end
 
+  def from_error({:no_such_interface, %{interface: interface} = details}, opts) do
+    opts =
+      opts
+      |> Keyword.put(:span, Map.get(details, :span) || Keyword.get(opts, :span))
+      |> Keyword.put(:candidates, Map.get(details, :candidates, []))
+
+    unknown_name(:interface, interface, opts)
+  end
+
   def from_error({:no_such_interface, interface}, opts),
     do: unknown_name(:interface, interface, opts)
 

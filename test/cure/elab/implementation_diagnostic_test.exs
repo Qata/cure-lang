@@ -267,6 +267,39 @@ defmodule Cure.Elab.ImplementationDiagnosticTest do
     assert {:ok, _environment} = Program.elaborate(fixed, file: "named_overlap_fixed.cure")
   end
 
+  test "an unknown interface labels its authored name and suggests an in-scope interface" do
+    source =
+      "mod M\n  interface Equatable(a)\n    fn eqs(x: a, y: a) -> Bool\n  implementation Equatble for Int\n    fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)\nend\n"
+
+    {diagnostic, registry, error} = diagnostic(source, "unknown_interface.cure")
+
+    assert {:no_such_interface, %{interface: :Equatble, span: %Cure.Diagnostic.Span{}, candidates: candidates}} =
+             Program.semantic_error(error)
+
+    assert :Equatable in candidates
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- UNKNOWN INTERFACE [E091] ----------------------------- unknown_interface.cure
+
+             `Equatble` is not available in this interface namespace.
+
+             at unknown_interface.cure:4:18
+             4 |   implementation Equatble for Int
+               |                  ^^^^^^^^ `Equatble` was not found
+
+             Hint: Did you mean `Equatable`, `Comparable`?
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert lsp["range"] == range(3, 17, 25)
+    assert lsp["relatedInformation"] == []
+    assert "Equatable" in lsp["data"]["payload"]["candidates"]
+
+    fixed = String.replace(source, "Equatble", "Equatable")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "unknown_interface_fixed.cure")
+  end
+
   defp diagnostic(source, file) do
     assert {:error, error} = Program.elaborate(source, file: file)
     {diagnostic, registry} = Errors.to_diagnostic(error, file, source)

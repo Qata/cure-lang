@@ -34,6 +34,8 @@ defmodule Cure.Elab.Implementation do
     for_name = surface_for_name(for_type, Keyword.get(meta, :for))
     as_name = Keyword.get(meta, :as)
     implementation_span = implementation_header_span(meta)
+    interface_span = implementation_interface_span(meta)
+    interface_candidates = Map.keys(env.interfaces)
 
     with {:ok, head} <- head_key(for_type, env),
          desc when not is_nil(desc) <- Env.get_interface(env, iface),
@@ -53,7 +55,13 @@ defmodule Cure.Elab.Implementation do
       {:ok, env3, mangled_fns, superinterface_obligations(iface, desc, head, for_name, implementation_span)}
     else
       nil ->
-        {:error, {:no_such_interface, iface}}
+        {:error,
+         {:no_such_interface,
+          %{
+            interface: iface,
+            span: interface_span,
+            candidates: interface_candidates
+          }}}
 
       {:error, {:instance_head_ill_formed, details}} ->
         {:error,
@@ -360,6 +368,13 @@ defmodule Cure.Elab.Implementation do
   defp implementation_type_span(meta) do
     case Cure.MetaAST.Metadata.source_info(meta) do
       %Cure.MetaAST.SourceInfo{annotation: %Cure.Diagnostic.Span{} = span} -> span
+      _source_info -> implementation_header_span(meta)
+    end
+  end
+
+  defp implementation_interface_span(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
       _source_info -> implementation_header_span(meta)
     end
   end
