@@ -12619,28 +12619,22 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
     state = advance(state)
     {expr, state} = parse_expr(state, 0)
-    meta = put_keyword_unary_source_info([line: token.line, col: token.col], token, expr, state)
+    meta = put_keyword_unary_source_info([line: token.line, col: token.col], token, expr)
     ast = {node_type, meta, [expr]}
     {ast, state}
   end
 
-  defp put_keyword_unary_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = first}, expr, state) do
-    last =
-      case ast_source_span(expr) do
-        %Cure.Diagnostic.Span{} = span -> span
-        _ -> match?(%Token{span: %Cure.Diagnostic.Span{}}, authored_token(state)) && authored_token(state).span
-      end
+  defp put_keyword_unary_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = first}, expr) do
+    body = ast_source_span(expr)
 
-    case last && Range.through(first, last) do
-      {:ok, whole} ->
-        Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: first, body: ast_source_span(expr)})
-
-      _ ->
-        meta
-    end
+    Metadata.put_source_info(meta, %SourceInfo{
+      whole: through_spans(first, body) || first,
+      name: first,
+      body: body
+    })
   end
 
-  defp put_keyword_unary_source_info(meta, _token, _expr, _state), do: meta
+  defp put_keyword_unary_source_info(meta, _token, _expr), do: meta
 
   # -- Quasiquote (SP5.1) ----------------------------------------------------
 
