@@ -246,9 +246,25 @@ defmodule Cure.Compiler.SourceSpansTest do
     enum_info = Metadata.source_info(elem(enum, 1))
 
     assert slice(source, alias_info.whole) == "typealias UserId = Int"
+    assert slice(source, alias_info.opener) == "typealias"
     assert slice(source, alias_info.name) == "UserId"
+    assert slice(source, alias_info.annotation) == "Int"
+    assert slice(source, Map.fetch!(alias_info.fields, :separator)) == "="
     assert slice(source, enum_info.whole) == "type Color = Red | Blue deriving Show"
     assert slice(source, enum_info.name) == "Color"
+  end
+
+  test "parameterized type aliases retain exact parameter and RHS ranges" do
+    source = "typealias Pair(a, b) = Tuple(a, b)\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "alias.cure", emit_events: false)
+
+    assert {:ok, {:type_annotation, meta, [_rhs]}} =
+             Parser.parse(tokens, file: "alias.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == "typealias Pair(a, b) = Tuple(a, b)"
+    assert slice(source, Map.fetch!(info.fields, :type_parameters)) == "(a, b)"
+    assert slice(source, info.annotation) == "Tuple(a, b)"
   end
 
   test "ADT variants retain exact constructor names and extents" do

@@ -8927,26 +8927,28 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    {head_params, state} =
+    {head_params, type_parameter_span, state} =
       case peek(state) do
         %Token{type: :lparen} ->
           open_token = peek(state)
           state = advance(state)
           {tp, state} = parse_typed_params(state)
 
-          {state, _close_token} =
+          {state, close_token} =
             expect_container_close(state, :rparen, :type_parameters, open_token, tp, true, %{
               declaration: name,
               declaration_kind: :typealias,
               closing_tokens: [:assign]
             })
 
-          {tp, state}
+          span = through_spans(open_token.span, close_token && close_token.span) || open_token.span
+          {tp, span, state}
 
         _ ->
-          {[], state}
+          {[], nil, state}
       end
 
+    assign_token = if match?(%Token{type: :assign}, peek(state)), do: peek(state)
     state = expect_type_declaration_assign(state, :typealias, token, name_token, name)
     state = skip_newlines(state)
     {rhs, state} = parse_type_expr(state)
@@ -8959,8 +8961,24 @@ defmodule Cure.Compiler.Parser do
     type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
     meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
     meta = if head_params != [], do: Keyword.put(meta, :params, head_params), else: meta
-    ast = {:type_annotation, meta, [rhs]}
-    {put_type_decl_source_info(ast, token, name_token, state), state}
+
+    rhs_span = ast_source_span(rhs)
+
+    source_fields =
+      %{}
+      |> maybe_put_source_field(:type_parameters, type_parameter_span)
+      |> maybe_put_source_field(:separator, assign_token)
+
+    meta =
+      Metadata.put_source_info(meta, %SourceInfo{
+        whole: through_spans(token.span, rhs_span || type_parameter_span || name_token.span) || token.span,
+        opener: token.span,
+        name: name_token.span,
+        annotation: rhs_span,
+        fields: source_fields
+      })
+
+    {{:type_annotation, meta, [rhs]}, state}
   end
 
   defp expect_type_declaration_assign(state, family, keyword_token, name_token, name) do
