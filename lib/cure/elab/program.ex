@@ -2681,6 +2681,16 @@ defmodule Cure.Elab.Program do
 
   defp contextualize_trusted_declaration_error({:error, reason} = error, items) do
     case trusted_declaration_span(reason, items) do
+      %{span: %Cure.Diagnostic.Span{}} = context ->
+        {:error,
+         {:source_context, reason,
+          Map.merge(
+            %{
+              expectation_origin: :trusted_declaration_check
+            },
+            context
+          )}}
+
       {%Cure.Diagnostic.Span{} = span, checking, category} ->
         {:error,
          {:source_context, reason,
@@ -2707,13 +2717,91 @@ defmodule Cure.Elab.Program do
   defp trusted_declaration_span({:non_strictly_positive, constructor}, items),
     do: constructor_role_span(items, constructor)
 
-  defp trusted_declaration_span({:erased_used_relevantly, %{def: name}}, items),
-    do: declaration_role_span(items, name, :body, :relevance_check)
+  defp trusted_declaration_span(
+         {:erased_used_relevantly, %{def: name, binder: binder}},
+         items
+       ) do
+    relevance_source_context(items, name, binder)
+  end
 
   defp trusted_declaration_span({:usage_violation, %{def: name}}, items),
     do: declaration_role_span(items, name, :body, :relevance_check)
 
   defp trusted_declaration_span(_reason, _items), do: nil
+
+  # Relevance checking intentionally runs over span-free Core. At this boundary the
+  # reported de Bruijn level is still the declaration-order parameter index, so we
+  # can recover the authored binder without contaminating Core with presentation
+  # metadata. We only claim an exact use range when the surface body has one
+  # unambiguous occurrence of that name; shadowing or repeated uses fall back to the
+  # honest body range instead of pointing at a possibly unrelated token.
+  defp relevance_source_context(items, qualified_name, binder) do
+    bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {:function_def, meta, [body]} when is_list(meta) ->
+        if to_string(Keyword.get(meta, :name)) == bare_name do
+          params = Keyword.get(meta, :params, [])
+          param = Enum.at(params, binder)
+          binder_name = if param, do: param_name(param)
+          binder_span = ast_role_span(param, :name)
+          body_span = ast_role_span(body, :whole) || ast_role_span({:function_def, meta, [body]}, :body)
+
+          use_span =
+            body
+            |> surface_variable_spans(binder_name)
+            |> case do
+              [span] -> span
+              _ -> body_span
+            end
+
+          if use_span do
+            %{
+              span: use_span,
+              binder_span: binder_span,
+              binder_name: binder_name,
+              checking: qualified_name,
+              expression_category: :relevance_check
+            }
+          end
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp surface_variable_spans(_ast, nil), do: []
+
+  defp surface_variable_spans({:variable, meta, name}, name) when is_list(meta) do
+    case ast_role_span({:variable, meta, name}, :name) do
+      %Cure.Diagnostic.Span{} = span -> [span]
+      _ -> []
+    end
+  end
+
+  defp surface_variable_spans({tag, _meta, children}, name) when is_atom(tag) do
+    surface_variable_spans(children, name)
+  end
+
+  defp surface_variable_spans(list, name) when is_list(list),
+    do: Enum.flat_map(list, &surface_variable_spans(&1, name))
+
+  defp surface_variable_spans(tuple, name) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.flat_map(&surface_variable_spans(&1, name))
+  end
+
+  defp surface_variable_spans(_other, _name), do: []
+
+  defp ast_role_span({_tag, meta, _children}, role) when is_list(meta) do
+    meta
+    |> Cure.MetaAST.Metadata.source_info()
+    |> source_role_span(role)
+  end
+
+  defp ast_role_span(_ast, _role), do: nil
 
   defp declaration_role_span(items, qualified_name, role, category) do
     bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()

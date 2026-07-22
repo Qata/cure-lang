@@ -422,7 +422,8 @@ defmodule Cure.Diagnostic.HostTest do
 
     relevance = Host.render({:erased_used_relevantly, %{binder: 0, site: :returned}}, "demo.cure")
     assert relevance =~ "[E104]"
-    assert relevance =~ "returned"
+    assert relevance =~ "function's runtime result"
+    refute relevance =~ "``"
   end
 
   test "renders ambiguous proof search with proof-specific context" do
