@@ -162,6 +162,51 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:overlapping_named_instance, %{name: name} = details}, opts) do
+    name = name_to_string(name)
+    first_interface = name_to_string(Map.get(details, :first_interface, "an interface"))
+    second_interface = name_to_string(Map.get(details, :interface, "an interface"))
+    first_head = name_to_string(Map.get(details, :first_for, Cure.Elab.Name.base(Map.get(details, :first_head))))
+    second_head = name_to_string(Map.get(details, :second_for, Cure.Elab.Name.base(Map.get(details, :head))))
+    primary_span = Map.get(details, :second_span) || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(details, :first_span) do
+        %Span{} = span when span != primary_span ->
+          [pickup_label(span, :secondary, "`#{name}` first names `#{first_interface}` for `#{first_head}` here")]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Implementation name is already used",
+      body:
+        Doc.paragraph(
+          "The name `#{name}` already selects `#{first_interface}` for `#{first_head}`, so it cannot also select `#{second_interface}` for `#{second_head}`. Named implementations must have distinct names wherever they are in scope."
+        ),
+      primary: pickup_label(primary_span, :primary, "this second `#{name}` conflicts with the first"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Choose a different name after `as` for one implementation",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :overlapping_named_instance,
+        name: name,
+        first_interface: first_interface,
+        first_head: first_head,
+        second_interface: second_interface,
+        second_head: second_head
+      }
+    )
+  end
+
   def from_error({:sibling_module_collision, name, owners}, opts) do
     declaration_conflict(:sibling_module_collision, %{name: name, owners: owners}, opts)
   end

@@ -15,12 +15,13 @@ defmodule Cure.Elab.Coherence do
   abstract sites.
   """
 
-  defstruct anon: %{}, named: %{}, anon_origins: %{}
+  defstruct anon: %{}, named: %{}, anon_origins: %{}, named_origins: %{}
 
   @type t :: %__MODULE__{
           anon: %{{atom(), atom()} => map()},
           named: %{atom() => map()},
-          anon_origins: %{{atom(), atom()} => map()}
+          anon_origins: %{{atom(), atom()} => map()},
+          named_origins: %{atom() => map()}
         }
 
   @doc "An empty registry."
@@ -69,11 +70,42 @@ defmodule Cure.Elab.Coherence do
   error (`iface`/`head` are carried for a descriptive message).
   """
   @spec register_named(t(), atom(), {atom(), atom()}, map()) :: {:ok, t()} | {:error, term()}
-  def register_named(%__MODULE__{named: named} = c, name, {iface, head}, ref) do
+  def register_named(%__MODULE__{} = c, name, {iface, head}, ref) do
+    register_named(c, name, {iface, head}, ref, %{})
+  end
+
+  @doc "Register a named instance while retaining inert source context for duplicate-name diagnostics."
+  @spec register_named(t(), atom(), {atom(), atom()}, map(), map()) :: {:ok, t()} | {:error, term()}
+  def register_named(
+        %__MODULE__{named: named, named_origins: origins} = c,
+        name,
+        {iface, head},
+        ref,
+        origin
+      ) do
     if Map.has_key?(named, name) do
-      {:error, {:overlapping_named_instance, name, iface, head}}
+      first = Map.get(origins, name, %{})
+
+      {:error,
+       {:overlapping_named_instance,
+        %{
+          name: name,
+          interface: iface,
+          head: head,
+          first_interface: Map.get(first, :interface),
+          first_head: Map.get(first, :head),
+          first_span: Map.get(first, :span),
+          second_span: Map.get(origin, :span),
+          first_for: Map.get(first, :for),
+          second_for: Map.get(origin, :for)
+        }}}
     else
-      {:ok, %{c | named: Map.put(named, name, ref)}}
+      {:ok,
+       %{
+         c
+         | named: Map.put(named, name, ref),
+           named_origins: Map.put(origins, name, origin)
+       }}
     end
   end
 
@@ -111,8 +143,13 @@ defmodule Cure.Elab.Coherence do
   def merge(other, nil), do: other
 
   def merge(
-        %__MODULE__{anon: a1, named: n1, anon_origins: o1},
-        %__MODULE__{anon: a2, named: n2, anon_origins: o2}
+        %__MODULE__{anon: a1, named: n1, anon_origins: o1, named_origins: no1},
+        %__MODULE__{anon: a2, named: n2, anon_origins: o2, named_origins: no2}
       ),
-      do: %__MODULE__{anon: Map.merge(a1, a2), named: Map.merge(n1, n2), anon_origins: Map.merge(o1, o2)}
+      do: %__MODULE__{
+        anon: Map.merge(a1, a2),
+        named: Map.merge(n1, n2),
+        anon_origins: Map.merge(o1, o2),
+        named_origins: Map.merge(no1, no2)
+      }
 end

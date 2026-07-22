@@ -43,6 +43,8 @@ defmodule Cure.Elab.Implementation do
          ref = %{iface: iface, head: head, methods: method_map, as: as_name},
          {:ok, env1} <-
            register_instance(env, iface, head, as_name, ref, %{
+             interface: iface,
+             head: head,
              for: for_name,
              span: implementation_span
            }),
@@ -454,7 +456,7 @@ defmodule Cure.Elab.Implementation do
     result =
       case as_name do
         nil -> Coherence.register_anon(coherence, iface, head, ref, origin)
-        name -> Coherence.register_named(coherence, String.to_atom(name), {iface, head}, ref)
+        name -> Coherence.register_named(coherence, String.to_atom(name), {iface, head}, ref, origin)
       end
 
     case result do

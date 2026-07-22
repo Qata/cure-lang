@@ -2668,8 +2668,14 @@ defmodule Cure.Elab.Program do
     # is an overlap. Named instances are exempt from uniqueness by design but their
     # names must still not collide with a different instance.
     with {:ok, anon, anon_origins} <- merge_anon_instances(left, right),
-         {:ok, named} <- merge_instances(left.named, right.named, :overlapping_named_instance) do
-      {:ok, %Coherence{anon: anon, named: named, anon_origins: anon_origins}}
+         {:ok, named, named_origins} <- merge_named_instances(left, right) do
+      {:ok,
+       %Coherence{
+         anon: anon,
+         named: named,
+         anon_origins: anon_origins,
+         named_origins: named_origins
+       }}
     end
   end
 
@@ -2703,17 +2709,37 @@ defmodule Cure.Elab.Program do
     end)
   end
 
-  defp merge_instances(left, right, error_tag) do
-    Enum.reduce_while(right, {:ok, left}, fn {key, ref}, {:ok, acc} ->
-      case Map.fetch(acc, key) do
-        {:ok, ^ref} -> {:cont, {:ok, acc}}
-        {:ok, _other} -> {:halt, {:error, overlap_error(error_tag, key)}}
-        :error -> {:cont, {:ok, Map.put(acc, key, ref)}}
+  defp merge_named_instances(%Coherence{} = left, %Coherence{} = right) do
+    Enum.reduce_while(right.named, {:ok, left.named, left.named_origins}, fn {name, ref}, {:ok, named, origins} ->
+      case Map.fetch(named, name) do
+        {:ok, ^ref} ->
+          origin = Map.get(origins, name) || Map.get(right.named_origins, name, %{})
+          {:cont, {:ok, named, Map.put(origins, name, origin)}}
+
+        {:ok, _other} ->
+          first = Map.get(origins, name, %{})
+          second = Map.get(right.named_origins, name, %{})
+
+          {:halt,
+           {:error,
+            {:overlapping_named_instance,
+             %{
+               name: name,
+               interface: Map.get(ref, :iface),
+               head: Map.get(ref, :head),
+               first_interface: Map.get(first, :interface),
+               first_head: Map.get(first, :head),
+               first_span: Map.get(first, :span),
+               second_span: Map.get(second, :span),
+               first_for: Map.get(first, :for),
+               second_for: Map.get(second, :for)
+             }}}}
+
+        :error ->
+          {:cont, {:ok, Map.put(named, name, ref), Map.put(origins, name, Map.get(right.named_origins, name, %{}))}}
       end
     end)
   end
-
-  defp overlap_error(:overlapping_named_instance, name), do: {:overlapping_named_instance, name}
 
   # Two passes so that forward references and mutual recursion resolve: first
   # every type/record is elaborated and every function *signature* is registered;

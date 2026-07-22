@@ -214,6 +214,59 @@ defmodule Cure.Elab.ImplementationDiagnosticTest do
     assert {:ok, _environment} = Program.elaborate(fixed, file: "overlap_fixed.cure")
   end
 
+  test "duplicate named implementations label both uses of the name" do
+    source =
+      "mod M\n  interface Eqs(a)\n    fn eqs(x: a, y: a) -> Bool = true\n  implementation Eqs for Int as fast\n  implementation Eqs for Bool as fast\nend\n"
+
+    {diagnostic, registry, error} = diagnostic(source, "named_overlap.cure")
+
+    assert {:overlapping_named_instance,
+            %{
+              name: :fast,
+              first_interface: :Eqs,
+              first_for: "Int",
+              second_for: "Bool",
+              first_span: %Cure.Diagnostic.Span{},
+              second_span: %Cure.Diagnostic.Span{}
+            }} = Program.semantic_error(error)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- IMPLEMENTATION NAME IS ALREADY USED [E105] --------------- named_overlap.cure
+
+             The name `fast` already selects `Eqs` for `Int`, so it cannot also select `Eqs`
+             for `Bool`. Named implementations must have distinct names wherever they are in
+             scope.
+
+             at named_overlap.cure:5:3
+             4 |   implementation Eqs for Int as fast
+               |   ---------------------------------- `fast` first names `Eqs` for `Int` here
+             5 |   implementation Eqs for Bool as fast
+               |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this second `fast` conflicts with the first
+
+             Hint: Choose a different name after `as` for one implementation
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert lsp["range"] == range(4, 2, 37)
+
+    assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+             range(3, 2, 36)
+           ]
+
+    assert lsp["data"]["payload"] == %{
+             "first_head" => "Int",
+             "first_interface" => "Eqs",
+             "kind" => "overlapping_named_instance",
+             "name" => "fast",
+             "second_head" => "Bool",
+             "second_interface" => "Eqs"
+           }
+
+    fixed = String.replace(source, "for Bool as fast", "for Bool as booleanEqs")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "named_overlap_fixed.cure")
+  end
+
   defp diagnostic(source, file) do
     assert {:error, error} = Program.elaborate(source, file: file)
     {diagnostic, registry} = Errors.to_diagnostic(error, file, source)
