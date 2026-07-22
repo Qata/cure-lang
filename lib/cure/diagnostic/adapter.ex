@@ -1342,6 +1342,19 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:invalid_check_name, name}, opts),
     do: macro_check_failure(:invalid_check_name, %{name: name}, opts)
 
+  def from_error({:invalid_protocol_name, name}, opts),
+    do: macro_protocol_failure(:invalid_protocol_name, %{name: name}, opts)
+
+  def from_error({:protocol_role_count, count}, opts),
+    do: macro_protocol_failure(:protocol_role_count, %{count: count}, opts)
+
+  def from_error({kind, role}, opts)
+      when kind in [:self_protocol_step, :unknown_choice_decider, :invalid_protocol_branches, :unprojectable_choice],
+      do: macro_protocol_failure(kind, %{role: role}, opts)
+
+  def from_error({:unknown_protocol_role, sender, receiver}, opts),
+    do: macro_protocol_failure(:unknown_protocol_role, %{sender: sender, receiver: receiver}, opts)
+
   # Some trusted checking paths can return the bare verdict after their
   # declaration wrapper has been stripped. Keep that verdict contextual rather
   # than falling through to the unhelpful generic "Elaboration failed" title.
@@ -1379,7 +1392,6 @@ defmodule Cure.Diagnostic.Adapter do
                :invalid_syntax_literal,
                :invalid_syntax_pair,
                :left_recursive_parse_production,
-               :protocol_role_count,
                :invalid_macro_segment,
                :unsupported_surface_filler,
                :missing_hole_filler,
@@ -1479,8 +1491,6 @@ defmodule Cure.Diagnostic.Adapter do
              :invalid_syntax_string,
              :invalid_syntax_literal,
              :invalid_syntax_pair,
-             :invalid_protocol_role,
-             :duplicate_protocol_role,
              :duplicate_reducer_constructor,
              :not_a_nat,
              :invalid_lift_module_ast,
@@ -1502,6 +1512,20 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error(kind, opts) when kind in [:invalid_check_property, :duplicate_check_property],
     do: macro_check_failure(kind, %{}, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :invalid_protocol_roles,
+             :invalid_protocol_role,
+             :duplicate_protocol_role,
+             :invalid_protocol_steps,
+             :invalid_protocol_step,
+             :invalid_protocol_message,
+             :invalid_protocol_options,
+             :invalid_protocol_choices,
+             :invalid_protocol_choice
+           ],
+      do: macro_protocol_failure(kind, %{}, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -5028,6 +5052,115 @@ defmodule Cure.Diagnostic.Adapter do
       payload: Map.put(details, :kind, kind)
     )
   end
+
+  defp macro_protocol_failure(kind, details, opts) do
+    {title, message, label, hint} = macro_protocol_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_protocol_validation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp macro_protocol_content(:invalid_protocol_name, %{name: name}),
+    do:
+      {"Protocol name is invalid",
+       "A protocol name must be an atom or text, but this definition uses `#{name_to_string(name)}`.",
+       "replace this protocol name", "Use a stable protocol name such as `Provisioning`"}
+
+  defp macro_protocol_content(:invalid_protocol_roles, _details),
+    do:
+      {"Protocol roles are malformed",
+       "A protocol's roles must be written as a list containing its two endpoint names.", "rewrite this role list",
+       "Provide exactly two distinct atom role names"}
+
+  defp macro_protocol_content(:protocol_role_count, %{count: count}) do
+    noun = if count == 1, do: "role", else: "roles"
+
+    {"Protocol needs exactly two roles",
+     "This two-party protocol declares #{count} #{noun}, but it must declare exactly two.",
+     "make this a two-party protocol", "Keep exactly two distinct role names"}
+  end
+
+  defp macro_protocol_content(:invalid_protocol_role, _details),
+    do:
+      {"Protocol role name is invalid",
+       "Every protocol role must be an atom so generated endpoint names remain stable.", "replace this role name",
+       "Use atom role names such as `client` and `server`"}
+
+  defp macro_protocol_content(:duplicate_protocol_role, _details),
+    do:
+      {"Protocol role is repeated",
+       "Both endpoints have the same role name, so sends and receives cannot identify opposite parties.",
+       "rename one protocol role", "Give the two endpoints distinct role names"}
+
+  defp macro_protocol_content(:invalid_protocol_steps, _details),
+    do:
+      {"Protocol steps are malformed", "A protocol's message flow must be a list of ordered send steps.",
+       "rewrite this step list", "Provide a list of steps with `sender`, `receiver`, and `message`"}
+
+  defp macro_protocol_content(:invalid_protocol_step, _details),
+    do:
+      {"Protocol step is malformed", "Every protocol step needs both a sender and a receiver from this protocol.",
+       "rewrite this protocol step", "Provide `sender`, `receiver`, and `message` for this step"}
+
+  defp macro_protocol_content(:unknown_protocol_role, %{sender: sender, receiver: receiver}),
+    do:
+      {"Protocol step uses an unknown role",
+       "The step from `#{name_to_string(sender)}` to `#{name_to_string(receiver)}` names an endpoint outside this protocol.",
+       "use the declared protocol roles", "Choose both endpoints from the protocol's two declared roles"}
+
+  defp macro_protocol_content(:self_protocol_step, %{role: role}),
+    do:
+      {"Protocol step sends to itself",
+       "The `#{name_to_string(role)}` endpoint is both sender and receiver in this step.",
+       "choose the opposite receiver", "Send each message from one role to the other"}
+
+  defp macro_protocol_content(:invalid_protocol_message, _details),
+    do:
+      {"Protocol message is missing", "This step has no message for its sender to transmit to its receiver.",
+       "add this step's message", "Add a message declaration to this protocol step"}
+
+  defp macro_protocol_content(:invalid_protocol_options, _details),
+    do:
+      {"Protocol options are malformed",
+       "Protocol options must be a keyword list containing optional choices and timeout settings.",
+       "rewrite these protocol options", "Use keyword options such as `choices: [...]` or `timeout: 1000`"}
+
+  defp macro_protocol_content(:invalid_protocol_choices, _details),
+    do:
+      {"Protocol choices are malformed", "The protocol's choices must be a list of branching decisions.",
+       "rewrite this choice list", "Provide a list of choices with `decider` and non-empty `branches`"}
+
+  defp macro_protocol_content(:invalid_protocol_choice, _details),
+    do:
+      {"Protocol choice is malformed",
+       "Every protocol choice needs the role that decides it and its possible branches.",
+       "rewrite this protocol choice", "Provide `decider` and a non-empty `branches` list"}
+
+  defp macro_protocol_content(:unknown_choice_decider, %{role: role}),
+    do:
+      {"Protocol choice has an unknown decider",
+       "The `#{name_to_string(role)}` role decides this choice but is not an endpoint in the protocol.",
+       "use a declared role as decider", "Choose one of the protocol's two roles as the decider"}
+
+  defp macro_protocol_content(:invalid_protocol_branches, %{role: role}),
+    do:
+      {"Protocol choice has no valid branches",
+       "The choice decided by `#{name_to_string(role)}` needs a non-empty list of protocol-step branches.",
+       "add the possible branches", "Provide at least one branch beginning with a send from the decider"}
+
+  defp macro_protocol_content(:unprojectable_choice, %{role: role}),
+    do:
+      {"Protocol choice cannot be projected",
+       "Every branch decided by `#{name_to_string(role)}` must begin with that role sending a message, so the other endpoint can observe the choice.",
+       "make the decider announce each branch", "Start every branch with a message sent by `#{name_to_string(role)}`"}
 
   defp macro_check_content(:invalid_check_name, %{name: name}) do
     {
