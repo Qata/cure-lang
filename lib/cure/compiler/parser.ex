@@ -6229,6 +6229,8 @@ defmodule Cure.Compiler.Parser do
           {[], state}
       end
 
+    authored_terminal = arms |> List.last() |> multi_with_arm_span()
+
     cond do
       proof != nil ->
         state =
@@ -6239,7 +6241,7 @@ defmodule Cure.Compiler.Parser do
           )
 
         {ast, state} = {{:with_abs, base_meta, [hd(scruts)]}, state}
-        {put_multi_with_source_info(ast, token, state), state}
+        {put_multi_with_source_info(ast, token, state, authored_terminal), state}
 
       arms == [] ->
         state =
@@ -6249,17 +6251,17 @@ defmodule Cure.Compiler.Parser do
           )
 
         {ast, state} = {{:with_abs, base_meta, [hd(scruts)]}, state}
-        {put_multi_with_source_info(ast, token, state), state}
+        {put_multi_with_source_info(ast, token, state, authored_terminal), state}
 
       true ->
         {ast, state} = build_multi_with(scruts, arms, base_meta, state)
-        {put_multi_with_source_info(ast, token, state), state}
+        {put_multi_with_source_info(ast, token, state, authored_terminal), state}
     end
   end
 
-  defp put_multi_with_source_info({:with_abs, meta, [scrutinee | _] = children}, token, state) do
+  defp put_multi_with_source_info({:with_abs, meta, [scrutinee | _] = children}, token, state, terminal_span) do
     arms = Enum.drop(children, 1)
-    meta = put_match_source_info(meta, token, scrutinee, arms, state)
+    meta = put_match_source_info(meta, token, scrutinee, arms, state, terminal_span)
     {:with_abs, meta, children}
   end
 
@@ -6795,9 +6797,14 @@ defmodule Cure.Compiler.Parser do
   # arms can fall through to it once they have decided they are NOT a rematch arm
   # (see `parse_with_clause_arm`).
   defp expect_branch_arrow(state, family, previous) do
+    {_arrow, state} = expect_branch_arrow_token(state, family, previous)
+    state
+  end
+
+  defp expect_branch_arrow_token(state, family, previous) do
     case expect_token(state, :arrow) do
-      {:ok, _arrow, next_state} ->
-        next_state
+      {:ok, arrow, next_state} ->
+        {arrow, next_state}
 
       {:error, next_state} ->
         [_generic | rest] = next_state.errors
@@ -6823,7 +6830,7 @@ defmodule Cure.Compiler.Parser do
              column: observed.col
            }}
 
-        %{next_state | errors: [error | rest]}
+        {nil, %{next_state | errors: [error | rest]}}
     end
   end
 
@@ -6843,48 +6850,38 @@ defmodule Cure.Compiler.Parser do
       end
 
     # Expect ->
-    state = expect_branch_arrow(state, :match_arm, guard || pattern)
+    {arrow_token, state} = expect_branch_arrow_token(state, :match_arm, guard || pattern)
     state = skip_newlines(state)
 
     # `impossible` is a soft keyword recognized only as an entire arm body
     # (spec §4): `pat -> impossible`. Any other use stays an ordinary identifier.
     if impossible_body?(state) do
+      impossible_token = peek(state)
       state = advance(state)
 
       meta =
         if guard, do: [pattern: pattern, guard: guard, impossible: true], else: [pattern: pattern, impossible: true]
 
-      meta = put_match_arm_source_info(meta, pattern, guard, nil, state)
+      meta = put_match_arm_source_info(meta, pattern, guard, arrow_token, impossible_token.span)
 
       {{:match_arm, meta, [nil]}, state}
     else
       {body, state} = parse_expr_or_block(state)
       meta = if guard, do: [pattern: pattern, guard: guard], else: [pattern: pattern]
-      meta = put_match_arm_source_info(meta, pattern, guard, body, state)
+      meta = put_match_arm_source_info(meta, pattern, guard, arrow_token, ast_source_span(body))
       {{:match_arm, meta, [body]}, state}
     end
   end
 
-  defp put_match_arm_source_info(meta, pattern, guard, body, state) do
+  defp put_match_arm_source_info(meta, pattern, guard, arrow_token, body_span) do
     pattern_span = first_node_source_span(pattern)
     guard_span = first_node_source_span(guard)
-    body_span = first_node_source_span(body)
-
-    whole =
-      case {pattern_span, authored_token(state)} do
-        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
-          case Range.through(first, last) do
-            {:ok, span} -> span
-            _ -> nil
-          end
-
-        _ ->
-          nil
-      end
+    whole = through_spans(pattern_span, body_span)
 
     if whole do
-      Keyword.put(meta, :source_info, %SourceInfo{
+      Metadata.put_source_info(meta, %SourceInfo{
         whole: whole,
+        operator: arrow_token && arrow_token.span,
         pattern: pattern_span,
         guard: guard_span,
         body: body_span
@@ -6894,7 +6891,9 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp put_match_source_info(meta, match_token, scrutinee, arms, state) do
+  defp put_match_source_info(meta, match_token, scrutinee, arms, state, terminal_span \\ nil)
+
+  defp put_match_source_info(meta, match_token, scrutinee, arms, _state, terminal_span) do
     match_span = if match_token.span, do: match_token.span, else: nil
     scrutinee_span = first_node_source_span(scrutinee)
 
@@ -6903,20 +6902,16 @@ defmodule Cure.Compiler.Parser do
       |> Enum.map(&match_arm_source_span/1)
       |> Enum.reject(&is_nil/1)
 
-    whole =
-      case {match_span || scrutinee_span, authored_token(state)} do
-        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
-          case Range.through(first, last) do
-            {:ok, span} -> span
-            _ -> nil
-          end
-
-        _ ->
-          scrutinee_span
-      end
+    terminal_span = terminal_span || List.last(branch_spans) || scrutinee_span
+    whole = through_spans(match_span || scrutinee_span, terminal_span)
 
     if whole || branch_spans != [] do
-      Keyword.put(meta, :source_info, %SourceInfo{whole: whole, branches: branch_spans})
+      Metadata.put_source_info(meta, %SourceInfo{
+        whole: whole,
+        opener: match_span,
+        operands: Enum.filter([scrutinee_span], & &1),
+        branches: branch_spans
+      })
     else
       meta
     end

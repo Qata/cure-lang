@@ -304,7 +304,23 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.whole) == "n when n > 0 -> n"
     assert slice(source, info.pattern) == "n"
     assert slice(source, info.guard) == "n > 0"
+    assert slice(source, info.operator) == "->"
     assert slice(source, info.body) == "n"
+  end
+
+  test "impossible match arms retain the authored marker as their exact body" do
+    source = "fn absurd(value: Void) -> Int = match value\n  impossible_case -> impossible\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "impossible.cure", emit_events: false)
+
+    assert {:ok, ast} =
+             Parser.parse(tokens, file: "impossible.cure", emit_events: false, prelude_macros: false)
+
+    {:match_arm, arm_meta, [nil]} = find_node(ast, :match_arm)
+    info = Metadata.source_info(arm_meta)
+
+    assert slice(source, info.whole) == "impossible_case -> impossible"
+    assert slice(source, info.operator) == "->"
+    assert slice(source, info.body) == "impossible"
   end
 
   test "match expressions retain their whole and branch-owned spans" do
@@ -316,6 +332,8 @@ defmodule Cure.Compiler.SourceSpansTest do
     info = Metadata.source_info(meta)
 
     assert slice(source, info.whole) == "match x\n  n -> n\n  _ -> 0"
+    assert slice(source, info.opener) == "match"
+    assert Enum.map(info.operands, &slice(source, &1)) == ["x"]
     assert Enum.map(info.branches, &slice(source, &1)) == ["n -> n", "_ -> 0"]
   end
 
