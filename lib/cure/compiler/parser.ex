@@ -2736,14 +2736,32 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp continuation_infix?(state) do
-    candidate =
-      case peek_ahead(state, 1) do
-        %Token{type: :indent} -> peek_ahead(state, 2)
-        token -> token
-      end
+  # Tokens whose only grammatical role is to join two operands: the two built-in
+  # connectives, plus `:operator`, which exists only because something declared
+  # it `infix`. A line may open with one of these and still be a continuation,
+  # because it cannot be the start of anything else.
+  @pure_infix_tokens [:pipe, :melquiades, :operator]
 
-    infix_token?(fixity_table(state), candidate)
+  # A continuation is a line the layout marks as belonging to the one above it,
+  # so an `:indent` opens one unconditionally. Failing that — a line at the
+  # enclosing block's own level — only a pure connective may continue. Every
+  # other operator lexeme doubles as something else (`*` opens a macro
+  # production row, `-` negates, `<`/`>` bracket a binder), and for those the
+  # fixity table cannot tell a continuation from a sibling statement: `*` in
+  # `terminal Red` ⏎ `* --Emergency--> Red` is the multiplication operator, so
+  # taking it as a continuation glues the row onto the field line above and
+  # leaves its `-->` with nowhere to go. Layout can tell them apart, so let it.
+  defp continuation_infix?(state) do
+    case peek_ahead(state, 1) do
+      %Token{type: :indent} ->
+        infix_token?(fixity_table(state), peek_ahead(state, 2))
+
+      %Token{type: type} = candidate when type in @pure_infix_tokens ->
+        infix_token?(fixity_table(state), candidate)
+
+      _ ->
+        false
+    end
   end
 
   defp skip_infix_continuation_layout(state) do

@@ -77,6 +77,27 @@ defmodule Cure.Compiler.InfixContinuationLayoutTest do
       assert Enum.all?(arms, &match?({:match_arm, _, _}, &1))
     end
 
+    test "a sibling line beginning with an operator is not a continuation" do
+      # `-` doubles as negation, so at the enclosing block's own level only
+      # layout can say whether this line continues the one above it. Reading
+      # the leading token against the fixity table instead makes every sibling
+      # statement that starts with an operator lexeme — a macro production row
+      # opening with `*`, say — get glued onto its predecessor. The pure
+      # connectives are exempt and stay unindented; `ergonomics_batch_test`
+      # covers leading `|>`.
+      assert {:ok, ast} = parse("mod T\n  fn f(a: Int) -> Int =\n    a\n    - 1\n")
+
+      assert {:container, _, [{:function_def, _, [{:block, _, stmts}]}]} = ast
+      assert [{:variable, _, "a"}, {:unary_op, _, _}] = stmts
+    end
+
+    test "an indented line beginning with an operator continues the line above" do
+      assert {:ok, ast} = parse("mod T\n  fn f(a: Int) -> Int =\n    a\n      - 1\n")
+
+      assert {:container, _, [{:function_def, _, [{:binary_op, meta, _}]}]} = ast
+      assert meta[:operator] == :-
+    end
+
     test "a chain of continuations associates as the fixity table says" do
       assert {:ok, ast} = parse("true or\n  false or\n  true\n")
 
