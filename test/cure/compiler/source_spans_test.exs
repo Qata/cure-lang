@@ -491,6 +491,27 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, pun_info.body) == "x"
   end
 
+  test "binary segments retain exact values, specifier separators, and terminal ranges" do
+    source = "fn encode(value: Int, width: Int) = <<value::integer-signed-size(width), 0>>\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "binary.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "binary.cure", emit_events: false, prelude_macros: false)
+
+    [specified, plain] = collect_nodes(ast, :bin_segment)
+
+    {:bin_segment, specified_meta, _} = specified
+    specified_info = Metadata.source_info(specified_meta)
+    assert slice(source, specified_info.whole) == "value::integer-signed-size(width)"
+    assert slice(source, specified_info.operator) == "::"
+    assert slice(source, specified_info.body) == "value"
+    assert Enum.map(specified_info.arguments, &slice(source, &1)) == ["width"]
+
+    {:bin_segment, plain_meta, _} = plain
+    plain_info = Metadata.source_info(plain_meta)
+    assert slice(source, plain_info.whole) == "0"
+    assert plain_info.operator == nil
+    assert slice(source, plain_info.body) == "0"
+  end
+
   test "operators and containers retain token-owned focused ranges" do
     source =
       "mod Demo\n  fn answer() -> Int = 1 + 2\n  fn xs() -> List(Int) = [1, 2]\n  fn pair() -> Tuple(Int, Int) = %[1, 2]\n" <>

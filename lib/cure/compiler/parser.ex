@@ -5375,37 +5375,40 @@ defmodule Cure.Compiler.Parser do
     start_token = peek(state)
     {value, state} = parse_expr(state, 0)
 
-    {specifier_meta, state} =
+    {specifier_meta, specifier_token, terminal_span, state} =
       case peek(state) do
-        %Token{type: :colon_colon} ->
+        %Token{type: :colon_colon} = specifier_token ->
           state = advance(state)
-          parse_bin_specifier_chain(state, [])
+          {meta, state, terminal_span} = parse_bin_specifier_chain(state, [])
+          {meta, specifier_token, terminal_span, state}
 
         _ ->
-          {[], state}
+          {[], nil, ast_source_span(value), state}
       end
 
     meta = [line: start_token.line, col: start_token.col] ++ specifier_meta
-    meta = put_binary_segment_source_info(meta, start_token, state)
+    meta = put_binary_segment_source_info(meta, start_token, value, specifier_token, terminal_span)
 
     {{:bin_segment, meta, [value]}, state}
   end
 
-  defp put_binary_segment_source_info(meta, start_token, state) do
-    case {start_token.span, authored_token(state)} do
-      {%Cure.Diagnostic.Span{} = first, %Token{span: %Cure.Diagnostic.Span{} = last}} ->
-        case Range.through(first, last) do
-          {:ok, whole} -> Keyword.put(meta, :source_info, %SourceInfo{whole: whole})
-          _ -> meta
-        end
+  defp put_binary_segment_source_info(meta, start_token, value, specifier_token, terminal_span) do
+    Metadata.put_source_info(meta, %SourceInfo{
+      whole: through_spans(start_token.span, terminal_span) || ast_source_span(value),
+      operator: specifier_token && specifier_token.span,
+      body: ast_source_span(value),
+      arguments: specifier_argument_spans(meta)
+    })
+  end
 
-      _ ->
-        meta
-    end
+  defp specifier_argument_spans(meta) do
+    meta
+    |> Keyword.take([:size, :unit])
+    |> Enum.flat_map(fn {_key, value} -> node_source_span(value) end)
   end
 
   defp parse_bin_specifier_chain(state, acc) do
-    {entry, state} = parse_bin_specifier(state)
+    {entry, state, terminal_span} = parse_bin_specifier(state)
     acc = merge_specifier(acc, entry)
 
     case peek(state) do
@@ -5414,7 +5417,7 @@ defmodule Cure.Compiler.Parser do
         parse_bin_specifier_chain(state, acc)
 
       _ ->
-        {acc, state}
+        {acc, state, terminal_span}
     end
   end
 
@@ -5429,7 +5432,8 @@ defmodule Cure.Compiler.Parser do
     case token.type do
       :integer ->
         state = advance(state)
-        {{:size, {:literal, [subtype: :integer, line: token.line, col: token.col], token.value}}, state}
+
+        {{:size, {:literal, [subtype: :integer, line: token.line, col: token.col], token.value}}, state, token.span}
 
       :identifier ->
         name = to_string(token.value)
@@ -5443,23 +5447,23 @@ defmodule Cure.Compiler.Parser do
             {arg, state} = parse_expr(state, 0)
             state = skip_newlines(state)
 
-            {state, _close_token} =
+            {state, close_token} =
               expect_container_close(state, :rparen, :binary_specifier_arguments, open_token, [arg], false, %{
                 specifier: name,
                 specifier_span: token.span,
                 closing_tokens: [:binary_close, :minus, :comma]
               })
 
-            {{String.to_atom(name), arg}, state}
+            {{String.to_atom(name), arg}, state, (close_token && close_token.span) || ast_source_span(arg)}
 
           _ ->
-            {classify_bin_specifier_name(name), state}
+            {classify_bin_specifier_name(name), state, token.span}
         end
 
       _ ->
         # Unknown specifier token -- consume and ignore so we don't deadlock.
         state = advance(state)
-        {{:type, :any}, state}
+        {{:type, :any}, state, token.span}
     end
   end
 
@@ -5724,18 +5728,19 @@ defmodule Cure.Compiler.Parser do
     start_token = peek(state)
     {value, state} = parse_expr(state, bp_above(state, "<"))
 
-    {specifier_meta, state} =
+    {specifier_meta, specifier_token, terminal_span, state} =
       case peek(state) do
-        %Token{type: :colon_colon} ->
+        %Token{type: :colon_colon} = specifier_token ->
           state = advance(state)
-          parse_bin_specifier_chain(state, [])
+          {meta, state, terminal_span} = parse_bin_specifier_chain(state, [])
+          {meta, specifier_token, terminal_span, state}
 
         _ ->
-          {[], state}
+          {[], nil, ast_source_span(value), state}
       end
 
     meta = [line: start_token.line, col: start_token.col] ++ specifier_meta
-    meta = put_binary_segment_source_info(meta, start_token, state)
+    meta = put_binary_segment_source_info(meta, start_token, value, specifier_token, terminal_span)
 
     {{:bin_segment, meta, [value]}, state}
   end
