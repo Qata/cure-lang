@@ -2547,6 +2547,21 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:proof_command_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:refinement_type_syntax, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -5117,6 +5132,19 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :induction_case}}),
     do: "Induction case arrow is missing"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :rewrite_using_missing}), do: "Rewrite command needs `using`"
+  defp syntax_problem_title(%SyntaxProblem{kind: :rewrite_in_missing}), do: "Rewrite expression needs `in`"
+  defp syntax_problem_title(%SyntaxProblem{kind: :rewrite_occurrence_invalid}), do: "Rewrite occurrence is invalid"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :rewrite_hypothesis_name_invalid}),
+    do: "Rewrite target needs a name"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :induction_case_introducer_missing}),
+    do: "Induction branch needs `case`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :induction_block_indent_missing}),
+    do: "Induction cases must be indented"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "Explanation clause arrow is missing"
 
@@ -5588,6 +5616,28 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :induction_case}}),
     do: "An induction case needs `=>` between its pattern and body expression."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :rewrite_using_missing, observed: observed}),
+    do:
+      "A directed rewrite introduces its equality proof with `using`; #{authored_syntax(observed)} appears where `using` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :rewrite_in_missing, observed: observed}),
+    do:
+      "A rewrite expression uses `in` between its equality proof and the expression being rewritten; #{authored_syntax(observed)} appears where `in` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :rewrite_occurrence_invalid, observed: observed}),
+    do:
+      "The selector after `at` must be a positive integer occurrence such as `1`; #{authored_syntax(observed)} cannot select an occurrence."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :rewrite_hypothesis_name_invalid, observed: observed}),
+    do: "The selector after `in` must name a local hypothesis; #{authored_syntax(observed)} is not a hypothesis name."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :induction_case_introducer_missing, observed: observed}),
+    do:
+      "Every branch in an induction block starts with `case`; #{authored_syntax(observed)} appears at the start of this branch."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :induction_block_indent_missing}),
+    do: "The `case` branches of an induction expression must form an indented block below its subject."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "An explanation clause needs `=>` between its failure point and message."
@@ -6166,6 +6216,24 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :induction_case}}),
     do: "insert `=>` before this induction case body"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :rewrite_using_missing}),
+    do: "insert `using` before the equality proof"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :rewrite_in_missing}),
+    do: "insert `in` before the expression to rewrite"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :rewrite_occurrence_invalid}),
+    do: "write a positive occurrence number here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :rewrite_hypothesis_name_invalid}),
+    do: "write the local hypothesis name here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :induction_case_introducer_missing}),
+    do: "this induction branch must start with `case`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :induction_block_indent_missing}),
+    do: "indent the induction cases below the subject"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "insert `=>` before this explanation message"
 
@@ -6671,6 +6739,73 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(opener, :secondary, "this induction case starts here"),
       pickup_label(previous, :secondary, "the induction pattern ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: kind, opener: %Span{} = opener, previous: previous},
+         primary_span
+       )
+       when kind in [
+              :rewrite_using_missing,
+              :rewrite_in_missing,
+              :rewrite_occurrence_invalid,
+              :rewrite_hypothesis_name_invalid
+            ] do
+    previous_message =
+      case kind do
+        :rewrite_using_missing -> "the rewrite direction ends here"
+        :rewrite_in_missing -> "the equality proof ends here"
+        :rewrite_occurrence_invalid -> "this `at` selector needs an occurrence number"
+        :rewrite_hypothesis_name_invalid -> "this `in` selector needs a hypothesis name"
+      end
+
+    [
+      pickup_label(opener, :secondary, "this rewrite command starts here"),
+      pickup_label(previous, :secondary, previous_message)
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :induction_case_introducer_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this induction block starts here"),
+      pickup_label(previous, :secondary, "the previous induction case ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :induction_block_indent_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this induction expression starts here"),
+      pickup_label(previous, :secondary, "the induction subject ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -7546,6 +7681,34 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Insert `=>` before the induction case body",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: "=> "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :rewrite_using_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `using` before the equality proof",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "using "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :rewrite_in_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `in` before the expression to rewrite",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "in "}]
       }
     ]
   end
@@ -8689,6 +8852,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_name(:identifier), do: "an identifier"
   defp syntax_name(:keyword), do: "a keyword"
   defp syntax_name(:integer), do: "an integer"
+  defp syntax_name(:positive_integer), do: "a positive integer"
   defp syntax_name(:float), do: "a number"
   defp syntax_name(:string), do: "a string"
   defp syntax_name(:char), do: "a character"
@@ -8700,4 +8864,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_name(name) when is_binary(name), do: "'#{name}'"
   defp syntax_name(name) when is_atom(name), do: "'#{name}'"
   defp syntax_name(name), do: inspect(name)
+
+  defp authored_syntax(value) when is_integer(value) or is_float(value), do: "'#{value}'"
+  defp authored_syntax(value), do: syntax_name(value)
 end

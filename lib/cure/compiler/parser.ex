@@ -3503,51 +3503,126 @@ defmodule Cure.Compiler.Parser do
     # to find each is unambiguous; `skip_newlines` skips only `:newline` (never `:indent`/`:dedent`),
     # so it cannot cross a branch boundary — a missing `in`/body still stops at the dedent and errors.
     state = skip_newlines(state)
-    state = expect_keyword(state, :in)
+    state = expect_legacy_rewrite_in(state, token, proof)
     state = skip_newlines(state)
     {body, state} = parse_expr(state, 0)
     {{:rewrite_expr, [line: token.line, col: token.col], [proof, body]}, state}
   end
 
+  defp expect_legacy_rewrite_in(state, rewrite_token, proof) do
+    case peek(state) do
+      %Token{type: :keyword, value: :in} ->
+        advance(state)
+
+      observed ->
+        add_error(
+          state,
+          {:proof_command_syntax,
+           %{
+             kind: :rewrite_in_missing,
+             expected: :in,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: rewrite_token.span,
+             previous_span: ast_source_span(proof),
+             line: observed.line,
+             column: observed.col
+           }}
+        )
+    end
+  end
+
   defp parse_directed_rewrite(state, rewrite_token) do
-    {direction, state} =
+    {direction, direction_span, state} =
       case peek(state) do
-        %Token{type: :identifier, value: "backwards"} -> {:backwards, advance(state)}
-        _ -> {:forward, state}
+        %Token{type: :identifier, value: "backwards", span: span} -> {:backwards, span, advance(state)}
+        _ -> {:forward, rewrite_token.span, state}
       end
 
     state =
       case peek(state) do
-        %Token{type: :identifier, value: "using"} -> advance(state)
-        token -> add_error(state, {:expected, :using, :got, token.type, token.line, token.col})
+        %Token{type: :identifier, value: "using"} ->
+          advance(state)
+
+        observed ->
+          add_error(
+            state,
+            {:proof_command_syntax,
+             %{
+               kind: :rewrite_using_missing,
+               expected: :using,
+               observed: observed.value || observed.type,
+               token_type: observed.type,
+               span: zero_width_start(observed.span),
+               observed_span: observed.span,
+               opener_span: rewrite_token.span,
+               previous_span: direction_span,
+               line: observed.line,
+               column: observed.col
+             }}
+          )
       end
 
     {proof, state} = parse_expr(state, 0)
 
     {target, state, last_span} =
       case peek(state) do
-        %Token{type: :identifier, value: "at"} ->
+        %Token{type: :identifier, value: "at"} = selector ->
           state = advance(state)
 
           case peek(state) do
             %Token{type: :integer, value: occurrence, span: span} when occurrence > 0 ->
               {{:at, occurrence}, advance(state), span}
 
-            token ->
-              state = add_error(state, {:expected, :positive_integer, :got, token.type, token.line, token.col})
-              {{:at, 0}, state, token.span}
+            observed ->
+              state =
+                add_error(
+                  state,
+                  {:proof_command_syntax,
+                   %{
+                     kind: :rewrite_occurrence_invalid,
+                     expected: :positive_integer,
+                     observed: observed.value || observed.type,
+                     token_type: observed.type,
+                     span: observed.span,
+                     opener_span: rewrite_token.span,
+                     previous_span: selector.span,
+                     line: observed.line,
+                     column: observed.col
+                   }}
+                )
+
+              {{:at, 0}, state, observed.span}
           end
 
-        %Token{type: :keyword, value: :in} ->
+        %Token{type: :keyword, value: :in} = selector ->
           state = advance(state)
 
           case peek(state) do
             %Token{type: :identifier, value: name, span: span} ->
               {{:in, name}, advance(state), span}
 
-            token ->
-              state = add_error(state, {:expected, :identifier, :got, token.type, token.line, token.col})
-              {{:in, "?"}, state, token.span}
+            observed ->
+              state =
+                add_error(
+                  state,
+                  {:proof_command_syntax,
+                   %{
+                     kind: :rewrite_hypothesis_name_invalid,
+                     expected: :identifier,
+                     observed: observed.value || observed.type,
+                     token_type: observed.type,
+                     span: observed.span,
+                     opener_span: rewrite_token.span,
+                     previous_span: selector.span,
+                     line: observed.line,
+                     column: observed.col
+                   }}
+                )
+
+              {{:in, "?"}, state, observed.span}
           end
 
         _ ->
@@ -3618,18 +3693,34 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :indent} ->
         state = advance(state)
-        {cases, state} = parse_induction_cases(state, [])
+        {cases, state} = parse_induction_cases(state, [], token)
         state = expect_dedent(state)
         meta = induction_meta(token, subject, cases)
         {{:induction, meta, [subject | cases]}, state}
 
       observed ->
-        state = add_error(state, {:expected, :indent, observed.type, observed.line})
+        state =
+          add_error(
+            state,
+            {:proof_command_syntax,
+             %{
+               kind: :induction_block_indent_missing,
+               expected: :indent,
+               observed: observed.value || observed.type,
+               token_type: observed.type,
+               span: observed.span,
+               opener_span: token.span,
+               previous_span: ast_source_span(subject),
+               line: observed.line,
+               column: observed.col
+             }}
+          )
+
         {{:induction, put_token_source_info([line: token.line, col: token.col], token), [subject]}, state}
     end
   end
 
-  defp parse_induction_cases(state, acc) do
+  defp parse_induction_cases(state, acc, induction_token) do
     state = skip_newlines(state)
 
     case peek(state) do
@@ -3656,10 +3747,26 @@ defmodule Cure.Compiler.Parser do
           |> Keyword.put(:impossible, impossible?)
           |> put_induction_case_source_info(case_token, arrow_token, pattern, terminal_span)
 
-        parse_induction_cases(state, [{:induction_case, meta, [pattern, body]} | acc])
+        parse_induction_cases(state, [{:induction_case, meta, [pattern, body]} | acc], induction_token)
 
       observed ->
-        state = add_error(state, {:expected, :induction_case, observed.type, observed.line})
+        state =
+          add_error(
+            state,
+            {:proof_command_syntax,
+             %{
+               kind: :induction_case_introducer_missing,
+               expected: :case,
+               observed: observed.value || observed.type,
+               token_type: observed.type,
+               span: observed.span,
+               opener_span: induction_token.span,
+               previous_span: acc |> List.first() |> ast_source_span(),
+               line: observed.line,
+               column: observed.col
+             }}
+          )
+
         {Enum.reverse(acc), advance(state)}
     end
   end

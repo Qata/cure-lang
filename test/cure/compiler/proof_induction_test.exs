@@ -136,5 +136,47 @@ defmodule Cure.Compiler.ProofInductionTest do
     assert diagnostic.suggestions == []
   end
 
+  test "an induction branch without `case` points at the authored branch head" do
+    source = "induction count\n  branch Z => simplify"
+    file = "induction_case.cure"
+    {:ok, tokens} = Lexer.tokenize(source, file: file, emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, file: file, emit_events: false)
+
+    assert {:proof_command_syntax,
+            %{
+              kind: :induction_case_introducer_missing,
+              expected: :case,
+              observed: "branch",
+              span: span
+            }} = error
+
+    assert {span.start_line, span.start_column, span.end_column} == {2, 3, 9}
+
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, file, source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- INDUCTION BRANCH NEEDS `CASE` [E094] -------------------- induction_case.cure
+
+             Every branch in an induction block starts with `case`; 'branch' appears at the
+             start of this branch.
+
+             A valid continuation here starts with 'case'.
+
+             at induction_case.cure:2:3
+             1 | induction count
+               | --------- this induction block starts here
+             2 |   branch Z => simplify
+               |   ^^^^^^ this induction branch must start with `case`
+             """)
+
+    assert diagnostic.suggestions == []
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 1, "character" => 2},
+             "end" => %{"line" => 1, "character" => 8}
+           }
+  end
+
   defp source_slice(source, span), do: binary_part(source, span.start_byte, span.end_byte - span.start_byte)
 end
