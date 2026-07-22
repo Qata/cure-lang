@@ -796,10 +796,13 @@ defmodule Cure.Elab.Elaborator do
         equation
 
       :not_equation ->
-        case parse_positional_index(attr) do
-          {:ok, i} -> positional_projection(i, inner, names, ctx, env)
-          :error -> record_projection(inner, attr, names, ctx, env)
-        end
+        result =
+          case parse_positional_index(attr) do
+            {:ok, i} -> positional_projection(i, inner, names, ctx, env)
+            :error -> record_projection(inner, attr, names, ctx, env)
+          end
+
+        attach_projection_context(result, meta, inner, attr)
 
       {:error, _} = error ->
         error
@@ -1182,6 +1185,29 @@ defmodule Cure.Elab.Elaborator do
     do: {:error, splice_outside_quote_error(tag, meta)}
 
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  defp attach_projection_context({:error, {:source_context, reason, context}}, meta, inner, field) do
+    {:error, {:source_context, reason, Map.merge(projection_context(meta, inner, field), context)}}
+  end
+
+  defp attach_projection_context({:error, reason}, meta, inner, field) do
+    {:error, {:source_context, reason, projection_context(meta, inner, field)}}
+  end
+
+  defp attach_projection_context(result, _meta, _inner, _field), do: result
+
+  defp projection_context(meta, inner, field) do
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+
+    %{
+      span: source_info && source_info.whole,
+      receiver_span: surface_expression_span(inner),
+      field_span: source_info && source_info.name,
+      field: field,
+      expression_category: :attribute_access,
+      expectation_origin: :projection
+    }
+  end
 
   defp equation_member(inner, member_name, use_span, ctx, env) do
     with {:ok, function_name, members} <- equation_reference(inner, member_name) do

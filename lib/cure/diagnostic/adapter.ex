@@ -1026,6 +1026,15 @@ defmodule Cure.Diagnostic.Adapter do
     unknown_name(:member, "#{name_to_string(record)}.#{name_to_string(field)}", opts)
   end
 
+  def from_error({:source_context, {:unknown_field, record, field, available_fields}, context}, opts)
+      when is_map(context) and is_list(available_fields) do
+    record_field_unknown_failure(record, field, available_fields, context, opts)
+  end
+
+  def from_error({:source_context, {:projection_not_a_record, record}, context}, opts) when is_map(context) do
+    projection_receiver_failure(record, context, opts)
+  end
+
   def from_error({:unknown_field, record, field}, opts) do
     unknown_name(:member, "#{name_to_string(record)}.#{name_to_string(field)}", Keyword.put(opts, :owner, record))
   end
@@ -1054,17 +1063,7 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   def from_error({:source_context, {:projection_non_record, field}, context}, opts) when is_map(context) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Record projection requires a record",
-      body: Doc.paragraph("The value being projected with `#{name_to_string(field)}` is not a record."),
-      primary: primary_label(opts, "project a field from a record value"),
-      payload: %{kind: :projection_non_record, field: field, checking: Map.get(context, :checking)}
-    )
+    projection_receiver_failure(nil, Map.put_new(context, :field, field), opts)
   end
 
   def from_error({:unknown_record, name}, opts),
@@ -3705,6 +3704,123 @@ defmodule Cure.Diagnostic.Adapter do
       do: contextual_type_failure(kind, %{first: first, second: second}, opts)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp record_field_unknown_failure(record, field, available_fields, context, opts) do
+    field = name_to_string(field)
+    record_name = surface_declaration_name(record)
+    field_span = Map.get(context, :field_span) || Map.get(context, :span)
+    receiver_span = Map.get(context, :receiver_span)
+
+    candidates =
+      Enum.map(available_fields, fn candidate ->
+        %{
+          id: {:record_field, record, candidate},
+          name: name_to_string(candidate),
+          namespace: :member,
+          owner: record,
+          imported: true,
+          origin: :record_shape
+        }
+      end)
+
+    ranking_opts =
+      opts
+      |> Keyword.put(:span, field_span)
+      |> Keyword.put(:owner, record)
+      |> Keyword.put(:record, record)
+
+    candidate_details = rank_candidates(candidates, field, :member, ranking_opts)
+
+    secondary =
+      case receiver_span do
+        %Span{} = span when span != field_span ->
+          [%Label{span: span, style: :secondary, message: "this value has record type `#{record_name}`"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: @unknown_name_code,
+      key: :unknown_name,
+      severity: :error,
+      title: "`#{record_name}` has no field `#{field}`",
+      body: Doc.paragraph("The record `#{record_name}` does not declare a field named `#{field}`."),
+      primary:
+        if(field_span,
+          do: %Label{span: field_span, style: :primary, message: "`#{record_name}` has no field named `#{field}`"}
+        ),
+      secondary: secondary,
+      suggestions: candidate_suggestions(candidate_details, field, ranking_opts),
+      payload: %{
+        namespace: :member,
+        name: field,
+        owner: record,
+        record: record,
+        candidates: Enum.map(candidate_details, & &1.name),
+        candidate_details: candidate_details,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp projection_receiver_failure(record, context, opts) do
+    field = context |> Map.get(:field) |> name_to_string()
+    receiver_span = Map.get(context, :receiver_span) || Map.get(context, :span)
+    field_span = Map.get(context, :field_span)
+    actual_type = if(record, do: surface_declaration_name(record))
+
+    {title, body, receiver_message} =
+      if actual_type do
+        {
+          "Cannot project `#{field}` from `#{actual_type}`",
+          "This value has type `#{actual_type}`, which is not a record and therefore has no field named `#{field}`.",
+          "this value has type `#{actual_type}`, not a record"
+        }
+      else
+        {
+          "Record projection requires a record",
+          "This value is not a record, so it has no field named `#{field}`.",
+          "this value is not a record"
+        }
+      end
+
+    secondary =
+      case field_span do
+        %Span{} = span when span != receiver_span ->
+          [%Label{span: span, style: :secondary, message: "this projection asks for field `#{field}`"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary:
+        if(receiver_span,
+          do: %Label{span: receiver_span, style: :primary, message: receiver_message},
+          else: primary_label(opts, receiver_message)
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Use a record value before `.#{field}`, or remove the projection",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: if(record, do: :projection_not_a_record, else: :projection_non_record),
+        actual_type: actual_type,
+        actual_type_id: record,
+        field: field,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
 
   defp match_inference_failure(reason, details, opts) do
     {title, body, label, hint} =
