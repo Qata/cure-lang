@@ -472,8 +472,8 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {2, 21}
     assert diagnostic.primary.span.end_column == 28
     assert rendered =~ "2 |   fn bad() -> Int = spawn 1"
-    assert rendered =~ "^^^^^^^ use a supported asynchronous boundary"
-    assert rendered =~ "`spawn` is not supported by the dependent runtime yet"
+    assert rendered =~ "^^^^^^^ this asynchronous operation has no dependent-runtime lowering"
+    assert rendered =~ "The dependent runtime cannot lower `spawn`"
   end
 
   test "under-saturated calls report the callee arity without rejecting valid partial application" do
@@ -1252,7 +1252,7 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.primary.span.start_line == 5
     assert diagnostic.primary.span.start_column == 29
     assert rendered =~ "5 |   fn bad() -> Point = Point{xx: 1, y: 2}"
-    assert rendered =~ "^^ this field is not declared by the record"
+    assert rendered =~ "----- ^^ this constructs `Point`; this field is not declared by the record"
     assert rendered =~ "Did you mean `x`?"
 
     assert [suggestion] = diagnostic.suggestions
@@ -1265,7 +1265,7 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert action["title"] == "Replace it with `x`"
   end
 
-  test "a missing record field names the field without inventing a source range" do
+  test "a missing record field names the field and points at the owned closing brace" do
     source =
       "mod M\n" <>
         "  rec Point\n" <>
@@ -1286,10 +1286,10 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.code == "E022"
     assert diagnostic.title == "Missing record field"
     assert diagnostic.payload.missing == [:y]
-    assert diagnostic.primary.span.start_column == 23
+    assert diagnostic.primary.span.start_column == 33
     assert rendered =~ "missing `y`"
-    assert rendered =~ "add the missing field here"
-    assert diagnostic.suggestions == []
+    assert rendered =~ "add the missing field `y` before this closing brace"
+    assert [%{applicability: :manual, edits: []}] = diagnostic.suggestions
   end
 
   test "a whole-record mismatch retains the authored record boundary" do

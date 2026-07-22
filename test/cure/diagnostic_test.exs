@@ -246,7 +246,7 @@ defmodule Cure.DiagnosticTest do
     assert diagnostic.primary.span.source_id == "record_field_mismatch.cure"
     assert diagnostic.primary.span.path == "record_field_mismatch.cure"
     assert rendered =~ "6 |   fn bad() -> Point = Point{x: S(Z()), z: Z()}"
-    assert rendered =~ "^ this field is not declared by the record"
+    assert rendered =~ "^ this constructs `Point`; this field is not declared by the record"
     refute rendered =~ "at nofile:"
   end
 

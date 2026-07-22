@@ -131,6 +131,13 @@ defmodule Cure.Elab.Elaborator do
     |> then(&{:record_field_mismatch, &1})
   end
 
+  defp available_record_names(%Env{} = env) do
+    env.ctors
+    |> Map.keys()
+    |> Enum.filter(&(Map.get(env.ctor_to_family, &1) == &1))
+    |> Enum.sort_by(&Atom.to_string/1)
+  end
+
   # Normalize a constructor atom to a registry key via the resolution layer:
   # a flattened dotted path (`:"Std.Nat.Z"`) via qualified resolution; a bare atom
   # that is absent from the registry but present under exactly one re-keyed
@@ -735,10 +742,10 @@ defmodule Cure.Elab.Elaborator do
           {:ok, positional} ->
             elaborate_expr_typed(positional, names, ctx, env)
             |> attach_record_field_context(meta, args, env)
-            |> attach_record_context(meta, args)
+            |> attach_record_context(meta, args, env)
 
           {:error, reason} ->
-            attach_record_context({:error, reason}, meta, args)
+            attach_record_context({:error, reason}, meta, args, env)
         end
 
       # `f(x)(y)` parses with the inner call preserved as `:callee` (and `name`
@@ -2024,10 +2031,10 @@ defmodule Cure.Elab.Elaborator do
           {:ok, positional} ->
             elaborate_expr_checked(positional, expected_core, names, ctx, env)
             |> attach_record_field_context(meta, args, env)
-            |> attach_record_context(meta, args)
+            |> attach_record_context(meta, args, env)
 
           {:error, reason} ->
-            attach_record_context({:error, reason}, meta, args)
+            attach_record_context({:error, reason}, meta, args, env)
         end
 
       name == "reflexive" and length(args) == 1 ->
@@ -2621,25 +2628,28 @@ defmodule Cure.Elab.Elaborator do
   defp attach_record_context(
          {:error, {:source_context, _reason, %{expectation_origin: origin} = _context}} = result,
          _meta,
-         _args
+         _args,
+         _env
        )
        when origin in [:record_field, :constructor_argument],
        do: result
 
-  defp attach_record_context({:error, {:source_context, reason, context}}, meta, args)
+  defp attach_record_context({:error, {:source_context, reason, context}}, meta, args, env)
        when is_map(context),
-       do: {:error, {:source_context, reason, Map.merge(record_context(meta, args), context)}}
+       do: {:error, {:source_context, reason, Map.merge(record_context(meta, args, env), context)}}
 
-  defp attach_record_context({:error, reason}, meta, args),
-    do: {:error, {:source_context, reason, record_context(meta, args)}}
+  defp attach_record_context({:error, reason}, meta, args, env),
+    do: {:error, {:source_context, reason, record_context(meta, args, env)}}
 
-  defp attach_record_context(result, _meta, _args), do: result
+  defp attach_record_context(result, _meta, _args, _env), do: result
 
-  defp record_context(meta, args) do
+  defp record_context(meta, args, env) do
     expression = {:function_call, meta, args}
 
     expectation_context(expression, :record, Keyword.get(meta, :name, :record), nil)
     |> Map.put(:field_spans, record_field_spans(meta))
+    |> Map.put(:available_records, available_record_names(env))
+    |> Map.merge(record_delimiter_context(meta))
   end
 
   defp record_field_spans(meta) do
@@ -2658,20 +2668,34 @@ defmodule Cure.Elab.Elaborator do
         field_result
 
       {:error, {:source_context, _reason, field_context}} ->
-        {:error, {:source_context, reason, Map.merge(field_context, record_update_context(meta, children, context))}}
+        {:error,
+         {:source_context, reason, Map.merge(field_context, record_update_context(meta, children, context, env))}}
     end
   end
 
-  defp attach_record_update_context({:error, reason}, meta, children, _env),
-    do: {:error, {:source_context, reason, record_update_context(meta, children, %{})}}
+  defp attach_record_update_context({:error, reason}, meta, children, env),
+    do: {:error, {:source_context, reason, record_update_context(meta, children, %{}, env)}}
 
   defp attach_record_update_context(result, _meta, _children, _env), do: result
 
-  defp record_update_context(meta, children, context) do
+  defp record_update_context(meta, children, context, env) do
     expression = {:record_update, meta, children}
 
     Map.merge(context, expectation_context(expression, :record_update, Keyword.get(meta, :name, :record_update), nil))
     |> Map.put(:field_spans, record_field_spans(meta))
+    |> Map.put(:available_records, available_record_names(env))
+    |> Map.merge(record_delimiter_context(meta))
+    |> Map.put(:base_span, children |> List.first() |> surface_expression_span())
+  end
+
+  defp record_delimiter_context(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{} = info ->
+        %{record_name_span: info.name, opener_span: info.opener, closer_span: info.closer}
+
+      _ ->
+        %{}
+    end
   end
 
   defp attach_record_field_reason({:source_context, reason, context}, meta, field_pairs, env)
