@@ -116,7 +116,8 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
              -- COMPUTED MACRO EXPANSION FAILED [E092] ----------------- macro_generated.cure
 
              The `bad` computed macro could not produce valid Cure syntax: invalid macro
-             expansion: raw syntax is only valid for reflection, not generated Cure code ()
+             expansion: raw syntax is only valid for reflection, not generated Cure code at
+             the expansion root
 
              at macro_generated.cure:9:24
              9 |   fn result() -> Int = bad

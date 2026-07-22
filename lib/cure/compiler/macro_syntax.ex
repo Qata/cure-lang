@@ -897,7 +897,8 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  defp validate_expansion_node({:syn_failure, _name, _args}, _path), do: :ok
+  defp validate_expansion_node({:syn_failure, name, args}, path) when is_atom(name) and is_list(args),
+    do: validate_reflected_children(args, [{:failure_arguments} | path])
 
   defp validate_expansion_node({:syn_raw, _lit}, path),
     do: {:error, {:raw_syntax_in_expansion, path}}
@@ -984,9 +985,15 @@ defmodule Cure.Compiler.MacroSyntax do
        when is_atom(tag) and is_list(attrs),
        do: validate_reflected_attrs(attrs, path) |> then(&validate_reflected_literal(&1, lit, path))
 
-  defp validate_reflected_node({:syn_raw, _lit}, _path), do: :ok
-  defp validate_reflected_node({:syn_quoted, _syntax}, _path), do: :ok
-  defp validate_reflected_node({:syn_failure, _name, _args}, _path), do: :ok
+  defp validate_reflected_node({:syn_raw, lit}, path),
+    do: validate_reflected_literal(:ok, lit, [{:raw_literal} | path])
+
+  defp validate_reflected_node({:syn_quoted, syntax}, path),
+    do: validate_reflected_node(syntax, [{:quoted_syntax} | path])
+
+  defp validate_reflected_node({:syn_failure, name, args}, path) when is_atom(name) and is_list(args),
+    do: validate_reflected_children(args, [{:failure_arguments} | path])
+
   defp validate_reflected_node(_other, path), do: {:error, {:malformed_reflected_syntax, path}}
 
   defp validate_reflected_children(children, path) do

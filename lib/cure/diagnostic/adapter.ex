@@ -1386,6 +1386,21 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:invalid_raw_delimiter, delimiter}, opts),
     do: macro_raw_failure(:invalid_raw_delimiter, %{delimiter: delimiter}, opts)
 
+  def from_error({kind, path}, opts)
+      when kind in [
+             :raw_syntax_in_expansion,
+             :quoted_syntax_in_expansion,
+             :malformed_expansion_syntax,
+             :malformed_expansion_attribute,
+             :malformed_expansion_map,
+             :malformed_expansion_literal,
+             :malformed_reflected_syntax,
+             :malformed_reflected_attribute,
+             :malformed_reflected_map,
+             :malformed_reflected_literal
+           ],
+      do: macro_syntax_integrity_failure(kind, path, opts)
+
   def from_error({kind, detail}, opts)
       when kind in [
              :invalid_lift_module,
@@ -1444,16 +1459,6 @@ defmodule Cure.Diagnostic.Adapter do
                :invalid_syntax_leaf,
                :invalid_syntax_failure,
                :unsupported_syntax_core,
-               :raw_syntax_in_expansion,
-               :quoted_syntax_in_expansion,
-               :malformed_expansion_syntax,
-               :malformed_expansion_attribute,
-               :malformed_expansion_map,
-               :malformed_expansion_literal,
-               :malformed_reflected_syntax,
-               :malformed_reflected_attribute,
-               :malformed_reflected_literal,
-               :malformed_reflected_map,
                :invalid_syntax_attrs
              ],
       do: macro_validation_failure(kind, %{detail: detail}, opts)
@@ -5158,6 +5163,91 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  defp macro_syntax_integrity_failure(kind, path, opts) do
+    {title, message, label, hint} = macro_syntax_integrity_content(kind, path)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_syntax_integrity,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{kind: kind, path: path}
+    )
+  end
+
+  defp macro_syntax_integrity_content(:raw_syntax_in_expansion, path),
+    do:
+      {"Macro expansion contains raw syntax",
+       "The generated expansion contains reflection-only raw syntax at #{syntax_path_phrase(path)}.",
+       "return executable syntax here", "Build structured `Syntax`; keep `Raw` values inside reflected metadata"}
+
+  defp macro_syntax_integrity_content(:quoted_syntax_in_expansion, path),
+    do:
+      {"Macro expansion contains quoted syntax",
+       "The generated expansion still contains quoted syntax at #{syntax_path_phrase(path)}.",
+       "unquote this generated syntax", "Splice or otherwise unquote the value before returning the expansion"}
+
+  defp macro_syntax_integrity_content(:malformed_expansion_syntax, path),
+    do:
+      {"Macro expansion syntax is malformed",
+       "The generated expansion does not contain a valid `Node`, `Leaf`, or accepted failure value at #{syntax_path_phrase(path)}.",
+       "rebuild this generated syntax", "Return a well-formed structured `Syntax` value"}
+
+  defp macro_syntax_integrity_content(:malformed_expansion_attribute, path),
+    do:
+      {"Macro expansion attribute is malformed",
+       "A generated syntax attribute is not an atom-keyed literal pair at #{syntax_path_phrase(path)}.",
+       "rebuild this syntax attribute", "Use an atom key and a valid syntax literal value"}
+
+  defp macro_syntax_integrity_content(:malformed_expansion_map, path),
+    do:
+      {"Macro expansion map literal is malformed",
+       "A generated syntax-map entry is not a key-value pair at #{syntax_path_phrase(path)}.",
+       "rebuild this syntax map", "Provide valid syntax-literal key-value pairs"}
+
+  defp macro_syntax_integrity_content(:malformed_expansion_literal, path),
+    do:
+      {"Macro expansion literal is malformed",
+       "A generated syntax literal has the wrong shape or host value at #{syntax_path_phrase(path)}.",
+       "replace this syntax literal",
+       "Use a valid integer, float, string, boolean, atom, list, map, syntax, or opaque literal"}
+
+  defp macro_syntax_integrity_content(:malformed_reflected_syntax, path),
+    do:
+      {"Reflected syntax value is malformed",
+       "Syntax stored inside generated metadata has an invalid node shape at #{syntax_path_phrase(path)}.",
+       "rebuild this reflected syntax", "Store a well-formed reflected `Syntax` value"}
+
+  defp macro_syntax_integrity_content(:malformed_reflected_attribute, path),
+    do:
+      {"Reflected syntax attribute is malformed",
+       "An attribute inside reflected syntax is not an atom-keyed literal pair at #{syntax_path_phrase(path)}.",
+       "rebuild this reflected attribute", "Use an atom key and a valid reflected literal value"}
+
+  defp macro_syntax_integrity_content(:malformed_reflected_map, path),
+    do:
+      {"Reflected syntax map is malformed",
+       "A map stored inside reflected syntax contains an entry that is not a key-value pair at #{syntax_path_phrase(path)}.",
+       "rebuild this reflected map", "Provide valid reflected-literal key-value pairs"}
+
+  defp macro_syntax_integrity_content(:malformed_reflected_literal, path),
+    do:
+      {"Reflected syntax literal is malformed",
+       "A literal stored inside reflected syntax has the wrong shape or host value at #{syntax_path_phrase(path)}.",
+       "replace this reflected literal", "Use a valid reflected syntax literal"}
+
+  defp macro_syntax_integrity_content(kind, path),
+    do:
+      {"Macro syntax value is invalid",
+       "Generated syntax failed the `#{name_to_string(kind)}` integrity check at #{syntax_path_phrase(path)}.",
+       "rebuild this generated syntax", "Return a well-formed structured `Syntax` value"}
+
+  defp syntax_path_phrase([]), do: "the expansion root"
+  defp syntax_path_phrase(path), do: "`#{format_syntax_path(path)}`"
+
   defp lift_module_failure(kind, details, opts) do
     {title, message, label, hint} = lift_module_content(kind, details)
 
@@ -8724,14 +8814,16 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp computed_macro_reason({:invalid_generated_syntax, {:raw_syntax_in_expansion, path}}),
     do:
-      "invalid macro expansion: raw syntax is only valid for reflection, not generated Cure code (#{format_syntax_path(path)})"
+      "invalid macro expansion: raw syntax is only valid for reflection, not generated Cure code at #{syntax_path_phrase(path)}"
 
   defp computed_macro_reason({:invalid_generated_syntax, {:quoted_syntax_in_expansion, path}}),
     do:
-      "invalid macro expansion: quoted syntax must be unquoted before it is emitted as Cure code (#{format_syntax_path(path)})"
+      "invalid macro expansion: quoted syntax must be unquoted before it is emitted as Cure code at #{syntax_path_phrase(path)}"
 
-  defp computed_macro_reason({:invalid_generated_syntax, {_reason, path}}),
-    do: "invalid macro expansion at #{format_syntax_path(path)}"
+  defp computed_macro_reason({:invalid_generated_syntax, {kind, path}}) do
+    {_title, message, _label, _hint} = macro_syntax_integrity_content(kind, path)
+    "invalid macro expansion: #{String.downcase(message)}"
+  end
 
   defp computed_macro_reason({:author_diagnostics, diagnostics}) when is_list(diagnostics),
     do: "macro rejected expansion: #{author_diagnostic_summary(diagnostics)}"
@@ -8756,6 +8848,11 @@ defmodule Cure.Diagnostic.Adapter do
         applicability: :manual
       }
     ]
+
+  defp computed_macro_suggestions({:invalid_generated_syntax, {kind, path}}) do
+    {_title, _message, _label, hint} = macro_syntax_integrity_content(kind, path)
+    [%Suggestion{message: hint, applicability: :manual}]
+  end
 
   defp computed_macro_suggestions({:author_diagnostics, diagnostics}),
     do: [
@@ -8806,6 +8903,9 @@ defmodule Cure.Diagnostic.Adapter do
       {:map_key} -> "map key"
       {:map_value} -> "map value"
       {:list_item} -> "list item"
+      {:failure_arguments} -> "failure arguments"
+      {:raw_literal} -> "raw literal"
+      {:quoted_syntax} -> "quoted syntax"
       other -> inspect(other)
     end)
   end

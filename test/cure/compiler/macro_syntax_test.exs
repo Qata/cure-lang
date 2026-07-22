@@ -1,6 +1,7 @@
 defmodule Cure.Compiler.MacroSyntaxTest do
   use ExUnit.Case, async: true
-  alias Cure.Compiler.{Lexer, Parser, MacroSyntax, Token}
+  alias Cure.Compiler.{Errors, Lexer, MacroSyntax, Parser, Token}
+  alias Cure.Diagnostic.Renderer
   alias Cure.MetaAST.Metadata
 
   # Parse the RHS of `fn f() = <expr>` to get a real expression AST.
@@ -192,6 +193,82 @@ defmodule Cure.Compiler.MacroSyntaxTest do
 
     assert :ok =
              MacroSyntax.validate_expansion({:syn_node, :block, [], [{:syn_leaf, :literal, [], {:s_int, 1}}]})
+  end
+
+  test "expansion validation reports every malformed generated-syntax location" do
+    reflected = fn syntax -> {:syn_leaf, :holder, [], {:s_syntax, syntax}} end
+
+    cases = [
+      {{:syn_raw, {:s_int, 1}}, {:raw_syntax_in_expansion, []}},
+      {{:syn_node, :block, [], [{:syn_quoted, {:syn_leaf, :literal, [], {:s_int, 1}}}]},
+       {:quoted_syntax_in_expansion, [{:child, 0}]}},
+      {:bad, {:malformed_expansion_syntax, []}},
+      {{:syn_failure, :bad, :arguments}, {:malformed_expansion_syntax, []}},
+      {{:syn_node, :block, [42], []}, {:malformed_expansion_attribute, [{:attribute, 0}]}},
+      {{:syn_leaf, :literal, [], {:s_map, [42]}}, {:malformed_expansion_map, []}},
+      {{:syn_leaf, :literal, [], :bad}, {:malformed_expansion_literal, []}},
+      {reflected.(:bad), {:malformed_reflected_syntax, [{:syntax_literal}]}},
+      {reflected.({:syn_node, :inner, [42], []}),
+       {:malformed_reflected_attribute, [{:attribute, 0}, {:syntax_literal}]}},
+      {reflected.({:syn_leaf, :inner, [], {:s_map, [42]}}), {:malformed_reflected_map, [{:syntax_literal}]}},
+      {reflected.({:syn_leaf, :inner, [], :bad}), {:malformed_reflected_literal, [{:syntax_literal}]}},
+      {reflected.({:syn_raw, :bad}), {:malformed_reflected_literal, [{:raw_literal}, {:syntax_literal}]}}
+    ]
+
+    Enum.each(cases, fn {syntax, reason} ->
+      assert {:error, ^reason} = MacroSyntax.validate_expansion(syntax)
+    end)
+  end
+
+  test "every generated-syntax integrity branch has dedicated diagnostic content" do
+    cases = [
+      {{:raw_syntax_in_expansion, []}, "Macro expansion contains raw syntax",
+       "The generated expansion contains reflection-only raw syntax at the expansion root.",
+       "Build structured `Syntax`; keep `Raw` values inside reflected metadata"},
+      {{:quoted_syntax_in_expansion, [{:child, 0}]}, "Macro expansion contains quoted syntax",
+       "The generated expansion still contains quoted syntax at `child[0]`.",
+       "Splice or otherwise unquote the value before returning the expansion"},
+      {{:malformed_expansion_syntax, []}, "Macro expansion syntax is malformed",
+       "The generated expansion does not contain a valid `Node`, `Leaf`, or accepted failure value at the expansion root.",
+       "Return a well-formed structured `Syntax` value"},
+      {{:malformed_expansion_attribute, [{:attribute, 0}]}, "Macro expansion attribute is malformed",
+       "A generated syntax attribute is not an atom-keyed literal pair at `{:attribute, 0}`.",
+       "Use an atom key and a valid syntax literal value"},
+      {{:malformed_expansion_map, []}, "Macro expansion map literal is malformed",
+       "A generated syntax-map entry is not a key-value pair at the expansion root.",
+       "Provide valid syntax-literal key-value pairs"},
+      {{:malformed_expansion_literal, []}, "Macro expansion literal is malformed",
+       "A generated syntax literal has the wrong shape or host value at the expansion root.",
+       "Use a valid integer, float, string, boolean, atom, list, map, syntax, or opaque literal"},
+      {{:malformed_reflected_syntax, [{:syntax_literal}]}, "Reflected syntax value is malformed",
+       "Syntax stored inside generated metadata has an invalid node shape at `syntax literal`.",
+       "Store a well-formed reflected `Syntax` value"},
+      {{:malformed_reflected_attribute, [{:attribute, 0}, {:syntax_literal}]},
+       "Reflected syntax attribute is malformed",
+       "An attribute inside reflected syntax is not an atom-keyed literal pair at `syntax literal.{:attribute, 0}`.",
+       "Use an atom key and a valid reflected literal value"},
+      {{:malformed_reflected_map, [{:syntax_literal}]}, "Reflected syntax map is malformed",
+       "A map stored inside reflected syntax contains an entry that is not a key-value pair at `syntax literal`.",
+       "Provide valid reflected-literal key-value pairs"},
+      {{:malformed_reflected_literal, [{:raw_literal}, {:syntax_literal}]}, "Reflected syntax literal is malformed",
+       "A literal stored inside reflected syntax has the wrong shape or host value at `syntax literal.raw literal`.",
+       "Use a valid reflected syntax literal"}
+    ]
+
+    Enum.each(cases, fn {reason, title, body, hint} ->
+      {diagnostic, registry} = Errors.to_diagnostic(reason, "generated.cure", "")
+      output = Renderer.plain(diagnostic, registry, width: 80)
+
+      assert diagnostic.code == "E092"
+      assert diagnostic.key == :macro_syntax_integrity
+      assert diagnostic.title == title
+      assert String.replace(output, ~r/\s+/, " ") =~ String.replace(body, ~r/\s+/, " ")
+      assert output =~ "Hint: " <> hint
+
+      lsp = Renderer.lsp(diagnostic, registry)
+      refute Map.has_key?(lsp, "range")
+      assert lsp["message"] == title <> "\n\n" <> body
+    end)
   end
 
   test "expansion validation permits reflection-only values in syntax metadata" do
