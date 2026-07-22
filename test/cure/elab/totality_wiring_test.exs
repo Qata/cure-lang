@@ -31,19 +31,40 @@ defmodule Cure.Elab.TotalityWiringTest do
 
     assert diagnostic.code == "E013"
     assert diagnostic.primary.span.start_line == 4
-    assert diagnostic.primary.span.start_column == 4
-    assert diagnostic.primary.message == "this definition is used in a type and must always terminate"
-    assert rendered =~ "-- FUNCTION MUST BE TOTAL [E013]"
-    assert rendered =~ "4 | fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)"
-    assert rendered =~ "   ^^^^ this definition is used in a type and must always terminate"
-    assert rendered =~ "Hint: Make each recursive call use a structurally smaller argument"
-    assert rendered =~ "Runtime-only functions may remain partial"
+    assert diagnostic.primary.span.start_column == 34
+    assert diagnostic.payload.reason == :not_total
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- FUNCTION MUST BE TOTAL [E013] --------------------------------- totality.cure
+
+             `Main#andd` is evaluated while checking types, but the compiler cannot prove
+             that every call to it terminates.
+
+             at totality.cure:4:34
+             4 | fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)
+               | ------------------------------------------- this type-level function must terminate on every input
+               |                                  ^^^^ this recursive call participates in an unproven termination cycle
+
+             Note: Runtime-only functions may remain partial; only compile-time computation
+                   requires a total definition.
+
+             Hint: Make each recursive call use a structurally smaller argument, or keep this function out of types
+             """)
 
     lsp = Cure.Diagnostic.Renderer.lsp(diagnostic, registry)
 
     assert lsp["range"] == %{
-             "start" => %{"line" => 3, "character" => 3},
-             "end" => %{"line" => 3, "character" => 7}
+             "start" => %{"line" => 3, "character" => 33},
+             "end" => %{"line" => 3, "character" => 37}
+           }
+
+    assert [definition] = lsp["relatedInformation"]
+    assert definition["message"] == "this type-level function must terminate on every input"
+
+    assert definition["location"]["range"] == %{
+             "start" => %{"line" => 3, "character" => 0},
+             "end" => %{"line" => 3, "character" => 43}
            }
   end
 
@@ -56,5 +77,40 @@ defmodule Cure.Elab.TotalityWiringTest do
         "fn loop(x: Dec) -> Dec = loop(x)\n"
 
     assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "every authored self-call in an unproven termination cycle is labeled" do
+    src =
+      @types <>
+        """
+        fn andd(x: Dec, y: Dec) -> Dec = match x
+          Dcoupled() -> andd(x, y)
+          Causal() -> andd(x, y)
+        """ <>
+        @gadt
+
+    assert {:error, error} = Program.elaborate(src, file: "totality_calls.cure")
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "totality_calls.cure", src)
+
+    assert diagnostic.primary.span.start_line == 5
+    assert diagnostic.primary.span.start_column == 17
+    assert diagnostic.primary.span.end_column == 21
+
+    assert Enum.map(diagnostic.secondary, &{&1.span.start_line, &1.span.start_column, &1.message}) == [
+             {6, 15, "another recursive call in this cycle is here"},
+             {4, 1, "this type-level function must terminate on every input"}
+           ]
+
+    lsp = Cure.Diagnostic.Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 4, "character" => 16},
+             "end" => %{"line" => 4, "character" => 20}
+           }
+
+    assert Enum.map(lsp["relatedInformation"], & &1["message"]) == [
+             "another recursive call in this cycle is here",
+             "this type-level function must terminate on every input"
+           ]
   end
 end

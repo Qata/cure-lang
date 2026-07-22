@@ -692,22 +692,23 @@ defmodule Cure.Elab.Program do
   end
 
   defp certify_type_level_with_source(ast, env, opts \\ []) do
-    case TotalityClosure.certify_type_level(env) do
+    case TotalityClosure.certify_type_level_detailed(env) do
       {:ok, certified} ->
         {:ok, certified}
 
-      {:error, {:totality_required, name} = reason} ->
-        {:error, {:source_context, reason, totality_source_context(ast, name, opts)}}
+      {:error, {:totality_required, name, detail}} ->
+        reason = {:totality_required, name}
+        {:error, {:source_context, reason, totality_source_context(ast, name, detail, opts)}}
 
-      {:error, {:compile_time_totality, name, _detail} = reason} ->
-        {:error, {:source_context, reason, totality_source_context(ast, name, opts)}}
+      {:error, {:compile_time_totality, name, detail} = reason} ->
+        {:error, {:source_context, reason, totality_source_context(ast, name, detail, opts)}}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp totality_source_context(ast, qualified_name, opts) do
+  defp totality_source_context(ast, qualified_name, detail, opts) do
     bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
 
     declaration =
@@ -716,21 +717,26 @@ defmodule Cure.Elab.Program do
         _ -> false
       end)
 
-    {name_span, definition_span} =
+    {name_span, definition_span, recursive_call_spans} =
       case declaration do
-        {:function_def, meta, _body} ->
+        {:function_def, meta, body} ->
           case Cure.MetaAST.Metadata.source_info(meta) do
-            %Cure.MetaAST.SourceInfo{name: name, whole: whole} -> {name, whole}
-            _ -> {nil, nil}
+            %Cure.MetaAST.SourceInfo{name: name, whole: whole} ->
+              {name, whole, recursive_call_spans(body, bare_name)}
+
+            _ ->
+              {nil, nil, recursive_call_spans(body, bare_name)}
           end
 
         _ ->
-          {nil, nil}
+          {nil, nil, []}
       end
 
     context = %{
       span: name_span || definition_span,
       definition_span: definition_span,
+      recursive_call_spans: recursive_call_spans,
+      totality_reason: detail,
       checking: qualified_name,
       expectation_origin: :type_level_totality,
       expression_category: :function_definition
@@ -744,6 +750,45 @@ defmodule Cure.Elab.Program do
         context
     end
   end
+
+  defp recursive_call_spans({:function_call, meta, arguments}, bare_name) when is_list(meta) do
+    own =
+      if same_surface_name?(Keyword.get(meta, :name), bare_name) do
+        case Cure.MetaAST.Metadata.source_info(meta) do
+          %Cure.MetaAST.SourceInfo{callee: %Cure.Diagnostic.Span{} = span} -> [span]
+          %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> [span]
+          _ -> []
+        end
+      else
+        []
+      end
+
+    own ++ Enum.flat_map(arguments, &recursive_call_spans(&1, bare_name))
+  end
+
+  defp recursive_call_spans({_tag, _meta, children}, bare_name),
+    do: recursive_call_spans(children, bare_name)
+
+  defp recursive_call_spans(items, bare_name) when is_list(items),
+    do: Enum.flat_map(items, &recursive_call_spans(&1, bare_name))
+
+  defp recursive_call_spans(item, bare_name) when is_tuple(item) do
+    item
+    |> Tuple.to_list()
+    |> Enum.flat_map(&recursive_call_spans(&1, bare_name))
+  end
+
+  defp recursive_call_spans(_item, _bare_name), do: []
+
+  defp same_surface_name?(name, bare_name) when is_atom(name) or is_binary(name) do
+    name
+    |> to_string()
+    |> String.split(["#", "."])
+    |> List.last()
+    |> Kernel.==(bare_name)
+  end
+
+  defp same_surface_name?(_name, _bare_name), do: false
 
   @doc "Expand Tier-3 computed uses that occur in declaration position."
   @spec expand_declaration_uses(tuple() | list()) :: {:ok, term()} | {:error, term()}
