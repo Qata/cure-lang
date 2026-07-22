@@ -68,6 +68,32 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, Metadata.source_info(explicit_meta).annotation) == ":linear Nat"
   end
 
+  test "all parameter forms own binder, annotation, initializer, and whole ranges" do
+    source =
+      "fn configure({token: Int}, to destination: String = \"home\", *items: Int, **options: String) -> Int = 0\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "parameters.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "parameters.cure", emit_events: false, prelude_macros: false)
+    {:function_def, meta, _body} = find_node(ast, :function_def)
+
+    [implicit, labelled, variadic, keyword_variadic] = Keyword.fetch!(meta, :params)
+
+    for {{:param, parameter_meta, name}, expected_name, expected_whole, expected_annotation} <- [
+          {implicit, "token", "{token: Int}", ": Int"},
+          {labelled, "destination", "to destination: String = \"home\"", ": String"},
+          {variadic, "items", "*items: Int", ": Int"},
+          {keyword_variadic, "options", "**options: String", ": String"}
+        ] do
+      info = Metadata.source_info(parameter_meta)
+      assert name == expected_name
+      assert slice(source, info.name) == expected_name
+      assert slice(source, info.whole) == expected_whole
+      assert slice(source, info.annotation) == expected_annotation
+    end
+
+    assert slice(source, labelled |> elem(1) |> Metadata.source_info() |> Map.fetch!(:body)) == "\"home\""
+  end
+
   test "let bindings retain their authored whole, name, and annotation ranges" do
     source = "fn answer() -> Int = let value: Int = 1\n  value\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "let.cure", emit_events: false)

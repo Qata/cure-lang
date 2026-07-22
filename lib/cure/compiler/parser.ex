@@ -7948,13 +7948,13 @@ defmodule Cure.Compiler.Parser do
     # the annotation means the first name was the EXTERNAL caller-facing label and
     # this second one is the INTERNAL body binder. Single-name params carry no
     # label (the one name serves as both, and any call label is optional).
-    {label, name, state} =
+    {label, name, name_token, state} =
       case peek(state) do
         %Token{type: :identifier} = internal_token ->
-          {name, to_string(internal_token.value), advance(state)}
+          {name, to_string(internal_token.value), internal_token, advance(state)}
 
         _ ->
-          {nil, name, state}
+          {nil, name, name_token, state}
       end
 
     # Optional type annotation `: Type`, or a graded one `:g Type`.
@@ -7992,7 +7992,12 @@ defmodule Cure.Compiler.Parser do
       {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = name_span, %Token{} = last} ->
         case Range.through(first, last) do
           {:ok, whole} ->
-            Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name_span, annotation: annotation_span})
+            Keyword.put(meta, :source_info, %SourceInfo{
+              whole: whole,
+              name: name_span,
+              annotation: annotation_span,
+              body: ast_source_span(Keyword.get(meta, :default))
+            })
 
           _ ->
             meta
