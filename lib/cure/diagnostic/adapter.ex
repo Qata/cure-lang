@@ -23,6 +23,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   alias Cure.Diagnostic.Operational
   alias Cure.Diagnostic.Suggest
+  alias Cure.MetaAST.Metadata
 
   @unknown_name_code "E091"
 
@@ -2953,6 +2954,9 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:computed_macro_error, meta, reason}, opts) when is_list(meta) do
     keyword = Keyword.get(meta, :keyword, "computed")
     payload = %{keyword: keyword, reason: inspect(reason)} |> maybe_put_meta_location(meta)
+    source_info = Metadata.source_info(meta)
+    span = (source_info && source_info.whole) || Keyword.get(opts, :span)
+    provenance = ((source_info && source_info.provenance) || []) ++ Keyword.get(opts, :provenance, [])
 
     Diagnostic.new(
       code: "E092",
@@ -2963,9 +2967,10 @@ defmodule Cure.Diagnostic.Adapter do
         Doc.paragraph(
           "The `#{keyword}` computed macro could not produce valid Cure syntax: #{computed_macro_reason(reason)}"
         ),
-      primary: primary_label(opts, "this macro invocation generated the failing syntax"),
+      primary: pickup_label(span, :primary, "this macro invocation generated the failing syntax"),
       notes: ["Edit the authored macro invocation or its rule; generated syntax is not the user-facing source."],
-      provenance: Keyword.get(opts, :provenance, []),
+      suggestions: computed_macro_suggestions(reason),
+      provenance: provenance,
       payload: payload
     )
   end
@@ -7201,6 +7206,31 @@ defmodule Cure.Diagnostic.Adapter do
     do: "macro rejected expansion: the macro reported `#{name}`"
 
   defp computed_macro_reason(_reason), do: "the generated expansion was rejected by the compiler"
+
+  defp computed_macro_suggestions({:invalid_generated_syntax, {:raw_syntax_in_expansion, _path}}),
+    do: [
+      %Suggestion{
+        message: "Return structured `Syntax`; use raw syntax only for reflection",
+        applicability: :manual
+      }
+    ]
+
+  defp computed_macro_suggestions({:invalid_generated_syntax, {:quoted_syntax_in_expansion, _path}}),
+    do: [
+      %Suggestion{
+        message: "Unquote the generated syntax before returning it from the expander",
+        applicability: :manual
+      }
+    ]
+
+  defp computed_macro_suggestions({:author_diagnostics, _diagnostics}),
+    do: [%Suggestion{message: "Address the macro's authored diagnostics at this invocation", applicability: :manual}]
+
+  defp computed_macro_suggestions({:author_failure, name, _args}),
+    do: [%Suggestion{message: "Fix the `#{name}` condition reported by this macro", applicability: :manual}]
+
+  defp computed_macro_suggestions(_reason),
+    do: [%Suggestion{message: "Fix this invocation or the computed macro's expander", applicability: :manual}]
 
   defp format_syntax_path(path) do
     path

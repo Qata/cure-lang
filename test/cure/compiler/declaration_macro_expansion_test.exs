@@ -93,7 +93,8 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     """
 
     assert {:error,
-            {:codegen_error, {:computed_macro_error, meta, {:invalid_generated_syntax, {:raw_syntax_in_expansion, []}}}}} =
+            {:codegen_error, {:computed_macro_error, meta, {:invalid_generated_syntax, {:raw_syntax_in_expansion, []}}}} =
+              reason} =
              Cure.Compiler.compile_and_load(source, emit_events: false)
 
     assert Keyword.get(meta, :keyword) == "bad"
@@ -107,6 +108,32 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert rendered =~ "invalid macro expansion"
     assert rendered =~ "raw syntax is only valid for reflection"
     assert rendered =~ "macro.cure:9"
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "macro_generated.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- COMPUTED MACRO EXPANSION FAILED [E092] ----------------- macro_generated.cure
+
+             The `bad` computed macro could not produce valid Cure syntax: invalid macro
+             expansion: raw syntax is only valid for reflection, not generated Cure code ()
+
+             at macro_generated.cure:9:24
+             9 |   fn result() -> Int = bad
+               |                        ^^^ this macro invocation generated the failing syntax
+
+             Note: Edit the authored macro invocation or its rule; generated syntax is not
+                   the user-facing source.
+
+             Hint: Return structured `Syntax`; use raw syntax only for reflection
+
+             expansion: bad
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 8, "character" => 23},
+             "end" => %{"line" => 8, "character" => 26}
+           }
   end
 
   test "author rejection results retain a friendly macro diagnostic category" do
