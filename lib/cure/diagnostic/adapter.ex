@@ -1591,6 +1591,10 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: extern_union_failure(:indistinct, name, reason, context, opts)
 
+  def from_error({:source_context, {:bounded_lit_out_of_range, value, bound}, context}, opts)
+      when is_map(context),
+      do: bounded_literal_failure(value, bound, context, opts)
+
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
     opts =
       opts
@@ -3729,8 +3733,11 @@ defmodule Cure.Diagnostic.Adapter do
       do: contextual_type_failure(kind, %{detail: detail}, opts)
 
   def from_error({kind, first, second}, opts)
-      when kind in [:rewrite_no_match, :non_uniform_parameter, :bounded_lit_out_of_range],
+      when kind in [:rewrite_no_match, :non_uniform_parameter],
       do: contextual_type_failure(kind, %{first: first, second: second}, opts)
+
+  def from_error({:bounded_lit_out_of_range, value, bound}, opts),
+    do: bounded_literal_failure(value, bound, %{}, opts)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
@@ -3958,6 +3965,49 @@ defmodule Cure.Diagnostic.Adapter do
   defp runtime_shape_name(:boolean), do: "boolean"
   defp runtime_shape_name(:list), do: "list"
   defp runtime_shape_name(shape), do: name_to_string(shape)
+
+  defp bounded_literal_failure(value, bound, context, opts) do
+    literal_span = Map.get(context, :span) || Keyword.get(opts, :span)
+    expectation_span = Map.get(context, :expectation_span)
+
+    {interval, hint} =
+      if is_integer(bound) and bound > 0 do
+        {"from `0` through `#{bound - 1}`", "Use an integer from 0 through #{bound - 1}"}
+      else
+        {"in an empty interval because its bound is `#{bound}`", "Use a positive bound before constructing this value"}
+      end
+
+    secondary =
+      case expectation_span do
+        %Span{} = span when span != literal_span ->
+          [%Label{span: span, style: :secondary, message: "this annotation requires `Bounded(#{bound})`"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "#{value} is outside `Bounded(#{bound})`",
+      body: Doc.paragraph("`Bounded(#{bound})` contains integer values #{interval}, but this literal is `#{value}`."),
+      primary:
+        if(literal_span,
+          do: %Label{span: literal_span, style: :primary, message: "this value does not fit the declared bound"},
+          else: primary_label(opts, "this value does not fit the declared bound")
+        ),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind: :bounded_lit_out_of_range,
+        value: value,
+        bound: bound,
+        minimum: 0,
+        maximum: if(is_integer(bound) and bound > 0, do: bound - 1, else: nil)
+      }
+    )
+  end
 
   defp record_owner(name) do
     case name_to_string(name) |> String.split("#", parts: 2) do
