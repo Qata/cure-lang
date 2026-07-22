@@ -702,7 +702,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+      assert {:extern_union_indistinct, :raw, _} = semantic_error(src)
     end
 
     # SUPERSEDED. This originally asserted `Bool | Atom` was REJECTED, on the grounds
@@ -780,7 +780,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+      assert {:extern_union_indistinct, :raw, _} = semantic_error(src)
     end
 
     test "a THREE-member union with a refining guard orders correctly" do
@@ -848,7 +848,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_returns_union, :head, _}} = Program.elaborate(src)
+      assert {:extern_returns_union, :head, _} = semantic_error(src)
     end
   end
 
@@ -883,7 +883,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+      assert {:extern_union_indistinct, :raw, _} = semantic_error(src)
     end
 
     test "Bool true and Atom :true collide too" do
@@ -894,7 +894,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+      assert {:extern_union_indistinct, :raw, _} = semantic_error(src)
     end
 
     test "but INSIDE Cure they stay distinct — injection is by literal SYNTAX" do
@@ -1014,7 +1014,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_union_indistinct, :look, _}} = Program.elaborate(src)
+      assert {:extern_union_indistinct, :look, _} = semantic_error(src)
     end
   end
 
@@ -1044,7 +1044,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+      assert {:extern_union_indistinct, :raw, _} = semantic_error(src)
     end
 
     test "a union NESTED under an Effect (not its head) is still rejected" do
@@ -1055,7 +1055,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_returns_union, :raw, _}} = Program.elaborate(src)
+      assert {:extern_returns_union, :raw, _} = semantic_error(src)
     end
 
     test "an effectful lookup returning a declared-erasure carrier or a literal" do
@@ -1079,5 +1079,10 @@ defmodule Cure.Elab.UnionTest do
       assert apply(:"Cure.EFU4", :look, [:cure_union_no_such_name]) ==
                :"Union<Atom#:undefined|EFU4#Handle>$Atom#:undefined"
     end
+  end
+
+  defp semantic_error(source) do
+    assert {:error, error} = Program.elaborate(source)
+    Program.semantic_error(error)
   end
 end

@@ -704,8 +704,17 @@ defmodule Cure.Elab.Declarations do
       {:data, ukey, [], []} ->
         if Cure.Elab.Union.union_family?(ukey) do
           case Cure.Elab.Union.discriminable(Cure.Elab.Union.members_of(env, ukey), env) do
-            :ok -> :ok
-            {:error, reason} -> {:error, {:extern_union_indistinct, sig.name, reason}}
+            :ok ->
+              :ok
+
+            {:error, reason} ->
+              {:error,
+               extern_union_source_context(
+                 {:extern_union_indistinct, sig.name, reason},
+                 sig,
+                 env,
+                 [ukey]
+               )}
           end
         else
           :ok
@@ -715,12 +724,51 @@ defmodule Cure.Elab.Declarations do
         # A union NESTED inside the return type (`List(Int | Bool)`) cannot be re-tagged:
         # the boundary would have to walk an arbitrary structure. Reject.
         if Elaborator.union_goal?(codomain) do
-          {:error, {:extern_returns_union, sig.name, codomain}}
+          {:error,
+           extern_union_source_context(
+             {:extern_returns_union, sig.name, codomain},
+             sig,
+             env,
+             nested_union_families(codomain)
+           )}
         else
           :ok
         end
     end
   end
+
+  defp extern_union_source_context(reason, sig, env, families) do
+    union_members =
+      families
+      |> Enum.flat_map(&Cure.Elab.Union.members_of(env, &1))
+      |> Enum.map(& &1.key)
+      |> Enum.uniq()
+
+    {:source_context, reason,
+     %{
+       span: sig.return_span || sig.declaration_span,
+       return_span: sig.return_span,
+       declaration_span: sig.declaration_span,
+       name_span: sig.name_span,
+       extern_span: sig.extern_span,
+       checking: sig.name,
+       expectation_origin: :ffi_boundary,
+       expression_category: :extern_return_type,
+       union_families: families,
+       union_members: union_members
+     }}
+  end
+
+  defp nested_union_families({:data, family, parameters, indices}) do
+    own = if Cure.Elab.Union.union_family?(family), do: [family], else: []
+    own ++ Enum.flat_map(parameters ++ indices, &nested_union_families/1)
+  end
+
+  defp nested_union_families(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.flat_map(&nested_union_families/1)
+
+  defp nested_union_families(list) when is_list(list), do: Enum.flat_map(list, &nested_union_families/1)
+  defp nested_union_families(_other), do: []
 
   defp extern_codomain(type, 0), do: type
   defp extern_codomain({:pi, _g, _dom, cod}, n), do: extern_codomain(cod, n - 1)
@@ -1285,6 +1333,8 @@ defmodule Cure.Elab.Declarations do
     {params, constraint_specs} =
       inject_constraint_dicts(params1, Keyword.get(meta, :constraints, []))
 
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+
     with {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
          ctx = build_context(env, telescope),
          {:ok, return_core} <- signature_return_core(return_expr, scope, env, ctx) do
@@ -1297,6 +1347,9 @@ defmodule Cure.Elab.Declarations do
          scope: scope,
          return_core: return_core,
          return_span: function_return_span(meta),
+         declaration_span: source_info && source_info.whole,
+         name_span: source_info && source_info.name,
+         extern_span: source_info && decorator_span(source_info, "extern", :whole),
          extern_arity_span: decorator_argument_span(meta, "extern", 2),
          inferred_return: is_nil(return_expr),
          constraints: constraint_specs,
@@ -1311,9 +1364,35 @@ defmodule Cure.Elab.Declarations do
 
   defp function_return_span(meta) do
     case Cure.MetaAST.Metadata.source_info(meta) do
-      %Cure.MetaAST.SourceInfo{annotation: %Cure.Diagnostic.Span{} = span} -> span
-      _ -> nil
+      %Cure.MetaAST.SourceInfo{annotation: %Cure.Diagnostic.Span{} = span} ->
+        span
+
+      _ ->
+        return_type_span(Keyword.get(meta, :return_type))
     end
+  end
+
+  defp return_type_span({_tag, meta, children}) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> children |> return_type_child_spans() |> cover_source_spans()
+    end
+  end
+
+  defp return_type_span(_other), do: nil
+
+  defp return_type_child_spans(children) when is_list(children),
+    do: Enum.flat_map(children, &List.wrap(return_type_span(&1)))
+
+  defp return_type_child_spans(_children), do: []
+
+  defp cover_source_spans([]), do: nil
+
+  defp cover_source_spans(spans) do
+    first = Enum.min_by(spans, & &1.start_byte)
+    last = Enum.max_by(spans, & &1.end_byte)
+
+    %{first | end_byte: last.end_byte, end_line: last.end_line, end_column: last.end_column}
   end
 
   defp decorator_argument_span(meta, decorator, index) do
