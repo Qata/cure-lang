@@ -412,8 +412,11 @@ defmodule Cure.Compiler.SourceSpansTest do
     info = Metadata.source_info(meta)
 
     assert slice(source, info.whole) == "if x > 0 then x else 0"
+    assert slice(source, info.opener) == "if"
     assert slice(source, info.condition) == "x > 0"
+    assert slice(source, Map.fetch!(info.fields, :then_keyword)) == "then"
     assert slice(source, info.then_branch) == "x"
+    assert slice(source, Map.fetch!(info.fields, :else_keyword)) == "else"
     assert slice(source, info.else_branch) == "0"
   end
 

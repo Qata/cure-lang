@@ -6007,17 +6007,19 @@ defmodule Cure.Compiler.Parser do
     # Block form: if cond <newline> <indent> ... <dedent> [elif ...] [else ...]
     case peek(state) do
       %Token{type: :keyword, value: :then} ->
+        then_token = peek(state)
         state = advance(state)
         {then_branch, state} = parse_expr(state, 0)
 
-        {else_branch, state} =
+        {else_branch, else_token, state} =
           case peek(state) do
-            %Token{type: :keyword, value: :else} ->
+            %Token{type: :keyword, value: :else} = else_token ->
               state = advance(state)
-              parse_expr(state, 0)
+              {else_branch, state} = parse_expr(state, 0)
+              {else_branch, else_token, state}
 
             _ ->
-              {{:literal, [subtype: :null], nil}, state}
+              {{:literal, [subtype: :null], nil}, nil, state}
           end
 
         meta =
@@ -6027,7 +6029,8 @@ defmodule Cure.Compiler.Parser do
             condition,
             then_branch,
             else_branch,
-            state
+            then_token,
+            else_token
           )
 
         ast = {:conditional, meta, [condition, then_branch, else_branch]}
@@ -6039,19 +6042,21 @@ defmodule Cure.Compiler.Parser do
 
         state = skip_newlines(state)
 
-        {else_branch, state} =
+        {else_branch, else_token, state} =
           case peek(state) do
-            %Token{type: :keyword, value: :elif} ->
+            %Token{type: :keyword, value: :elif} = elif_token ->
               # Desugar elif to nested conditional
-              parse_if(state)
+              {else_branch, state} = parse_if(state)
+              {else_branch, elif_token, state}
 
-            %Token{type: :keyword, value: :else} ->
+            %Token{type: :keyword, value: :else} = else_token ->
               state = advance(state)
               state = skip_newlines(state)
-              parse_block(state)
+              {else_branch, state} = parse_block(state)
+              {else_branch, else_token, state}
 
             _ ->
-              {{:literal, [subtype: :null], nil}, state}
+              {{:literal, [subtype: :null], nil}, nil, state}
           end
 
         meta =
@@ -6061,7 +6066,8 @@ defmodule Cure.Compiler.Parser do
             condition,
             then_branch,
             else_branch,
-            state
+            nil,
+            else_token
           )
 
         ast = {:conditional, meta, [condition, then_branch, else_branch]}
@@ -6934,38 +6940,37 @@ defmodule Cure.Compiler.Parser do
 
   defp match_arm_source_span(arm), do: first_node_source_span(arm)
 
-  defp put_conditional_source_info(meta, if_token, condition, then_branch, else_branch, state) do
+  defp put_conditional_source_info(meta, if_token, condition, then_branch, else_branch, then_token, else_token) do
     condition_span = first_node_source_span(condition)
     then_span = first_node_source_span(then_branch)
     else_span = first_node_source_span(else_branch)
 
-    whole =
-      case {if_token.span, authored_token(state)} do
-        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
-          case Range.through(first, last) do
-            {:ok, span} -> span
-            _ -> nil
-          end
+    whole = through_spans(if_token.span, else_span || then_span || condition_span)
 
-        _ ->
-          nil
-      end
+    fields =
+      %{}
+      |> maybe_put_source_field(:then_keyword, then_token)
+      |> maybe_put_source_field(:else_keyword, else_token)
 
     if whole || condition_span || then_span || else_span do
-      Keyword.put(
+      Metadata.put_source_info(
         meta,
-        :source_info,
         %SourceInfo{
           whole: whole,
+          opener: if_token.span,
           condition: condition_span,
           then_branch: then_span,
-          else_branch: else_span
+          else_branch: else_span,
+          fields: fields
         }
       )
     else
       meta
     end
   end
+
+  defp maybe_put_source_field(fields, _role, nil), do: fields
+  defp maybe_put_source_field(fields, role, %Token{span: span}), do: Map.put(fields, role, span)
 
   defp first_node_source_span(node) do
     case node_source_span(node) do
