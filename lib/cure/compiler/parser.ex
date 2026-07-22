@@ -3361,7 +3361,8 @@ defmodule Cure.Compiler.Parser do
       # never reaches this prefix clause.
       :dot ->
         {inner, state} = parse_forced_inner(advance(state))
-        {{:forced_pattern, [line: token.line, col: token.col], [inner]}, state}
+        meta = put_forced_pattern_source_info([line: token.line, col: token.col], token, inner)
+        {{:forced_pattern, meta, [inner]}, state}
 
       # Named-implicit dot pattern `{ name = <expr> }` in a constructor-argument
       # position — annotates an erased implicit index by name (Lean/Idris-style),
@@ -4219,16 +4220,56 @@ defmodule Cure.Compiler.Parser do
     state = expect_named_implicit_pattern_assign(state, brace_token, name_token, name)
     {inner, state} = parse_expr(state, 0)
 
-    {state, _close_token} =
+    {state, close_token} =
       expect_container_close(state, :rbrace, :named_implicit_pattern, brace_token, [inner], false, %{
         binder: name,
         binder_span: name_token.span,
+        previous_span: pattern_value_terminal_span(inner),
         closing_tokens: [:comma, :rparen, :arrow]
       })
 
-    meta = [line: brace_token.line, col: brace_token.col, name: name]
+    meta =
+      [line: brace_token.line, col: brace_token.col, name: name]
+      |> put_named_implicit_source_info(brace_token, close_token, name_token, inner)
+
     {{:named_implicit_pat, meta, [inner]}, state}
   end
+
+  defp put_forced_pattern_source_info(meta, %Token{span: dot}, inner) do
+    inner_span = ast_source_span(inner)
+
+    Metadata.put_source_info(meta, %SourceInfo{
+      whole: if(inner_span, do: merge_source_spans(dot, inner_span), else: dot),
+      opener: dot,
+      operator: dot,
+      body: inner_span,
+      operands: List.wrap(inner_span)
+    })
+  end
+
+  defp put_named_implicit_source_info(meta, %Token{span: opener}, close_token, %Token{span: name}, inner) do
+    body = ast_source_span(inner)
+    closer = if match?(%Token{}, close_token), do: close_token.span
+    ending = closer || body || name
+
+    Metadata.put_source_info(meta, %SourceInfo{
+      whole: merge_source_spans(opener, ending),
+      name: name,
+      opener: opener,
+      closer: closer,
+      body: body,
+      fields: %{binder: name}
+    })
+  end
+
+  defp pattern_value_terminal_span({_kind, meta, _children} = node) when is_list(meta) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{body: %Cure.Diagnostic.Span{} = body} -> body
+      _ -> ast_source_span(node)
+    end
+  end
+
+  defp pattern_value_terminal_span(node), do: ast_source_span(node)
 
   defp expect_named_implicit_pattern_assign(state, brace_token, name_token, name) do
     case expect_token(state, :assign) do

@@ -765,14 +765,16 @@ defmodule Cure.Elab.Elaborator do
   # before the catch-all so this precise error, not `{:unsupported_expression,…}`,
   # is reported.
   def elaborate_expr_typed({:forced_pattern, meta, _children}, _names, _ctx, _env),
-    do: {:error, {:forced_pattern_not_in_pattern, meta}}
+    do: {:error, {:source_context, {:forced_pattern_not_in_pattern, meta}, pattern_only_context(meta, :forced_pattern)}}
 
   # A named-implicit dot pattern `{ name = <expr> }` is only meaningful as a
   # constructor-argument PATTERN position (annotating an erased index by name).
   # Reaching ordinary expression elaboration means it was used outside a pattern
   # — reject it with a precise error (mirrors the forced-pattern guard above).
   def elaborate_expr_typed({:named_implicit_pat, meta, _children}, _names, _ctx, _env),
-    do: {:error, {:named_implicit_not_in_pattern, meta}}
+    do:
+      {:error,
+       {:source_context, {:named_implicit_not_in_pattern, meta}, pattern_only_context(meta, :named_implicit_pattern)}}
 
   def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
     cond do
@@ -1250,6 +1252,19 @@ defmodule Cure.Elab.Elaborator do
     do: {:error, splice_outside_quote_error(tag, meta)}
 
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  defp pattern_only_context(meta, category) do
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+
+    %{
+      span: source_info && source_info.whole,
+      opener_span: source_info && source_info.opener,
+      name_span: source_info && source_info.name,
+      body_span: source_info && source_info.body,
+      expectation_origin: :pattern,
+      expression_category: category
+    }
+  end
 
   defp attach_application_context(
          {:error, {:applied_non_function, details} = reason},
