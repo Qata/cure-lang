@@ -165,19 +165,41 @@ defmodule Cure.Diagnostic.Adapter do
     match_inference_failure(:unknown, %{}, opts)
   end
 
-  def from_error({:lambda_expected_pi, expected}, opts) do
+  def from_error({:lambda_expected_pi, %{expected: expected} = details}, opts) do
+    expected_surface = surface_type(expected)
+    parameter_index = Map.get(details, :parameter_index, 0)
+
     Diagnostic.new(
       code: "E093",
       key: :type_mismatch,
       severity: :error,
-      title: "Lambda used where a function was not expected",
+      title: "Lambda needs a function type",
       body:
         Doc.paragraph(
-          "This lambda can only be checked against a function type, but the expected type is `#{surface_type(expected)}`."
+          "This lambda has parameter #{parameter_index + 1}, but its surrounding context expects `#{expected_surface}` at that point. An untyped lambda parameter can only be checked when the expected type provides a corresponding function input."
         ),
-      primary: primary_label(opts, "change the expected type or remove this lambda"),
-      payload: %{kind: :lambda_expected_pi, expected: expected}
+      primary: primary_label(opts, "this lambda is used where a non-function value is required"),
+      secondary:
+        case Map.get(details, :parameter_span) do
+          %Span{} = span -> [pickup_label(span, :secondary, "this parameter needs a function input type")]
+          _ -> []
+        end,
+      suggestions: [
+        %Suggestion{
+          message: "Pass this lambda to a function-valued parameter, or replace it with a `#{expected_surface}` value",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :lambda_expected_pi,
+        expected_surface: expected_surface,
+        parameter_index: parameter_index
+      }
     )
+  end
+
+  def from_error({:lambda_expected_pi, expected}, opts) do
+    from_error({:lambda_expected_pi, %{expected: expected, parameter_index: 0}}, opts)
   end
 
   def from_error({:unsupported_async, message, meta}, opts)

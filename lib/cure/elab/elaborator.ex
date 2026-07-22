@@ -2896,19 +2896,39 @@ defmodule Cure.Elab.Elaborator do
   defp elaborate_lambda([], body_expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked(body_expr, expected_core, names, ctx, env)
 
-  defp elaborate_lambda([{:param, _pm, pname} | rest], body_expr, expected_core, names, ctx, env) do
+  defp elaborate_lambda(params, body_expr, expected_core, names, ctx, env),
+    do: elaborate_lambda(params, body_expr, expected_core, names, ctx, env, 0)
+
+  defp elaborate_lambda([], body_expr, expected_core, names, ctx, env, _index),
+    do: elaborate_expr_checked(body_expr, expected_core, names, ctx, env)
+
+  defp elaborate_lambda(
+         [{:param, param_meta, pname} | rest],
+         body_expr,
+         expected_core,
+         names,
+         ctx,
+         env,
+         index
+       ) do
     case Kernel.normalize(ctx, expected_core) do
       {:pi, _g, dom_term, cod_term} ->
         dom_value = Eval.eval(dom_term, Context.env(ctx))
         ctx1 = Context.extend(ctx, dom_value)
 
         with {:ok, body_term} <-
-               elaborate_lambda(rest, body_expr, cod_term, [pname | names], ctx1, env) do
+               elaborate_lambda(rest, body_expr, cod_term, [pname | names], ctx1, env, index + 1) do
           {:ok, {:lam, Cure.Core.Grade.unrestricted(), dom_term, body_term}}
         end
 
       _ ->
-        {:error, {:lambda_expected_pi, expected_core}}
+        {:error,
+         {:lambda_expected_pi,
+          %{
+            expected: expected_core,
+            parameter_index: index,
+            parameter_span: surface_expression_span({:param, param_meta, []})
+          }}}
     end
   end
 

@@ -8504,12 +8504,71 @@ defmodule Cure.Compiler.Parser do
         end
       end
 
-    state = if close_token, do: expect_lambda_arrow(state, token, close_token), else: state
+    {state, arrow_token} =
+      if close_token, do: expect_lambda_arrow(state, token, close_token), else: {state, nil}
+
     state = skip_newlines(state)
     {body, state} = parse_lambda_block_body(state, token)
 
-    ast = {:lambda, [params: params, line: token.line, col: token.col], [body]}
+    meta = [params: params, line: token.line, col: token.col]
+
+    meta =
+      put_lambda_source_info(
+        meta,
+        token,
+        open_token,
+        close_token,
+        arrow_token,
+        lambda_terminal_token(state),
+        params,
+        body
+      )
+
+    ast = {:lambda, meta, [body]}
     {ast, state}
+  end
+
+  defp put_lambda_source_info(
+         meta,
+         lambda_token,
+         open_token,
+         close_token,
+         arrow_token,
+         terminal_token,
+         params,
+         body
+       ) do
+    body_span = ast_source_span(body)
+    terminal_span = (terminal_token && terminal_token.span) || body_span
+    parameter_spans = params |> Enum.map(&ast_source_span/1) |> Enum.reject(&is_nil/1)
+
+    parameter_range =
+      case {open_token, close_token} do
+        {%Token{span: opener}, %Token{span: closer}} -> through_spans(opener, closer)
+        _ -> nil
+      end
+
+    Metadata.put_source_info(meta, %SourceInfo{
+      whole: through_spans(lambda_token.span, terminal_span) || lambda_token.span,
+      opener: lambda_token.span,
+      closer: terminal_token && terminal_token.span,
+      operator: arrow_token && arrow_token.span,
+      arguments: parameter_spans,
+      body: body_span,
+      fields: %{
+        parameters: parameter_range,
+        parameter_opener: open_token && open_token.span,
+        parameter_closer: close_token && close_token.span
+      }
+    })
+  end
+
+  defp lambda_terminal_token(state) do
+    case peek_at(state, -1) do
+      %Token{type: :rbrace} = token -> token
+      %Token{type: :keyword, value: :end} = token -> token
+      _ -> nil
+    end
   end
 
   defp expect_lambda_open(state, lambda_token) do
@@ -8541,8 +8600,8 @@ defmodule Cure.Compiler.Parser do
 
   defp expect_lambda_arrow(state, lambda_token, close_token) do
     case expect_token(state, :arrow) do
-      {:ok, _arrow, next_state} ->
-        next_state
+      {:ok, arrow, next_state} ->
+        {next_state, arrow}
 
       {:error, next_state} ->
         [_generic | rest] = next_state.errors
@@ -8562,7 +8621,7 @@ defmodule Cure.Compiler.Parser do
              column: observed.col
            }}
 
-        %{next_state | errors: [error | rest]}
+        {%{next_state | errors: [error | rest]}, nil}
     end
   end
 

@@ -56,6 +56,27 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, function_info.body) == "x"
   end
 
+  test "lambda metadata owns its parameters, arrow, body, and complete expression" do
+    source = "mod Demo\n  fn use() = apply(fn (left, right) -> left end)\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "lambda.cure", emit_events: false)
+
+    assert {:ok, ast} =
+             Parser.parse(tokens, file: "lambda.cure", emit_events: false, prelude_macros: false)
+
+    {:lambda, meta, [_body]} = find_node(ast, :lambda)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "fn (left, right) -> left end"
+    assert slice(source, info.opener) == "fn"
+    assert slice(source, info.closer) == "end"
+    assert slice(source, info.operator) == "->"
+    assert slice(source, info.body) == "left"
+    assert slice(source, info.fields.parameters) == "(left, right)"
+    assert slice(source, info.fields.parameter_opener) == "("
+    assert slice(source, info.fields.parameter_closer) == ")"
+    assert Enum.map(info.arguments, &slice(source, &1)) == ["left", "right"]
+  end
+
   test "parameter source info owns the authored annotation range" do
     source = "fn answer({value: Int}, count :linear Nat) -> Int = count\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "params.cure", emit_events: false)
