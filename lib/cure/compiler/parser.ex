@@ -8447,8 +8447,7 @@ defmodule Cure.Compiler.Parser do
 
     # Parse module name (dotted path)
     name_start = peek(state)
-    {name, state} = parse_dotted_name(state)
-    name_end = authored_token(state)
+    {name, name_end, state} = parse_dotted_name_owned(state)
     state = skip_newlines(state)
 
     # Parse indented body. Leading `##` docs immediately after `mod Name`
@@ -8457,7 +8456,7 @@ defmodule Cure.Compiler.Parser do
     {body_stmts, leading_doc, state} = parse_definition_block_with_lead_doc(state)
 
     meta = [container_type: :module, name: name, language: :cure, line: token.line, col: token.col]
-    meta = put_container_source_info(meta, token, name_start, name_end, state)
+    meta = put_body_declaration_source_info(meta, token, name_start, name_end, body_stmts)
     meta = if leading_doc != "", do: Keyword.put(meta, :doc, leading_doc), else: meta
     ast = {:container, meta, body_stmts}
     {ast, state}
@@ -8473,8 +8472,7 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     name_start = peek(state)
-    {name, state} = parse_dotted_name(state)
-    name_end = authored_token(state)
+    {name, name_end, state} = parse_dotted_name_owned(state)
     state = skip_newlines(state)
     {body_stmts, state} = parse_definition_block(state)
 
@@ -8486,9 +8484,21 @@ defmodule Cure.Compiler.Parser do
       col: token.col
     ]
 
-    meta = put_container_source_info(meta, token, name_start, name_end, state)
+    meta = put_body_declaration_source_info(meta, token, name_start, name_end, body_stmts)
 
     {{:container, meta, body_stmts}, state}
+  end
+
+  defp put_body_declaration_source_info(meta, keyword, name_start, name_end, body) do
+    branches = body |> Enum.map(&ast_source_span/1) |> Enum.reject(&is_nil/1)
+    name = through_spans(name_start.span, name_end.span) || name_start.span
+
+    Metadata.put_source_info(meta, %SourceInfo{
+      whole: through_spans(keyword.span, List.last(branches) || name) || keyword.span,
+      opener: keyword.span,
+      name: name,
+      branches: branches
+    })
   end
 
   # -- Fixity declarations (Phase 3) -----------------------------------------

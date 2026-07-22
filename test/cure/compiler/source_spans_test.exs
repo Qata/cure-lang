@@ -199,9 +199,25 @@ defmodule Cure.Compiler.SourceSpansTest do
     module_info = Metadata.source_info(module_meta)
     record_info = Metadata.source_info(record_meta)
     assert slice(source, module_info.whole) == "mod Demo.Core\n  rec Point\n    x: Int"
+    assert slice(source, module_info.opener) == "mod"
     assert slice(source, module_info.name) == "Demo.Core"
+    assert Enum.map(module_info.branches, &slice(source, &1)) == ["rec Point\n    x: Int"]
     assert slice(source, record_info.whole) == "rec Point\n    x: Int"
     assert slice(source, record_info.name) == "Point"
+  end
+
+  test "proof containers retain exact dotted names and child declaration ranges" do
+    source = "proof Laws.Identity\n  fn reflexive(x: Int) -> Int = x\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "proof.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "proof.cure", emit_events: false, prelude_macros: false)
+
+    {:container, meta, _} = find_node(ast, :container)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "proof Laws.Identity\n  fn reflexive(x: Int) -> Int = x"
+    assert slice(source, info.opener) == "proof"
+    assert slice(source, info.name) == "Laws.Identity"
+    assert Enum.map(info.branches, &slice(source, &1)) == ["fn reflexive(x: Int) -> Int = x"]
   end
 
   test "type declarations and aliases retain exact declaration and name ranges" do
