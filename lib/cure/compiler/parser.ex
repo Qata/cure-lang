@@ -7239,12 +7239,13 @@ defmodule Cure.Compiler.Parser do
 
     # Expect fn keyword next
     case peek(state) do
-      %Token{type: :keyword, value: :fn} ->
+      %Token{type: :keyword, value: :fn} = function_token ->
         state = advance(state)
         # After `local fn`, a name (identifier or soft keyword) must follow.
         case peek(state) do
           %Token{type: type} when type in [:identifier, :keyword] ->
-            parse_fn_def(state, token, :private)
+            {ast, state} = parse_fn_def(state, token, :private)
+            {put_local_function_keyword(ast, function_token), state}
 
           _ ->
             parse_lambda_body(state, token)
@@ -7258,6 +7259,17 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  defp put_local_function_keyword({:function_def, meta, body}, %Token{} = function_token) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{} = info ->
+        fields = maybe_put_source_field(info.fields, :function_keyword, function_token)
+        {:function_def, Metadata.put_source_info(meta, %{info | fields: fields}), body}
+
+      _ ->
+        {:function_def, meta, body}
+    end
+  end
+
   # -- Named Function Definition ---------------------------------------------
 
   defp parse_fn_def(state, fn_token, visibility) do
@@ -7268,47 +7280,58 @@ defmodule Cure.Compiler.Parser do
     # Parse parameter list. Keep ownership here so a missing `(` does not let
     # the generic parameter parser consume `->` or `=` as a parameter name and
     # blame a later token for the declaration's real mistake.
-    {params, state} = parse_function_params(state, name, name_token)
+    {params, parameter_span, state} = parse_function_params(state, name, name_token)
 
     # Optional return type: -> Type
-    {return_type, state} =
+    {return_type, return_arrow_token, state} =
       case peek(state) do
-        %Token{type: :arrow} ->
+        %Token{type: :arrow} = arrow_token ->
           state = advance(state)
-          parse_type_expr(state)
+          {return_type, state} = parse_type_expr(state)
+          {return_type, arrow_token, state}
 
         _ ->
-          {nil, state}
+          {nil, nil, state}
       end
 
     # Optional effect annotation: ! Effect, Effect2
-    {effects, state} =
+    {effects, effects_span, state} =
       case peek(state) do
-        %Token{type: :bang} ->
+        %Token{type: :bang} = bang_token ->
           state = advance(state)
-          parse_effect_list(state)
+          {effects, last_effect_token, state} = parse_effect_list(state)
+          span = through_spans(bang_token.span, last_effect_token.span) || bang_token.span
+          {effects, span, state}
 
         _ ->
-          {nil, state}
+          {nil, nil, state}
       end
 
     # Optional guard: when expr
     # Parse at BP 6 to stop before `=` (BP 5) so the guard doesn't consume the body
-    {guard, state} =
+    {guard, guard_span, state} =
       case peek(state) do
-        %Token{type: :keyword, value: :when} ->
+        %Token{type: :keyword, value: :when} = when_token ->
           state = advance(state)
           {g, state} = parse_expr(state, bp_above(state, "="))
-          {g, state}
+          span = through_spans(when_token.span, ast_source_span(g)) || when_token.span
+          {g, span, state}
 
         _ ->
-          {nil, state}
+          {nil, nil, state}
       end
 
     # Optional interface requirements: `requires Proto(T), ...`. The former
     # constraint-position `where` remains a deprecated migration spelling;
     # declaration-local `where` is reserved for the post-body definition block.
+    requirements_token = peek(state)
     {constraints, state} = parse_requirements_clause(state)
+
+    requirements_span =
+      case constraints |> List.last() |> ast_source_span() do
+        %Cure.Diagnostic.Span{} = last -> through_spans(requirements_token.span, last)
+        _ -> nil
+      end
 
     state = skip_newlines(state)
 
@@ -7319,11 +7342,26 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         {body, state} = parse_required_function_body(state, assign_token)
 
-        {where_bindings, state} = parse_post_body_where(state)
+        {where_bindings, where_span, state} = parse_post_body_where(state)
 
         meta =
-          build_fn_meta(state, fn_token, name_token, name, params, return_type, visibility, guard, constraints, effects)
-          |> put_function_body_source_info(body)
+          build_fn_meta(
+            fn_token,
+            name_token,
+            name,
+            params,
+            return_type,
+            visibility,
+            guard,
+            constraints,
+            effects,
+            parameter_span,
+            return_arrow_token,
+            effects_span,
+            guard_span,
+            requirements_span
+          )
+          |> put_function_body_source_info(body, assign_token, where_span)
 
         meta = if where_bindings == [], do: meta, else: Keyword.put(meta, :where, where_bindings)
         ast = {:function_def, meta, [body]}
@@ -7340,11 +7378,10 @@ defmodule Cure.Compiler.Parser do
             {body, state} = parse_required_function_body(state, assign_token)
             state = expect_dedent(state)
 
-            {where_bindings, state} = parse_post_body_where(state)
+            {where_bindings, where_span, state} = parse_post_body_where(state)
 
             meta =
               build_fn_meta(
-                state,
                 fn_token,
                 name_token,
                 name,
@@ -7353,9 +7390,14 @@ defmodule Cure.Compiler.Parser do
                 visibility,
                 guard,
                 constraints,
-                effects
+                effects,
+                parameter_span,
+                return_arrow_token,
+                effects_span,
+                guard_span,
+                requirements_span
               )
-              |> put_function_body_source_info(body)
+              |> put_function_body_source_info(body, assign_token, where_span)
 
             meta = if where_bindings == [], do: meta, else: Keyword.put(meta, :where, where_bindings)
 
@@ -7369,7 +7411,6 @@ defmodule Cure.Compiler.Parser do
 
             meta =
               build_fn_meta(
-                state,
                 fn_token,
                 name_token,
                 name,
@@ -7378,7 +7419,12 @@ defmodule Cure.Compiler.Parser do
                 visibility,
                 guard,
                 constraints,
-                effects
+                effects,
+                parameter_span,
+                return_arrow_token,
+                effects_span,
+                guard_span,
+                requirements_span
               )
 
             meta = Keyword.put(meta, :clauses, clauses)
@@ -7390,7 +7436,22 @@ defmodule Cure.Compiler.Parser do
       _ ->
         # Function signature only (no body, e.g. in protocol)
         meta =
-          build_fn_meta(state, fn_token, name_token, name, params, return_type, visibility, guard, constraints, effects)
+          build_fn_meta(
+            fn_token,
+            name_token,
+            name,
+            params,
+            return_type,
+            visibility,
+            guard,
+            constraints,
+            effects,
+            parameter_span,
+            return_arrow_token,
+            effects_span,
+            guard_span,
+            requirements_span
+          )
 
         ast = {:function_def, meta, []}
         {ast, state}
@@ -7401,8 +7462,9 @@ defmodule Cure.Compiler.Parser do
     case expect_token(state, :lparen) do
       {:ok, open, state} ->
         {params, state} = parse_typed_params(state)
-        {state, _close} = expect_container_close(state, :rparen, :parameters, open, params, true)
-        {params, state}
+        {state, close} = expect_container_close(state, :rparen, :parameters, open, params, true)
+        span = through_spans(open.span, close && close.span) || open.span
+        {params, span, state}
 
       {:error, state} ->
         # Replace the generic error emitted by expect_token/2 with a declaration-
@@ -7422,7 +7484,7 @@ defmodule Cure.Compiler.Parser do
              column: observed.col
            }}
 
-        {[], %{state | errors: [error | rest]}}
+        {[], nil, %{state | errors: [error | rest]}}
     end
   end
 
@@ -7470,14 +7532,17 @@ defmodule Cure.Compiler.Parser do
         case expect_where_block_indent(probe, where_token) do
           {:ok, probe} ->
             {bindings, probe} = parse_where_bindings(probe, [], where_token)
-            {Enum.reverse(bindings), expect_dedent(probe)}
+            bindings = Enum.reverse(bindings)
+            terminal = bindings |> List.last() |> ast_source_span()
+            span = through_spans(where_token.span, terminal) || where_token.span
+            {bindings, span, expect_dedent(probe)}
 
           {:error, probe} ->
-            {[], probe}
+            {[], where_token.span, probe}
         end
 
       _ ->
-        {[], state}
+        {[], nil, state}
     end
   end
 
@@ -7573,7 +7638,22 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp build_fn_meta(state, fn_token, name_token, name, params, return_type, visibility, guard, constraints, effects) do
+  defp build_fn_meta(
+         fn_token,
+         name_token,
+         name,
+         params,
+         return_type,
+         visibility,
+         guard,
+         constraints,
+         effects,
+         parameter_span,
+         return_arrow_token,
+         effects_span,
+         guard_span,
+         requirements_span
+       ) do
     meta = [
       name: name,
       params: params,
@@ -7588,26 +7668,46 @@ defmodule Cure.Compiler.Parser do
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
     meta = if effects, do: Keyword.put(meta, :effects, effects), else: meta
 
-    case {fn_token.span, name_token.span, authored_token(state)} do
-      {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = name_span, %Token{} = last} ->
-        case Range.through(first, last) do
-          {:ok, whole} ->
-            info = %SourceInfo{whole: whole, name: name_span, annotation: ast_source_span(return_type)}
-            Keyword.put(meta, :source_info, info)
+    annotation_span = ast_source_span(return_type)
 
-          _ ->
-            meta
-        end
+    terminal_span =
+      requirements_span || guard_span || effects_span || annotation_span || parameter_span || name_token.span
 
-      _ ->
-        meta
-    end
+    fields =
+      %{}
+      |> maybe_put_source_field(:parameters, parameter_span)
+      |> maybe_put_source_field(:return_arrow, return_arrow_token)
+      |> maybe_put_source_field(:effects, effects_span)
+      |> maybe_put_source_field(:guard, guard_span)
+      |> maybe_put_source_field(:requirements, requirements_span)
+
+    Metadata.put_source_info(meta, %SourceInfo{
+      whole: through_spans(fn_token.span, terminal_span) || fn_token.span,
+      opener: fn_token.span,
+      name: name_token.span,
+      annotation: annotation_span,
+      guard: ast_source_span(guard),
+      fields: fields
+    })
   end
 
-  defp put_function_body_source_info(meta, body) do
+  defp put_function_body_source_info(meta, body, assign_token, where_span) do
     case {Metadata.source_info(meta), ast_source_span(body)} do
       {%SourceInfo{} = info, %Cure.Diagnostic.Span{} = body_span} ->
-        Metadata.put_source_info(meta, %{info | body: body_span})
+        fields =
+          info.fields
+          |> maybe_put_source_field(:separator, assign_token)
+          |> maybe_put_source_field(:where, where_span)
+
+        whole = through_spans(info.whole, where_span || body_span) || info.whole
+
+        Metadata.put_source_info(meta, %{
+          info
+          | whole: whole,
+            body: body_span,
+            operator: assign_token.span,
+            fields: fields
+        })
 
       _ ->
         meta
@@ -12304,35 +12404,35 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_effect_list(state) do
     state = skip_newlines(state)
-    {first, state} = parse_single_effect(state)
+    {first, first_token, state} = parse_single_effect(state)
 
-    {rest, state} =
+    {rest, last_token, state} =
       case peek(state) do
         %Token{type: :comma} ->
           state = advance(state)
           state = skip_newlines(state)
-          {more, state} = parse_effect_list_tail(state)
-          {more, state}
+          {more, last_token, state} = parse_effect_list_tail(state)
+          {more, last_token, state}
 
         _ ->
-          {[], state}
+          {[], first_token, state}
       end
 
-    {[first | rest], state}
+    {[first | rest], last_token, state}
   end
 
   defp parse_effect_list_tail(state) do
-    {eff, state} = parse_single_effect(state)
+    {eff, effect_token, state} = parse_single_effect(state)
 
     case peek(state) do
       %Token{type: :comma} ->
         state = advance(state)
         state = skip_newlines(state)
-        {rest, state} = parse_effect_list_tail(state)
-        {[eff | rest], state}
+        {rest, last_token, state} = parse_effect_list_tail(state)
+        {[eff | rest], last_token, state}
 
       _ ->
-        {[eff], state}
+        {[eff], effect_token, state}
     end
   end
 
@@ -12351,7 +12451,7 @@ defmodule Cure.Compiler.Parser do
         _ -> String.to_atom(String.downcase(name))
       end
 
-    {effect, state}
+    {effect, token, state}
   end
 
   # -- Constraint List  Proto(T), Proto2(U) ----------------------------------

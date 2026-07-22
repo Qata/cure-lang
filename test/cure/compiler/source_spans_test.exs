@@ -703,6 +703,41 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.guard) == "n > 0"
     assert slice(source, info.operator) == "->"
     assert slice(source, info.body) == "1"
+    assert slice(source, function_info.whole) == String.trim_trailing(source)
+  end
+
+  test "function signatures own parameters, return, effects, guard, and requirements" do
+    source = "fn convert(value: T) -> U ! Io, State when ready requires Show(T), Eq(U)\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "signature.cure", emit_events: false)
+
+    assert {:ok, {:function_def, meta, []}} =
+             Parser.parse(tokens, file: "signature.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == String.trim_trailing(source)
+    assert slice(source, info.opener) == "fn"
+    assert slice(source, info.name) == "convert"
+    assert slice(source, Map.fetch!(info.fields, :parameters)) == "(value: T)"
+    assert slice(source, Map.fetch!(info.fields, :return_arrow)) == "->"
+    assert slice(source, info.annotation) == "U"
+    assert slice(source, Map.fetch!(info.fields, :effects)) == "! Io, State"
+    assert slice(source, Map.fetch!(info.fields, :guard)) == "when ready"
+    assert slice(source, info.guard) == "ready"
+    assert slice(source, Map.fetch!(info.fields, :requirements)) == "requires Show(T), Eq(U)"
+  end
+
+  test "local functions distinguish the visibility and function keywords" do
+    source = "local fn helper(x: Int) -> Int = x\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "local_function.cure", emit_events: false)
+
+    assert {:ok, {:function_def, meta, [_body]}} =
+             Parser.parse(tokens, file: "local_function.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == String.trim_trailing(source)
+    assert slice(source, info.opener) == "local"
+    assert slice(source, Map.fetch!(info.fields, :function_keyword)) == "fn"
+    assert slice(source, info.name) == "helper"
   end
 
   test "local bindings retain exact keyword, pattern, annotation, assignment, and value ranges" do
@@ -729,8 +764,12 @@ defmodule Cure.Compiler.SourceSpansTest do
 
     {:function_def, function_meta, _} = find_node(ast, :function_def)
     assert [{:where_value, where_meta, _}] = Keyword.fetch!(function_meta, :where)
+    function_info = Metadata.source_info(function_meta)
     info = Metadata.source_info(where_meta)
 
+    assert slice(source, function_info.whole) == String.trim_trailing(source)
+    assert slice(source, function_info.operator) == "="
+    assert slice(source, Map.fetch!(function_info.fields, :where)) == "where\n  answer = 42"
     assert slice(source, info.whole) == "answer = 42"
     assert slice(source, info.name) == "answer"
     assert slice(source, info.operator) == "="
