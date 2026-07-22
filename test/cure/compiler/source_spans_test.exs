@@ -254,7 +254,10 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, group_info.whole) == "precedencegroup additive"
     assert slice(source, group_info.name) == "additive"
     assert slice(source, fixity_info.whole) == "infix <+> : additive"
+    assert slice(source, fixity_info.opener) == "infix"
     assert slice(source, fixity_info.operator) == "<+>"
+    assert slice(source, Map.fetch!(fixity_info.fields, :separator)) == ":"
+    assert slice(source, fixity_info.name) == "additive"
   end
 
   test "protocol and interface declarations retain authored name ranges" do

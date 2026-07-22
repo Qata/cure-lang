@@ -8525,12 +8525,12 @@ defmodule Cure.Compiler.Parser do
     lexeme = fixity_lexeme(op_token)
     state = advance(state)
 
-    state = expect_fixity_colon(state, kw, op_token, fixity, lexeme)
+    {colon_token, state} = expect_fixity_colon(state, kw, op_token, fixity, lexeme)
 
-    {group, state} =
+    {group, group_token, state} =
       case peek(state) do
-        %Token{type: :identifier, value: v} -> {String.to_atom(v), advance(state)}
-        _ -> {nil, state}
+        %Token{type: :identifier, value: v} = token -> {String.to_atom(v), token, advance(state)}
+        _ -> {nil, nil, state}
       end
 
     meta = [
@@ -8541,15 +8541,15 @@ defmodule Cure.Compiler.Parser do
       col: kw.col
     ]
 
-    meta = put_fixity_source_info(meta, kw, op_token, state)
+    meta = put_fixity_source_info(meta, kw, op_token, colon_token, group_token)
 
     {{:fixity, meta, []}, state}
   end
 
   defp expect_fixity_colon(state, keyword_token, operator_token, fixity, operator) do
     case expect_token(state, :colon) do
-      {:ok, _colon, next_state} ->
-        next_state
+      {:ok, colon, next_state} ->
+        {colon, next_state}
 
       {:error, next_state} ->
         [_generic | rest] = next_state.errors
@@ -8572,22 +8572,18 @@ defmodule Cure.Compiler.Parser do
              column: observed.col
            }}
 
-        %{next_state | errors: [error | rest]}
+        {nil, %{next_state | errors: [error | rest]}}
     end
   end
 
-  defp put_fixity_source_info(meta, %Token{} = first, %Token{} = operator, state) do
-    case {first.span, operator.span, authored_token(state)} do
-      {%Cure.Diagnostic.Span{} = first_span, %Cure.Diagnostic.Span{} = operator_span,
-       %Token{span: %Cure.Diagnostic.Span{} = last_span}} ->
-        case Range.through(first_span, last_span) do
-          {:ok, whole} -> Keyword.put(meta, :source_info, %SourceInfo{whole: whole, operator: operator_span})
-          _ -> meta
-        end
-
-      _ ->
-        meta
-    end
+  defp put_fixity_source_info(meta, %Token{} = first, %Token{} = operator, colon, group) do
+    Metadata.put_source_info(meta, %SourceInfo{
+      whole: through_spans(first.span, (group && group.span) || operator.span) || first.span,
+      opener: first.span,
+      operator: operator.span,
+      name: group && group.span,
+      fields: maybe_put_source_field(%{}, :separator, colon)
+    })
   end
 
   defp fixity_lexeme(%Token{value: v}) when is_binary(v), do: v
