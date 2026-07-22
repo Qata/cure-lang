@@ -1,6 +1,7 @@
 # Dependently Typed Regular Expressions
 
-**Status:** proposed authoritative design
+**Status:** superseded for unfinished work by
+`2026-07-22-dependent-regex-completion-design.md`
 
 **Date:** 2026-07-21
 

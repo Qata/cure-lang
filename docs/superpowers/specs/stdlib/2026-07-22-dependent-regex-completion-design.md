@@ -1,0 +1,581 @@
+# Dependently Typed Regex Completion from the Current Implementation
+
+**Status:** authoritative for all remaining dependent-regex work
+
+**Date:** 2026-07-22
+
+**Supersedes for unfinished work:**
+`2026-07-21-dependently-typed-regex-design.md`
+
+**Primary reference:** Katarzyna Marek, *Dependently-typed regex matchers in
+Idris*, MSc thesis, University of Edinburgh, 2021
+(`docs/research/idris-tyre-2305.04480.pdf`; owner copy:
+`/Users/ch/Downloads/msc_proj.pdf`).
+
+**Implementation baseline:** committed through `45be0d5c` ("Stage pure Cure
+regex literal expansion and execute checked macro BEAMs"). The uncommitted
+bounded-quantifier draft present while this specification was written is not
+credited as complete until its compilation, behavior, property, and full-suite
+gates pass and it is committed.
+
+## 1. Purpose
+
+The previous design correctly chose a pure Cure, dependently typed regex engine,
+but it is a clean-slate architecture document rather than an exact ledger from
+the implementation that now exists. It also attributes a stronger theorem to the
+thesis than the thesis proves.
+
+This document answers, precisely:
+
+1. what the thesis actually implements and proves;
+2. what Cure currently implements;
+3. which current pieces are scaffolding rather than discharged proofs;
+4. what Elixir-compatible behavior Cure adds beyond the thesis;
+5. the only permitted order for reaching a complete implementation;
+6. the test, trust, erasure, performance, Unix, and AtomVM gates for each step.
+
+Completion means satisfying every mandatory item below. A working `/.../flags`
+literal or green examples are not, by themselves, completion.
+
+## 2. Thesis claim boundary
+
+The thesis contributes a shape-safe parser for the regular core:
+
+```text
+Pred | Empty | Concat | Group | Alt | Star
+```
+
+It has three representations:
+
+- `RE`, surface sugar whose result shape is simplified;
+- `TyRE a`, typed combinators and one-way conversions;
+- `CoreRE`, the minimal algebra consumed by Thompson construction.
+
+It has two parsing modes: whole-string and stream-prefix parsing. Matching runs
+an epsilon-free NFA and an evidence VM. Its verification certificate consists of
+exactly three links:
+
+1. successful execution yields an accepting path carrying the same evidence;
+2. an accepting path through `thompson(re)` yields evidence encoding
+   `ShapeCode(re)`;
+3. evidence accompanied by that `Encodes` proof is totally extractable as
+   `Sem(ShapeCode(re))`.
+
+The thesis does **not** prove that Thompson construction recognizes exactly the
+denotational language of the regex. Section 7.1 explicitly leaves matching
+soundness and completeness as future certified-regex work. Cure requires those
+theorems eventually, but they are a Cure strengthening and must be identified as
+such in code, tests, and documentation.
+
+The thesis also leaves these as future work or known limitations:
+
+- bounded quantifiers such as `a{4,7}`;
+- generic escapes such as `\d`;
+- tailored literal diagnostics;
+- efficient state-indexed thread storage;
+- staged or memoized Thompson construction;
+- language soundness and completeness;
+- practical performance engineering.
+
+Therefore “paper parity” and “complete Cure regex” are separate milestones.
+
+## 3. Non-negotiable Cure constraints
+
+1. `Regex(a)`, its parser, NFA, VM, evidence, and proof code live in Cure.
+2. No OTP `:re`, PCRE handle, runtime syntax interpreter, runtime macro
+   dispatcher, opaque container, or Elixir matching helper may implement regex
+   semantics.
+3. `/pattern/flags` is a compile-time macro. Generated runtime code contains
+   direct checked Cure behavior and never reparses `pattern`.
+4. The compiler knows only generic macro/syntax/elaboration mechanisms. It does
+   not know regex grammar, modifiers, constructors, or APIs.
+5. No `believe_me`, proof postulate, proof-carrying `@extern`, cast, or impossible
+   fallback is permitted.
+6. `Bounded(n)` remains the ordinary indexed inductive in `Std.Bounded`. Finite
+   NFA states use it; regex work must not replace it with a primitive or weaken
+   the TCB.
+7. Character classification and code-point manipulation are encapsulated by
+   `Std.Char`; regex modules do not perform raw integer/code-point arithmetic.
+8. Proof and index arguments are erased and verified absent from emitted BEAM.
+9. Every accepted syntax form and modifier has direct behavioral tests. Parsing
+   and retaining an option without implementing its meaning is forbidden.
+10. Property tests use `Antigen.Backend.StreamData`, not StreamData directly.
+
+## 4. Honest baseline audit
+
+### 4.1 Implemented and retained
+
+The following are real foundations and should be evolved, not deleted:
+
+- closed `ShapeCode`, `Sem`, `Simplify`, and `simplify_value`;
+- indexed `Pattern(shape)` corresponding to the thesis core, plus boundary and
+  priority extensions;
+- indexed public `Regex(result)` and typed conversion algebra;
+- pure Cure epsilon-free Thompson-style machine construction;
+- ordered evidence-producing execution;
+- typed full parsing, prefix parsing, search, and `Match(result)`;
+- capture extents producing `String`;
+- deterministic left/right and greedy/lazy priority;
+- compile-time slash-literal parser and checked macro expansion;
+- staged compile-time syntax modules;
+- options `u`, `i`, `s`, `m`, `x`, `f`, `U`, and `E`;
+- anchors `^`, `$`, `\A`, `\z`, `\Z` and word boundaries `\b`, `\B`;
+- classes, ranges, negation, and `\d/D`, `\w/W`, `\s/S`, `\h/H`, `\v/V`;
+- focused shape, NFA, evidence, parsing, modifier, anchor, boundary, and source
+  tests;
+- some generated and exhaustive-small-word comparison tests;
+- proof-erasure inspection for the current evidence decoder;
+- source scans rejecting OTP `:re` in regex sources;
+- dependency-ordered stdlib bundling and direct execution of fresh checked
+  stdlib macro BEAMs.
+
+### 4.2 Present but not yet equivalent to the thesis proof
+
+Current `Encodes(shape, input, rest)` is useful, but is reconstructed by
+`decode_pattern_encoding` while parsing an untrusted evidence list. Consequently:
+
+- decoding still returns `Option`;
+- accepted execution is not accompanied by an `Accepting` path;
+- there is no theorem equating the accepting path's evidence with the winning
+  VM thread's evidence;
+- there is no constructor-by-constructor Thompson evidence theorem;
+- total extraction is not driven solely by a pre-existing erased proof;
+- an accepted machine run can, in principle, still be followed by decoder
+  failure.
+
+This is checked intrinsic decoding, not the thesis's end-to-end certificate. It
+must remain only as a temporary oracle while the real proof chain is built, then
+be removed from the successful parse path.
+
+### 4.3 Structural and performance gaps
+
+- `PatternMachine` stores a `Nat` count but states are raw `Nat`, not
+  `Bounded(state_count)`.
+- thread deduplication is quadratic list scanning.
+- Thompson transition functions are closure-composed and re-traverse
+  construction structure during execution.
+- evidence is a front-built list rather than an explicitly append-efficient
+  builder/snoc structure.
+- literal expansion emits typed combinator construction, not a completely
+  staged finite machine.
+- the runtime module is monolithic and expensive to elaborate cold.
+
+### 4.4 Test gaps
+
+The suite does not yet provide all of:
+
+- generated surface-AST print/parse round trips;
+- exhaustive regex enumeration rather than a representative fixed menu;
+- accepting-path/evidence theorem tests;
+- proof-directed extraction tests where failure is unrepresentable;
+- all ambiguity examples required below;
+- all malformed-syntax subspan diagnostics;
+- all supported Elixir-compatible escapes and classes;
+- benchmark thresholds and complexity ratchets;
+- final Unix and AtomVM runs.
+
+## 5. Final architecture
+
+The final flow is:
+
+```text
+/source/flags
+  -> compile-time SurfacePattern(shape)
+  -> checked Regex(Sem(shape)) expression
+  -> Pattern(raw_shape) + Conversion(Sem(raw_shape), Sem(shape))
+  -> sigma package (state_count ** Machine state_count raw_shape)
+  -> ordered VM execution
+  -> Failed | AcceptedRun(input, evidence, erased accepting_path,
+                           erased evidence_certificate)
+  -> total proof-directed extraction
+  -> typed conversion
+  -> Option(result)
+```
+
+The runtime cannot construct `AcceptedRun` unless all certificate fields check.
+The public `Option` describes match failure only; it does not also hide malformed
+evidence or conversion failure.
+
+### 5.1 Finite machine
+
+Use an existential state count with intrinsically bounded states:
+
+```text
+Machine(shape) = Sigma(n : Nat, MachineOf(n, shape))
+
+MachineOf(n, shape) contains:
+  starts      : ordered collection of Bounded(n) or Accept
+  accepting   : Bounded(n) -> Bool
+  next        : Bounded(n) -> Char -> ordered destinations in Bounded(n) + Accept
+  routines    : routine aligned with every start/destination
+  invariants  : erased construction proofs
+```
+
+`Accept` may remain an explicit terminal destination rather than consuming a
+bounded state. State shifting must return bounded values with proofs derived
+structurally from addition. There is no unchecked Nat-to-Bounded coercion.
+
+### 5.2 Ordered winning semantics
+
+Ordering is product semantics, not a proof artifact:
+
+1. search chooses the earliest starting position;
+2. alternatives choose the left branch by default;
+3. greedy quantifiers prefer consuming;
+4. lazy quantifiers prefer exiting;
+5. `U` inverts each quantifier's default, while an explicit `?` inverts that
+   quantifier again;
+6. deduplication by `{position,state}` keeps the first/highest-priority thread
+   and its complete history/evidence;
+7. full parsing chooses the highest-priority accepting path after consuming all
+   input;
+8. Cure's string `parse_prefix` chooses the highest-priority accepted prefix,
+   while a separately named streaming primitive may expose the thesis's
+   stop-on-first-accept behavior.
+
+Test at minimum `a|a`, `a?|a?`, `(a*)a`, `(a|aa)*`, `(a?)*`, empty alternatives,
+and nested greedy/lazy bounded quantifiers.
+
+### 5.3 Evidence and proof chain
+
+Adopt the thesis proof decomposition explicitly:
+
+```text
+AcceptingFrom(machine, state, word)
+Accepting(machine, word)
+
+run_certificate:
+  run(machine, word) = Accepted(evidence)
+  -> Sigma(path : Accepting(machine, word),
+           extracted_path_evidence(path) = evidence)
+
+thompson_evidence:
+  (pattern : Pattern(shape))
+  -> (path : Accepting(compile(pattern), word))
+  -> Encodes(extracted_path_evidence(path), [shape])
+
+extract:
+  (evidence : Evidence)
+  -> {0 certificate : Encodes(evidence, context ++ [shape])}
+  -> Extraction(shape, context)
+```
+
+As in the thesis, use an extended routine containing ordinary VM instructions
+and `Observe(char)`. This separates proof reasoning from transition chunking and
+allows the theorem to generalize over pre-existing VM evidence/capture state.
+
+Every `Pattern` constructor—including Cure's boundary and priority extensions—
+requires its own proof clause. Boundary patterns append `Unit` evidence without
+consuming input. Priority modes change ordering only and reuse the same language
+and evidence theorem.
+
+Extraction returns the typed value, remaining evidence, and an erased proof that
+the remainder encodes the remaining context. No branch returns `None` when given
+an `Encodes` certificate.
+
+### 5.4 Additional language correctness
+
+After thesis parity, define a small structural denotation and prove Cure's stronger
+claims:
+
+- Thompson soundness: accepting path implies denotation membership;
+- Thompson completeness: denotation membership constructs an accepting path;
+- full-run correctness;
+- prefix-run correctness;
+- search leftmost correctness independent of winning ambiguity policy.
+
+Do not entangle these proofs with evidence extraction. Language correctness and
+shape safety are separate theorem families.
+
+## 6. Literal and Elixir-compatibility contract
+
+Slash literals—not `~r`—are Cure syntax. `/[A-Z]*/im` and `/[A-Z]*/mi` are valid,
+equivalent macro invocations. The modifier set is the current Elixir set:
+
+| Flag | Required Cure behavior |
+| --- | --- |
+| `i` | Unicode-aware under `u`; otherwise documented ASCII/simple folding |
+| `m` | `^`/`$` become line boundaries |
+| `s` | dot includes newline; newline convention is documented |
+| `x` | ignore unescaped whitespace/comments outside classes using a stateful scanner |
+| `u` | Unicode properties/classes and valid Unicode input semantics |
+| `f` | unanchored start must occur before/at first newline |
+| `U` | invert quantifier greediness |
+| `E` | accepted for Elixir source parity; semantically direct/staged in Cure because no exportable PCRE object exists |
+
+Flags are order-independent. Duplicate-flag policy must be selected and tested;
+until changed, accepting duplicates is permitted only if documented as Elixir
+behavior. Unknown flags are compile-time errors.
+
+### 6.1 Mandatory regular syntax
+
+The final regular subset includes:
+
+- literals, escaped metacharacters, dot;
+- concatenation and alternation;
+- capturing and non-capturing groups;
+- classes, negated classes, ranges, and escaped classes within classes;
+- `?`, `*`, `+`, `{m}`, `{m,}`, `{m,n}` and lazy forms;
+- anchors and word boundaries already listed;
+- `\a`, `\e`, `\f`, `\n`, `\r`, `\t`;
+- `\xHH` and `\x{H...}` Unicode scalar escapes;
+- documented octal escape disposition (support with tests or reject with a
+  precise diagnostic; never misparse as literal digits);
+- Unicode property classes `\p{...}` and `\P{...}` required by `u` parity;
+- POSIX classes if the final Elixir behavior audit finds they are accepted by
+  the supported Elixir version;
+- leading newline-convention controls only if they can be represented without
+  compromising the pure finite model.
+
+Unsupported non-regular constructs—backreferences, recursion, conditionals, and
+general lookbehind—produce dedicated compile-time diagnostics. Lookahead,
+atomic groups, possessive quantifiers, named captures, and inline option groups
+remain out of scope until separately specified; they must not silently degrade.
+
+### 6.2 Bounded quantifiers
+
+Bounded repetition is a Cure extension beyond the thesis and returns
+`Regex(List(a))`, simplified to `Nat` for repeated `Unit`.
+
+- `{m}` means exactly `m` repetitions;
+- `{m,}` means at least `m`;
+- `{m,n}` means between `m` and `n`, inclusive;
+- `n < m`, missing counts, overflow/resource excess, and malformed delimiters
+  are compile-time errors with quantifier subspans;
+- exact repetition accepts a lazy suffix syntactically but it has no behavioral
+  effect;
+- expansion must preserve list shape directly, not expose nested tuple shapes;
+- compile-time limits prevent generated-machine explosions.
+
+The current draft's typed-combinator recursion is acceptable as the first green
+implementation. Final staging must compile the resulting finite machine once.
+
+## 7. Public API completion
+
+Mandatory typed primitives:
+
+```text
+parse_full   : Regex(a) -> String -> Option(a)
+parse_prefix : Regex(a) -> String -> Option(Tuple(a, String))
+search       : Regex(a) -> String -> Option(Match(a))
+matches      : Regex(a) -> String -> Bool
+```
+
+`Match(a)` must ultimately contain typed value, matched text, prefix, suffix, and
+character or byte positions with the unit explicitly documented.
+
+After the proof core is complete, add typed APIs corresponding where sensible to
+Elixir operations:
+
+- `scan : Regex(a) -> String -> List(Match(a))` with non-overlap and empty-match
+  progress rules;
+- `split` with explicit inclusion/trimming/parts options represented as Cure data;
+- `replace` driven by typed callbacks or literal replacement, never numbered
+  capture indexing into an untyped list;
+- capture access designed around typed groups or a named-capture extension,
+  rather than weakening `Regex(a)`.
+
+These APIs reuse one verified engine. They do not introduce alternate matchers.
+
+## 8. Ordered implementation ledger
+
+Every phase is red-test first, focused-green, full relevant gate, documentation
+update, and descriptive commit. Do not credit partially edited work.
+
+### Phase A — stabilize the current baseline
+
+1. Finish or revert the bounded-quantifier draft coherently.
+2. Run dependency-ordered clean stdlib compilation.
+3. Run all current regex tests and the full suite.
+4. Record the syntax/behavior matrix generated from tests.
+5. Confirm no E101 in the real `MIX_ENV=test mix test` pre-task path.
+
+Gate: clean baseline, no uncommitted regex changes, no current regression.
+
+### Phase B — modularize without semantic change
+
+Split the runtime along shape/core/NFA/Thompson/evidence/VM/proof/API boundaries
+using canonical stdlib module paths and dependency ordering. Add parity tests
+before moving each section. Do not duplicate definitions to break cycles; adjust
+ownership and dependency direction.
+
+Gate: byte-for-byte-equivalent public behavior and materially lower isolated
+module elaboration costs.
+
+### Phase C — intrinsic finite states
+
+Replace raw state `Nat` with `Bounded(n)` inside an existential machine package.
+Implement structural shift/injection helpers with erased proofs. Property-test
+that every generated start and transition target is in range.
+
+Gate: no unchecked state conversion; `Bounded` remains inductive; TCB, totality,
+compact-Bounded, and Antigen regression suites pass.
+
+### Phase D — accepting paths from execution
+
+Define `AcceptingFrom`/`Accepting`, retain predecessor/history data in winning
+threads, and construct a path plus evidence equality from every successful full
+or prefix execution.
+
+Gate: successful execution cannot be returned without a kernel-checked erased
+path certificate; fixed and generated replay equality tests pass.
+
+### Phase E — Thompson evidence theorem
+
+Introduce extended routines and prove the generalized evidence theorem for
+`Predicate`, `Empty`, `Concat`, `Group`, `Alternate`, `Repeat`, boundary, and
+priority variants. Handle nullable starts and nullable star explicitly.
+
+Gate: the theorem kernel-checks over the complete totality closure; no
+postulates; constructor mutation tests fail for the expected proof reason.
+
+### Phase F — total extraction and seam removal
+
+Implement proof-directed extraction and contextual remainder validity. Route
+successful parsing through it. Delete the fallible post-hoc decoder from the
+accepted path; retain it only as a test oracle if useful, then remove it after
+differential tests.
+
+Gate: after an accepted run there is no `Option`/error branch until the public
+match result is wrapped; proof erasure inspection passes.
+
+**This gate is faithful thesis parity.**
+
+### Phase G — language soundness and completeness
+
+Define denotation and prove the stronger Cure theorem family in §5.4. Use
+exhaustive small models while developing the proofs.
+
+Gate: all proof modules kernel-check and all small models agree among denotation,
+NFA paths, VM acceptance, and public parsing.
+
+### Phase H — finish literal parity and diagnostics
+
+Complete bounded quantifiers, scalar escapes, Unicode properties, malformed
+construct rejection, exact source subspans, and the modifier matrix. Remove raw
+integer character constants from regex modules in favor of character literals or
+named `Std.Char` APIs/constants.
+
+Gate: every accepted grammar row has positive, negative, interaction, Unicode,
+and inferred-shape tests; every rejected row has a structured diagnostic test.
+
+### Phase I — complete typed APIs
+
+Finalize positions in `Match`, then implement `scan`, `split`, and typed
+replacement where specified. Lock empty-match progress and leftmost behavior.
+
+Gate: fixed and generated API laws pass; all APIs call the same verified VM.
+
+### Phase J — stage and optimize
+
+1. Stage literal machines at compile time.
+2. Replace list `distinct` with a state-indexed winner table/set preserving
+   priority and evidence.
+3. Use append-efficient evidence/capture builders.
+4. Remove repeated Thompson traversal and closure reconstruction.
+5. Preserve an unstaged reference path in tests only for differential checking.
+
+Gate: generated literal BEAM contains neither parser nor Thompson builder calls;
+proofs remain erased; semantics are unchanged.
+
+### Phase K — final verification
+
+Run the complete matrix in §9, scan trust boundaries, update public docs and the
+older spec's status, and commit final evidence/benchmark reports.
+
+Gate: every acceptance criterion in §10 has an attached command/result artifact.
+
+## 9. Required verification matrix
+
+### 9.1 Fixed tests
+
+Cover every Pattern and Regex constructor, conversion, simplification, syntax
+form, flag, parser mode, boundary position, ambiguity policy, capture nesting,
+empty input, empty regex, nullable repetition, malformed literal, and public API.
+
+### 9.2 Property tests
+
+Through `Antigen.Backend.StreamData`:
+
+1. generated surface AST print/parse round trip;
+2. `matches(r,s) == Option.is_some(search(r,s))`;
+3. full acceptance agrees with structural denotation;
+4. successful prefix result recombines consumed text and suffix to input;
+5. successful run path replays to identical evidence;
+6. proof-directed extraction returns a value of computed shape;
+7. simplification agrees with structural conversion;
+8. smart constructors agree with primitive forms;
+9. deduplication keeps the specified ambiguity winner;
+10. all generated nullable stars terminate;
+11. staged and unstaged machines agree;
+12. bounded repetition agrees with a small count reference.
+
+Generators shrink to a surface regex AST and input pair.
+
+### 9.3 Exhaustive models
+
+Enumerate all core regex trees to a documented depth over `{'a','b'}` and all
+words to a documented length. Compare denotation, accepting-path existence, NFA,
+VM, evidence extraction, and public parse outcome. Report counts so accidental
+generator shrinkage is visible.
+
+### 9.4 Trust and erasure
+
+- kernel-check proof modules and complete closure;
+- totality and termination checks;
+- relevant Antigen TCB/normalization/erasure assays;
+- inspect BEAM abstract code and references for proof constructors;
+- scan all implementation and emitted references for `:re`, legacy shims,
+  runtime parsers, casts, and postulates;
+- inspect representative literal artifacts for direct compiled behavior.
+
+### 9.5 Performance
+
+Benchmark the thesis families:
+
+- `a*` over increasing input;
+- `((a*c)|a)*b` over increasing input;
+- growing `a|a|...|a`;
+- growing concatenation.
+
+Add ambiguous-nullable, capture-heavy, Unicode-class, bounded-repeat, search,
+and compile-time literal families. Record warm runtime, cold compilation, state
+count, peak thread count, and allocation. Ratchet complexity trends rather than
+machine-specific microsecond constants.
+
+### 9.6 Platform gates
+
+- focused regex suite;
+- complete `MIX_ENV=test mix test` from a clean dependency-ordered stdlib build;
+- Unix CLI/escript smoke tests;
+- AtomVM-compatible compile and runtime fixtures for the supported subset;
+- no warning and no E101 diagnostic.
+
+## 10. Final acceptance criteria
+
+Work is complete only when:
+
+- the paper's three-certificate chain exists end to end;
+- accepted execution cannot be followed by evidence/extraction failure;
+- finite states are intrinsically bounded without changing `Bounded`'s trusted
+  status;
+- Cure's additional language soundness/completeness proofs pass;
+- `/[A-Z]*/im` and the complete supported syntax matrix compile and behave as
+  documented;
+- every modifier has interaction tests and no modifier is text-only;
+- bounded quantifiers and required scalar/property escapes are complete;
+- typed full, prefix, search, scan, split, and approved replacement APIs share
+  one engine;
+- nullable and empty matches always make specified progress;
+- ambiguity winners are deterministic and tested;
+- generated literals contain no runtime parser/dispatcher/Thompson construction;
+- state deduplication and evidence construction meet performance requirements;
+- proofs and indices are absent from runtime artifacts;
+- no OTP regex dependency, compatibility engine, cast, postulate, or impossible
+  fallback remains;
+- fixed, property, exhaustive, proof, trust, performance, full-suite, Unix, and
+  AtomVM gates are green;
+- repository documentation reports thesis parity and Cure extensions accurately.
+
+Until all of these are true, status must name the earliest incomplete phase and
+must not say the thesis or regex implementation is finished.
