@@ -12,16 +12,29 @@ preserves every locked decision, invariant, constraint, and status marker; imple
 examples are dropped. Where a later spec supersedes an earlier one, only the final design is kept, with a one-line
 supersession note.
 
+**2026-07-22 execution amendment.**
+`2026-07-22-compiler-identity-and-regex-stabilization-plan.md` is the active
+implementation plan for canonical module and definition identity, the unified
+dependency/emission closure, macro hygiene, dependent-language stabilization,
+properties, diagnostics, test isolation, and the bounded-regex resumption gate.
+It is grounded in the local Lean 4, Agda, Idris 2, and Racket implementations.
+Where it conflicts with the older must-import wording below, the amendment
+controls: dependency/interface availability permits canonical qualified access;
+`use` controls bare lexical exposure.
+
 ---
 
 ## 1. Import surface & name visibility (must-import) — PARTIALLY LANDED / remainder PARKED
 
 Source: `2026-07-12-import-surface-must-import-design.md`.
 
-**Locked model — must-import.** A name from module `M` is referenceable only after `use M`; there is **no
-globally-addressable qualified access** (no `Std.String.length` without importing `Std.String`). Yardsticks: Swift,
-Elm, Haskell, Idris (all must-import); Elixir/Rust global addressability deliberately rejected. Rationale:
-explicitness, typed-FP tradition, avoids load-and-re-key-on-mention machinery.
+**Superseded availability rule (2026-07-22).** The original design required
+`use M` before either bare or qualified access. The compiler-identity plan now
+separates the concerns: a module present in the canonical dependency/interface
+closure is qualified-available, while `use M` controls bare lexical exposure.
+There is still no load-by-mention global namespace: a qualified module must be
+present in the dependency graph. This removes macro-generated synthetic imports
+without allowing transitive bare-name leakage.
 
 **Consumer surface** (keyword stays `use`):
 
