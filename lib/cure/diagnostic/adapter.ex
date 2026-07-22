@@ -2592,6 +2592,45 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:syntax_family_definition_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        alternatives: Map.get(details, :alternatives, []),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:syntax_family_body_syntax, details}, opts) when is_map(details) do
+    valid_fields = Map.get(details, :valid_fields, [])
+    expected = Map.get(details, :expected) || List.first(valid_fields)
+
+    alternatives =
+      if Map.get(details, :kind) == :syntax_family_entry_invalid,
+        do: Enum.drop(valid_fields, 1),
+        else: []
+
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: expected,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        previous: Map.get(details, :previous_span),
+        alternatives: alternatives,
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:refinement_type_syntax, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -5199,6 +5238,24 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :macro_expands_with_missing}),
     do: "Macro expander needs `with`"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :syntax_family_indent_missing}),
+    do: "Syntax family body must be indented"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :syntax_family_member_invalid}),
+    do: "Syntax family member is invalid"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :syntax_family_entry_invalid}),
+    do: "Structured macro entry is invalid"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :syntax_family_production_invalid}),
+    do: "Structured macro production is invalid"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :syntax_family_body_indent_missing}),
+    do: "Structured macro body must be indented"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_definition_entry_invalid}),
+    do: "Macro declaration entry is invalid"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "Explanation clause arrow is missing"
 
@@ -5724,6 +5781,49 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :macro_expands_with_missing, observed: observed}),
     do:
       "A structured macro uses `expands with` before its expander function; #{authored_syntax(observed)} appears where `with` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :syntax_family_indent_missing, context: %{family: family}}),
+    do:
+      "The fields, included families, and productions of `#{family}` must be nested below its `syntax family` declaration."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :syntax_family_member_invalid,
+         observed: observed,
+         context: %{family: family}
+       }),
+       do:
+         "#{authored_syntax(observed)} cannot declare a member of the `#{family}` syntax family. Write a typed field, `includes Family`, or a `syntax` production."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :syntax_family_entry_invalid,
+         observed: observed,
+         context: %{family: family, valid_fields: valid_fields}
+       }),
+       do:
+         "#{authored_syntax(observed)} does not start a field of the `#{family}` structured macro body. Valid fields are #{inline_choices(valid_fields)}."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :syntax_family_production_invalid,
+         observed: observed,
+         context: context
+       }) do
+    field = Map.get(context, :field, "this field")
+    family = Map.get(context, :family)
+    owner = if family, do: " in `#{family}`", else: ""
+
+    "#{authored_syntax(observed)} does not match any production accepted by `#{field}`#{owner}. Follow one of the forms declared by that syntax family."
+  end
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :syntax_family_body_indent_missing,
+         context: %{family: family, valid_fields: valid_fields}
+       }),
+       do:
+         "The `#{family}` structured macro body must be indented below its invocation. Its fields are #{inline_choices(valid_fields)}."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_definition_entry_invalid, observed: observed}),
+    do:
+      "#{authored_syntax(observed)} cannot start an entry in a macro declaration. Use a syntax rule, family contract, expander, literal rule, explanation, failure, or opened category."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "An explanation clause needs `=>` between its failure point and message."
@@ -6349,6 +6449,24 @@ defmodule Cure.Diagnostic.Adapter do
             ],
        do: "insert `#{expected}` before this expression"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :syntax_family_indent_missing}),
+    do: "indent the syntax family members below this declaration"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :syntax_family_member_invalid}),
+    do: "write a field, include, or production here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :syntax_family_entry_invalid}),
+    do: "start this entry with a valid structured field"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :syntax_family_production_invalid}),
+    do: "this does not match a declared family production"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :syntax_family_body_indent_missing}),
+    do: "indent the structured macro body here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :macro_definition_entry_invalid}),
+    do: "replace this with a valid macro declaration entry"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "insert `=>` before this explanation message"
 
@@ -6882,6 +7000,65 @@ defmodule Cure.Diagnostic.Adapter do
 
     [
       pickup_label(opener, :secondary, "this rewrite command starts here"),
+      pickup_label(previous, :secondary, previous_message)
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: kind, opener: %Span{} = opener, previous: previous, context: context},
+         primary_span
+       )
+       when kind in [:syntax_family_indent_missing, :syntax_family_member_invalid] do
+    previous_message =
+      case kind do
+        :syntax_family_indent_missing ->
+          "the syntax family header ends here"
+
+        :syntax_family_member_invalid ->
+          if previous == Map.get(context, :name_span),
+            do: "the syntax family header ends here",
+            else: "the previous family member ends here"
+      end
+
+    [
+      pickup_label(opener, :secondary, "this syntax family declaration starts here"),
+      pickup_label(previous, :secondary, previous_message)
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: kind, previous: %Span{} = previous},
+         primary_span
+       )
+       when kind in [:syntax_family_entry_invalid, :syntax_family_production_invalid] and
+              previous != primary_span,
+       do: [%Label{span: previous, style: :secondary, message: "the previous structured entry ends here"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :macro_definition_entry_invalid,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    previous_message =
+      if previous && previous.start_line == opener.start_line,
+        do: "the macro header ends here",
+        else: "the previous macro entry ends here"
+
+    [
+      pickup_label(opener, :secondary, "this macro declaration starts here"),
       pickup_label(previous, :secondary, previous_message)
     ]
     |> Enum.reject(fn
@@ -7935,6 +8112,63 @@ defmodule Cure.Diagnostic.Adapter do
     [
       %Suggestion{
         message: "Add `#{expected}` and the expression that follows it",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :syntax_family_indent_missing}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Indent one or more family members below the declaration",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :syntax_family_member_invalid}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Replace this line with a typed field, an `includes` line, or a `syntax` production",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :syntax_family_entry_invalid, context: %{valid_fields: fields}}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Start this entry with one of: #{inline_choices(fields)}",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :syntax_family_production_invalid}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Rewrite this entry using one of the syntax family's declared production forms",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :syntax_family_body_indent_missing, context: %{valid_fields: fields}},
+         %Span{}
+       ) do
+    [
+      %Suggestion{
+        message: "Indent a structured body starting with one of: #{inline_choices(fields)}",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :macro_definition_entry_invalid}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Replace this line with a valid macro declaration entry",
         applicability: :manual
       }
     ]
@@ -9081,6 +9315,8 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_name(:integer), do: "an integer"
   defp syntax_name(:positive_integer), do: "a positive integer"
   defp syntax_name(:failure_constructor), do: "a failure constructor call"
+  defp syntax_name(:family_field), do: "a typed field"
+  defp syntax_name(:syntax_family_production), do: "a declared family production"
   defp syntax_name(:float), do: "a number"
   defp syntax_name(:string), do: "a string"
   defp syntax_name(:char), do: "a character"
@@ -9095,4 +9331,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp authored_syntax(value) when is_integer(value) or is_float(value), do: "'#{value}'"
   defp authored_syntax(value), do: syntax_name(value)
+
+  defp inline_choices([]), do: "no fields"
+  defp inline_choices(values), do: Enum.map_join(values, ", ", &"`#{&1}`")
 end

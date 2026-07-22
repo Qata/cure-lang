@@ -37,9 +37,38 @@ defmodule Cure.Compiler.MacroDefParseTest do
   end
 
   test "a body line that isn't a recognized rule keyword records a parse error" do
-    {:ok, tokens} = Lexer.tokenize("macro Bad\n  oops\n", emit_events: false)
-    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
-    assert Enum.any?(errors, &match?({:expected, :syntax_rule, :got, _, _, _, %Cure.Diagnostic.Span{}}, &1))
+    source = "macro Bad\n  oops\n"
+    file = "macro_entry.cure"
+    {:ok, tokens} = Lexer.tokenize(source, file: file, emit_events: false)
+
+    assert {:error, [{:syntax_family_definition_syntax, %{kind: :macro_definition_entry_invalid}} = error]} =
+             Parser.parse(tokens, file: file, emit_events: false)
+
+    {diagnostic, registry} = Errors.to_diagnostic({:parse_error, [error]}, file, source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- MACRO DECLARATION ENTRY IS INVALID [E094] ------------------ macro_entry.cure
+
+             'oops' cannot start an entry in a macro declaration. Use a syntax rule, family
+             contract, expander, literal rule, explanation, failure, or opened category.
+
+             A valid continuation here starts with 'syntax' or 'accepts' or 'expands' or
+             'literal' or 'explain' or 'fail' or 'open'.
+
+             at macro_entry.cure:2:3
+             1 | macro Bad
+               | ----- --- this macro declaration starts here; the macro header ends here
+             2 |   oops
+               |   ^^^^ replace this with a valid macro declaration entry
+
+             Hint: Replace this line with a valid macro declaration entry
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 1, "character" => 2},
+             "end" => %{"line" => 1, "character" => 6}
+           }
   end
 
   test "a syntax rule with a typed hole captures name + kind in order" do

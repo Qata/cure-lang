@@ -1316,7 +1316,23 @@ defmodule Cure.Compiler.Parser do
 
       token ->
         family_state =
-          add_error(family_state, {:expected, :indent, :got, token.type, token.line, token.col, token.span})
+          add_error(
+            family_state,
+            {:syntax_family_body_syntax,
+             %{
+               kind: :syntax_family_body_indent_missing,
+               family: family_meta.family,
+               valid_fields: Enum.map(family_meta.fields, & &1.name),
+               expected: :indent,
+               observed: macro_separator_observed(token),
+               token_type: token.type,
+               span: zero_width_start(token.span),
+               observed_span: token.span,
+               body_span: Map.get(family_meta, :body_span),
+               line: token.line,
+               column: token.col
+             }}
+          )
 
         family_value(family_meta, %{}, family_state)
     end
@@ -1379,7 +1395,20 @@ defmodule Cure.Compiler.Parser do
             state =
               add_error(
                 state,
-                {:expected, :syntax_family_field, :got, token.type, token.line, token.col, token.span}
+                {:syntax_family_body_syntax,
+                 %{
+                   kind: :syntax_family_entry_invalid,
+                   family: family_meta.family,
+                   valid_fields: Enum.map(family_meta.fields, & &1.name),
+                   expected: family_meta.fields |> List.first() |> then(&(&1 && &1.name)),
+                   observed: macro_separator_observed(token),
+                   token_type: token.type,
+                   span: token.span,
+                   previous_span: previous_authored_span(state, nil),
+                   body_span: Map.get(family_meta, :body_span),
+                   line: token.line,
+                   column: token.col
+                 }}
               )
 
             parse_family_sections(advance(state), family_meta, values)
@@ -1518,14 +1547,14 @@ defmodule Cure.Compiler.Parser do
   # itself own an optional indented production body.
   defp parse_family_field_value(
          state,
-         %{grammar: grammar, cardinality: cardinality}
+         %{grammar: grammar, cardinality: cardinality} = field
        )
        when cardinality in [:repeated, :one_or_more] do
     state = skip_newlines(state)
 
     case peek(state) do
       %Token{type: :indent} ->
-        {values, state} = parse_family_production_entries(advance(state), grammar, [])
+        {values, state} = parse_family_production_entries(advance(state), field, [])
         {{:family_repeated_values, values}, expect_dedent(state)}
 
       # `children []` is the explicit empty spelling for a structured repeated
@@ -1540,11 +1569,7 @@ defmodule Cure.Compiler.Parser do
           _ ->
             token = peek(state)
 
-            state =
-              add_error(
-                state,
-                {:expected, :syntax_family_production, :got, token.type, token.line, token.col, token.span}
-              )
+            state = add_family_production_error(state, token, field)
 
             {{:family_repeated_values, []}, state}
         end
@@ -1557,11 +1582,7 @@ defmodule Cure.Compiler.Parser do
           :error ->
             token = peek(state)
 
-            state =
-              add_error(
-                state,
-                {:expected, :syntax_family_production, :got, token.type, token.line, token.col, token.span}
-              )
+            state = add_family_production_error(state, token, field)
 
             {{:family_repeated_values, []}, state}
         end
@@ -1580,7 +1601,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_family_production_entries(state, grammar, values) do
+  defp parse_family_production_entries(state, %{grammar: grammar} = field, values) do
     state = skip_newlines(state)
 
     case peek(state) do
@@ -1590,19 +1611,36 @@ defmodule Cure.Compiler.Parser do
       token ->
         case parse_family_production(state, grammar) do
           {:ok, value, state} ->
-            parse_family_production_entries(state, grammar, [value | values])
+            parse_family_production_entries(state, field, [value | values])
 
           :error ->
-            state =
-              add_error(
-                state,
-                {:expected, :syntax_family_production, :got, token.type, token.line, token.col, token.span}
-              )
+            state = add_family_production_error(state, token, field)
 
             {_ignored, state} = parse_expr_or_block(advance(state))
-            parse_family_production_entries(state, grammar, values)
+            parse_family_production_entries(state, field, values)
         end
     end
+  end
+
+  defp add_family_production_error(state, token, field) do
+    grammar = Map.fetch!(field, :grammar)
+
+    add_error(
+      state,
+      {:syntax_family_body_syntax,
+       %{
+         kind: :syntax_family_production_invalid,
+         family: Map.get(grammar, :family),
+         field: Map.get(field, :name),
+         expected: :syntax_family_production,
+         observed: macro_separator_observed(token),
+         token_type: token.type,
+         span: token.span,
+         previous_span: previous_authored_span(state, nil),
+         line: token.line,
+         column: token.col
+       }}
+    )
   end
 
   defp record_family_value(
@@ -10632,7 +10670,7 @@ defmodule Cure.Compiler.Parser do
 
     {leading_segments, leading_segment_span, state} = parse_rule_segments(state, [])
     state = skip_macro_trivia(state)
-    {rules, state} = parse_macro_block(state)
+    {rules, state} = parse_macro_block(state, token)
 
     state =
       case MacroFamily.validate(rules) do
@@ -10955,11 +10993,11 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_macro_block(state) do
+  defp parse_macro_block(state, macro_token) do
     case peek(state) do
       %Token{type: :indent} ->
         state = advance(state)
-        {rules, state} = parse_macro_rules(state, [])
+        {rules, state} = parse_macro_rules(state, [], macro_token)
         state = expect_dedent(state)
         {rules, state}
 
@@ -10985,7 +11023,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_macro_rules(state, acc) do
+  defp parse_macro_rules(state, acc, macro_token) do
     state = skip_macro_trivia(state)
 
     case peek(state) do
@@ -10999,38 +11037,53 @@ defmodule Cure.Compiler.Parser do
             _ -> parse_macro_rule(state)
           end
 
-        parse_macro_rules(state, [rule | acc])
+        parse_macro_rules(state, [rule | acc], macro_token)
 
       %Token{type: :identifier, value: "accepts"} ->
         {entry, state} = parse_macro_accepts(state)
-        parse_macro_rules(state, [entry | acc])
+        parse_macro_rules(state, [entry | acc], macro_token)
 
       %Token{type: :identifier, value: "expands"} ->
         {entry, state} = parse_macro_expands_with(state)
-        parse_macro_rules(state, [entry | acc])
+        parse_macro_rules(state, [entry | acc], macro_token)
 
       %Token{type: :identifier, value: "literal"} ->
         {rule, state} = parse_literal_rule(state)
-        parse_macro_rules(state, [rule | acc])
+        parse_macro_rules(state, [rule | acc], macro_token)
 
       %Token{type: :identifier, value: "explain"} ->
         {entry, state} = parse_explain_block(state)
-        parse_macro_rules(state, [entry | acc])
+        parse_macro_rules(state, [entry | acc], macro_token)
 
       %Token{type: :identifier, value: "fail"} ->
         {entry, state} = parse_fail_declaration(state)
-        parse_macro_rules(state, [entry | acc])
+        parse_macro_rules(state, [entry | acc], macro_token)
 
       %Token{type: :identifier, value: "open"} ->
         {entry, state} = parse_open_category(state)
-        parse_macro_rules(state, [entry | acc])
+        parse_macro_rules(state, [entry | acc], macro_token)
 
-      other ->
+      observed ->
         state =
-          add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col, other.span})
+          add_error(
+            state,
+            {:syntax_family_definition_syntax,
+             %{
+               kind: :macro_definition_entry_invalid,
+               expected: :syntax,
+               alternatives: [:accepts, :expands, :literal, :explain, :fail, :open],
+               observed: macro_separator_observed(observed),
+               token_type: observed.type,
+               span: observed.span,
+               opener_span: macro_token.span,
+               previous_span: previous_authored_span(state, macro_token.span),
+               line: observed.line,
+               column: observed.col
+             }}
+          )
 
         # Recover: skip a token so one bad line does not eat the block.
-        parse_macro_rules(advance(state), acc)
+        parse_macro_rules(advance(state), acc, macro_token)
     end
   end
 
@@ -11076,10 +11129,17 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
     state = skip_macro_trivia(state)
 
+    family_context = %{
+      family: name,
+      opener_span: syntax_token.span,
+      family_keyword_span: family_token.span,
+      name_span: name_token.span
+    }
+
     case peek(state) do
       %Token{type: :indent} ->
         {fields, includes, productions, include_spans, state} =
-          parse_syntax_family_fields(advance(state), [], [], [], [])
+          parse_syntax_family_fields(advance(state), [], [], [], [], family_context)
 
         state = expect_dedent(state)
 
@@ -11101,8 +11161,23 @@ defmodule Cure.Compiler.Parser do
            source_span: macro_rule_source_span(syntax_token, terminal_span)
          }, state}
 
-      t ->
-        state = add_error(state, {:expected, :indent, :got, t.type, t.line, t.col, t.span})
+      observed ->
+        state =
+          add_error(
+            state,
+            {:syntax_family_definition_syntax,
+             Map.merge(family_context, %{
+               kind: :syntax_family_indent_missing,
+               expected: :indent,
+               observed: macro_separator_observed(observed),
+               token_type: observed.type,
+               span: zero_width_start(observed.span),
+               observed_span: observed.span,
+               previous_span: name_token.span,
+               line: observed.line,
+               column: observed.col
+             })}
+          )
 
         {%{
            kind: :syntax_family,
@@ -11115,7 +11190,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_syntax_family_fields(state, fields, includes, productions, include_spans) do
+  defp parse_syntax_family_fields(state, fields, includes, productions, include_spans, family_context) do
     state = skip_macro_trivia(state)
 
     case peek(state) do
@@ -11136,7 +11211,7 @@ defmodule Cure.Compiler.Parser do
           source_span: macro_rule_source_span(token, segment_span || token.span)
         }
 
-        parse_syntax_family_fields(state, fields, includes, [production | productions], include_spans)
+        parse_syntax_family_fields(state, fields, includes, [production | productions], include_spans, family_context)
 
       %Token{type: :identifier, value: "includes"} = token ->
         include_start = peek(advance(state))
@@ -11149,7 +11224,8 @@ defmodule Cure.Compiler.Parser do
           fields,
           [{include, token.line, token.col} | includes],
           productions,
-          [include_span || include_start.span | include_spans]
+          [include_span || include_start.span | include_spans],
+          family_context
         )
 
       %Token{type: :identifier} = token ->
@@ -11175,13 +11251,41 @@ defmodule Cure.Compiler.Parser do
           source_span: macro_rule_source_span(token, terminal_span)
         }
 
-        parse_syntax_family_fields(state, [field_entry | fields], includes, productions, include_spans)
+        parse_syntax_family_fields(
+          state,
+          [field_entry | fields],
+          includes,
+          productions,
+          include_spans,
+          family_context
+        )
 
-      other ->
+      observed ->
         state =
-          add_error(state, {:expected, :family_field, :got, other.type, other.line, other.col, other.span})
+          add_error(
+            state,
+            {:syntax_family_definition_syntax,
+             Map.merge(family_context, %{
+               kind: :syntax_family_member_invalid,
+               expected: :family_field,
+               alternatives: [:includes, :syntax],
+               observed: macro_separator_observed(observed),
+               token_type: observed.type,
+               span: observed.span,
+               previous_span: previous_authored_span(state, family_context.name_span),
+               line: observed.line,
+               column: observed.col
+             })}
+          )
 
-        parse_syntax_family_fields(advance(state), fields, includes, productions, include_spans)
+        parse_syntax_family_fields(
+          advance(state),
+          fields,
+          includes,
+          productions,
+          include_spans,
+          family_context
+        )
     end
   end
 
