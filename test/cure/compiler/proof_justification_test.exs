@@ -1,8 +1,8 @@
 defmodule Cure.Compiler.ProofJustificationTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Lexer, Parser, Printer}
-  alias Cure.MetaAST.Metadata
+  alias Cure.Compiler.{Errors, Lexer, Parser, Printer}
+  alias Cure.Diagnostic.Renderer
   alias Cure.MetaAST.{Metadata, SourceInfo}
 
   @source """
@@ -68,5 +68,87 @@ defmodule Cure.Compiler.ProofJustificationTest do
     printed = Printer.quoted_to_string(ast)
     assert printed == String.trim_trailing(source)
     assert Metadata.strip_diagnostics(parse!(printed)) == Metadata.strip_diagnostics(ast)
+  end
+
+  test "a directed rewrite missing `using` has exact labels and a machine edit" do
+    source = "rewrite backwards equality_proof"
+    {diagnostic, registry} = syntax_diagnostic(source, "rewrite_using.cure")
+
+    assert diagnostic.key == :rewrite_using_missing
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- REWRITE COMMAND NEEDS `USING` [E094] --------------------- rewrite_using.cure
+
+             A directed rewrite introduces its equality proof with `using`; 'equality_proof'
+             appears where `using` belongs.
+
+             A valid continuation here starts with 'using'.
+
+             at rewrite_using.cure:1:19
+             1 | rewrite backwards equality_proof
+               | ------- --------- ^ this rewrite command starts here; the rewrite direction ends here; insert `using` before the equality proof
+
+             Hint: Insert `using` before the equality proof
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "using ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert {insertion.start_line, insertion.start_column, insertion.start_byte, insertion.end_byte} == {1, 19, 18, 18}
+
+    assert [%{"newText" => "using ", "range" => range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert range == %{
+             "start" => %{"line" => 0, "character" => 18},
+             "end" => %{"line" => 0, "character" => 18}
+           }
+  end
+
+  test "rewrite selectors distinguish an invalid occurrence from an invalid hypothesis name" do
+    {occurrence, _registry} = syntax_diagnostic("rewrite using equality_proof at 0", "rewrite_at.cure")
+    assert occurrence.key == :rewrite_occurrence_invalid
+    assert occurrence.primary.span.start_column == 33
+    assert occurrence.primary.span.end_column == 34
+    assert occurrence.primary.message == "write a positive occurrence number here"
+    assert occurrence.suggestions == []
+
+    {hypothesis, _registry} = syntax_diagnostic("rewrite using equality_proof in 42", "rewrite_in.cure")
+    assert hypothesis.key == :rewrite_hypothesis_name_invalid
+    assert hypothesis.primary.span.start_column == 33
+    assert hypothesis.primary.span.end_column == 35
+    assert hypothesis.primary.message == "write the local hypothesis name here"
+    assert hypothesis.suggestions == []
+  end
+
+  test "a legacy rewrite missing `in` labels both sides and inserts the unique separator" do
+    source = "rewrite equality_proof\nresult"
+    {diagnostic, registry} = syntax_diagnostic(source, "rewrite_in_separator.cure")
+
+    assert diagnostic.key == :rewrite_in_missing
+    assert diagnostic.primary.span.start_line == 2
+    assert diagnostic.primary.span.start_column == 1
+
+    assert Enum.map(diagnostic.secondary, & &1.message) == [
+             "this rewrite command starts here",
+             "the equality proof ends here"
+           ]
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "in ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert {insertion.start_line, insertion.start_column, insertion.start_byte, insertion.end_byte} == {2, 1, 23, 23}
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 1, "character" => 0},
+             "end" => %{"line" => 1, "character" => 0}
+           }
+  end
+
+  defp syntax_diagnostic(source, file) do
+    assert {:ok, tokens} = Lexer.tokenize(source, file: file, emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, file: file, emit_events: false)
+    Errors.to_diagnostic({:parse_error, [error]}, file, source)
   end
 end

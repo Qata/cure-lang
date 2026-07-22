@@ -380,7 +380,7 @@ defmodule Cure.Diagnostic.HostTest do
     rendered = Host.render({:rule_unpinned, ["every"]}, "macro.cure")
 
     assert rendered =~ "[E092]"
-    assert rendered =~ "MACRO VALIDATION FAILED"
+    assert rendered =~ "MACRO RULE NEEDS A WORKED EXAMPLE"
     assert rendered =~ "every"
     refute rendered =~ ":rule_unpinned"
   end

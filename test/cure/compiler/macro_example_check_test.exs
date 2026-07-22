@@ -183,5 +183,32 @@ defmodule Cure.Compiler.MacroExampleCheckTest do
     rendered = Errors.format_error({:computed_example_error, [failure]}, "m.cure")
     assert rendered =~ "computed macro example failed"
     assert rendered =~ "mk"
+
+    assert {:error,
+            {:source_context, {:computed_example_error, [%{keyword: "mk", source_span: %Cure.Diagnostic.Span{}}]},
+             %{span: %Cure.Diagnostic.Span{}, rule_spans: [%Cure.Diagnostic.Span{}]}} = reason} =
+             MacroValidate.check_program(md, env)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "computed_example.cure", source)
+
+    assert Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- COMPUTED MACRO EXAMPLE FAILED [E092] ------------------ computed_example.cure
+
+             A computed macro example failed while being checked: mk.
+
+             at computed_example.cure:6:7
+             5 |     syntax mk computed by build_it
+               |     ------------------------------ this rule owns the failing example
+             6 |       example mk expands 1
+               |       ^^^^^^^^^^^^^^^^^^^^ this computed example could not be checked
+
+             Hint: Fix the computed expander or its worked example
+             """)
+
+    assert Cure.Diagnostic.Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 5, "character" => 6},
+             "end" => %{"line" => 5, "character" => 26}
+           }
   end
 end

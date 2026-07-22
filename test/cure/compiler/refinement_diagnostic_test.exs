@@ -128,4 +128,31 @@ defmodule Cure.Compiler.RefinementDiagnosticTest do
     assert insertion.end_byte == byte_size(source)
     assert length(Renderer.lsp(diagnostic, registry)["relatedInformation"]) == 3
   end
+
+  test "a mismatched refinement closer labels the complete authored type and replaces it" do
+    source = "typealias P = {x: Int | true]"
+    {error, {diagnostic, registry}} = diagnostic(source, "refine_mismatch.cure")
+
+    assert {:refinement_type_syntax,
+            %{kind: :mismatched_closer, family: :refinement_type, expected: :rbrace, observed: "]"}} = error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- REFINEMENT TYPE HAS THE WRONG CLOSER [E094] ------------ refine_mismatch.cure
+
+             This refinement type starts with '{', so ']' cannot close it. Use '}' after the
+             proposition.
+
+             at refine_mismatch.cure:1:29
+             1 | typealias P = {x: Int | true]
+               |               --        ----^ this refinement type starts here; this is the refinement binder; the proposition ends here; replace this with `}`
+
+             Hint: Replace ']' with `}`
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "}", span: replacement}]}] =
+             diagnostic.suggestions
+
+    assert {replacement.start_column, replacement.end_column} == {29, 30}
+  end
 end

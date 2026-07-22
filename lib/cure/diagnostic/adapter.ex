@@ -596,6 +596,21 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:missing_diagnosis, points}, opts), do: macro_validation_failure(:missing_diagnosis, points, opts)
   def from_error({:rule_unpinned, keywords}, opts), do: macro_validation_failure(:rule_unpinned, keywords, opts)
 
+  def from_error({:source_context, {:missing_diagnosis, points}, context}, opts) when is_map(context),
+    do: macro_validation_failure(:missing_diagnosis, points, opts, context)
+
+  def from_error({:source_context, {:rule_unpinned, keywords}, context}, opts) when is_map(context),
+    do: macro_validation_failure(:rule_unpinned, keywords, opts, context)
+
+  def from_error({:source_context, {:example_mismatch, mismatches}, context}, opts) when is_map(context),
+    do: macro_validation_failure(:example_mismatch, mismatches, opts, context)
+
+  def from_error({:source_context, {:example_type_mismatch, failures}, context}, opts) when is_map(context),
+    do: macro_validation_failure(:example_type_mismatch, failures, opts, context)
+
+  def from_error({:source_context, {:computed_example_error, failures}, context}, opts) when is_map(context),
+    do: macro_validation_failure(:computed_example_error, failures, opts, context)
+
   def from_error({:example_mismatch, mismatches}, opts),
     do: macro_validation_failure(:example_mismatch, mismatches, opts)
 
@@ -2547,6 +2562,106 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:proof_command_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:macro_check_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:macro_rule_separator_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:syntax_family_definition_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        alternatives: Map.get(details, :alternatives, []),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:syntax_family_body_syntax, details}, opts) when is_map(details) do
+    valid_fields = Map.get(details, :valid_fields, [])
+    expected = Map.get(details, :expected) || List.first(valid_fields)
+
+    alternatives =
+      if Map.get(details, :kind) == :syntax_family_entry_invalid,
+        do: Enum.drop(valid_fields, 1),
+        else: []
+
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: expected,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        previous: Map.get(details, :previous_span),
+        alternatives: alternatives,
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:macro_nested_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        alternatives: Map.get(details, :alternatives, []),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:refinement_type_syntax, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -4295,18 +4410,81 @@ defmodule Cure.Diagnostic.Adapter do
     |> Enum.map_join(", ", &Atom.to_string/1)
   end
 
-  defp macro_validation_failure(kind, details, opts) do
+  defp macro_validation_failure(kind, details, opts), do: macro_validation_failure(kind, details, opts, %{})
+
+  defp macro_validation_failure(kind, details, opts, context) do
+    span = Map.get(context, :span) || Keyword.get(opts, :span)
+
     Diagnostic.new(
       code: "E092",
       key: :macro_validation_failed,
       severity: :error,
-      title: "Macro validation failed",
+      title: macro_validation_title(kind),
       body: Doc.paragraph(macro_validation_message(kind, details)),
-      primary: primary_label(opts, "this macro declaration is incomplete or inconsistent"),
-      notes: ["Fix the authored macro rules or their pinned examples."],
-      payload: %{kind: kind, details: details}
+      primary: pickup_label(span, :primary, macro_validation_primary_label(kind)),
+      secondary: macro_validation_secondary_labels(kind, context, span),
+      suggestions: macro_validation_suggestions(kind),
+      payload: %{kind: kind, details: details, macro: Map.get(context, :macro)}
     )
   end
+
+  defp macro_validation_title(:missing_diagnosis), do: "Macro explanations are incomplete"
+  defp macro_validation_title(:rule_unpinned), do: "Macro rule needs a worked example"
+  defp macro_validation_title(:example_mismatch), do: "Macro example has the wrong expansion"
+  defp macro_validation_title(:example_type_mismatch), do: "Macro example has the wrong type"
+  defp macro_validation_title(:computed_example_error), do: "Computed macro example failed"
+  defp macro_validation_title(_kind), do: "Macro validation failed"
+
+  defp macro_validation_primary_label(:missing_diagnosis), do: "add clauses for the unexplained failure points"
+  defp macro_validation_primary_label(:rule_unpinned), do: "add a worked example beneath this rule"
+  defp macro_validation_primary_label(:example_mismatch), do: "this pin does not match the actual expansion"
+  defp macro_validation_primary_label(:example_type_mismatch), do: "this pinned type does not accept the expansion"
+  defp macro_validation_primary_label(:computed_example_error), do: "this computed example could not be checked"
+  defp macro_validation_primary_label(_kind), do: "this macro declaration is incomplete or inconsistent"
+
+  defp macro_validation_secondary_labels(:missing_diagnosis, context, primary_span) do
+    context
+    |> Map.get(:rule_spans, [])
+    |> Enum.map(&pickup_label(&1, :secondary, "this rule declares an unexplained failure point"))
+    |> Enum.reject(&(&1.span == primary_span))
+  end
+
+  defp macro_validation_secondary_labels(:rule_unpinned, context, primary_span) do
+    context
+    |> Map.get(:rule_spans, [])
+    |> Enum.drop(1)
+    |> Enum.map(&pickup_label(&1, :secondary, "this rule also needs a worked example"))
+    |> Enum.reject(&(&1.span == primary_span))
+  end
+
+  defp macro_validation_secondary_labels(kind, context, primary_span)
+       when kind in [:example_mismatch, :example_type_mismatch, :computed_example_error] do
+    context
+    |> Map.get(:rule_spans, [])
+    |> Enum.map(&pickup_label(&1, :secondary, "this rule owns the failing example"))
+    |> Enum.reject(&(&1.span == primary_span))
+  end
+
+  defp macro_validation_secondary_labels(_kind, _context, _primary_span), do: []
+
+  defp macro_validation_suggestions(:missing_diagnosis),
+    do: [%Suggestion{message: "Add one `explain` clause for each listed failure point", applicability: :manual}]
+
+  defp macro_validation_suggestions(:rule_unpinned),
+    do: [
+      %Suggestion{message: "Add `example use_site expands expected` beneath each listed rule", applicability: :manual}
+    ]
+
+  defp macro_validation_suggestions(:example_mismatch),
+    do: [%Suggestion{message: "Update the pinned expansion or fix the macro rule", applicability: :manual}]
+
+  defp macro_validation_suggestions(:example_type_mismatch),
+    do: [%Suggestion{message: "Use the expansion's actual type or fix the macro rule", applicability: :manual}]
+
+  defp macro_validation_suggestions(:computed_example_error),
+    do: [%Suggestion{message: "Fix the computed expander or its worked example", applicability: :manual}]
+
+  defp macro_validation_suggestions(_kind), do: []
 
   defp macro_validation_message(:missing_diagnosis, points),
     do: "The macro does not explain every declared failure point: #{macro_failure_points(points)}."
@@ -5117,6 +5295,73 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :induction_case}}),
     do: "Induction case arrow is missing"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :rewrite_using_missing}), do: "Rewrite command needs `using`"
+  defp syntax_problem_title(%SyntaxProblem{kind: :rewrite_in_missing}), do: "Rewrite expression needs `in`"
+  defp syntax_problem_title(%SyntaxProblem{kind: :rewrite_occurrence_invalid}), do: "Rewrite occurrence is invalid"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :rewrite_hypothesis_name_invalid}),
+    do: "Rewrite target needs a name"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :induction_case_introducer_missing}),
+    do: "Induction branch needs `case`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :induction_block_indent_missing}),
+    do: "Induction cases must be indented"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_check_else_missing}),
+    do: "Macro check needs `else`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_check_fail_missing}),
+    do: "Macro check needs `fail`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_check_failure_constructor_invalid}),
+    do: "Macro check needs a failure value"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_rule_becomes_missing}),
+    do: "Macro rule needs `becomes`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :literal_rule_becomes_missing}),
+    do: "Literal rule needs `becomes`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :computed_rule_by_missing}),
+    do: "Computed rule needs `by`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_example_expands_missing}),
+    do: "Macro example needs `expands`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_expands_with_missing}),
+    do: "Macro expander needs `with`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :syntax_family_indent_missing}),
+    do: "Syntax family body must be indented"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :syntax_family_member_invalid}),
+    do: "Syntax family member is invalid"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :syntax_family_entry_invalid}),
+    do: "Structured macro entry is invalid"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :syntax_family_production_invalid}),
+    do: "Structured macro production is invalid"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :syntax_family_body_indent_missing}),
+    do: "Structured macro body must be indented"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_definition_entry_invalid}),
+    do: "Macro declaration entry is invalid"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_example_entry_invalid}),
+    do: "Macro example entry is invalid"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_explain_point_invalid}),
+    do: "Macro explanation point is invalid"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :local_function_keyword_missing}),
+    do: "Local function needs `fn`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :implementation_for_keyword_missing}),
+    do: "Implementation needs `for`"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "Explanation clause arrow is missing"
 
@@ -5146,10 +5391,16 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :refinement_unclosed}),
     do: "Refinement type is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :mismatched_closer, context: %{family: :refinement_type}}),
+    do: "Refinement type has the wrong closer"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :sigma_binder_invalid}), do: "Sigma binder needs a name"
   defp syntax_problem_title(%SyntaxProblem{kind: :sigma_colon_missing}), do: "Sigma binder needs a colon"
   defp syntax_problem_title(%SyntaxProblem{kind: :sigma_comma_missing}), do: "Sigma type needs a separator"
   defp syntax_problem_title(%SyntaxProblem{kind: :sigma_unclosed}), do: "Sigma type is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :mismatched_closer, context: %{family: :sigma_type}}),
+    do: "Sigma type has the wrong closer"
 
   defp syntax_problem_title(%SyntaxProblem{kind: :gadt_constructor_colon_missing}),
     do: "Constructor signature needs a colon"
@@ -5493,7 +5744,6 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_parentheses}), do: "Parenthesized expression is not closed"
   defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_brackets}), do: "Bracketed expression is not closed"
   defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_braces}), do: "Braced expression is not closed"
-  defp syntax_problem_title(%SyntaxProblem{expected: :explain_point}), do: "Explanation clause needs a failure point"
   defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
 
   defp syntax_problem_context(%SyntaxProblem{
@@ -5589,6 +5839,121 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :induction_case}}),
     do: "An induction case needs `=>` between its pattern and body expression."
 
+  defp syntax_problem_context(%SyntaxProblem{kind: :rewrite_using_missing, observed: observed}),
+    do:
+      "A directed rewrite introduces its equality proof with `using`; #{authored_syntax(observed)} appears where `using` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :rewrite_in_missing, observed: observed}),
+    do:
+      "A rewrite expression uses `in` between its equality proof and the expression being rewritten; #{authored_syntax(observed)} appears where `in` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :rewrite_occurrence_invalid, observed: observed}),
+    do:
+      "The selector after `at` must be a positive integer occurrence such as `1`; #{authored_syntax(observed)} cannot select an occurrence."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :rewrite_hypothesis_name_invalid, observed: observed}),
+    do: "The selector after `in` must name a local hypothesis; #{authored_syntax(observed)} is not a hypothesis name."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :induction_case_introducer_missing, observed: observed}),
+    do:
+      "Every branch in an induction block starts with `case`; #{authored_syntax(observed)} appears at the start of this branch."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :induction_block_indent_missing}),
+    do: "The `case` branches of an induction expression must form an indented block below its subject."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_check_else_missing, observed: observed}),
+    do:
+      "A macro check uses `else` between its condition and failure value; #{authored_syntax(observed)} appears where `else` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_check_fail_missing, observed: observed}),
+    do:
+      "The rejected branch of a macro check starts with `fail`; #{authored_syntax(observed)} appears where `fail` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_check_failure_constructor_invalid, observed: observed}),
+    do:
+      "After `fail`, write a declared macro failure with its arguments, such as `BadInput(value)`; #{authored_syntax(observed)} is not a failure constructor call."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_rule_becomes_missing, observed: observed}),
+    do:
+      "A syntax rule uses `becomes` between its matched form and expansion template; #{authored_syntax(observed)} appears where `becomes` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :literal_rule_becomes_missing, observed: observed}),
+    do:
+      "A literal rule uses `becomes` between its suffix pattern and expansion template; #{authored_syntax(observed)} appears where `becomes` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :computed_rule_by_missing, observed: observed}),
+    do:
+      "A computed rule uses `by` before the elaborator function that implements it; #{authored_syntax(observed)} appears where `by` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_example_expands_missing, observed: observed}),
+    do:
+      "A macro example uses `expands` between its use-site and expected result; #{authored_syntax(observed)} appears where `expands` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_expands_with_missing, observed: observed}),
+    do:
+      "A structured macro uses `expands with` before its expander function; #{authored_syntax(observed)} appears where `with` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :syntax_family_indent_missing, context: %{family: family}}),
+    do:
+      "The fields, included families, and productions of `#{family}` must be nested below its `syntax family` declaration."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :syntax_family_member_invalid,
+         observed: observed,
+         context: %{family: family}
+       }),
+       do:
+         "#{authored_syntax(observed)} cannot declare a member of the `#{family}` syntax family. Write a typed field, `includes Family`, or a `syntax` production."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :syntax_family_entry_invalid,
+         observed: observed,
+         context: %{family: family, valid_fields: valid_fields}
+       }),
+       do:
+         "#{authored_syntax(observed)} does not start a field of the `#{family}` structured macro body. Valid fields are #{inline_choices(valid_fields)}."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :syntax_family_production_invalid,
+         observed: observed,
+         context: context
+       }) do
+    field = Map.get(context, :field, "this field")
+    family = Map.get(context, :family)
+    owner = if family, do: " in `#{family}`", else: ""
+
+    "#{authored_syntax(observed)} does not match any production accepted by `#{field}`#{owner}. Follow one of the forms declared by that syntax family."
+  end
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :syntax_family_body_indent_missing,
+         context: %{family: family, valid_fields: valid_fields}
+       }),
+       do:
+         "The `#{family}` structured macro body must be indented below its invocation. Its fields are #{inline_choices(valid_fields)}."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_definition_entry_invalid, observed: observed}),
+    do:
+      "#{authored_syntax(observed)} cannot start an entry in a macro declaration. Use a syntax rule, family contract, expander, literal rule, explanation, failure, or opened category."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_example_entry_invalid, observed: observed}),
+    do:
+      "#{authored_syntax(observed)} cannot start a pinned macro example. Each line in this nested block must use `example use_site expands expected`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_explain_point_invalid, observed: observed}),
+    do:
+      "#{authored_syntax(observed)} cannot name a macro failure point. Use a failure category such as `Duration`, or `keyword \"every\"` for a literal token."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :local_function_keyword_missing}),
+    do: "A private function declaration must put `fn` between `local` and the function name."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :implementation_for_keyword_missing,
+         context: %{declaration: declaration}
+       }),
+       do:
+         "The implementation of `#{declaration}` needs `for` between its interface or protocol and the type receiving the implementation."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "An explanation clause needs `=>` between its failure point and message."
 
@@ -5608,6 +5973,15 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :refinement_unclosed}),
     do: "This refinement type reaches the end of its container without the '}' that closes its proposition."
 
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :mismatched_closer,
+         expected: expected,
+         observed: observed,
+         context: %{family: :refinement_type}
+       }),
+       do:
+         "This refinement type starts with '{', so #{authored_syntax(observed)} cannot close it. Use '#{syntax_insertion(expected)}' after the proposition."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :sigma_binder_invalid, observed: observed}),
     do:
       "#{String.capitalize(syntax_name(observed))} cannot name the first value in this dependent pair. Use a lower-case binder such as `value`."
@@ -5620,6 +5994,15 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :sigma_unclosed}),
     do: "This Sigma type reaches the end of the source without the ')' that closes its dependent pair."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :mismatched_closer,
+         expected: expected,
+         observed: observed,
+         context: %{family: :sigma_type}
+       }),
+       do:
+         "This Sigma type starts with '(', so #{authored_syntax(observed)} cannot close it. Use '#{syntax_insertion(expected)}' after the dependent result type."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :gadt_constructor_colon_missing,
@@ -6064,10 +6447,6 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :unclosed_braces}),
     do: "This braced expression reaches the end of the source without its closing '}'."
 
-  defp syntax_problem_context(%SyntaxProblem{expected: :explain_point, observed: observed}),
-    do:
-      "#{String.capitalize(syntax_name(observed))} starts an explanation message, but each clause must first name a failure category or `keyword \"...\"`."
-
   defp syntax_problem_context(%SyntaxProblem{observed: :eof}),
     do: "The source ended while I was still parsing this construct."
 
@@ -6091,8 +6470,6 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_expected_doc(%SyntaxProblem{kind: kind})
        when kind in [:container_unclosed, :container_separator_missing, :container_trailing_separator],
        do: Doc.empty()
-
-  defp syntax_expected_doc(%SyntaxProblem{expected: :explain_point}), do: Doc.empty()
 
   defp syntax_expected_doc(%SyntaxProblem{} = problem) do
     expected = [problem.expected | problem.alternatives] |> Enum.reject(&is_nil/1) |> Enum.map(&syntax_name/1)
@@ -6166,6 +6543,89 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :induction_case}}),
     do: "insert `=>` before this induction case body"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :rewrite_using_missing}),
+    do: "insert `using` before the equality proof"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :rewrite_in_missing}),
+    do: "insert `in` before the expression to rewrite"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :rewrite_occurrence_invalid}),
+    do: "write a positive occurrence number here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :rewrite_hypothesis_name_invalid}),
+    do: "write the local hypothesis name here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :induction_case_introducer_missing}),
+    do: "this induction branch must start with `case`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :induction_block_indent_missing}),
+    do: "indent the induction cases below the subject"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :macro_check_else_missing}),
+    do: "insert `else` before the rejected branch"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :macro_check_fail_missing}),
+    do: "insert `fail` before this failure value"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :macro_check_failure_constructor_invalid}),
+    do: "call a declared macro failure here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: kind, expected: expected, context: %{token_type: type}})
+       when kind in [
+              :macro_rule_becomes_missing,
+              :literal_rule_becomes_missing,
+              :computed_rule_by_missing,
+              :macro_example_expands_missing,
+              :macro_expands_with_missing
+            ] and type in [:eof, :dedent, :newline],
+       do: "add `#{expected}` and the expression that follows it"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: kind, expected: expected})
+       when kind in [
+              :macro_rule_becomes_missing,
+              :literal_rule_becomes_missing,
+              :computed_rule_by_missing,
+              :macro_example_expands_missing,
+              :macro_expands_with_missing
+            ],
+       do: "insert `#{expected}` before this expression"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :syntax_family_indent_missing}),
+    do: "indent the syntax family members below this declaration"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :syntax_family_member_invalid}),
+    do: "write a field, include, or production here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :syntax_family_entry_invalid}),
+    do: "start this entry with a valid structured field"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :syntax_family_production_invalid}),
+    do: "this does not match a declared family production"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :syntax_family_body_indent_missing}),
+    do: "indent the structured macro body here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :macro_definition_entry_invalid}),
+    do: "replace this with a valid macro declaration entry"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :macro_example_entry_invalid}),
+    do: "start this line with `example`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :macro_explain_point_invalid}),
+    do: "name the failure point before `=>`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :local_function_keyword_missing}),
+    do: "insert `fn` before this function name"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :implementation_for_keyword_missing,
+         context: %{repair: :replace}
+       }),
+       do: "replace this with `for`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :implementation_for_keyword_missing}),
+    do: "insert `for` before this implementation type"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "insert `=>` before this explanation message"
 
@@ -6184,6 +6644,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :refinement_unclosed}),
     do: "close this refinement type with `}`"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :mismatched_closer, context: %{family: :refinement_type}}),
+    do: "replace this with `}`"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :sigma_binder_invalid}),
     do: "write a lower-case Sigma binder here"
 
@@ -6195,6 +6658,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :sigma_unclosed}),
     do: "close this Sigma type with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :mismatched_closer, context: %{family: :sigma_type}}),
+    do: "replace this with `)`"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :gadt_constructor_colon_missing}),
     do: "insert `:` before this constructor signature"
@@ -6518,8 +6984,6 @@ defmodule Cure.Diagnostic.Adapter do
        when kind in [:unclosed_parentheses, :unclosed_brackets, :unclosed_braces],
        do: "the closing delimiter belongs here"
 
-  defp syntax_problem_label(%SyntaxProblem{expected: :explain_point}), do: "name the failure point before this arrow"
-
   defp syntax_problem_label(%SyntaxProblem{kind: :non_associative}),
     do: "this second operator makes the chain ambiguous"
 
@@ -6565,6 +7029,37 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(problem.opener, :secondary, "this macro invocation starts here"),
       pickup_label(problem.within, :secondary, "the matching rule is declared here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :mismatched_closer,
+           opener: opener,
+           previous: previous,
+           context: %{family: family, binder_span: binder_span}
+         },
+         primary_span
+       )
+       when family in [:refinement_type, :sigma_type] do
+    {opener_message, binder_message, previous_message} =
+      case family do
+        :refinement_type ->
+          {"this refinement type starts here", "this is the refinement binder", "the proposition ends here"}
+
+        :sigma_type ->
+          {"this Sigma type starts here", "this is the Sigma binder", "the dependent result type ends here"}
+      end
+
+    [
+      pickup_label(opener, :secondary, opener_message),
+      pickup_label(binder_span, :secondary, binder_message),
+      pickup_label(previous, :secondary, previous_message)
     ]
     |> Enum.reject(fn
       nil -> true
@@ -6671,6 +7166,209 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(opener, :secondary, "this induction case starts here"),
       pickup_label(previous, :secondary, "the induction pattern ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: kind, opener: %Span{} = opener, previous: previous},
+         primary_span
+       )
+       when kind in [
+              :rewrite_using_missing,
+              :rewrite_in_missing,
+              :rewrite_occurrence_invalid,
+              :rewrite_hypothesis_name_invalid
+            ] do
+    previous_message =
+      case kind do
+        :rewrite_using_missing -> "the rewrite direction ends here"
+        :rewrite_in_missing -> "the equality proof ends here"
+        :rewrite_occurrence_invalid -> "this `at` selector needs an occurrence number"
+        :rewrite_hypothesis_name_invalid -> "this `in` selector needs a hypothesis name"
+      end
+
+    [
+      pickup_label(opener, :secondary, "this rewrite command starts here"),
+      pickup_label(previous, :secondary, previous_message)
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: kind, opener: %Span{} = opener, previous: previous, context: context},
+         primary_span
+       )
+       when kind in [:syntax_family_indent_missing, :syntax_family_member_invalid] do
+    previous_message =
+      case kind do
+        :syntax_family_indent_missing ->
+          "the syntax family header ends here"
+
+        :syntax_family_member_invalid ->
+          if previous == Map.get(context, :name_span),
+            do: "the syntax family header ends here",
+            else: "the previous family member ends here"
+      end
+
+    [
+      pickup_label(opener, :secondary, "this syntax family declaration starts here"),
+      pickup_label(previous, :secondary, previous_message)
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: kind, previous: %Span{} = previous},
+         primary_span
+       )
+       when kind in [:syntax_family_entry_invalid, :syntax_family_production_invalid] and
+              previous != primary_span,
+       do: [%Label{span: previous, style: :secondary, message: "the previous structured entry ends here"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :macro_definition_entry_invalid,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    previous_message =
+      if previous && previous.start_line == opener.start_line,
+        do: "the macro header ends here",
+        else: "the previous macro entry ends here"
+
+    [
+      pickup_label(opener, :secondary, "this macro declaration starts here"),
+      pickup_label(previous, :secondary, previous_message)
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: kind, opener: %Span{} = opener, previous: previous},
+         primary_span
+       )
+       when kind in [:macro_example_entry_invalid, :macro_explain_point_invalid] do
+    {opener_message, previous_message} =
+      case kind do
+        :macro_example_entry_invalid ->
+          {"this syntax rule owns the example block", "the previous macro example ends here"}
+
+        :macro_explain_point_invalid ->
+          {"this explanation block starts here", "the previous explanation clause ends here"}
+      end
+
+    [pickup_label(opener, :secondary, opener_message), pickup_label(previous, :secondary, previous_message)]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: kind, opener: %Span{} = opener, previous: previous},
+         primary_span
+       )
+       when kind in [
+              :macro_rule_becomes_missing,
+              :literal_rule_becomes_missing,
+              :computed_rule_by_missing,
+              :macro_example_expands_missing,
+              :macro_expands_with_missing
+            ] do
+    {opener_message, previous_message} =
+      case kind do
+        :macro_rule_becomes_missing -> {"this syntax rule starts here", "the matched form ends here"}
+        :literal_rule_becomes_missing -> {"this literal rule starts here", "the suffix pattern ends here"}
+        :computed_rule_by_missing -> {"this computed rule starts here", "the computed modifier ends here"}
+        :macro_example_expands_missing -> {"this macro example starts here", "the example use-site ends here"}
+        :macro_expands_with_missing -> {"this expander section starts here", "the `expands` keyword ends here"}
+      end
+
+    [pickup_label(opener, :secondary, opener_message), pickup_label(previous, :secondary, previous_message)]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :induction_case_introducer_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this induction block starts here"),
+      pickup_label(previous, :secondary, "the previous induction case ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :induction_block_indent_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this induction expression starts here"),
+      pickup_label(previous, :secondary, "the induction subject ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: kind, opener: %Span{} = opener, previous: previous},
+         primary_span
+       )
+       when kind in [
+              :macro_check_else_missing,
+              :macro_check_fail_missing,
+              :macro_check_failure_constructor_invalid
+            ] do
+    previous_message =
+      case kind do
+        :macro_check_else_missing -> "the checked condition ends here"
+        :macro_check_fail_missing -> "the rejected branch starts after this `else`"
+        :macro_check_failure_constructor_invalid -> "this `fail` needs a failure constructor call"
+      end
+
+    [
+      pickup_label(opener, :secondary, "this macro check starts here"),
+      pickup_label(previous, :secondary, previous_message)
     ]
     |> Enum.reject(fn
       nil -> true
@@ -6922,6 +7620,32 @@ defmodule Cure.Diagnostic.Adapter do
        )
        when previous != primary_span,
        do: [%Label{span: previous, style: :secondary, message: "this is the record field name"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :local_function_keyword_missing, opener: %Span{} = opener},
+         primary_span
+       )
+       when opener != primary_span,
+       do: [%Label{span: opener, style: :secondary, message: "this starts a private declaration"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :implementation_for_keyword_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this starts the implementation"),
+      pickup_label(previous, :secondary, "the implemented interface or protocol ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
 
   defp syntax_secondary_labels(
          %SyntaxProblem{
@@ -7205,7 +7929,12 @@ defmodule Cure.Diagnostic.Adapter do
          },
          primary_span
        )
-       when kind in [:sigma_binder_invalid, :sigma_colon_missing, :sigma_comma_missing, :sigma_unclosed] do
+       when kind in [
+              :sigma_binder_invalid,
+              :sigma_colon_missing,
+              :sigma_comma_missing,
+              :sigma_unclosed
+            ] do
     [
       pickup_label(opener, :secondary, "this Sigma type starts here"),
       pickup_label(Map.get(context, :binder_span), :secondary, "this is the Sigma binder"),
@@ -7551,6 +8280,166 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_insertions(
+         %SyntaxProblem{kind: :rewrite_using_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `using` before the equality proof",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "using "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :rewrite_in_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `in` before the expression to rewrite",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "in "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: kind, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when kind in [:macro_check_else_missing, :macro_check_fail_missing] and
+              type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    {keyword, branch} =
+      case kind do
+        :macro_check_else_missing -> {"else", "the rejected branch"}
+        :macro_check_fail_missing -> {"fail", "this failure value"}
+      end
+
+    [
+      %Suggestion{
+        message: "Insert `#{keyword}` before #{branch}",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "#{keyword} "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: kind, expected: expected, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when kind in [
+              :macro_rule_becomes_missing,
+              :literal_rule_becomes_missing,
+              :computed_rule_by_missing,
+              :macro_example_expands_missing,
+              :macro_expands_with_missing
+            ] and type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `#{expected}` before this expression",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "#{expected} "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: kind, expected: expected}, %Span{})
+       when kind in [
+              :macro_rule_becomes_missing,
+              :literal_rule_becomes_missing,
+              :computed_rule_by_missing,
+              :macro_example_expands_missing,
+              :macro_expands_with_missing
+            ] do
+    [
+      %Suggestion{
+        message: "Add `#{expected}` and the expression that follows it",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :syntax_family_indent_missing}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Indent one or more family members below the declaration",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :syntax_family_member_invalid}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Replace this line with a typed field, an `includes` line, or a `syntax` production",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :syntax_family_entry_invalid, context: %{valid_fields: fields}}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Start this entry with one of: #{inline_choices(fields)}",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :syntax_family_production_invalid}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Rewrite this entry using one of the syntax family's declared production forms",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :syntax_family_body_indent_missing, context: %{valid_fields: fields}},
+         %Span{}
+       ) do
+    [
+      %Suggestion{
+        message: "Indent a structured body starting with one of: #{inline_choices(fields)}",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :macro_definition_entry_invalid}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Replace this line with a valid macro declaration entry",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :macro_example_entry_invalid}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Write `example use_site expands expected` on this line",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :macro_explain_point_invalid}, %Span{}) do
+    [
+      %Suggestion{
+        message: "Write `Category => message` or `keyword \"word\" => message`",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(
          %SyntaxProblem{
            kind: :branch_arrow_missing,
            context: %{family: :explain_clause, token_type: type}
@@ -7800,6 +8689,67 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Insert `(` before the type indices",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: "("}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :local_function_keyword_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline] do
+    [
+      %Suggestion{
+        message: "Insert `fn` before the local function name",
+        applicability: :machine_applicable,
+        edits: [
+          %TextEdit{
+            span: %{
+              span
+              | end_byte: span.start_byte,
+                end_line: span.start_line,
+                end_column: span.start_column
+            },
+            replacement: "fn "
+          }
+        ]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :implementation_for_keyword_missing, context: %{repair: :replace}},
+         %Span{} = span
+       ) do
+    [
+      %Suggestion{
+        message: "Replace this keyword with `for`",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "for"}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :implementation_for_keyword_missing,
+           context: %{repair: :insert, token_type: type}
+         },
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline] do
+    insertion_span = %{
+      span
+      | end_byte: span.start_byte,
+        end_line: span.start_line,
+        end_column: span.start_column
+    }
+
+    [
+      %Suggestion{
+        message: "Insert `for` before the implementation type",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: insertion_span, replacement: "for "}]
       }
     ]
   end
@@ -8234,14 +9184,6 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Remove the trailing comma",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: ""}]
-      }
-    ]
-
-  defp syntax_insertions(%SyntaxProblem{expected: :explain_point}, %Span{}),
-    do: [
-      %Suggestion{
-        message: "Write `Category => message` or `keyword \"word\" => message`",
-        applicability: :manual
       }
     ]
 
@@ -8689,6 +9631,11 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_name(:identifier), do: "an identifier"
   defp syntax_name(:keyword), do: "a keyword"
   defp syntax_name(:integer), do: "an integer"
+  defp syntax_name(:positive_integer), do: "a positive integer"
+  defp syntax_name(:failure_constructor), do: "a failure constructor call"
+  defp syntax_name(:family_field), do: "a typed field"
+  defp syntax_name(:syntax_family_production), do: "a declared family production"
+  defp syntax_name(:failure_category), do: "a failure category"
   defp syntax_name(:float), do: "a number"
   defp syntax_name(:string), do: "a string"
   defp syntax_name(:char), do: "a character"
@@ -8700,4 +9647,10 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_name(name) when is_binary(name), do: "'#{name}'"
   defp syntax_name(name) when is_atom(name), do: "'#{name}'"
   defp syntax_name(name), do: inspect(name)
+
+  defp authored_syntax(value) when is_integer(value) or is_float(value), do: "'#{value}'"
+  defp authored_syntax(value), do: syntax_name(value)
+
+  defp inline_choices([]), do: "no fields"
+  defp inline_choices(values), do: Enum.map_join(values, ", ", &"`#{&1}`")
 end

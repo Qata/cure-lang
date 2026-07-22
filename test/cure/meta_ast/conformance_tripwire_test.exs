@@ -107,13 +107,21 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
 
   defp tag_file(nonnodes, file), do: Enum.map(nonnodes, &Map.put(&1, :file, Path.basename(file)))
 
-  test "every first-party file parses (a parse failure would silently shrink coverage)" do
-    failed = corpus().failed
+  setup_all do
+    # Parsing and analysing the first-party corpus is the expensive part of this
+    # tripwire. The result is immutable and every test examines the same snapshot,
+    # so compute it once per module run instead of repeating the full pass five
+    # times. A new `mix test` invocation always builds a fresh snapshot.
+    {:ok, corpus: corpus()}
+  end
+
+  test "every first-party file parses (a parse failure would silently shrink coverage)", %{corpus: corpus} do
+    failed = corpus.failed
     assert failed == [], "files failed to parse: #{Enum.join(failed, ", ")}"
   end
 
-  test "INV-C.1: no guard-matching non-node appears in any meta value" do
-    nonnodes = corpus().nonnodes
+  test "INV-C.1: no guard-matching non-node appears in any meta value", %{corpus: corpus} do
+    nonnodes = corpus.nonnodes
 
     assert nonnodes == [], """
     A meta value holds a tuple that Metastatic's descent guard (`{atom, is_list, _}`)
@@ -128,8 +136,8 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
     """
   end
 
-  test "INV-C.2: the node-tag vocabulary in meta is exactly the frozen set" do
-    tags = corpus().tags
+  test "INV-C.2: the node-tag vocabulary in meta is exactly the frozen set", %{corpus: corpus} do
+    tags = corpus.tags
     new_tags = MapSet.difference(tags, @meta_vocabulary)
     gone_tags = MapSet.difference(@meta_vocabulary, tags)
 
@@ -145,8 +153,8 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
     """
   end
 
-  test "INV-A/INV-B: no structural violation outside the shrinking allowlist" do
-    unexpected = MapSet.difference(corpus().buckets, @structural_allowlist)
+  test "INV-A/INV-B: no structural violation outside the shrinking allowlist", %{corpus: corpus} do
+    unexpected = MapSet.difference(corpus.buckets, @structural_allowlist)
 
     assert MapSet.equal?(unexpected, MapSet.new()), """
     New MetaAST structural violation(s) not in the allowlist:
@@ -160,8 +168,8 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
     """
   end
 
-  test "INV-A/INV-B: the structural allowlist has no stale entries (forces it to shrink)" do
-    stale = MapSet.difference(@structural_allowlist, corpus().buckets)
+  test "INV-A/INV-B: the structural allowlist has no stale entries (forces it to shrink)", %{corpus: corpus} do
+    stale = MapSet.difference(@structural_allowlist, corpus.buckets)
 
     assert MapSet.equal?(stale, MapSet.new()), """
     Allowlisted structural bucket(s) no longer occur in the corpus:
