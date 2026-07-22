@@ -236,4 +236,71 @@ defmodule Cure.Elab.MacroValidationWiringTest do
     assert Map.has_key?(debug_diagnostic.payload, :internal_reason)
     assert Map.has_key?(debug_diagnostic.payload, :expansion)
   end
+
+  test "compilation points at a hole category the proof generator cannot inhabit" do
+    source = """
+    mod M
+      macro Mystery
+        syntax inspect <value: OpaqueThing> becomes 0
+    """
+
+    assert {:error,
+            {:source_context, {:unsupported_hole_type, "OpaqueThing"},
+             %{
+               span: %Cure.Diagnostic.Span{start_line: 3, start_column: 20},
+               category: "OpaqueThing"
+             }} = reason} = Program.elaborate(source)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "unsupported_hole.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- MACRO HOLE CANNOT BE GENERATED FOR PROOFS [E092] ------ unsupported_hole.cure
+
+             The generative expansion proof has no safe value generator for the `OpaqueThing`
+             hole category.
+
+             at unsupported_hole.cure:3:20
+             3 |     syntax inspect <value: OpaqueThing> becomes 0
+               |                    ^^^^^^^^^^^^^^^^^^^^ the proof generator cannot construct this category
+
+             Hint: Use a generatable category, or mark the rule `contextual` when proof needs its call site
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 2, "character" => 19},
+             "end" => %{"line" => 2, "character" => 39}
+           }
+  end
+
+  test "unsupported proof categories label every affected hole" do
+    source = """
+    mod M
+      macro Mystery
+        syntax first <a: OpaqueThing> becomes 0
+        syntax second <b: OpaqueThing> becomes 1
+    """
+
+    assert {:error,
+            {:source_context, {:unsupported_hole_type, "OpaqueThing"},
+             %{hole_spans: [%Cure.Diagnostic.Span{}, %Cure.Diagnostic.Span{}]}} = reason} = Program.elaborate(source)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "unsupported_holes.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- MACRO HOLE CANNOT BE GENERATED FOR PROOFS [E092] ----- unsupported_holes.cure
+
+             The generative expansion proof has no safe value generator for the `OpaqueThing`
+             hole category.
+
+             at unsupported_holes.cure:3:18
+             3 |     syntax first <a: OpaqueThing> becomes 0
+               |                  ^^^^^^^^^^^^^^^^ the proof generator cannot construct this category
+             4 |     syntax second <b: OpaqueThing> becomes 1
+               |                   ---------------- this hole uses the same unsupported category
+
+             Hint: Use a generatable category, or mark the rule `contextual` when proof needs its call site
+             """)
+  end
 end

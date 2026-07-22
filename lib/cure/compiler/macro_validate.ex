@@ -81,7 +81,8 @@ defmodule Cure.Compiler.MacroValidate do
               :example_mismatch,
               :example_type_mismatch,
               :computed_example_error,
-              :expansion_ill_typed
+              :expansion_ill_typed,
+              :unsupported_hole_type
             ] do
     {:error, {:source_context, reason, validation_source_context(reason, meta, rules)}}
   end
@@ -200,6 +201,38 @@ defmodule Cure.Compiler.MacroValidate do
       expression_category: :macro_expansion_proof
     }
   end
+
+  defp validation_source_context({:unsupported_hole_type, category}, meta, rules) do
+    offenders =
+      for rule <- rules,
+          rule[:kind] in [:syntax, :computed],
+          field <- fields_with_category(rule[:segments] || [], category),
+          span <- List.wrap(get_in(rule, [:field_spans, field])) do
+        %{field: field, keyword: rule[:keyword], span: span}
+      end
+
+    spans = offenders |> Enum.map(& &1.span) |> Enum.uniq()
+    macro_span = macro_source_span(meta)
+
+    %{
+      span: List.first(spans) || macro_span,
+      hole_spans: spans,
+      offenders: offenders,
+      related_spans: Enum.drop(spans, 1),
+      macro_span: macro_span,
+      macro: Keyword.get(meta, :name),
+      category: category,
+      expression_category: :macro_expansion_proof
+    }
+  end
+
+  defp fields_with_category(segments, category) when is_list(segments),
+    do: Enum.flat_map(segments, &fields_with_category(&1, category))
+
+  defp fields_with_category({:hole, %{name: name, kind: category}}, category), do: [name]
+  defp fields_with_category({:repeat, segment}, category), do: fields_with_category(segment, category)
+  defp fields_with_category({:optional, segments}, category), do: fields_with_category(segments, category)
+  defp fields_with_category(_segment, _category), do: []
 
   defp macro_source_span(meta) do
     case Metadata.source_info(meta) do

@@ -618,6 +618,9 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(details) and is_map(context),
       do: expansion_proof_failure(details, context, opts)
 
+  def from_error({:source_context, {:unsupported_hole_type, category}, context}, opts) when is_map(context),
+    do: macro_validation_failure(:unsupported_hole_type, %{detail: category}, opts, context)
+
   def from_error({:example_mismatch, mismatches}, opts),
     do: macro_validation_failure(:example_mismatch, mismatches, opts)
 
@@ -4490,6 +4493,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp macro_validation_title(:example_type_mismatch), do: "Macro example has the wrong type"
   defp macro_validation_title(:computed_example_error), do: "Computed macro example failed"
   defp macro_validation_title(:reserved_syntax_field), do: "Macro hole uses a reserved name"
+  defp macro_validation_title(:unsupported_hole_type), do: "Macro hole cannot be generated for proofs"
   defp macro_validation_title(_kind), do: "Macro validation failed"
 
   defp macro_validation_primary_label(:missing_diagnosis), do: "add clauses for the unexplained failure points"
@@ -4498,6 +4502,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp macro_validation_primary_label(:example_type_mismatch), do: "this pinned type does not accept the expansion"
   defp macro_validation_primary_label(:computed_example_error), do: "this computed example could not be checked"
   defp macro_validation_primary_label(:reserved_syntax_field), do: "this hole name is reserved for expansion context"
+  defp macro_validation_primary_label(:unsupported_hole_type), do: "the proof generator cannot construct this category"
   defp macro_validation_primary_label(_kind), do: "this macro declaration is incomplete or inconsistent"
 
   defp macro_validation_secondary_labels(:missing_diagnosis, context, primary_span) do
@@ -4530,6 +4535,13 @@ defmodule Cure.Diagnostic.Adapter do
     |> Enum.reject(&(&1.span == primary_span))
   end
 
+  defp macro_validation_secondary_labels(:unsupported_hole_type, context, primary_span) do
+    context
+    |> Map.get(:hole_spans, [])
+    |> Enum.map(&pickup_label(&1, :secondary, "this hole uses the same unsupported category"))
+    |> Enum.reject(&(&1.span == primary_span))
+  end
+
   defp macro_validation_secondary_labels(_kind, _context, _primary_span), do: []
 
   defp macro_validation_suggestions(:missing_diagnosis),
@@ -4552,6 +4564,14 @@ defmodule Cure.Diagnostic.Adapter do
   defp macro_validation_suggestions(:reserved_syntax_field),
     do: [%Suggestion{message: "Rename this hole; `context` is supplied automatically", applicability: :manual}]
 
+  defp macro_validation_suggestions(:unsupported_hole_type),
+    do: [
+      %Suggestion{
+        message: "Use a generatable category, or mark the rule `contextual` when proof needs its call site",
+        applicability: :manual
+      }
+    ]
+
   defp macro_validation_suggestions(_kind), do: []
 
   defp macro_validation_message(:missing_diagnosis, points),
@@ -4572,6 +4592,10 @@ defmodule Cure.Diagnostic.Adapter do
   defp macro_validation_message(:reserved_syntax_field, %{first: field, second: keywords}),
     do:
       "The hole `#{field}` in #{macro_rule_names(keywords)} conflicts with the reflected expansion context supplied to computed rules."
+
+  defp macro_validation_message(:unsupported_hole_type, %{detail: category}),
+    do:
+      "The generative expansion proof has no safe value generator for the `#{name_to_string(category)}` hole category."
 
   defp macro_validation_message(:invalid_macro_family, _reason),
     do: "The macro's syntax-family declarations are inconsistent."
