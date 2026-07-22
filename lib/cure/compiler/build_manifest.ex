@@ -12,6 +12,7 @@ defmodule Cure.Compiler.BuildManifest do
 
   @manifest_version 1
   @filename ".cure_manifest"
+  @toolchain_fingerprint_key {__MODULE__, :toolchain_fingerprint}
 
   @type entry :: %{
           source_path: String.t(),
@@ -63,6 +64,21 @@ defmodule Cure.Compiler.BuildManifest do
   @doc "SHA-256 over the :cure application's compiled .beam files, in sorted path order."
   @spec toolchain_fingerprint() :: binary()
   def toolchain_fingerprint do
+    beams = toolchain_beams()
+    signature = toolchain_signature(beams)
+
+    case :persistent_term.get(@toolchain_fingerprint_key, :missing) do
+      {^signature, fingerprint} ->
+        fingerprint
+
+      _missing_or_changed ->
+        fingerprint = compute_toolchain_fingerprint(beams)
+        :persistent_term.put(@toolchain_fingerprint_key, {signature, fingerprint})
+        fingerprint
+    end
+  end
+
+  defp toolchain_beams do
     # NOT `Application.app_dir(:cure, "ebin")`: in this project `:code.lib_dir(:cure)`
     # resolves to `_build/cure` (not the standard `_build/<env>/lib/cure`), so
     # `Application.app_dir/2` collides with the driver's own default `output_dir`
@@ -74,12 +90,20 @@ defmodule Cure.Compiler.BuildManifest do
     # all, so a real toolchain change goes undetected. `Mix.Project.compile_path()`
     # is the correct location: `_build/<env>/lib/cure/ebin`, where the `:cure`
     # app's own compiled bytecode actually lives.
-    beams =
-      Mix.Project.compile_path()
-      |> Path.join("*.beam")
-      |> Path.wildcard()
-      |> Enum.sort()
+    Mix.Project.compile_path()
+    |> Path.join("*.beam")
+    |> Path.wildcard()
+    |> Enum.sort()
+  end
 
+  defp toolchain_signature(beams) do
+    Enum.map(beams, fn beam ->
+      stat = File.stat!(beam, time: :posix)
+      {beam, stat.inode, stat.size, stat.mtime, stat.ctime}
+    end)
+  end
+
+  defp compute_toolchain_fingerprint(beams) do
     ctx = :crypto.hash_init(:sha256)
 
     beams
