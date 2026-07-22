@@ -96,7 +96,7 @@ defmodule Cure.Diagnostic.Registry do
     "W088" =>
       "The dependent-only pipeline rejects unresolved imported names as E091 before the classic codegen fallback can occur."
   }
-  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E112 E113 E114 E115 E116 W086 W088]
+  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E112 E113 E114 E115 E116 E117 W086 W088]
   @known_producers ~w[
     beam_writer dependency_graph elaboration kernel lexer macro_expansion
     name_resolution operational parser pattern_checker proof_checker
@@ -174,6 +174,7 @@ defmodule Cure.Diagnostic.Registry do
     "E114" => :defining_equation_unavailable,
     "E115" => :named_argument_mismatch,
     "E116" => :implementation_scope,
+    "E117" => :resource_usage_violation,
     "W000" => :compiler_warning,
     "W001" => :migration_warning,
     "W002" => :configuration_warning,
@@ -1423,6 +1424,16 @@ defmodule Cure.Diagnostic.Registry do
 
     Indent every implementation member beneath its `implementation` declaration.
     """,
+    "E117" => """
+    E117: Resource Usage Violation
+
+    A linear value is not consumed exactly once, or an affine value may be
+    consumed more than once. The diagnostic identifies the authored binding and
+    every unambiguous use that contributes to the violation.
+
+    Keep linear ownership on exactly one path and affine ownership on at most
+    one path. Pass restricted values only to parameters with compatible grades.
+    """,
     "W000" => """
     W000: Compiler Warning
 
@@ -1764,6 +1775,7 @@ defmodule Cure.Diagnostic.Registry do
   defp stable_key("E114", _title), do: :defining_equation_unavailable
   defp stable_key("E115", _title), do: :named_argument_mismatch
   defp stable_key("E116", _title), do: :implementation_scope
+  defp stable_key("E117", _title), do: :resource_usage_violation
 
   defp stable_key(_code, title) do
     title
@@ -1829,6 +1841,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E113"), do: [:elaboration]
   defp producers("E115"), do: [:elaboration]
   defp producers("E116"), do: [:elaboration]
+  defp producers("E117"), do: [:elaboration]
   defp producers("E008"), do: [:operational]
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
@@ -1891,6 +1904,7 @@ defmodule Cure.Diagnostic.Registry do
   defp subsystem("E113"), do: :elaboration
   defp subsystem("E115"), do: :elaboration
   defp subsystem("E116"), do: :elaboration
+  defp subsystem("E117"), do: :elaboration
   defp subsystem("E091"), do: :resolution
   defp subsystem("E092"), do: :macros
   defp subsystem("E093"), do: :elaboration

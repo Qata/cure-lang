@@ -79,22 +79,7 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   def from_error({:usage_violation, details}, opts) when is_map(details) do
-    declared = Map.get(details, :declared, :unknown)
-    used = Map.get(details, :used, :unknown)
-    binder = Map.get(details, :binder)
-
-    Diagnostic.new(
-      code: "E104",
-      key: :erased_value_used_relevantly,
-      severity: :error,
-      title: "Resource usage violates its grade",
-      body:
-        Doc.paragraph(
-          "This #{if is_nil(binder), do: "binding", else: "binder #{binder}"} is declared `#{declared}` but used as `#{used}`. Restricted resources must not be duplicated or consumed at an incompatible grade."
-        ),
-      primary: primary_label(opts, "use this binding according to its declared grade"),
-      payload: details
-    )
+    usage_failure(details, %{}, opts)
   end
 
   def from_error({kind, name}, opts)
@@ -1132,6 +1117,20 @@ defmodule Cure.Diagnostic.Adapter do
       end
 
     relevance_failure(details, context, opts)
+  end
+
+  def from_error(
+        {:source_context, {:usage_violation, details}, context},
+        opts
+      )
+      when is_map(details) and is_map(context) do
+    opts =
+      case Map.get(context, :span) do
+        %Span{} = span -> Keyword.put_new(opts, :span, span)
+        _ -> opts
+      end
+
+    usage_failure(details, context, opts)
   end
 
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
@@ -5263,6 +5262,124 @@ defmodule Cure.Diagnostic.Adapter do
       suggestions: [%Suggestion{message: hint, applicability: :manual}],
       payload: %{family: family, constructor: constructor, precise_occurrence: precise?}
     )
+  end
+
+  defp usage_failure(details, context, opts) do
+    declared = Map.get(details, :declared, :unknown)
+    used = Map.get(details, :used, :unknown)
+    binder = Map.get(details, :binder)
+    binder_name = Map.get(context, :binder_name)
+    display_name = if binder_name, do: "`#{binder_name}`", else: "A binding"
+
+    {title, body, primary_message, hint} =
+      usage_copy(display_name, binder_name, declared, used, Map.get(context, :use_spans, []))
+
+    primary_span = Keyword.get(opts, :span)
+
+    secondary =
+      usage_secondary_labels(context, primary_span, declared, used)
+
+    Diagnostic.new(
+      code: "E117",
+      key: :resource_usage_violation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: primary_label(opts, primary_message),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :binder_name, binder_name || binder)
+    )
+  end
+
+  defp usage_copy(name, binder_name, :linear, :erased, _uses) do
+    action_name = usage_action_name(name, binder_name)
+
+    {
+      "Linear value is not used",
+      "#{name} is linear, so every path through this function must use it exactly once. This function does not use it.",
+      "this linear parameter must be used exactly once",
+      "Use #{action_name} once on every path, or declare it `:affine` if it may be dropped"
+    }
+  end
+
+  defp usage_copy(name, binder_name, :linear, :unrestricted, uses) do
+    action_name = usage_action_name(name, binder_name)
+
+    body =
+      if length(uses) > 1 do
+        "#{name} is linear, but this path can use it more than once. A linear value must be consumed exactly once."
+      else
+        "#{name} is linear, but this use passes it to a context that may consume it any number of times."
+      end
+
+    {
+      "Linear value may be used more than once",
+      body,
+      "this use does not preserve linear ownership",
+      "Pass #{action_name} only to linear parameters, and consume it exactly once on every path"
+    }
+  end
+
+  defp usage_copy(name, binder_name, :affine, :unrestricted, uses) do
+    action_name = usage_action_name(name, binder_name)
+
+    body =
+      if length(uses) > 1 do
+        "#{name} is affine, but this path can use it more than once. An affine value may be used once or not at all."
+      else
+        "#{name} is affine, but this use passes it to a context that may consume it any number of times."
+      end
+
+    {
+      "Affine value may be used more than once",
+      body,
+      "this use does not preserve affine ownership",
+      "Pass #{action_name} only to affine or linear parameters, and use it at most once"
+    }
+  end
+
+  defp usage_copy(name, binder_name, declared, used, _uses) do
+    action_name = usage_action_name(name, binder_name)
+
+    {
+      "Resource usage violates its grade",
+      "#{name} is declared `#{declared}` but its inferred usage is `#{used}`.",
+      "this use is incompatible with the declared resource grade",
+      "Use #{action_name} according to its declared `#{declared}` grade"
+    }
+  end
+
+  defp usage_action_name(name, binder_name) when not is_nil(binder_name), do: name
+  defp usage_action_name(_name, _binder_name), do: "the binding"
+
+  defp usage_secondary_labels(context, primary_span, declared, :erased) do
+    [
+      pickup_label(
+        Map.get(context, :grade_span),
+        :secondary,
+        "this parameter is declared `#{declared}` here"
+      )
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.reject(&(&1.span == primary_span))
+  end
+
+  defp usage_secondary_labels(context, primary_span, declared, _used) do
+    binder =
+      pickup_label(
+        Map.get(context, :binder_span),
+        :secondary,
+        "this parameter is declared `#{declared}` here"
+      )
+
+    earlier_uses =
+      context
+      |> Map.get(:use_spans, [])
+      |> Enum.reject(&(&1 == primary_span))
+      |> Enum.map(&pickup_label(&1, :secondary, "another use on this path is here"))
+
+    [binder | earlier_uses] |> Enum.reject(&is_nil/1)
   end
 
   defp pickup_label(%Span{} = span, style, message), do: %Label{span: span, style: style, message: message}

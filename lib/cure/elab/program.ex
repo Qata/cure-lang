@@ -2724,6 +2724,14 @@ defmodule Cure.Elab.Program do
     relevance_source_context(items, name, binder)
   end
 
+  defp trusted_declaration_span(
+         {:usage_violation, %{def: name, binder: binder, kind: :param} = details},
+         items
+       ) do
+    usage_source_context(items, name, binder, details) ||
+      declaration_role_span(items, name, :body, :relevance_check)
+  end
+
   defp trusted_declaration_span({:usage_violation, %{def: name}}, items),
     do: declaration_role_span(items, name, :body, :relevance_check)
 
@@ -2762,6 +2770,43 @@ defmodule Cure.Elab.Program do
               binder_name: binder_name,
               checking: qualified_name,
               expression_category: :relevance_check
+            }
+          end
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp usage_source_context(items, qualified_name, binder, details) do
+    bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {:function_def, meta, [body]} when is_list(meta) ->
+        if to_string(Keyword.get(meta, :name)) == bare_name do
+          param = meta |> Keyword.get(:params, []) |> Enum.at(binder)
+          binder_name = if param, do: param_name(param)
+          binder_span = ast_role_span(param, :name)
+          grade_span = ast_role_span(param, :annotation)
+          use_spans = surface_variable_spans(body, binder_name)
+          body_span = ast_role_span(body, :whole) || ast_role_span({:function_def, meta, [body]}, :body)
+
+          primary_span =
+            case Map.get(details, :used) do
+              :erased -> binder_span || grade_span || body_span
+              _ -> List.last(use_spans) || body_span || binder_span
+            end
+
+          if primary_span do
+            %{
+              span: primary_span,
+              binder_span: binder_span,
+              grade_span: grade_span,
+              binder_name: binder_name,
+              use_spans: use_spans,
+              checking: qualified_name,
+              expression_category: :resource_usage
             }
           end
         end

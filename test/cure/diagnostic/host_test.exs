@@ -445,9 +445,11 @@ defmodule Cure.Diagnostic.HostTest do
         "demo.cure"
       )
 
-    assert rendered =~ "[E104]"
+    assert rendered =~ "[E117]"
     assert rendered =~ "linear"
-    assert rendered =~ "unrestricted"
+    assert rendered =~ "may consume it"
+    assert rendered =~ "number of times"
+    refute rendered =~ "this binding"
     refute rendered =~ ":usage_violation"
   end
 
