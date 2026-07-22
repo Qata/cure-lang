@@ -5074,9 +5074,16 @@ defmodule Cure.Elab.Elaborator do
     end)
   end
 
+  # Columns carrying structural patterns, excluding those whose pattern is
+  # itself a tuple. Projecting such a column would hand a tuple pattern to
+  # single-scrutinee matching, which cannot destructure one — that is
+  # `desugar_tuple_scrutinee`'s job, and it needs the tuple still in place.
   defp refutable_tuple_columns(rows, arity) do
     Enum.filter(0..(arity - 1), fn column ->
-      Enum.any?(rows, fn {pats, _meta, _body} -> not catchall_pat?(Enum.at(pats, column)) end)
+      patterns = Enum.map(rows, fn {pats, _meta, _body} -> Enum.at(pats, column) end)
+
+      Enum.any?(patterns, &(not catchall_pat?(&1))) and
+        not Enum.any?(patterns, &match?({:tuple, _meta, _elems}, &1))
     end)
   end
 
