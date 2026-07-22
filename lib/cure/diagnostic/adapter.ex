@@ -562,6 +562,24 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:computed_example_error, failures}, opts),
     do: macro_validation_failure(:computed_example_error, failures, opts)
 
+  def from_error({kind, detail}, opts)
+      when kind in [
+             :invalid_packet_name,
+             :invalid_packet_endian,
+             :unknown_packet_scalar,
+             :missing_packet_endian,
+             :invalid_packet_field
+           ],
+      do: macro_packet_failure(kind, %{detail: detail}, opts)
+
+  def from_error({kind, field, dependency}, opts)
+      when kind in [:forward_packet_length, :invalid_packet_crc_fields],
+      do: macro_packet_failure(kind, %{field: field, dependency: dependency}, opts)
+
+  def from_error(kind, opts)
+      when kind in [:invalid_packet_field, :invalid_packet_field_name, :duplicate_packet_field],
+      do: macro_packet_failure(kind, %{}, opts)
+
   def from_error({:codegen_error, {:computed_macro_error, _, _} = reason}, opts),
     do: from_error(reason, opts)
 
@@ -4910,6 +4928,104 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp macro_validation_failure(kind, details, opts), do: macro_validation_failure(kind, details, opts, %{})
+
+  defp macro_packet_failure(kind, details, opts) do
+    {title, message, label, hint} = macro_packet_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_packet_validation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp macro_packet_content(:invalid_packet_name, %{detail: name}) do
+    {
+      "Packet name is invalid",
+      "A packet name must be an atom or string, but this declaration uses `#{name_to_string(name)}`.",
+      "replace this packet name",
+      "Use a stable packet name such as `Frame`"
+    }
+  end
+
+  defp macro_packet_content(:invalid_packet_endian, %{detail: endian}) do
+    {
+      "Packet byte order is invalid",
+      "`#{name_to_string(endian)}` is not a packet byte order. Multi-byte scalar fields use big-endian (`be`) or little-endian (`le`) order.",
+      "choose a supported byte order",
+      "Use `endian: :be` or `endian: :le`"
+    }
+  end
+
+  defp macro_packet_content(:unknown_packet_scalar, %{detail: scalar}) do
+    {
+      "Packet scalar type is unknown",
+      "`#{name_to_string(scalar)}` is not a fixed-width packet scalar.",
+      "replace this scalar type",
+      "Use one of `u8`, `i8`, `u16`, `i16`, `u32`, `i32`, or `byte`"
+    }
+  end
+
+  defp macro_packet_content(:missing_packet_endian, %{detail: field}) do
+    {
+      "Packet field needs a byte order",
+      "The multi-byte `#{name_to_string(field)}` field has no byte order, so its encoded bytes would be ambiguous.",
+      "declare this field's byte order",
+      "Set `endian: :be` or `endian: :le` on the packet or this field"
+    }
+  end
+
+  defp macro_packet_content(:forward_packet_length, %{field: field, dependency: length_field}) do
+    {
+      "Packet length field comes too late",
+      "The `#{name_to_string(field)}` field takes its length from `#{name_to_string(length_field)}`, but that length field has not been decoded yet.",
+      "move the length field before this payload",
+      "Declare `#{name_to_string(length_field)}` before `#{name_to_string(field)}`"
+    }
+  end
+
+  defp macro_packet_content(:invalid_packet_crc_fields, %{field: field, dependency: missing}) do
+    names = missing |> List.wrap() |> Enum.map_join(", ", &"`#{name_to_string(&1)}`")
+
+    {
+      "Packet checksum references unavailable fields",
+      "The `#{name_to_string(field)}` checksum includes #{names}, but those fields have not been decoded before the checksum.",
+      "fix this checksum coverage",
+      "List only earlier packet fields in `over`, or move the referenced fields before `#{name_to_string(field)}`"
+    }
+  end
+
+  defp macro_packet_content(:duplicate_packet_field, _details) do
+    {
+      "Packet field name is repeated",
+      "Two packet fields have the same name, so generated accessors and layout entries would collide.",
+      "rename or remove this repeated field",
+      "Give every packet field a unique name"
+    }
+  end
+
+  defp macro_packet_content(:invalid_packet_field_name, _details) do
+    {
+      "Packet field has no name",
+      "Every packet field needs a name so later length and checksum fields can refer to it.",
+      "add a name to this field",
+      "Add a unique `name` to every packet field"
+    }
+  end
+
+  defp macro_packet_content(:invalid_packet_field, _details) do
+    {
+      "Packet field is malformed",
+      "A packet field must declare a name and one supported shape: constant, scalar, bytes, or checksum.",
+      "rewrite this packet field",
+      "Use a `const`, `scalar`, `bytes`, or `crc` field with all required properties"
+    }
+  end
 
   defp macro_validation_failure(kind, details, opts, context) do
     span = Map.get(context, :span) || Keyword.get(opts, :span)
