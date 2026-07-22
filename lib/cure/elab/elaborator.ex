@@ -7473,7 +7473,14 @@ defmodule Cure.Elab.Elaborator do
           # and lie about its linearity. A graded `let` must produce a real `:let`.
           # Ascribing the binding gives `let_ascribed/9`, which always builds one.
           Keyword.has_key?(meta, :grade) ->
-            {:error, {:graded_let_needs_annotation, name, meta}}
+            {:error,
+             local_binding_annotation_error(
+               :graded_let_needs_annotation,
+               name,
+               meta,
+               rhs,
+               count_surface_uses(rest, name)
+             )}
 
           # Shadowing + non-inferable is unrepresentable: substitution would
           # capture and `:let` cannot be built. Surface the inference error.
@@ -7492,7 +7499,14 @@ defmodule Cure.Elab.Elaborator do
           # Both are refused, and the message says how to fix it: ascribe the
           # binding (`let x : T = e`) and it binds once, checked.
           count_surface_uses(rest, name) != 1 ->
-            {:error, {:let_needs_annotation, name, meta}}
+            {:error,
+             local_binding_annotation_error(
+               :let_needs_annotation,
+               name,
+               meta,
+               rhs,
+               count_surface_uses(rest, name)
+             )}
 
           # Exactly one use: the rhs is elaborated once, in checking mode, at that
           # use site. No duplication, and it IS type-checked.
@@ -7502,6 +7516,23 @@ defmodule Cure.Elab.Elaborator do
             |> elaborate_let_block(expected_core, names, ctx, env)
         end
     end
+  end
+
+  defp local_binding_annotation_error(kind, name, meta, rhs, use_count) do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+
+    details = %{
+      name: name,
+      grade: Keyword.get(meta, :grade),
+      use_count: use_count,
+      reason: :initializer_not_inferable,
+      span: info && info.whole,
+      name_span: info && info.name,
+      grade_span: info && info.annotation,
+      initializer_span: surface_expression_span(rhs)
+    }
+
+    {kind, details}
   end
 
   # `let x : T = e ⏎ rest`  ⟶  `{:let, Cure.Core.Grade.unrestricted(), T, e, rest}` with `x := e` in the context.

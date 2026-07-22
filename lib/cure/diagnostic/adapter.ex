@@ -1826,6 +1826,12 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unsolved_parameters, constructor}, opts),
     do: contextual_type_failure(:unsolved_parameters, %{constructor: constructor}, opts)
 
+  def from_error({:graded_let_needs_annotation, %{name: _name} = details}, opts),
+    do: local_binding_annotation_failure(:graded, details, opts)
+
+  def from_error({:let_needs_annotation, %{name: _name} = details}, opts),
+    do: local_binding_annotation_failure(:ungraded, details, opts)
+
   def from_error({kind, detail}, opts)
       when kind in [
              :unsupported_expression,
@@ -3510,6 +3516,81 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp match_inference_labels(_reason, _details, _primary_span), do: []
+
+  defp local_binding_annotation_failure(kind, details, opts) do
+    name = name_to_string(details.name)
+    use_count = Map.get(details, :use_count)
+
+    {title, body, primary_message, hint} =
+      case {kind, use_count} do
+        {:graded, _} ->
+          grade = Map.get(details, :grade, :graded) |> name_to_string()
+
+          {
+            "Graded binding needs a type",
+            "`#{name}` is declared `#{grade}`, but its initializer has no type Cure can synthesize without an expectation. Preserving the grade requires a real local binder, and Cure cannot construct that binder until its type is written.",
+            "this grade cannot be preserved without a binding type",
+            "Write the initializer's type after `:#{grade}`, before `=`"
+          }
+
+        {:ungraded, 0} ->
+          {
+            "Unused binding needs a type",
+            "Cure cannot synthesize a type for `#{name}`'s initializer. Because the binding is unused, substituting it would discard the initializer without checking or evaluating it.",
+            "this unused binding cannot safely discard its initializer",
+            "Add a type between `#{name}` and `=` so the initializer is checked exactly once"
+          }
+
+        {:ungraded, count} when is_integer(count) and count > 1 ->
+          {
+            "Repeated binding needs a type",
+            "Cure cannot synthesize a type for `#{name}`'s initializer. Substituting the initializer at its #{count} uses would duplicate the expression instead of evaluating and binding it once.",
+            "this binding would duplicate its initializer #{count} times",
+            "Add a type between `#{name}` and `=` so the initializer is bound once"
+          }
+
+        _ ->
+          {
+            "Binding needs a type",
+            "Cure cannot synthesize a type for `#{name}`'s initializer, so this local binding needs an explicit type.",
+            "this binding needs an explicit type",
+            "Add a type between `#{name}` and `=`"
+          }
+      end
+
+    primary_span =
+      case kind do
+        :graded -> Map.get(details, :grade_span) || Map.get(details, :span)
+        :ungraded -> Map.get(details, :name_span) || Map.get(details, :span)
+      end || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(details, :initializer_span) do
+        %Span{} = span when span != primary_span ->
+          [pickup_label(span, :secondary, "this initializer needs an expected type")]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: pickup_label(primary_span, :primary, primary_message),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind: if(kind == :graded, do: :graded_let_needs_annotation, else: :let_needs_annotation),
+        name: name,
+        grade: Map.get(details, :grade),
+        use_count: use_count,
+        reason: Map.get(details, :reason, :initializer_not_inferable)
+      }
+    )
+  end
 
   defp argument_count(1), do: "1 argument"
   defp argument_count(count) when is_integer(count), do: "#{count} arguments"
