@@ -8498,9 +8498,9 @@ defmodule Cure.Compiler.Parser do
       if open_token do
         expect_container_close(state, :rparen, :lambda_parameters, open_token, params, true)
       else
-        case expect_token(state, :rparen) do
-          {:ok, close, next_state} -> {next_state, close}
-          {:error, next_state} -> {next_state, nil}
+        case peek(state) do
+          %Token{type: :rparen} = close -> {advance(state), close}
+          _ -> {state, nil}
         end
       end
 
@@ -9483,9 +9483,9 @@ defmodule Cure.Compiler.Parser do
           })
 
         nil ->
-          case expect_token(state, :rparen) do
-            {:ok, close_token, next_state} -> {next_state, close_token}
-            {:error, next_state} -> {next_state, nil}
+          case peek(state) do
+            %Token{type: :rparen} = close_token -> {advance(state), close_token}
+            _ -> {state, nil}
           end
       end
 

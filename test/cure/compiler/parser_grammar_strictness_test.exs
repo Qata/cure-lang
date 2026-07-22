@@ -702,6 +702,15 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
            end)
   end
 
+  test "a missing lambda opener does not cascade into a generic closing-token error" do
+    source = "fn [x) -> x"
+    {:ok, tokens} = Lexer.tokenize(source, file: "lambda_recovery.cure", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+    assert Enum.any?(errors, &match?({:lambda_parameters_unparenthesized, _}, &1))
+    refute Enum.any?(errors, &match?({:expected_token, :rparen, _, _, _, _, _}, &1))
+  end
+
   test "an unclosed binary literal points to its opener and final segment" do
     source = "<<tag::utf8, payload"
     {:ok, tokens} = Lexer.tokenize(source, file: "binary.cure", emit_events: false)

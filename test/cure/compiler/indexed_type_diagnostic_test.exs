@@ -47,6 +47,15 @@ defmodule Cure.Compiler.IndexedTypeDiagnosticTest do
     assert insertion.start_byte == insertion.end_byte
   end
 
+  test "a missing index opener and closer reports only the owned opener problem" do
+    source = "type Vec indices n: Type\n"
+    {:ok, tokens} = Lexer.tokenize(source, file: "indices_recovery.cure", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+    assert Enum.any?(errors, &match?({:indexed_type_syntax, %{kind: :type_indices_opener_missing}}, &1))
+    refute Enum.any?(errors, &match?({:expected_token, :rparen, _, _, _, _, _}, &1))
+  end
+
   test "an unclosed index telescope labels its opener and final index" do
     source = "type Vec indices (n: Type"
     {error, {diagnostic, registry}} = diagnostic(source, "indices_close.cure")
