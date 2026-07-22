@@ -5313,10 +5313,16 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :refinement_unclosed}),
     do: "Refinement type is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :mismatched_closer, context: %{family: :refinement_type}}),
+    do: "Refinement type has the wrong closer"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :sigma_binder_invalid}), do: "Sigma binder needs a name"
   defp syntax_problem_title(%SyntaxProblem{kind: :sigma_colon_missing}), do: "Sigma binder needs a colon"
   defp syntax_problem_title(%SyntaxProblem{kind: :sigma_comma_missing}), do: "Sigma type needs a separator"
   defp syntax_problem_title(%SyntaxProblem{kind: :sigma_unclosed}), do: "Sigma type is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :mismatched_closer, context: %{family: :sigma_type}}),
+    do: "Sigma type has the wrong closer"
 
   defp syntax_problem_title(%SyntaxProblem{kind: :gadt_constructor_colon_missing}),
     do: "Constructor signature needs a colon"
@@ -5889,6 +5895,15 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :refinement_unclosed}),
     do: "This refinement type reaches the end of its container without the '}' that closes its proposition."
 
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :mismatched_closer,
+         expected: expected,
+         observed: observed,
+         context: %{family: :refinement_type}
+       }),
+       do:
+         "This refinement type starts with '{', so #{authored_syntax(observed)} cannot close it. Use '#{syntax_insertion(expected)}' after the proposition."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :sigma_binder_invalid, observed: observed}),
     do:
       "#{String.capitalize(syntax_name(observed))} cannot name the first value in this dependent pair. Use a lower-case binder such as `value`."
@@ -5901,6 +5916,15 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :sigma_unclosed}),
     do: "This Sigma type reaches the end of the source without the ')' that closes its dependent pair."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :mismatched_closer,
+         expected: expected,
+         observed: observed,
+         context: %{family: :sigma_type}
+       }),
+       do:
+         "This Sigma type starts with '(', so #{authored_syntax(observed)} cannot close it. Use '#{syntax_insertion(expected)}' after the dependent result type."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :gadt_constructor_colon_missing,
@@ -6542,6 +6566,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :refinement_unclosed}),
     do: "close this refinement type with `}`"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :mismatched_closer, context: %{family: :refinement_type}}),
+    do: "replace this with `}`"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :sigma_binder_invalid}),
     do: "write a lower-case Sigma binder here"
 
@@ -6553,6 +6580,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :sigma_unclosed}),
     do: "close this Sigma type with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :mismatched_closer, context: %{family: :sigma_type}}),
+    do: "replace this with `)`"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :gadt_constructor_colon_missing}),
     do: "insert `:` before this constructor signature"
@@ -6921,6 +6951,37 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(problem.opener, :secondary, "this macro invocation starts here"),
       pickup_label(problem.within, :secondary, "the matching rule is declared here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :mismatched_closer,
+           opener: opener,
+           previous: previous,
+           context: %{family: family, binder_span: binder_span}
+         },
+         primary_span
+       )
+       when family in [:refinement_type, :sigma_type] do
+    {opener_message, binder_message, previous_message} =
+      case family do
+        :refinement_type ->
+          {"this refinement type starts here", "this is the refinement binder", "the proposition ends here"}
+
+        :sigma_type ->
+          {"this Sigma type starts here", "this is the Sigma binder", "the dependent result type ends here"}
+      end
+
+    [
+      pickup_label(opener, :secondary, opener_message),
+      pickup_label(binder_span, :secondary, binder_message),
+      pickup_label(previous, :secondary, previous_message)
     ]
     |> Enum.reject(fn
       nil -> true
@@ -7790,7 +7851,12 @@ defmodule Cure.Diagnostic.Adapter do
          },
          primary_span
        )
-       when kind in [:sigma_binder_invalid, :sigma_colon_missing, :sigma_comma_missing, :sigma_unclosed] do
+       when kind in [
+              :sigma_binder_invalid,
+              :sigma_colon_missing,
+              :sigma_comma_missing,
+              :sigma_unclosed
+            ] do
     [
       pickup_label(opener, :secondary, "this Sigma type starts here"),
       pickup_label(Map.get(context, :binder_span), :secondary, "this is the Sigma binder"),

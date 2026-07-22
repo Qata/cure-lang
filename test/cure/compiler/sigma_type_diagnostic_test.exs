@@ -123,6 +123,33 @@ defmodule Cure.Compiler.SigmaTypeDiagnosticTest do
     assert insertion.end_byte == byte_size(source)
   end
 
+  test "a mismatched Sigma closer labels the complete authored type and replaces it" do
+    source = "typealias P = Sigma(x: Int, Bool]"
+    {error, {diagnostic, registry}} = diagnostic(source, "sigma_mismatch.cure")
+
+    assert {:sigma_type_syntax, %{kind: :mismatched_closer, family: :sigma_type, expected: :rparen, observed: "]"}} =
+             error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- SIGMA TYPE HAS THE WRONG CLOSER [E094] ------------------ sigma_mismatch.cure
+
+             This Sigma type starts with '(', so ']' cannot close it. Use ')' after the
+             dependent result type.
+
+             at sigma_mismatch.cure:1:33
+             1 | typealias P = Sigma(x: Int, Bool]
+               |                    --       ----^ this Sigma type starts here; this is the Sigma binder; the dependent result type ends here; replace this with `)`
+
+             Hint: Replace ']' with `)`
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ")", span: replacement}]}] =
+             diagnostic.suggestions
+
+    assert {replacement.start_column, replacement.end_column} == {33, 34}
+  end
+
   test "a valid Sigma type owns its name, delimiters, binder, domain, and result" do
     source = "mod M\n  typealias P = Sigma(x: Int, Bool)\n"
     {:ok, tokens} = Lexer.tokenize(source, file: "sigma_meta.cure", emit_events: false)

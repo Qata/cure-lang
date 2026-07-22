@@ -12434,30 +12434,26 @@ defmodule Cure.Compiler.Parser do
 
         {:error, next_state} ->
           observed = peek(next_state)
+          [_generic | rest] = next_state.errors
 
-          if observed.type in [:eof, :dedent] do
-            [_generic | rest] = next_state.errors
+          error =
+            {:refinement_type_syntax,
+             %{
+               kind: if(observed.type in [:eof, :dedent], do: :refinement_unclosed, else: :mismatched_closer),
+               family: :refinement_type,
+               expected: :rbrace,
+               observed: observed.value || observed.type,
+               token_type: observed.type,
+               span: observed.span,
+               observed_span: observed.span,
+               opener_span: open_token.span,
+               binder_span: binder_token.span,
+               previous_span: first_node_source_span(proposition),
+               line: observed.line,
+               column: observed.col
+             }}
 
-            error =
-              {:refinement_type_syntax,
-               %{
-                 kind: :refinement_unclosed,
-                 expected: :rbrace,
-                 observed: observed.value || observed.type,
-                 token_type: observed.type,
-                 span: observed.span,
-                 observed_span: observed.span,
-                 opener_span: open_token.span,
-                 binder_span: binder_token.span,
-                 previous_span: first_node_source_span(proposition),
-                 line: observed.line,
-                 column: observed.col
-               }}
-
-            {%{next_state | errors: [error | rest]}, nil}
-          else
-            {next_state, nil}
-          end
+          {%{next_state | errors: [error | rest]}, nil}
       end
 
     meta = [binder: binder]
@@ -12631,30 +12627,26 @@ defmodule Cure.Compiler.Parser do
 
         {:error, next_state} ->
           observed = peek(next_state)
+          [_generic | rest] = next_state.errors
 
-          if observed.type in [:eof, :dedent] do
-            [_generic | rest] = next_state.errors
+          error =
+            {:sigma_type_syntax,
+             %{
+               kind: if(observed.type in [:eof, :dedent], do: :sigma_unclosed, else: :mismatched_closer),
+               family: :sigma_type,
+               expected: :rparen,
+               observed: observed.value || observed.type,
+               token_type: observed.type,
+               span: observed.span,
+               observed_span: observed.span,
+               opener_span: open_token.span,
+               binder_span: binder_token.span,
+               previous_span: first_node_source_span(body_type),
+               line: observed.line,
+               column: observed.col
+             }}
 
-            error =
-              {:sigma_type_syntax,
-               %{
-                 kind: :sigma_unclosed,
-                 expected: :rparen,
-                 observed: observed.value || observed.type,
-                 token_type: observed.type,
-                 span: observed.span,
-                 observed_span: observed.span,
-                 opener_span: open_token.span,
-                 binder_span: binder_token.span,
-                 previous_span: first_node_source_span(body_type),
-                 line: observed.line,
-                 column: observed.col
-               }}
-
-            {%{next_state | errors: [error | rest]}, nil}
-          else
-            {next_state, nil}
-          end
+          {%{next_state | errors: [error | rest]}, nil}
       end
 
     meta = [binder: binder]
