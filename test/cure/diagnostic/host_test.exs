@@ -714,7 +714,7 @@ defmodule Cure.Diagnostic.HostTest do
 
     assert derive =~ "[E105]"
     assert derive =~ "CANNOT DERIVE INTERFACE"
-    assert constraints =~ "DERIVING CONSTRAINTS ARE NOT SATISFIED"
+    assert constraints =~ "CANNOT DERIVE `BEAMDECODE` FOR `PACKET`"
     assert method =~ "CANNOT DERIVE INTERFACE METHOD"
     assert missing =~ "[E095]"
     assert missing =~ "Cannot read"

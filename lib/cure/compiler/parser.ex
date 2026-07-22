@@ -9846,9 +9846,22 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :keyword, value: :deriving} = deriving_token ->
         state = advance(state)
-        {names, last_name_token, state} = parse_deriving_names(state, [])
+        {names, name_tokens, last_name_token, state} = parse_deriving_names(state, [])
         span = through_spans(deriving_token.span, last_name_token.span) || deriving_token.span
-        {{:container, Keyword.put(meta, :deriving, names), body}, span, state}
+
+        source_info = Metadata.source_info(meta) || %SourceInfo{}
+
+        fields =
+          Enum.reduce(name_tokens, source_info.fields, fn {name, token}, fields ->
+            Map.put(fields, {:deriving_interface, name}, token.span)
+          end)
+
+        meta =
+          meta
+          |> Keyword.put(:deriving, names)
+          |> Metadata.put_source_info(%{source_info | fields: fields})
+
+        {{:container, meta, body}, span, state}
 
       _ ->
         {{:container, meta, body}, nil, state}
@@ -9861,13 +9874,15 @@ defmodule Cure.Compiler.Parser do
     name_token = peek(state)
     name = to_string(name_token.value)
     state = advance(state)
+    entries = [{name, name_token} | acc]
 
     case peek(state) do
       %Token{type: :comma} ->
-        parse_deriving_names(advance(state), [name | acc])
+        parse_deriving_names(advance(state), entries)
 
       _ ->
-        {Enum.reverse([name | acc]), name_token, state}
+        entries = Enum.reverse(entries)
+        {Enum.map(entries, &elem(&1, 0)), entries, name_token, state}
     end
   end
 

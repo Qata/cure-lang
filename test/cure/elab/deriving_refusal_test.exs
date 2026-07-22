@@ -93,7 +93,8 @@ defmodule Cure.Elab.DerivingRefusalTest do
       src =
         "mod DvTwo\n" <> @equatable <> "  type Lst(a) = Nil | Cons(a, Lst(a)) deriving Equatable\nend\n"
 
-      assert {:error, {:deriving_needs_constraints, :Equatable, :Lst}} = Program.elaborate(src)
+      assert {:error, error} = Program.elaborate(src)
+      assert {:deriving_needs_constraints, :Equatable, :Lst} = Program.semantic_error(error)
     end
 
     test "a parameterized type with no field of the parameter's type still derives" do

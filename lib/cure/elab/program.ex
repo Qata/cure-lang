@@ -3733,10 +3733,33 @@ defmodule Cure.Elab.Program do
              Cure.Elab.Implementation.register(impl_ast, acc) do
         {:cont, {:ok, acc2, fns ++ mangled_fns, obligations ++ new_obligations}}
       else
-        {:error, _} = err -> {:halt, err}
+        {:error, {:source_context, _reason, _context}} = err ->
+          {:halt, err}
+
+        {:error, reason} ->
+          {:halt, {:error, {:source_context, reason, deriving_source_context(decl, name)}}}
       end
     end)
   end
+
+  defp deriving_source_context({:container, meta, _body}, interface) do
+    info = Cure.MetaAST.Metadata.source_info(meta) || %Cure.MetaAST.SourceInfo{}
+    declaration_name = Keyword.get(meta, :name)
+
+    %{
+      span: Map.get(info.fields, {:deriving_interface, interface}) || Map.get(info.fields, :deriving) || info.whole,
+      deriving_span: Map.get(info.fields, {:deriving_interface, interface}) || Map.get(info.fields, :deriving),
+      declaration_span: info.whole,
+      declaration_name_span: info.name,
+      checking: declaration_name,
+      interface: interface,
+      expectation_origin: :deriving,
+      expression_category: :deriving_clause
+    }
+  end
+
+  defp deriving_source_context(_decl, interface),
+    do: %{interface: interface, expectation_origin: :deriving, expression_category: :deriving_clause}
 
   defp register_builtin_from_meta(meta, env) do
     dec = Keyword.get(meta, :decorator)

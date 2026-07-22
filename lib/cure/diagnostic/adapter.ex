@@ -1595,6 +1595,32 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: bounded_literal_failure(value, bound, context, opts)
 
+  def from_error({:source_context, {:cannot_derive, interface}, context}, opts)
+      when is_map(context),
+      do: deriving_failure(:cannot_derive, %{interface: interface}, context, opts)
+
+  def from_error({:source_context, {:deriving_needs_strings, interface}, context}, opts)
+      when is_map(context),
+      do: deriving_failure(:deriving_needs_strings, %{interface: interface}, context, opts)
+
+  def from_error({:source_context, {:deriving_needs_constraints, interface, type_name}, context}, opts)
+      when is_map(context),
+      do: deriving_failure(:deriving_needs_constraints, %{interface: interface, type: type_name}, context, opts)
+
+  def from_error({:source_context, {:cannot_derive_shape, interface, type_name}, context}, opts)
+      when is_map(context),
+      do: deriving_failure(:cannot_derive_shape, %{interface: interface, type: type_name}, context, opts)
+
+  def from_error({:source_context, {:cannot_derive_method, interface, method, reason}, context}, opts)
+      when is_map(context),
+      do:
+        deriving_failure(
+          :cannot_derive_method,
+          %{interface: interface, method: method, reason: reason},
+          context,
+          opts
+        )
+
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
     opts =
       opts
@@ -4941,33 +4967,57 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  defp deriving_failure(kind, details, opts) do
-    {title, message, label} =
+  defp deriving_failure(kind, details, opts), do: deriving_failure(kind, details, %{}, opts)
+
+  defp deriving_failure(kind, details, context, opts) do
+    {title, message, label, hint} =
       case kind do
         :cannot_derive ->
           {"Cannot derive interface",
            "Cure cannot derive interface `#{name_to_string(details.interface)}` for this declaration.",
-           "provide the required deriving implementation"}
+           "automatic derivation is unavailable for this interface",
+           "Implement `#{name_to_string(details.interface)}` manually, or remove it from the deriving clause"}
 
         :deriving_needs_strings ->
           {"Deriving requires string support",
            "Interface `#{name_to_string(details.interface)}` can only be derived for a type with string-compatible members.",
-           "use string-compatible members or implement the interface manually"}
+           "this derived interface needs string-compatible members",
+           "Use string-compatible members, or implement `#{name_to_string(details.interface)}` manually"}
 
         :deriving_needs_constraints ->
-          {"Deriving constraints are not satisfied",
-           "Deriving `#{name_to_string(details.interface)}` for `#{name_to_string(details.type)}` requires constraints that are not available.",
-           "add the required constraints or implement the interface manually"}
+          {"Cannot derive `#{name_to_string(details.interface)}` for `#{name_to_string(details.type)}`",
+           "A field of `#{name_to_string(details.type)}` uses one of the type's parameters directly. Deriving `#{name_to_string(details.interface)}` would need an interface dictionary for that parameter, which automatic derivation cannot thread yet.",
+           "this derived interface needs a constraint on the type parameter",
+           "Implement `#{name_to_string(details.interface)}` for `#{name_to_string(details.type)}` manually, or remove the parameter-typed field"}
 
         :cannot_derive_shape ->
           {"Cannot derive for this type shape",
            "Interface `#{name_to_string(details.interface)}` cannot be derived for `#{name_to_string(details.type)}` because its shape is unsupported.",
-           "change the type shape or implement the interface manually"}
+           "automatic derivation does not support this declaration shape",
+           "Change the type shape, or implement `#{name_to_string(details.interface)}` manually"}
 
         :cannot_derive_method ->
           {"Cannot derive interface method",
            "Method `#{name_to_string(details.method)}` of `#{name_to_string(details.interface)}` cannot be generated for this type.",
-           "implement this method explicitly"}
+           "this interface method cannot be generated", "Implement `#{name_to_string(details.method)}` explicitly"}
+      end
+
+    primary_span = Map.get(context, :deriving_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+    declaration_span = Map.get(context, :declaration_name_span) || Map.get(context, :declaration_span)
+    declaration_name = Map.get(context, :checking) || Map.get(details, :type)
+
+    secondary =
+      case declaration_span do
+        %Span{} = span when span != primary_span ->
+          message =
+            if declaration_name,
+              do: "this declares `#{name_to_string(declaration_name)}`",
+              else: "this is the declaration being derived"
+
+          [%Label{span: span, style: :secondary, message: message}]
+
+        _ ->
+          []
       end
 
     Diagnostic.new(
@@ -4976,7 +5026,13 @@ defmodule Cure.Diagnostic.Adapter do
       severity: :error,
       title: title,
       body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
+      primary:
+        if(primary_span,
+          do: %Label{span: primary_span, style: :primary, message: label},
+          else: primary_label(opts, label)
+        ),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
       payload: Map.put(details, :kind, kind)
     )
   end
