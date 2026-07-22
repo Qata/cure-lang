@@ -347,6 +347,31 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, fallback_info.body) == "0"
   end
 
+  test "multi-clause functions retain exact clause roles through parser ownership" do
+    source = "fn sign(value: Int) -> Int\n  | 0 -> 0\n  | n when n > 0 -> 1\n  | _ -> -1\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "clauses.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "clauses.cure", emit_events: false, prelude_macros: false)
+
+    {:function_def, function_meta, []} = find_node(ast, :function_def)
+    function_info = Metadata.source_info(function_meta)
+
+    assert Enum.map(function_info.branches, &slice(source, &1)) == [
+             "| 0 -> 0",
+             "| n when n > 0 -> 1",
+             "| _ -> -1"
+           ]
+
+    [_, guarded, _] = Keyword.fetch!(function_meta, :clauses)
+    info = guarded.source_info
+    assert slice(source, info.whole) == "| n when n > 0 -> 1"
+    assert slice(source, info.opener) == "|"
+    assert Enum.map(info.arguments, &slice(source, &1)) == ["n"]
+    assert slice(source, info.pattern) == "n"
+    assert slice(source, info.guard) == "n > 0"
+    assert slice(source, info.operator) == "->"
+    assert slice(source, info.body) == "1"
+  end
+
   test "match expressions retain their whole and branch-owned spans" do
     source = "fn choose(x: Int) -> Int = match x\n  n -> n\n  _ -> 0\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "match.cure", emit_events: false)

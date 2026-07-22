@@ -7368,6 +7368,7 @@ defmodule Cure.Compiler.Parser do
               )
 
             meta = Keyword.put(meta, :clauses, clauses)
+            meta = put_function_clause_source_info(meta, clauses)
             ast = {:function_def, meta, []}
             {ast, state}
         end
@@ -7606,8 +7607,9 @@ defmodule Cure.Compiler.Parser do
         {[], state}
 
       %Token{type: :bar} ->
+        bar_token = peek(state)
         state = advance(state)
-        {clause, state} = parse_single_fn_clause(state)
+        {clause, state} = parse_single_fn_clause(state, bar_token)
         state = skip_newlines(state)
         {rest, state} = parse_fn_clauses(state)
         {[clause | rest], state}
@@ -7617,7 +7619,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_single_fn_clause(state) do
+  defp parse_single_fn_clause(state, bar_token) do
     # Parse pattern(s) until -> or when
     {patterns, state} = parse_clause_patterns(state, [])
 
@@ -7633,12 +7635,38 @@ defmodule Cure.Compiler.Parser do
           {nil, state}
       end
 
-    state = expect_branch_arrow(state, :function_clause, guard || List.last(patterns))
+    {arrow_token, state} = expect_branch_arrow_token(state, :function_clause, guard || List.last(patterns))
     state = skip_newlines(state)
     {body, state} = parse_expr_or_block(state)
 
-    clause = %{params: patterns, guard: guard, body: [body]}
+    pattern_spans = patterns |> Enum.map(&ast_source_span/1) |> Enum.reject(&is_nil/1)
+    pattern_span = through_spans(List.first(pattern_spans), List.last(pattern_spans))
+    body_span = ast_source_span(body)
+
+    info = %SourceInfo{
+      whole: through_spans(bar_token.span, body_span) || bar_token.span,
+      opener: bar_token.span,
+      operator: arrow_token && arrow_token.span,
+      arguments: pattern_spans,
+      pattern: pattern_span,
+      guard: ast_source_span(guard),
+      body: body_span
+    }
+
+    clause = %{params: patterns, guard: guard, body: [body], source_info: info}
     {clause, state}
+  end
+
+  defp put_function_clause_source_info(meta, clauses) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{} = info ->
+        branches = clauses |> Enum.map(& &1.source_info.whole) |> Enum.reject(&is_nil/1)
+        whole = through_spans(info.whole, List.last(branches)) || info.whole
+        Metadata.put_source_info(meta, %{info | whole: whole, branches: branches})
+
+      _ ->
+        meta
+    end
   end
 
   defp parse_clause_patterns(state, acc) do

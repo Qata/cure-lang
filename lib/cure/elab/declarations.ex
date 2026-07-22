@@ -677,11 +677,17 @@ defmodule Cure.Elab.Declarations do
   defp clause_scrutinee(formals, fmeta),
     do: {:tuple, fmeta, Enum.map(formals, fn {:param, _pm, pname} -> {:variable, [scope: :local] ++ fmeta, pname} end)}
 
-  defp clause_to_arm(%{guard: guard, params: pats, body: cbody}, arity, fmeta) do
+  defp clause_to_arm(%{guard: guard, params: pats, body: cbody} = clause, arity, fmeta) do
     pattern = if arity == 1, do: hd(pats), else: {:tuple, fmeta, pats}
     arm_meta = [pattern: pattern] ++ if(guard, do: [guard: guard], else: [])
+    arm_meta = put_clause_source_info(arm_meta, Map.get(clause, :source_info))
     {:match_arm, arm_meta, cbody}
   end
+
+  defp put_clause_source_info(meta, %Cure.MetaAST.SourceInfo{} = info),
+    do: Cure.MetaAST.Metadata.put_source_info(meta, info)
+
+  defp put_clause_source_info(meta, _), do: meta
 
   defp elaborate_real_body(meta, body, env) do
     body_expr = single_body(body)

@@ -20,6 +20,7 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
      "mod PatternInvariant\n  type Maybe = None | Some(Int)\n  fn value(m: Maybe) -> Int = match m\n    None() -> 0\n    Some(x) -> x\nend\n"},
     {"guarded branches",
      "mod GuardInvariant\n  fn sign(n: Int) -> Int = match n\n    x when x > 0 -> 1\n    x -> 0\nend\n"},
+    {"multi-clause branches", "mod ClauseInvariant\n  fn sign(n: Int) -> Int\n    | 0 -> 0\n    | _ -> -1\nend\n"},
     {"interface descriptor",
      "mod InterfaceInvariant\n  interface Sized(a)\n    fn size(value: a) -> Int\n  fn keep(x: Int) -> Int = x\nend\n"},
     {"syntax macro expansion",
@@ -107,6 +108,29 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
 
     assert semantic_digest(plain) == semantic_digest(decorated)
     assert semantic_digest(plain) == semantic_digest(stripped)
+  end
+
+  test "source roles nested in structural metadata maps are stripped recursively" do
+    span =
+      Cure.Diagnostic.Span.new(
+        source_id: "clause.cure",
+        path: "clause.cure",
+        start_byte: 0,
+        end_byte: 1,
+        start_line: 1,
+        start_column: 1,
+        end_line: 1,
+        end_column: 2
+      )
+
+    clause = %{
+      params: [],
+      guard: nil,
+      body: [],
+      source_info: %Cure.MetaAST.SourceInfo{whole: span, operator: span}
+    }
+
+    assert Metadata.strip_diagnostics(clause) == %{params: [], guard: nil, body: []}
   end
 
   test "computed-macro hygiene is invariant under recursive source decoration" do
