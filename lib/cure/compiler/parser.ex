@@ -7840,7 +7840,7 @@ defmodule Cure.Compiler.Parser do
         case peek(state) do
           %Token{type: :colon} ->
             {type_ast, state} = parse_type_expr(advance(state))
-            {nil, type_ast, state, annotation_span(annotation_start, state)}
+            {nil, type_ast, state, annotation_span(annotation_start, type_ast, state)}
 
           _ ->
             {nil, nil, state, nil}
@@ -7886,7 +7886,7 @@ defmodule Cure.Compiler.Parser do
 
           true ->
             {type_ast, state} = parse_type_expr(state)
-            {grade, type_ast, state, annotation_span(annotation_start, state)}
+            {grade, type_ast, state, annotation_span(annotation_start, type_ast, state)}
         end
     end
   end
@@ -7905,6 +7905,15 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp annotation_span(_start, _state), do: nil
+
+  defp annotation_span(%Token{span: %Cure.Diagnostic.Span{} = first} = start, type_ast, state) do
+    case ast_source_span(type_ast) do
+      %Cure.Diagnostic.Span{} = last -> through_spans(first, last) || first
+      _ -> annotation_span(start, state)
+    end
+  end
+
+  defp annotation_span(_start, _type_ast, _state), do: nil
 
   defp put_binder_meta(meta, grade, type_ast) do
     meta = if type_ast, do: Keyword.put(meta, :type, type_ast), else: meta
@@ -7944,7 +7953,7 @@ defmodule Cure.Compiler.Parser do
 
     {grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
 
-    {state, _close_token} =
+    {state, close_token} =
       expect_container_close(state, :rbrace, :implicit_parameter, start_token, [type_ast], false, %{
         binder: name,
         binder_span: name_token.span,
@@ -7952,7 +7961,16 @@ defmodule Cure.Compiler.Parser do
       })
 
     meta = put_binder_meta([implicit: true], grade, type_ast)
-    {{:param, put_param_source_info(meta, start_token, name_token, state, annotation_span), name}, state}
+
+    meta =
+      put_param_source_info(meta, start_token, name_token,
+        annotation_span: annotation_span,
+        terminal_span: (close_token && close_token.span) || annotation_span || name_token.span,
+        opener: start_token.span,
+        closer: close_token && close_token.span
+      )
+
+    {{:param, meta, name}, state}
   end
 
   defp parse_explicit_param(state) do
@@ -8022,29 +8040,29 @@ defmodule Cure.Compiler.Parser do
     # the annotation means the first name was the EXTERNAL caller-facing label and
     # this second one is the INTERNAL body binder. Single-name params carry no
     # label (the one name serves as both, and any call label is optional).
-    {label, name, name_token, state} =
+    {label, label_span, name, name_token, state} =
       case peek(state) do
         %Token{type: :identifier} = internal_token ->
-          {name, to_string(internal_token.value), internal_token, advance(state)}
+          {name, name_token.span, to_string(internal_token.value), internal_token, advance(state)}
 
         _ ->
-          {nil, name, name_token, state}
+          {nil, nil, name, name_token, state}
       end
 
     # Optional type annotation `: Type`, or a graded one `:g Type`.
     {grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
 
     # Optional default value: = expr
-    {default, state} =
+    {default, assign_token, state} =
       case peek(state) do
-        %Token{type: :assign} ->
+        %Token{type: :assign} = assign_token ->
           state = advance(state)
           state = skip_newlines(state)
           {d, state} = parse_expr(state, bp_above(state, "="))
-          {d, state}
+          {d, assign_token, state}
 
         _ ->
-          {nil, state}
+          {nil, nil, state}
       end
 
     param_meta = put_binder_meta([], grade, type_ast)
@@ -8052,7 +8070,17 @@ defmodule Cure.Compiler.Parser do
     param_meta = if default, do: Keyword.put(param_meta, :default, default), else: param_meta
     param_meta = if kind != :positional, do: Keyword.put(param_meta, :kind, kind), else: param_meta
 
-    {{:param, put_param_source_info(param_meta, start_token, name_token, state, annotation_span), name}, state}
+    terminal_span = ast_source_span(default) || annotation_span || name_token.span
+
+    param_meta =
+      put_param_source_info(param_meta, start_token, name_token,
+        annotation_span: annotation_span,
+        terminal_span: terminal_span,
+        label_span: label_span,
+        operator: assign_token && assign_token.span
+      )
+
+    {{:param, param_meta, name}, state}
   end
 
   defp parameter_name_site(%Token{type: type, span: %Cure.Diagnostic.Span{} = span})
@@ -8061,25 +8089,23 @@ defmodule Cure.Compiler.Parser do
 
   defp parameter_name_site(%Token{span: span}), do: span
 
-  defp put_param_source_info(meta, %Token{} = start_token, %Token{} = name_token, state, annotation_span) do
-    case {start_token.span, name_token.span, authored_token(state)} do
-      {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = name_span, %Token{} = last} ->
-        case Range.through(first, last) do
-          {:ok, whole} ->
-            Keyword.put(meta, :source_info, %SourceInfo{
-              whole: whole,
-              name: name_span,
-              annotation: annotation_span,
-              body: ast_source_span(Keyword.get(meta, :default))
-            })
+  defp put_param_source_info(meta, %Token{} = start_token, %Token{} = name_token, roles) do
+    fields =
+      case Keyword.get(roles, :label_span) do
+        %Cure.Diagnostic.Span{} = span -> %{label: span}
+        _ -> %{}
+      end
 
-          _ ->
-            meta
-        end
-
-      _ ->
-        meta
-    end
+    Metadata.put_source_info(meta, %SourceInfo{
+      whole: through_spans(start_token.span, Keyword.get(roles, :terminal_span)) || name_token.span,
+      name: name_token.span,
+      operator: Keyword.get(roles, :operator),
+      annotation: Keyword.get(roles, :annotation_span),
+      body: ast_source_span(Keyword.get(meta, :default)),
+      opener: Keyword.get(roles, :opener),
+      closer: Keyword.get(roles, :closer),
+      fields: fields
+    })
   end
 
   # -- Lambda (anonymous fn) -------------------------------------------------
@@ -8771,18 +8797,19 @@ defmodule Cure.Compiler.Parser do
         annotation_start = peek(state)
         state = expect_record_field_colon(state, name_token, record)
         {type_ast, state} = parse_type_expr(state)
-        field_annotation_span = annotation_span(annotation_start, state)
+        field_annotation_span = annotation_span(annotation_start, type_ast, state)
 
         # v0.19.0: optional `= default_expr` per record field.
-        {default_ast, state} =
+        {default_ast, assign_token, state} =
           case peek(state) do
-            %Token{type: :assign} ->
+            %Token{type: :assign} = assign_token ->
               state = advance(state)
               state = skip_newlines(state)
-              parse_expr(state, 0)
+              {default_ast, state} = parse_expr(state, 0)
+              {default_ast, assign_token, state}
 
             _ ->
-              {nil, state}
+              {nil, nil, state}
           end
 
         state = skip_newlines(state)
@@ -8795,8 +8822,9 @@ defmodule Cure.Compiler.Parser do
             meta,
             name_token,
             name_token,
-            state,
-            field_annotation_span
+            annotation_span: field_annotation_span,
+            terminal_span: ast_source_span(default_ast) || field_annotation_span || name_token.span,
+            operator: assign_token && assign_token.span
           )
 
         field = {:param, meta, to_string(name_token.value)}

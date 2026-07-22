@@ -92,6 +92,14 @@ defmodule Cure.Compiler.SourceSpansTest do
     end
 
     assert slice(source, labelled |> elem(1) |> Metadata.source_info() |> Map.fetch!(:body)) == "\"home\""
+
+    implicit_info = implicit |> elem(1) |> Metadata.source_info()
+    assert slice(source, implicit_info.opener) == "{"
+    assert slice(source, implicit_info.closer) == "}"
+
+    labelled_info = labelled |> elem(1) |> Metadata.source_info()
+    assert slice(source, Map.fetch!(labelled_info.fields, :label)) == "to"
+    assert slice(source, labelled_info.operator) == "="
   end
 
   test "let bindings retain their authored whole, name, and annotation ranges" do
