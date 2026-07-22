@@ -5281,6 +5281,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :local_function_keyword_missing}),
     do: "Local function needs `fn`"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :implementation_for_keyword_missing}),
+    do: "Implementation needs `for`"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "Explanation clause arrow is missing"
 
@@ -5859,6 +5862,13 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :local_function_keyword_missing}),
     do: "A private function declaration must put `fn` between `local` and the function name."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :implementation_for_keyword_missing,
+         context: %{declaration: declaration}
+       }),
+       do:
+         "The implementation of `#{declaration}` needs `for` between its interface or protocol and the type receiving the implementation."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "An explanation clause needs `=>` between its failure point and message."
@@ -6504,6 +6514,15 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :local_function_keyword_missing}),
     do: "insert `fn` before this function name"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :implementation_for_keyword_missing,
+         context: %{repair: :replace}
+       }),
+       do: "replace this with `for`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :implementation_for_keyword_missing}),
+    do: "insert `for` before this implementation type"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "insert `=>` before this explanation message"
@@ -7469,6 +7488,25 @@ defmodule Cure.Diagnostic.Adapter do
        )
        when opener != primary_span,
        do: [%Label{span: opener, style: :secondary, message: "this starts a private declaration"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :implementation_for_keyword_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this starts the implementation"),
+      pickup_label(previous, :secondary, "the implemented interface or protocol ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
 
   defp syntax_secondary_labels(
          %SyntaxProblem{
@@ -8531,6 +8569,43 @@ defmodule Cure.Diagnostic.Adapter do
             replacement: "fn "
           }
         ]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :implementation_for_keyword_missing, context: %{repair: :replace}},
+         %Span{} = span
+       ) do
+    [
+      %Suggestion{
+        message: "Replace this keyword with `for`",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "for"}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :implementation_for_keyword_missing,
+           context: %{repair: :insert, token_type: type}
+         },
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline] do
+    insertion_span = %{
+      span
+      | end_byte: span.start_byte,
+        end_line: span.start_line,
+        end_column: span.start_column
+    }
+
+    [
+      %Suggestion{
+        message: "Insert `for` before the implementation type",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: insertion_span, replacement: "for "}]
       }
     ]
   end

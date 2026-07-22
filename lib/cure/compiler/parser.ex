@@ -10338,9 +10338,8 @@ defmodule Cure.Compiler.Parser do
     proto_start = peek(state)
     {proto_name, proto_end, state} = parse_dotted_name_owned(state)
 
-    # Expect `for`
-    for_token = peek(state)
-    state = expect_keyword(state, :for)
+    protocol_span = through_spans(proto_start.span, proto_end.span) || proto_start.span
+    {for_token, state} = expect_implementation_for(state, token, protocol_span, proto_name, :protocol)
 
     # Type being implemented
     {for_type, state} = parse_type_expr(state)
@@ -10377,7 +10376,6 @@ defmodule Cure.Compiler.Parser do
 
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
 
-    protocol_span = through_spans(proto_start.span, proto_end.span) || proto_start.span
     for_type_span = ast_source_span(for_type)
     branches = body |> Enum.map(&ast_source_span/1) |> Enum.reject(&is_nil/1)
     terminal_span = List.last(branches) || requirements_span || for_type_span || protocol_span
@@ -10521,9 +10519,8 @@ defmodule Cure.Compiler.Parser do
     iface_start = peek(state)
     {iface_name, iface_end, state} = parse_dotted_name_owned(state)
 
-    # Consume the `for` keyword.
-    for_token = peek(state)
-    state = expect_keyword(state, :for)
+    interface_span = through_spans(iface_start.span, iface_end.span) || iface_start.span
+    {for_token, state} = expect_implementation_for(state, token, interface_span, iface_name, :interface)
 
     {for_type, state} = parse_type_expr(state)
 
@@ -10568,7 +10565,6 @@ defmodule Cure.Compiler.Parser do
 
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
 
-    interface_span = through_spans(iface_start.span, iface_end.span) || iface_start.span
     for_type_span = ast_source_span(for_type)
     branches = body |> Enum.map(&ast_source_span/1) |> Enum.reject(&is_nil/1)
 
@@ -13890,14 +13886,52 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp expect_keyword(state, expected_value) do
-    token = peek(state)
+  defp expect_implementation_for(state, opener, head_span, head_name, family) do
+    observed = peek(state)
 
-    if token.type == :keyword and token.value == expected_value do
-      advance(state)
-    else
-      error = {:expected, expected_value, :got, token.type, token.line, token.col, token.span}
-      add_error(state, error)
+    case observed do
+      %Token{type: :keyword, value: :for} = for_token ->
+        {for_token, advance(state)}
+
+      %Token{type: :keyword} ->
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :implementation_for_keyword_missing,
+             expected: :for,
+             observed: macro_separator_observed(observed),
+             token_type: observed.type,
+             span: observed.span,
+             opener_span: opener.span,
+             previous_span: head_span,
+             declaration: head_name,
+             family: family,
+             repair: :replace,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        {nil, state |> add_error(error) |> advance()}
+
+      _ ->
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :implementation_for_keyword_missing,
+             expected: :for,
+             observed: macro_separator_observed(observed),
+             token_type: observed.type,
+             span: observed.span,
+             opener_span: opener.span,
+             previous_span: head_span,
+             declaration: head_name,
+             family: family,
+             repair: :insert,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        {nil, add_error(state, error)}
     end
   end
 
