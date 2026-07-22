@@ -335,16 +335,61 @@ defmodule Cure.Diagnostic.HostTest do
   end
 
   test "renders trusted Final-Core rejection paths as structured internal diagnostics" do
-    rendered =
-      Host.render(
-        {:final_core_violation, :run, [%{clause: :no_hole, message: "hole present in Core term"}]},
-        "demo.cure",
-        "fn run() -> Int = 1\nfn other() -> Int = 2\n"
-      )
+    source = "fn run() -> Int = 1\n"
 
-    assert rendered =~ "[E101]"
-    assert rendered =~ "FINAL-CORE VALIDATION FAILED"
-    assert rendered =~ "hole"
+    span = %Cure.Diagnostic.Span{
+      source_id: "demo.cure",
+      path: "demo.cure",
+      start_byte: 0,
+      end_byte: 19,
+      start_line: 1,
+      start_column: 1,
+      end_line: 1,
+      end_column: 20
+    }
+
+    error =
+      {:source_context,
+       {:final_core_violation, :"Demo#run", [%{clause: :no_hole, message: "hole present in Core term"}]},
+       %{
+         span: span,
+         checking: :"Demo#run",
+         codegen_stage: :final_core_validation,
+         codegen_module: :"Cure.Demo"
+       }}
+
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80)
+    fingerprint = diagnostic.payload.fingerprint
+
+    assert fingerprint =~ ~r/^[0-9a-f]{12}$/
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- FINAL-CORE VALIDATION FAILED [E101] ------------------------------- demo.cure
+
+             The compiler rejected an internal Core term at the trusted boundary (hole
+             present in Core term).
+
+             Stage: `final_core_validation`. Module: `Cure.Demo`. Source: `demo.cure`.
+             Diagnostic fingerprint: `#{fingerprint}`.
+
+             at demo.cure:1:1
+             1 | fn run() -> Int = 1
+               | ^^^^^^^^^^^^^^^^^^^ this definition produced invalid internal Core
+
+             Note: This is an internal compiler failure; report it with the diagnostic
+                   fingerprint.
+             """)
+
+    assert Cure.Diagnostic.Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 0, "character" => 0},
+             "end" => %{"line" => 0, "character" => 19}
+           }
+
+    assert diagnostic.payload.stage == :final_core_validation
+    assert diagnostic.payload.module == :"Cure.Demo"
+    assert diagnostic.payload.file == "demo.cure"
     refute rendered =~ ":final_core_violation"
     refute rendered =~ "{:hole"
   end

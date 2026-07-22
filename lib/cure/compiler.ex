@@ -544,8 +544,42 @@ defmodule Cure.Compiler do
            ) do
       {:ok, forms}
     else
-      {:error, {:source_context, {:expansion_ill_typed, _details}, _context} = reason} -> {:error, reason}
-      {:error, reason} -> {:error, {:codegen_error, reason}}
+      {:error, {:source_context, {:expansion_ill_typed, _details}, _context} = reason} ->
+        {:error, reason}
+
+      {:error, {:final_core_violation, name, _rejections} = reason} ->
+        {:error, {:codegen_error, {:source_context, reason, final_core_source_context(ast, name)}}}
+
+      {:error, reason} ->
+        {:error, {:codegen_error, reason}}
     end
   end
+
+  defp final_core_source_context(ast, name) do
+    span = find_definition_span(ast, Cure.Elab.Name.base(name))
+
+    %{
+      span: span,
+      checking: name,
+      codegen_stage: :final_core_validation,
+      codegen_module: Cure.Elab.Program.module_atom(ast),
+      expression_category: :function_definition
+    }
+  end
+
+  defp find_definition_span({:function_def, meta, _body}, bare_name) when is_list(meta) do
+    if to_string(Keyword.get(meta, :name)) == bare_name do
+      case Cure.MetaAST.Metadata.source_info(meta) do
+        %Cure.MetaAST.SourceInfo{whole: span} -> span
+        _ -> nil
+      end
+    end
+  end
+
+  defp find_definition_span({_tag, _meta, children}, bare_name), do: find_definition_span(children, bare_name)
+
+  defp find_definition_span(items, bare_name) when is_list(items),
+    do: Enum.find_value(items, &find_definition_span(&1, bare_name))
+
+  defp find_definition_span(_item, _bare_name), do: nil
 end

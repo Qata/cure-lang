@@ -1142,6 +1142,17 @@ defmodule Cure.Diagnostic.Adapter do
     totality_failure(name, Map.put(context, :totality_reason, reason), opts)
   end
 
+  def from_error({:source_context, {:final_core_violation, name, rejections}, context}, opts)
+      when is_list(rejections) and is_map(context) do
+    opts =
+      opts
+      |> Keyword.put_new(:span, Map.get(context, :span))
+      |> Keyword.put(:codegen_stage, Map.get(context, :codegen_stage, :final_core_validation))
+      |> Keyword.put(:codegen_module, Map.get(context, :codegen_module))
+
+    final_core_failure(name, rejections, opts)
+  end
+
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
     opts =
       opts
@@ -3273,7 +3284,14 @@ defmodule Cure.Diagnostic.Adapter do
     {title, body, kind} = codegen_failure_content(reason)
     stage = Keyword.get(opts, :codegen_stage) || codegen_stage(reason)
     module = Keyword.get(opts, :codegen_module)
-    file = Keyword.get(opts, :source_file)
+
+    file =
+      Keyword.get(opts, :source_file) ||
+        case Keyword.get(opts, :span) do
+          %Span{path: path} -> path
+          _ -> nil
+        end
+
     reason_text = codegen_reason_text(reason)
     fingerprint = diagnostic_fingerprint({stage, module, file, reason})
 
@@ -3419,6 +3437,27 @@ defmodule Cure.Diagnostic.Adapter do
   defp final_core_failure(name, rejections, opts) do
     clauses = Enum.map(rejections, &Map.get(&1, :clause))
     messages = Enum.map(rejections, &Map.get(&1, :message))
+    stage = Keyword.get(opts, :codegen_stage, :final_core_validation)
+    module = Keyword.get(opts, :codegen_module)
+
+    file =
+      Keyword.get(opts, :source_file) ||
+        case Keyword.get(opts, :span) do
+          %Span{path: path} -> path
+          _ -> nil
+        end
+
+    fingerprint = diagnostic_fingerprint({stage, module, file, name, rejections})
+
+    context =
+      [
+        "Stage: `#{name_to_string(stage)}`.",
+        if(module, do: "Module: `#{name_to_string(module)}`."),
+        if(file, do: "Source: `#{file}`."),
+        "Diagnostic fingerprint: `#{fingerprint}`."
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" ")
 
     Diagnostic.new(
       code: "E101",
@@ -3426,12 +3465,24 @@ defmodule Cure.Diagnostic.Adapter do
       severity: :error,
       title: "Final-Core validation failed",
       body:
-        Doc.paragraph(
-          "The compiler rejected an internal Core term at the trusted boundary (#{Enum.join(Enum.map(messages, &to_string/1), "; ")})."
-        ),
+        Doc.stack([
+          Doc.paragraph(
+            "The compiler rejected an internal Core term at the trusted boundary (#{Enum.join(Enum.map(messages, &to_string/1), "; ")})."
+          ),
+          Doc.paragraph(context)
+        ]),
       primary: primary_label(opts, "this definition produced invalid internal Core"),
       notes: ["This is an internal compiler failure; report it with the diagnostic fingerprint."],
-      payload: %{kind: :final_core_violation, name: name, clauses: clauses, messages: messages}
+      payload: %{
+        kind: :final_core_violation,
+        name: name,
+        clauses: clauses,
+        messages: messages,
+        stage: stage,
+        module: module,
+        file: file,
+        fingerprint: fingerprint
+      }
     )
   end
 
