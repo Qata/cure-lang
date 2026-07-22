@@ -31,13 +31,15 @@ defmodule Cure.Elab.Implementation do
   def register({:implementation, meta, body}, env) do
     iface = meta |> Keyword.fetch!(:interface) |> String.to_atom()
     for_type = Keyword.fetch!(meta, :for_type)
+    for_name = Keyword.get(meta, :for)
     as_name = Keyword.get(meta, :as)
+    implementation_span = implementation_header_span(meta)
 
     with {:ok, head} <- head_key(for_type, env),
          desc when not is_nil(desc) <- Env.get_interface(env, iface),
          :ok <- check_no_stray_clauses(desc, iface, body),
          {:ok, method_map, mangled_fns} <-
-           build_methods(desc, iface, head, for_type, body, env),
+           build_methods(desc, iface, head, for_name, for_type, body, implementation_span, env),
          ref = %{iface: iface, head: head, methods: method_map, as: as_name},
          {:ok, env1} <- register_instance(env, iface, head, as_name, ref),
          {:ok, env2} <- register_signatures(mangled_fns, env1),
@@ -180,7 +182,7 @@ defmodule Cure.Elab.Implementation do
   # function_def — either the instance's own clause renamed, or the interface
   # default specialised to this head type. Returns the `method => mangled_atom`
   # map alongside the decls.
-  defp build_methods(desc, iface, head, for_type, body, env) do
+  defp build_methods(desc, iface, head, for_name, for_type, body, implementation_span, env) do
     Enum.reduce_while(desc.method_order, {:ok, %{}, []}, fn method, {:ok, mm, fns} ->
       mangled = mangled_name(env, iface, head, method)
 
@@ -189,8 +191,20 @@ defmodule Cure.Elab.Implementation do
         renamed = rename_fn(fn_decl, mangled)
         {:cont, {:ok, Map.put(mm, method, mangled), fns ++ [renamed]}}
       else
-        :missing -> {:halt, {:error, {:missing_method, iface, method}}}
-        {:error, _} = err -> {:halt, err}
+        :missing ->
+          {:halt,
+           {:error,
+            {:missing_method,
+             %{
+               interface: iface,
+               method: method,
+               head: head,
+               for: for_name,
+               span: implementation_span
+             }}}}
+
+        {:error, _} = err ->
+          {:halt, err}
       end
     end)
   end
@@ -290,6 +304,26 @@ defmodule Cure.Elab.Implementation do
   defp metadata_span(meta), do: meta |> Cure.MetaAST.Metadata.source_info() |> source_info_span()
   defp source_info_span(%Cure.MetaAST.SourceInfo{whole: span}), do: span
   defp source_info_span(_source_info), do: nil
+
+  defp implementation_header_span(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{opener: %Cure.Diagnostic.Span{} = opener} = source_info ->
+        ending =
+          [source_info.name, source_info.annotation | Map.values(source_info.fields || %{})]
+          |> Enum.filter(&match?(%Cure.Diagnostic.Span{}, &1))
+          |> Enum.max_by(& &1.end_byte, fn -> opener end)
+
+        %Cure.Diagnostic.Span{
+          opener
+          | end_byte: ending.end_byte,
+            end_line: ending.end_line,
+            end_column: ending.end_column
+        }
+
+      source_info ->
+        source_info_span(source_info)
+    end
+  end
 
   # Build the surface function-type AST `T1 -> ... -> Tn -> R` from a param list
   # and return type, MIRRORING `Interface.build_method_map`'s `method_type_ast`

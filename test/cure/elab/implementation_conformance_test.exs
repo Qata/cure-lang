@@ -129,4 +129,24 @@ defmodule Cure.Elab.ImplementationConformanceTest do
       assert {:ok, _env} = Program.elaborate(src)
     end
   end
+
+  describe "required methods" do
+    test "an omitted method without an interface default retains implementation context" do
+      src = """
+      mod M
+        interface Eqs(a)
+          fn eqs(x: a, y: a) -> Bool
+          fn nes(x: a, y: a) -> Bool
+        implementation Eqs for Int
+          fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)
+      end
+      """
+
+      assert {:error,
+              {:missing_method, %{interface: :Eqs, method: :nes, head: head, for: "Int", span: %Cure.Diagnostic.Span{}}}} =
+               Program.elaborate(src)
+
+      assert Cure.Elab.Name.base(head) == "Int"
+    end
+  end
 end

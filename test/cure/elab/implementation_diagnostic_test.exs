@@ -79,6 +79,53 @@ defmodule Cure.Elab.ImplementationDiagnosticTest do
     refute inspect(lsp["data"]["payload"]) =~ "source_info"
   end
 
+  test "a missing required method points at the implementation that needs it" do
+    source =
+      "mod M\n  interface Eqs(a)\n    fn eqs(x: a, y: a) -> Bool\n    fn nes(x: a, y: a) -> Bool\n  implementation Eqs for Int\n    fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)\nend\n"
+
+    {diagnostic, registry, error} = diagnostic(source, "missing_method.cure")
+
+    assert {:missing_method, %{interface: :Eqs, method: :nes, head: head, for: "Int", span: %Cure.Diagnostic.Span{}}} =
+             Program.semantic_error(error)
+
+    assert Cure.Elab.Name.base(head) == "Int"
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- IMPLEMENTATION IS MISSING `NES` [E105] ------------------ missing_method.cure
+
+             `Eqs` requires a method named `nes`, but this implementation for `Int` does not
+             provide it and the interface has no default implementation.
+
+             at missing_method.cure:5:3
+             5 |   implementation Eqs for Int
+               |   ^^^^^^^^^^^^^^^^^^^^^^^^^^ add `nes` beneath this implementation
+
+             Hint: Implement `nes` with the signature required by `Eqs`
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert lsp["range"] == range(4, 2, 28)
+    assert lsp["relatedInformation"] == []
+
+    assert lsp["data"]["payload"] == %{
+             "head" => "Int",
+             "head_id" => "Std.Int#Int",
+             "interface" => "Eqs",
+             "kind" => "missing_method",
+             "method" => "nes"
+           }
+
+    fixed =
+      String.replace(
+        source,
+        "    fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)\nend",
+        "    fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)\n    fn nes(x: Int, y: Int) -> Bool = true\nend"
+      )
+
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "missing_method_fixed.cure")
+  end
+
   defp diagnostic(source, file) do
     assert {:error, error} = Program.elaborate(source, file: file)
     {diagnostic, registry} = Errors.to_diagnostic(error, file, source)
