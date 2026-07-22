@@ -292,6 +292,54 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, Map.fetch!(info.fields, :type_parameters)) == "(resource: Type)"
   end
 
+  test "indexed families own parameter, index, and constructor signature ranges" do
+    source =
+      "type Vec(a: Type) indices (n: Nat)\n" <>
+        "  Nil: Vec(a, Zero)\n" <>
+        "  Cons: a -> Vec(a, n) -> Vec(a, Succ(n))\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "indexed.cure", emit_events: false)
+
+    assert {:ok, {:indexed_type, meta, [nil_ctor, cons_ctor]}} =
+             Parser.parse(tokens, file: "indexed.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == String.trim_trailing(source)
+    assert slice(source, info.opener) == "type"
+    assert slice(source, info.name) == "Vec"
+    assert slice(source, Map.fetch!(info.fields, :type_parameters)) == "(a: Type)"
+    assert slice(source, Map.fetch!(info.fields, :indices)) == "indices (n: Nat)"
+
+    assert Enum.map(info.branches, &slice(source, &1)) == [
+             "Nil: Vec(a, Zero)",
+             "Cons: a -> Vec(a, n) -> Vec(a, Succ(n))"
+           ]
+
+    nil_info = nil_ctor |> elem(1) |> Metadata.source_info()
+    cons_info = cons_ctor |> elem(1) |> Metadata.source_info()
+    assert slice(source, nil_info.name) == "Nil"
+    assert slice(source, Map.fetch!(nil_info.fields, :separator)) == ":"
+    assert slice(source, nil_info.annotation) == "Vec(a, Zero)"
+    assert slice(source, cons_info.annotation) == "a -> Vec(a, n) -> Vec(a, Succ(n))"
+  end
+
+  test "indexed constructor ranges include implicit and named dependent domains" do
+    source = "type Witness indices (n: Nat)\n  Mk: {k: Nat} -> (value: Nat) -> Witness(k)\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "dependent_ctor.cure", emit_events: false)
+
+    assert {:ok, {:indexed_type, meta, [{:gadt_ctor, ctor_meta, _signature}]}} =
+             Parser.parse(tokens, file: "dependent_ctor.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    ctor_info = Metadata.source_info(ctor_meta)
+
+    assert Enum.map(info.branches, &slice(source, &1)) == [
+             "Mk: {k: Nat} -> (value: Nat) -> Witness(k)"
+           ]
+
+    assert slice(source, ctor_info.annotation) == "{k: Nat} -> (value: Nat) -> Witness(k)"
+  end
+
   test "ADT variants retain exact constructor names and extents" do
     source = "type Maybe = None | Some(Int)\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "variants.cure", emit_events: false)

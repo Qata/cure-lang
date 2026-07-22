@@ -9102,8 +9102,7 @@ defmodule Cure.Compiler.Parser do
         {{:container, meta, []}, state}
 
       match?(%Token{type: :keyword, value: :indices}, peek(state)) ->
-        {ast, state} = parse_indexed_family(state, name, head_params, token)
-        {put_type_decl_source_info(ast, token, name_token, state), state}
+        parse_indexed_family(state, name, head_params, token, name_token, type_parameter_span)
 
       true ->
         type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
@@ -9114,13 +9113,13 @@ defmodule Cure.Compiler.Parser do
   # Indexed (GADT) family: `type NAME(params) indices (idx)` followed by an
   # indentation-delimited block of constructor signatures. Head-paren args are
   # parameters (uniform, never matched); the `indices (…)` clause are indices.
-  defp parse_indexed_family(state, name, params, token) do
+  defp parse_indexed_family(state, name, params, token, name_token, type_parameter_span) do
     indices_token = peek(state)
     state = advance(state)
     {state, open_token} = expect_index_list_opener(state, name, indices_token)
     {idx_tele, state} = parse_typed_params(state)
 
-    {state, _close_token} =
+    {state, close_token} =
       case open_token do
         %Token{} ->
           expect_container_close(state, :rparen, :type_indices, open_token, idx_tele, true, %{
@@ -9152,6 +9151,28 @@ defmodule Cure.Compiler.Parser do
       end
 
     meta = [name: name, params: params, indices: idx_tele, line: token.line, col: token.col]
+    branches = ctors |> Enum.map(&ast_source_span/1) |> Enum.reject(&is_nil/1)
+
+    indices_span =
+      through_spans(indices_token.span, close_token && close_token.span) ||
+        through_spans(indices_token.span, open_token && open_token.span) || indices_token.span
+
+    terminal_span = List.last(branches) || indices_span || type_parameter_span || name_token.span
+
+    source_fields =
+      %{}
+      |> maybe_put_source_field(:type_parameters, type_parameter_span)
+      |> maybe_put_source_field(:indices, indices_span)
+
+    meta =
+      Metadata.put_source_info(meta, %SourceInfo{
+        whole: through_spans(token.span, terminal_span) || token.span,
+        opener: token.span,
+        name: name_token.span,
+        branches: branches,
+        fields: source_fields
+      })
+
     {{:indexed_type, meta, ctors}, state}
   end
 
@@ -9400,17 +9421,26 @@ defmodule Cure.Compiler.Parser do
         cname_token = peek(state)
         cname = to_string(cname_token.value)
         state = advance(state)
-        state = expect_gadt_constructor_colon(state, cname_token, family)
-        {sig, state} = parse_ctor_signature(state)
+        {state, colon_token} = expect_gadt_constructor_colon(state, cname_token, family)
+        {sig, signature_span, state} = parse_ctor_signature(state)
         meta = [name: cname, line: cname_token.line, col: cname_token.col]
+
+        meta =
+          Metadata.put_source_info(meta, %SourceInfo{
+            whole: through_spans(cname_token.span, signature_span || cname_token.span) || cname_token.span,
+            name: cname_token.span,
+            annotation: signature_span,
+            fields: maybe_put_source_field(%{}, :separator, colon_token)
+          })
+
         parse_gadt_ctors(state, [{:gadt_ctor, meta, sig} | acc], family)
     end
   end
 
   defp expect_gadt_constructor_colon(state, constructor_token, family) do
     case expect_token(state, :colon) do
-      {:ok, _colon, next_state} ->
-        next_state
+      {:ok, colon, next_state} ->
+        {next_state, colon}
 
       {:error, next_state} ->
         [_generic | rest] = next_state.errors
@@ -9432,7 +9462,7 @@ defmodule Cure.Compiler.Parser do
              column: observed.col
            }}
 
-        %{next_state | errors: [error | rest]}
+        {%{next_state | errors: [error | rest]}, nil}
     end
   end
 
@@ -9444,19 +9474,20 @@ defmodule Cure.Compiler.Parser do
   # parser keeps each application intact and yields `{:arrow_chain, [atoms]}`
   # with the last atom as the result type.
   defp parse_ctor_signature(state) do
-    {first, state} = parse_ctor_dom(state)
-    collect_arrow_chain(state, [first])
+    {first, first_span, state} = parse_ctor_dom(state)
+    collect_arrow_chain(state, [first], first_span, first_span)
   end
 
-  defp collect_arrow_chain(state, acc) do
+  defp collect_arrow_chain(state, acc, first_span, last_span) do
     case peek(state) do
       %Token{type: :arrow} ->
         state = advance(state)
-        {atom, state} = parse_ctor_dom(state)
-        collect_arrow_chain(state, [atom | acc])
+        {atom, atom_span, state} = parse_ctor_dom(state)
+        collect_arrow_chain(state, [atom | acc], first_span, atom_span || last_span)
 
       _ ->
-        {{:arrow_chain, Enum.reverse(acc)}, state}
+        signature_span = through_spans(first_span, last_span) || first_span || last_span
+        {{:arrow_chain, Enum.reverse(acc)}, signature_span, state}
     end
   end
 
@@ -9479,12 +9510,13 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         {inner, state} = parse_type_atom(state)
 
-        {state, _close_token} =
+        {state, close_token} =
           expect_container_close(state, :rparen, :named_constructor_domain, open_token, [inner], false, %{
             binder_span: name_token.span
           })
 
-        {{:named_dom, name, inner}, state}
+        span = through_spans(open_token.span, close_token && close_token.span) || open_token.span
+        {{:named_dom, name, inner}, span, state}
 
       # A RELEVANT IMPLICIT domain `{k: Type}` (Idris `{k : Nat}`): implicit at
       # application/pattern (solved by unification, never positional) but
@@ -9504,18 +9536,21 @@ defmodule Cure.Compiler.Parser do
           state = advance(state)
           {inner, state} = parse_type_atom(state)
 
-          {state, _close_token} =
+          {state, close_token} =
             expect_container_close(state, :rbrace, :implicit_constructor_domain, open_token, [inner], false, %{
               binder_span: name_token.span
             })
 
-          {{:implicit_dom, name, inner}, state}
+          span = through_spans(open_token.span, close_token && close_token.span) || open_token.span
+          {{:implicit_dom, name, inner}, span, state}
         else
-          parse_type_atom(state)
+          {atom, state} = parse_type_atom(state)
+          {atom, ast_source_span(atom), state}
         end
 
       _ ->
-        parse_type_atom(state)
+        {atom, state} = parse_type_atom(state)
+        {atom, ast_source_span(atom), state}
     end
   end
 
@@ -9553,7 +9588,7 @@ defmodule Cure.Compiler.Parser do
         # `Mk : ((x: A) -> B(x)) -> T`. Previously the general type parser
         # accepted this Π shape while this constructor-only path accepted only
         # anonymous `(A) -> B`, creating two subtly different type grammars.
-        {inner, state} = parse_ctor_dom(state)
+        {inner, _inner_span, state} = parse_ctor_dom(state)
         # A PARENTHESISED function type (`(A) -> B`, `(A) -> B -> C`) is ONE grouped
         # type — e.g. a higher-order constructor field `MkPid : ((m) -> R) -> Pid(m)`.
         # The closing `)` bounds the arrow chain, so absorbing `->` here is
@@ -9609,7 +9644,7 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :arrow} ->
         state = advance(state)
-        {atom, state} = parse_ctor_dom(state)
+        {atom, _atom_span, state} = parse_ctor_dom(state)
         collect_paren_arrow(state, [atom | acc])
 
       _ ->
