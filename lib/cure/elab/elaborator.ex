@@ -1012,7 +1012,7 @@ defmodule Cure.Elab.Elaborator do
       # desugar to a call on the function named by its lexeme, exactly as the
       # built-in overloads route (`<>`→combine, non-primitive `==`/`<`→method).
       Keyword.get(meta, :category) == :overloaded ->
-        overloaded_op_call(op, l, r, names, ctx, env)
+        overloaded_op_call(op, l, r, expr, names, ctx, env)
 
       op == :<> ->
         combine_call(l, r, names, ctx, env)
@@ -1322,7 +1322,7 @@ defmodule Cure.Elab.Elaborator do
           {:error, reason} ->
             {:error, attach_operator_operand_context(reason, r, 1, op)}
 
-          {:ok, r_core, _rt} ->
+          {:ok, r_core, r_type} ->
             with {:ok, term} <- build_binop(op, l_core, r_core, l_type, ctx),
                  {:ok, type} <- Kernel.infer(ctx, term) do
               {:ok, term, type}
@@ -1345,6 +1345,10 @@ defmodule Cure.Elab.Elaborator do
 
               :unsupported_op ->
                 {:error, {:unsupported_expression, expr}}
+
+              {:error, {:unsupported_operand_type, failed_op} = reason} ->
+                {:error,
+                 {:source_context, reason, operator_expression_context(expr, l, r, failed_op, [l_type, r_type], ctx)}}
 
               {:error, reason} ->
                 {:error, attach_operator_operand_context(reason, r, 1, op)}
@@ -1394,12 +1398,35 @@ defmodule Cure.Elab.Elaborator do
   # with `{:no_operator_meaning, op}` rather than letting it dissolve into a
   # generic `:unknown_global`. Otherwise route through the ordinary
   # function-call path, so real type errors in the operands still surface.
-  defp overloaded_op_call(op, l, r, names, ctx, env) do
+  defp overloaded_op_call(op, l, r, expr, names, ctx, env) do
     if operator_meaning?(env, op) do
       elaborate_expr_typed({:function_call, [name: Atom.to_string(op)], [l, r]}, names, ctx, env)
     else
-      {:error, {:no_operator_meaning, op}}
+      {:error, {:source_context, {:no_operator_meaning, op}, operator_expression_context(expr, l, r, op, [], ctx)}}
     end
+  end
+
+  defp operator_expression_context({:binary_op, meta, _children}, left, right, op, types, ctx)
+       when is_list(meta) do
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+    operator_span = source_info && source_info.operator
+    operand_spans = if source_info, do: source_info.operands, else: []
+
+    operand_spans =
+      if operand_spans == [], do: [surface_expression_span(left), surface_expression_span(right)], else: operand_spans
+
+    %{
+      line: operator_span && operator_span.start_line,
+      column: operator_span && operator_span.start_column,
+      length: operator_span && max(1, operator_span.end_byte - operator_span.start_byte),
+      span: operator_span,
+      operator_span: operator_span,
+      operand_spans: Enum.reject(operand_spans, &is_nil/1),
+      operand_types: Enum.map(types, &Quote.reify(&1, Context.length(ctx), Context.signature(ctx))),
+      checking: op,
+      expression_category: :binary_operator,
+      expectation_origin: :operator
+    }
   end
 
   # True when `atom` names anything callable: a top-level definition, an

@@ -574,9 +574,10 @@ defmodule Cure.Diagnostic.HostTest do
     meaning = Host.render({:no_operator_meaning, :<<<}, "demo.cure")
 
     assert operand =~ "[E093]"
-    assert operand =~ "OPERATOR OPERAND TYPE MISMATCH"
+    assert operand =~ "`+` DOES NOT SUPPORT THESE OPERANDS"
     assert operand =~ "`+`"
     assert meaning =~ "[E093]"
+    assert meaning =~ "`<<<` HAS NO DEFINITION"
     assert meaning =~ "<<<"
     refute operand =~ ":unsupported_operand_type"
     refute meaning =~ ":no_operator_meaning"
