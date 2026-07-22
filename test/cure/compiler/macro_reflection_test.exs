@@ -34,6 +34,7 @@ defmodule Cure.Compiler.MacroReflectionTest do
     first = {:function_def, [name: "first"], []}
     second = {:function_def, [name: "second"], []}
     assert {:ok, [^first, ^second]} = MacroReflection.lift([first, second])
+    assert {:error, :invalid_lift_declaration} = MacroReflection.lift([first, 42])
     assert env == env
   end
 end

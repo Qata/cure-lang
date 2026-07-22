@@ -153,34 +153,40 @@ defmodule Cure.Compiler.LiftModule do
   @doc "Validate and normalize a generic quoted module value."
   @spec request_ast(tuple()) :: {:ok, map()} | {:error, term()}
   def request_ast({:lift_module, meta, []}) when is_list(meta) do
-    with {:ok, module} <- normalize_module_name(Keyword.get(meta, :module)),
-         behaviour when is_atom(behaviour) <- Keyword.get(meta, :behaviour),
-         callbacks when is_list(callbacks) <- Keyword.get(meta, :callbacks, []),
-         declarations when is_list(declarations) <- Keyword.get(meta, :declarations, []),
-         inherit_imports when is_boolean(inherit_imports) <- Keyword.get(meta, :inherit_imports, true),
-         declarations = MacroSyntax.lower_internal_tree(declarations),
-         declarations = Enum.map(declarations, &normalize_generated_declaration/1),
-         :ok <- validate_module_name(module),
-         :ok <- validate_behaviour(behaviour),
-         :ok <- validate_callbacks(callbacks),
-         :ok <- validate_declarations(declarations),
-         imports = Keyword.get(meta, :imports, imports_from_declarations(declarations)),
-         :ok <- validate_imports(imports) do
-      {:ok,
-       %{
-         kind: :quoted_module,
-         module: module,
-         behaviour: behaviour,
-         callbacks: callbacks,
-         declarations: declarations,
-         imports: imports,
-         inherit_imports: inherit_imports,
-         dependencies: imports,
-         source_provenance: Keyword.get(meta, :source_provenance),
-         expansion_provenance: Keyword.get(meta, :expansion_provenance, [])
-       }}
+    if Keyword.keyword?(meta) do
+      with {:ok, module} <- normalize_module_name(Keyword.get(meta, :module)),
+           behaviour = Keyword.get(meta, :behaviour),
+           callbacks = Keyword.get(meta, :callbacks, []),
+           declarations = Keyword.get(meta, :declarations, []),
+           inherit_imports = Keyword.get(meta, :inherit_imports, true),
+           :ok <- validate_module_name(module),
+           :ok <- validate_behaviour(behaviour),
+           :ok <- validate_callbacks(callbacks),
+           :ok <- validate_declarations(declarations),
+           :ok <- validate_inherit_imports(inherit_imports),
+           declarations = MacroSyntax.lower_internal_tree(declarations),
+           declarations = Enum.map(declarations, &normalize_generated_declaration/1),
+           :ok <- validate_declarations(declarations),
+           imports = Keyword.get(meta, :imports, imports_from_declarations(declarations)),
+           :ok <- validate_imports(imports) do
+        {:ok,
+         %{
+           kind: :quoted_module,
+           module: module,
+           behaviour: behaviour,
+           callbacks: callbacks,
+           declarations: declarations,
+           imports: imports,
+           inherit_imports: inherit_imports,
+           dependencies: imports,
+           source_provenance: Keyword.get(meta, :source_provenance),
+           expansion_provenance: Keyword.get(meta, :expansion_provenance, [])
+         }}
+      else
+        {:error, _reason} = error -> error
+      end
     else
-      _ -> {:error, :invalid_lift_module_ast}
+      {:error, :invalid_lift_module_ast}
     end
   end
 
@@ -194,10 +200,12 @@ defmodule Cure.Compiler.LiftModule do
   defp normalize_module_name(module) when is_atom(module), do: {:ok, Atom.to_string(module)}
 
   defp normalize_module_name(module) when is_list(module) do
-    if Enum.all?(module, &is_integer/1), do: {:ok, List.to_string(module)}, else: {:error, :invalid_lift_module_ast}
+    if Enum.all?(module, &is_integer/1),
+      do: {:ok, List.to_string(module)},
+      else: {:error, {:invalid_module_name, module}}
   end
 
-  defp normalize_module_name(_module), do: {:error, :invalid_lift_module_ast}
+  defp normalize_module_name(module), do: {:error, {:invalid_module_name, module}}
 
   @spec strip(term()) :: term()
   def strip({:lift_module, _meta, _children} = node), do: node
@@ -393,22 +401,31 @@ defmodule Cure.Compiler.LiftModule do
   defp validate_behaviour(behaviour) when is_atom(behaviour) and not is_nil(behaviour), do: :ok
   defp validate_behaviour(behaviour), do: {:error, {:invalid_behaviour, behaviour}}
 
-  defp validate_callbacks(callbacks) do
+  defp validate_callbacks(callbacks) when is_list(callbacks) do
     if Enum.all?(callbacks, &valid_callback?/1), do: :ok, else: {:error, :invalid_lift_callback}
   end
+
+  defp validate_callbacks(_callbacks), do: {:error, :invalid_lift_callback}
 
   defp valid_callback?(%{name: name, arity: arity}) when is_atom(name) and is_integer(arity) and arity >= 0,
     do: true
 
   defp valid_callback?(_), do: false
 
-  defp validate_declarations(declarations) do
+  defp validate_declarations(declarations) when is_list(declarations) do
     if Enum.all?(declarations, &is_tuple/1), do: :ok, else: {:error, :invalid_lift_declaration}
   end
 
-  defp validate_imports(imports) do
+  defp validate_declarations(_declarations), do: {:error, :invalid_lift_declaration}
+
+  defp validate_imports(imports) when is_list(imports) do
     if Enum.all?(imports, &is_binary/1), do: :ok, else: {:error, :invalid_lift_import}
   end
+
+  defp validate_imports(_imports), do: {:error, :invalid_lift_import}
+
+  defp validate_inherit_imports(value) when is_boolean(value), do: :ok
+  defp validate_inherit_imports(_value), do: {:error, :invalid_lift_inheritance}
 
   defp imports_from_declarations(declarations) do
     declarations
