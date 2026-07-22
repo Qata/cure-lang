@@ -2577,6 +2577,21 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:macro_rule_separator_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:refinement_type_syntax, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -5169,6 +5184,21 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :macro_check_failure_constructor_invalid}),
     do: "Macro check needs a failure value"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_rule_becomes_missing}),
+    do: "Macro rule needs `becomes`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :literal_rule_becomes_missing}),
+    do: "Literal rule needs `becomes`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :computed_rule_by_missing}),
+    do: "Computed rule needs `by`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_example_expands_missing}),
+    do: "Macro example needs `expands`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_expands_with_missing}),
+    do: "Macro expander needs `with`"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "Explanation clause arrow is missing"
 
@@ -5674,6 +5704,26 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :macro_check_failure_constructor_invalid, observed: observed}),
     do:
       "After `fail`, write a declared macro failure with its arguments, such as `BadInput(value)`; #{authored_syntax(observed)} is not a failure constructor call."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_rule_becomes_missing, observed: observed}),
+    do:
+      "A syntax rule uses `becomes` between its matched form and expansion template; #{authored_syntax(observed)} appears where `becomes` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :literal_rule_becomes_missing, observed: observed}),
+    do:
+      "A literal rule uses `becomes` between its suffix pattern and expansion template; #{authored_syntax(observed)} appears where `becomes` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :computed_rule_by_missing, observed: observed}),
+    do:
+      "A computed rule uses `by` before the elaborator function that implements it; #{authored_syntax(observed)} appears where `by` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_example_expands_missing, observed: observed}),
+    do:
+      "A macro example uses `expands` between its use-site and expected result; #{authored_syntax(observed)} appears where `expands` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_expands_with_missing, observed: observed}),
+    do:
+      "A structured macro uses `expands with` before its expander function; #{authored_syntax(observed)} appears where `with` belongs."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "An explanation clause needs `=>` between its failure point and message."
@@ -6279,6 +6329,26 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :macro_check_failure_constructor_invalid}),
     do: "call a declared macro failure here"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: kind, expected: expected, context: %{token_type: type}})
+       when kind in [
+              :macro_rule_becomes_missing,
+              :literal_rule_becomes_missing,
+              :computed_rule_by_missing,
+              :macro_example_expands_missing,
+              :macro_expands_with_missing
+            ] and type in [:eof, :dedent, :newline],
+       do: "add `#{expected}` and the expression that follows it"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: kind, expected: expected})
+       when kind in [
+              :macro_rule_becomes_missing,
+              :literal_rule_becomes_missing,
+              :computed_rule_by_missing,
+              :macro_example_expands_missing,
+              :macro_expands_with_missing
+            ],
+       do: "insert `#{expected}` before this expression"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "insert `=>` before this explanation message"
 
@@ -6814,6 +6884,34 @@ defmodule Cure.Diagnostic.Adapter do
       pickup_label(opener, :secondary, "this rewrite command starts here"),
       pickup_label(previous, :secondary, previous_message)
     ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: kind, opener: %Span{} = opener, previous: previous},
+         primary_span
+       )
+       when kind in [
+              :macro_rule_becomes_missing,
+              :literal_rule_becomes_missing,
+              :computed_rule_by_missing,
+              :macro_example_expands_missing,
+              :macro_expands_with_missing
+            ] do
+    {opener_message, previous_message} =
+      case kind do
+        :macro_rule_becomes_missing -> {"this syntax rule starts here", "the matched form ends here"}
+        :literal_rule_becomes_missing -> {"this literal rule starts here", "the suffix pattern ends here"}
+        :computed_rule_by_missing -> {"this computed rule starts here", "the computed modifier ends here"}
+        :macro_example_expands_missing -> {"this macro example starts here", "the example use-site ends here"}
+        :macro_expands_with_missing -> {"this expander section starts here", "the `expands` keyword ends here"}
+      end
+
+    [pickup_label(opener, :secondary, opener_message), pickup_label(previous, :secondary, previous_message)]
     |> Enum.reject(fn
       nil -> true
       %Label{span: span} -> span == primary_span
@@ -7802,6 +7900,42 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Insert `#{keyword}` before #{branch}",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: "#{keyword} "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: kind, expected: expected, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when kind in [
+              :macro_rule_becomes_missing,
+              :literal_rule_becomes_missing,
+              :computed_rule_by_missing,
+              :macro_example_expands_missing,
+              :macro_expands_with_missing
+            ] and type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `#{expected}` before this expression",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "#{expected} "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: kind, expected: expected}, %Span{})
+       when kind in [
+              :macro_rule_becomes_missing,
+              :literal_rule_becomes_missing,
+              :computed_rule_by_missing,
+              :macro_example_expands_missing,
+              :macro_expands_with_missing
+            ] do
+    [
+      %Suggestion{
+        message: "Add `#{expected}` and the expression that follows it",
+        applicability: :manual
       }
     ]
   end

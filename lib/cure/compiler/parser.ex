@@ -11053,12 +11053,7 @@ defmodule Cure.Compiler.Parser do
   defp parse_macro_expands_with(state) do
     token = peek(state)
     state = advance(state)
-
-    state =
-      case peek(state) do
-        %Token{type: :identifier, value: "with"} -> advance(state)
-        t -> add_error(state, {:expected, :with, :got, t.type, t.line, t.col, t.span})
-      end
+    state = expect_macro_rule_keyword(state, :with, :macro_expands_with_missing, token)
 
     {expander, state} = parse_expr(state, 0)
 
@@ -11448,11 +11443,7 @@ defmodule Cure.Compiler.Parser do
 
   # Tier-2: `becomes <template>` (unchanged behaviour, just extracted).
   defp parse_becomes_rule(state, kw_token, keyword, segments, category, contextual, obligations) do
-    state =
-      case peek(state) do
-        %Token{type: :identifier, value: "becomes"} -> advance(state)
-        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col, t.span})
-      end
+    state = expect_macro_rule_keyword(state, :becomes, :macro_rule_becomes_missing, kw_token)
 
     {template, state} = parse_expr(state, 0)
     {examples, state} = parse_rule_examples(state)
@@ -11493,11 +11484,7 @@ defmodule Cure.Compiler.Parser do
         _ -> {false, state}
       end
 
-    state =
-      case peek(state) do
-        %Token{type: :identifier, value: "by"} -> advance(state)
-        t -> add_error(state, {:expected, :by, :got, t.type, t.line, t.col, t.span})
-      end
+    state = expect_macro_rule_keyword(state, :by, :computed_rule_by_missing, kw_token)
 
     {elab, state} = parse_expr(state, 0)
     {examples, state} = parse_rule_examples(state)
@@ -11660,11 +11647,7 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
     {use_site, state} = collect_until_expands(state, [])
 
-    state =
-      case peek(state) do
-        %Token{type: :identifier, value: "expands"} -> advance(state)
-        t -> add_error(state, {:expected, :expands, :got, t.type, t.line, t.col, t.span})
-      end
+    state = expect_macro_rule_keyword(state, :expands, :macro_example_expands_missing, kw)
 
     {expected, state} =
       case peek(state) do
@@ -11706,11 +11689,7 @@ defmodule Cure.Compiler.Parser do
 
     {segments, _segment_span, state} = parse_rule_segments(state, [])
 
-    state =
-      case peek(state) do
-        %Token{type: :identifier, value: "becomes"} -> advance(state)
-        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col, t.span})
-      end
+    state = expect_macro_rule_keyword(state, :becomes, :literal_rule_becomes_missing, kw_token)
 
     {template, state} = parse_expr(state, 0)
 
@@ -11727,6 +11706,36 @@ defmodule Cure.Compiler.Parser do
 
     {rule, state}
   end
+
+  defp expect_macro_rule_keyword(state, expected, kind, opener_token) do
+    expected_value = Atom.to_string(expected)
+
+    case peek(state) do
+      %Token{type: :identifier, value: ^expected_value} ->
+        advance(state)
+
+      observed ->
+        add_error(
+          state,
+          {:macro_rule_separator_syntax,
+           %{
+             kind: kind,
+             expected: expected,
+             observed: macro_separator_observed(observed),
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: opener_token.span,
+             previous_span: previous_authored_span(state, opener_token.span),
+             line: observed.line,
+             column: observed.col
+           }}
+        )
+    end
+  end
+
+  defp macro_separator_observed(%Token{type: type}) when type in [:newline, :dedent, :eof], do: type
+  defp macro_separator_observed(%Token{value: value, type: type}), do: value || type
 
   # The dispatch suffix is the first literal segment following the leading
   # number-hole (`[{:hole,_}, {:lit, s} | _]`). A malformed literal rule
