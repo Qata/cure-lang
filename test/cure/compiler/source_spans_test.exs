@@ -407,6 +407,22 @@ defmodule Cure.Compiler.SourceSpansTest do
     end
   end
 
+  test "pipe desugaring retains the complete call and aligned argument roles" do
+    source = "fn run(value: Int) -> Int = value |> transform(extra: 1)\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "pipe.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "pipe.cure", emit_events: false, prelude_macros: false)
+
+    {:function_call, meta, _arguments} = find_node(ast, :function_call)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "value |> transform(extra: 1)"
+    assert slice(source, info.callee) == "transform"
+    assert slice(source, info.operator) == "|>"
+    assert Enum.map(info.arguments, &slice(source, &1)) == ["value", "1"]
+    assert [nil, label] = info.argument_labels
+    assert slice(source, label) == "extra"
+  end
+
   test "range expressions retain their exact operator and operand ranges" do
     source = "fn values() = 1..=10\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "range.cure", emit_events: false)

@@ -4333,14 +4333,46 @@ defmodule Cure.Compiler.Parser do
         new_meta = Keyword.merge(meta, pipe: true, line: token.line, col: token.col)
         new_meta = Keyword.put(new_meta, :name, name)
         new_meta = prepend_pipe_label_metadata(new_meta)
+        new_meta = put_pipe_source_info(new_meta, left, right, token)
         {:function_call, new_meta, [left | args]}
 
-      {:variable, _meta, name} ->
-        {:function_call, [name: name, pipe: true, line: token.line, col: token.col], [left]}
+      {:variable, _meta, name} = variable ->
+        meta = [name: name, pipe: true, line: token.line, col: token.col]
+        {:function_call, put_pipe_source_info(meta, left, variable, token), [left]}
 
       _ ->
-        {:function_call, [name: "unknown", pipe: true, line: token.line, col: token.col], [left, right]}
+        meta = [name: "unknown", pipe: true, line: token.line, col: token.col]
+        {:function_call, put_pipe_source_info(meta, left, right, token), [left, right]}
     end
+  end
+
+  defp put_pipe_source_info(meta, left, right, %Token{} = token) do
+    left_span = ast_source_span(left)
+    right_span = ast_source_span(right)
+    existing = Metadata.source_info(meta) || %SourceInfo{}
+
+    whole =
+      case {left_span, right_span} do
+        {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = last} ->
+          case Range.through(first, last) do
+            {:ok, span} -> span
+            _ -> existing.whole
+          end
+
+        _ ->
+          existing.whole
+      end
+
+    callee = existing.callee || right_span
+    arguments = if left_span, do: [left_span | existing.arguments], else: existing.arguments
+
+    Metadata.put_source_info(meta, %{
+      existing
+      | whole: whole,
+        callee: callee,
+        operator: token.span,
+        arguments: arguments
+    })
   end
 
   defp prepend_pipe_label_metadata(meta) do
