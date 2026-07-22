@@ -460,7 +460,7 @@ defmodule Cure.Elab.Declarations do
          {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
          ctx = build_context(env, telescope),
          {:ok, rhs_core} <- idx_to_core(rhs, scope, nil, env),
-         {:ok, level} <- typealias_universe(ctx, name, rhs_core) do
+         {:ok, level} <- typealias_universe(ctx, name, rhs_core, meta, rhs) do
       type_core = wrap_binders(:pi, telescope, quantities, {:type, level})
       body = wrap_binders(:lam, telescope, quantities, rhs_core)
       env1 = Env.add_def(env, name, type_core, body, quantities)
@@ -468,13 +468,33 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  defp typealias_universe(ctx, name, rhs_core) do
+  defp typealias_universe(ctx, name, rhs_core, meta, rhs) do
     case Kernel.infer(ctx, rhs_core) do
-      {:ok, {:vtype, level}} -> {:ok, level}
-      {:ok, other} -> {:error, {:typealias_not_a_type, name, Quote.reify(other, 0)}}
-      {:error, reason} -> {:error, reason}
+      {:ok, {:vtype, level}} ->
+        {:ok, level}
+
+      {:ok, other} ->
+        info = Cure.MetaAST.Metadata.source_info(meta)
+        rhs_info = rhs |> elem(1) |> Cure.MetaAST.Metadata.source_info()
+
+        {:error,
+         {:typealias_not_a_type,
+          %{
+            name: name,
+            actual_type: Quote.reify(other, 0),
+            rhs_shape: typealias_rhs_shape(rhs),
+            span: rhs_info && rhs_info.whole,
+            declaration_span: info && info.whole,
+            name_span: info && info.name
+          }}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
+
+  defp typealias_rhs_shape({tag, _meta, _children}) when is_atom(tag), do: tag
+  defp typealias_rhs_shape(_rhs), do: :expression
 
   defp typealias_params(meta) do
     meta

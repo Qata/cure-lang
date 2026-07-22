@@ -1832,6 +1832,12 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:let_needs_annotation, %{name: _name} = details}, opts),
     do: local_binding_annotation_failure(:ungraded, details, opts)
 
+  def from_error({:typealias_not_a_type, %{name: _name, actual_type: _actual} = details}, opts),
+    do: typealias_value_failure(details, opts)
+
+  def from_error({:typealias_not_a_type, name, actual_type}, opts),
+    do: typealias_value_failure(%{name: name, actual_type: actual_type}, opts)
+
   def from_error({kind, detail}, opts)
       when kind in [
              :unsupported_expression,
@@ -3588,6 +3594,46 @@ defmodule Cure.Diagnostic.Adapter do
         grade: Map.get(details, :grade),
         use_count: use_count,
         reason: Map.get(details, :reason, :initializer_not_inferable)
+      }
+    )
+  end
+
+  defp typealias_value_failure(details, opts) do
+    name = name_to_string(details.name)
+    actual_surface = surface_type(details.actual_type)
+    primary_span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(details, :name_span) do
+        %Span{} = span when span != primary_span ->
+          [pickup_label(span, :secondary, "this declaration promises a type alias")]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "`#{name}` aliases a value, not a type",
+      body:
+        Doc.paragraph(
+          "The right side of a `typealias` must itself be a type, but this expression is a value whose type is `#{actual_surface}`. Type aliases give another name to a type; they cannot name one particular value."
+        ),
+      primary: pickup_label(primary_span, :primary, "this is a value of type `#{actual_surface}`"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "If `#{name}` should alias the value's type, write `typealias #{name} = #{actual_surface}`",
+          applicability: :maybe_incorrect
+        }
+      ],
+      payload: %{
+        kind: :typealias_not_a_type,
+        name: name,
+        actual_surface: actual_surface,
+        rhs_shape: Map.get(details, :rhs_shape, :expression)
       }
     )
   end

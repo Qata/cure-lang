@@ -42,8 +42,51 @@ defmodule Cure.Elab.TypeDeclarationTest do
     end
 
     test "an alias to a constructor is rejected — a constructor is not a type" do
-      assert {:error, {:typealias_not_a_type, :Bad, _}} =
-               Program.elaborate("mod M\n" <> @nat <> "  typealias Bad = Z\nend\n")
+      source = "mod M\n" <> @nat <> "  typealias Bad = Z\nend\n"
+      assert {:error, {:typealias_not_a_type, %{name: :Bad}} = error} = Program.elaborate(source)
+
+      {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "bad_alias.cure", source)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- `BAD` ALIASES A VALUE, NOT A TYPE [E093] --------------------- bad_alias.cure
+
+               The right side of a `typealias` must itself be a type, but this expression is a
+               value whose type is `Nat`. Type aliases give another name to a type; they cannot
+               name one particular value.
+
+               at bad_alias.cure:3:19
+               3 |   typealias Bad = Z
+                 |             ---   ^ this declaration promises a type alias; this is a value of type `Nat`
+
+               Hint: If `Bad` should alias the value's type, write `typealias Bad = Nat`
+               """)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+
+      assert lsp["range"] == %{
+               "start" => %{"line" => 2, "character" => 18},
+               "end" => %{"line" => 2, "character" => 19}
+             }
+
+      assert [related] = lsp["relatedInformation"]
+
+      assert related["location"]["range"] == %{
+               "start" => %{"line" => 2, "character" => 12},
+               "end" => %{"line" => 2, "character" => 15}
+             }
+
+      assert lsp["data"]["payload"] == %{
+               "actual_surface" => "Nat",
+               "kind" => "typealias_not_a_type",
+               "name" => "Bad",
+               "rhs_shape" => "variable"
+             }
+
+      assert {:ok, _environment} =
+               source
+               |> String.replace("typealias Bad = Z", "typealias Bad = Nat")
+               |> Program.elaborate(file: "fixed_alias.cure")
     end
   end
 
