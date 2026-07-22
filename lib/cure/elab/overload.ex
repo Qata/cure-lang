@@ -281,6 +281,25 @@ defmodule Cure.Elab.Overload do
   @doc "Owner names used in overload ambiguity diagnostics."
   def candidate_owners(keys), do: owners(keys)
 
+  @doc "Semantic parameter signatures retained for no-match diagnostics."
+  def candidate_signatures(%Env{} = env, keys) do
+    Enum.flat_map(keys, fn key ->
+      case Env.get_def(env, key) do
+        %{type: pi} ->
+          [
+            %{
+              id: key,
+              owner: Cure.Elab.Name.owner(key),
+              parameters: present_param_types(pi)
+            }
+          ]
+
+        _ ->
+          []
+      end
+    end)
+  end
+
   @doc """
   Legacy declaration-order label check for callers that have not migrated to
   `align/5`. Ordinary calls use telescope alignment, including reordering. This

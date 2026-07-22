@@ -3684,7 +3684,15 @@ defmodule Cure.Elab.Elaborator do
             {:ok, term, type}
 
           [] ->
-            {:error, {:no_matching_overload, atom, []}}
+            argument_types = infer_overload_argument_types(args, names, ctx, env)
+
+            {:error,
+             {:no_matching_overload,
+              %{
+                name: atom,
+                arguments: argument_types,
+                candidates: Cure.Elab.Overload.candidate_signatures(env, candidates)
+              }}}
 
           many ->
             keys = Enum.map(many, &elem(&1, 0))
@@ -3710,6 +3718,15 @@ defmodule Cure.Elab.Elaborator do
             end
         end
     end
+  end
+
+  defp infer_overload_argument_types(args, names, ctx, env) do
+    Enum.map(args, fn argument ->
+      case elaborate_expr_typed(argument, names, ctx, env) do
+        {:ok, _term, type} -> Quote.reify(type, Context.length(ctx))
+        {:error, _reason} -> nil
+      end
+    end)
   end
 
   defp map_present_args(args, names, ctx, env) do

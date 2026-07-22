@@ -139,7 +139,46 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     """
 
     assert {:error, err} = compile_and_load_error(src)
-    assert match?({:no_matching_overload, :plus, _}, unwrap_inner(err))
+    assert match?({:no_matching_overload, %{name: :plus}}, unwrap_inner(err))
+
+    assert {:codegen_error, diagnostic_error} = err
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(diagnostic_error, "no_match.cure", src)
+
+    assert Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- NO OVERLOAD OF `PLUS` MATCHES [E093] -------------------------- no_match.cure
+
+             This call supplies argument types `Int, Int`.
+
+             These overloads are available:
+
+             - `OvlNoMatch.plus(Grams, Grams)`
+             - `OvlNoMatch.plus(Meters, Meters)`
+
+             at no_match.cure:6:27
+             6 |   fn bad() -> Int = match plus(1, 2)
+               |                           ^^^^^^^^^^ these arguments do not match any `plus` overload
+
+             Hint: Change the arguments to match one of the listed signatures
+             """)
+
+    lsp = Cure.Diagnostic.Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 5, "character" => 26},
+             "end" => %{"line" => 5, "character" => 36}
+           }
+
+    assert lsp["data"]["payload"]["arguments"] == ["Int", "Int"]
+
+    assert Enum.map(lsp["data"]["payload"]["candidates"], & &1["signature"]) == [
+             "OvlNoMatch.plus(Grams, Grams)",
+             "OvlNoMatch.plus(Meters, Meters)"
+           ]
+
+    fixed = String.replace(src, "plus(1, 2)", "plus(MkM(1), MkM(2))")
+    assert {:ok, module} = Cure.Compiler.compile_and_load(fixed, emit_events: false)
+    assert apply(module, :bad, []) == 0
   end
 
   # Task 7 — inertness. A module with no same-name group must be untouched by the

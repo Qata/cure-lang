@@ -731,7 +731,8 @@ defmodule Cure.Diagnostic.HostTest do
     occurs = Host.render({:occurs_check, 1, {:var, 1}}, "types.cure")
 
     assert overload =~ "[E093]"
-    assert overload =~ "NO MATCHING OVERLOAD"
+    assert overload =~ "NO OVERLOAD OF `MAP` MATCHES"
+    assert overload =~ "Int, String"
     assert ambiguous =~ "CALL TO `MAP` IS AMBIGUOUS"
     assert ambiguous =~ "List.map/2"
     assert ambiguous =~ "Seq.map/2"

@@ -1985,7 +1985,10 @@ defmodule Cure.Diagnostic.Adapter do
     do: contextual_type_failure(:ambiguous_instance, %{interface: interface, expected: expected}, opts)
 
   def from_error({:no_matching_overload, name, arguments}, opts),
-    do: contextual_type_failure(:no_matching_overload, %{name: name, arguments: arguments}, opts)
+    do: no_matching_overload_failure(%{name: name, arguments: arguments, candidates: []}, opts)
+
+  def from_error({:no_matching_overload, %{name: _name} = details}, opts),
+    do: no_matching_overload_failure(details, opts)
 
   def from_error({:label_mismatch, key, declared, written}, opts),
     do:
@@ -5355,6 +5358,78 @@ defmodule Cure.Diagnostic.Adapter do
     surface = surface_type(head)
     %{kind: :concrete, surface: surface, id: surface}
   end
+
+  defp no_matching_overload_failure(details, opts) do
+    name = name_to_string(details.name)
+
+    arguments =
+      details
+      |> Map.get(:arguments, [])
+      |> Enum.map(fn
+        nil -> "unknown"
+        type -> overload_type_surface(type)
+      end)
+
+    candidates =
+      details
+      |> Map.get(:candidates, [])
+      |> Enum.map(fn candidate ->
+        owner = Map.get(candidate, :owner)
+        prefix = if owner, do: "#{name_to_string(owner)}.", else: ""
+        parameters = Enum.map_join(Map.get(candidate, :parameters, []), ", ", &overload_type_surface/1)
+
+        %{
+          id: name_to_string(Map.get(candidate, :id, name)),
+          owner: if(owner, do: name_to_string(owner)),
+          signature: "#{prefix}#{name}(#{parameters})"
+        }
+      end)
+      |> Enum.sort_by(& &1.signature)
+
+    argument_text = if arguments == [], do: "unknown argument types", else: Enum.join(arguments, ", ")
+
+    candidate_doc =
+      case candidates do
+        [] ->
+          Doc.paragraph("No declared overload accepts these argument types.")
+
+        candidates ->
+          Doc.stack([
+            Doc.paragraph("These overloads are available:"),
+            Doc.bullet_list(Enum.map(candidates, &"`#{&1.signature}`"))
+          ])
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "No overload of `#{name}` matches",
+      body:
+        Doc.stack([
+          Doc.paragraph("This call supplies argument types `#{argument_text}`."),
+          candidate_doc
+        ]),
+      primary: primary_label(opts, "these arguments do not match any `#{name}` overload"),
+      suggestions: [
+        %Suggestion{
+          message: "Change the arguments to match one of the listed signatures",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :no_matching_overload,
+        name: name,
+        arguments: arguments,
+        candidates: candidates
+      }
+    )
+  end
+
+  defp overload_type_surface(type) when is_atom(type) or is_binary(type),
+    do: name_to_string(Cure.Elab.Name.base(type) || type)
+
+  defp overload_type_surface(type), do: surface_type(type)
 
   defp ambiguous_overload_failure(name, owners, opts) do
     name = name_to_string(name)
