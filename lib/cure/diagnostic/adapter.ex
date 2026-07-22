@@ -1330,14 +1330,14 @@ defmodule Cure.Diagnostic.Adapter do
     do: macro_validation_failure(:closed_category_extension, %{categories: categories}, opts)
 
   def from_error({:duplicate_unit, suffix}, opts),
-    do: macro_validation_failure(:duplicate_unit, %{suffix: suffix}, opts)
+    do: macro_unit_failure(:duplicate_unit, %{suffix: suffix}, opts)
 
-  # These are public macro-library validation boundaries. Keep them in the
-  # macro family so users are directed to the authored board/unit declaration,
-  # rather than seeing an internal tuple or a generic compiler failure.
   def from_error({kind, detail}, opts)
       when kind in [:invalid_unit, :unknown_unit],
-      do: macro_validation_failure(kind, %{detail: detail}, opts)
+      do: macro_unit_failure(kind, %{suffix: detail}, opts)
+
+  def from_error({:invalid_unit_literal, value, suffix}, opts),
+    do: macro_unit_failure(:invalid_unit_literal, %{value: value, suffix: suffix}, opts)
 
   # Some trusted checking paths can return the bare verdict after their
   # declaration wrapper has been stripped. Keep that verdict contextual rather
@@ -1421,7 +1421,7 @@ defmodule Cure.Diagnostic.Adapter do
       do: macro_validation_failure(kind, %{detail: detail}, opts)
 
   def from_error({kind, first, second}, opts)
-      when kind in [:forward_packet_length, :invalid_packet_crc_fields, :reserved_syntax_field, :invalid_unit_literal],
+      when kind in [:forward_packet_length, :invalid_packet_crc_fields, :reserved_syntax_field],
       do: macro_validation_failure(kind, %{first: first, second: second}, opts)
 
   # C2/Core artifact decoding is an untrusted boundary. Its failures are
@@ -4993,6 +4993,57 @@ defmodule Cure.Diagnostic.Adapter do
       suggestions: [%Suggestion{message: hint, applicability: :manual}],
       payload: Map.put(details, :kind, kind)
     )
+  end
+
+  defp macro_unit_failure(kind, details, opts) do
+    {title, message, label, hint} = macro_unit_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_unit_validation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp macro_unit_content(:duplicate_unit, %{suffix: suffix}) do
+    {
+      "Unit suffix is already declared",
+      "The `#{name_to_string(suffix)}` suffix is registered more than once, so a literal would have two possible scales.",
+      "rename or remove this unit declaration",
+      "Keep exactly one declaration for the `#{name_to_string(suffix)}` suffix"
+    }
+  end
+
+  defp macro_unit_content(:invalid_unit, %{suffix: suffix}) do
+    {
+      "Unit declaration is invalid",
+      "The `#{name_to_string(suffix)}` unit needs a text suffix, a positive numeric scale, and an atom naming its dimension.",
+      "fix this unit declaration",
+      "Use a positive scale and a stable dimension such as `duration`"
+    }
+  end
+
+  defp macro_unit_content(:unknown_unit, %{suffix: suffix}) do
+    {
+      "Unit suffix is unknown",
+      "The `#{name_to_string(suffix)}` suffix is used by this literal, but no unit with that suffix is registered.",
+      "declare this unit or change the suffix",
+      "Register `#{name_to_string(suffix)}` before using it in a literal"
+    }
+  end
+
+  defp macro_unit_content(:invalid_unit_literal, %{value: value, suffix: suffix}) do
+    {
+      "Unit literal is malformed",
+      "A unit literal needs a numeric value and a text suffix, but this one uses value `#{name_to_string(value)}` and suffix `#{name_to_string(suffix)}`.",
+      "rewrite this unit literal",
+      "Use a number followed by a registered text suffix"
+    }
   end
 
   defp macro_board_content(:invalid_board_definition, _details) do
