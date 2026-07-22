@@ -867,8 +867,9 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
-    do: {:error, :rewrite_requires_expected_type}
+  def elaborate_expr_typed({:rewrite_expr, meta, [proof_ast, body_ast]}, _names, _ctx, _env) do
+    {:error, {:source_context, :rewrite_requires_expected_type, rewrite_source_context(meta, proof_ast, body_ast)}}
+  end
 
   def elaborate_expr_typed({:proof_chain, _meta, _children} = chain, names, ctx, env),
     do: Cure.Elab.ProofChain.elaborate(chain, names, ctx, env)
@@ -2262,21 +2263,24 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr_checked({:rewrite_expr, _meta, [proof_ast, body_ast]}, expected_core, names, ctx, env) do
+  def elaborate_expr_checked({:rewrite_expr, meta, [proof_ast, body_ast]}, expected_core, names, ctx, env) do
     depth = Context.length(ctx)
 
-    with {:ok, proof_term, proof_type} <- elaborate_expr_typed(proof_ast, names, ctx, env),
-         {:ok, ty_value, a_value, b_value} <- Rewrite.eq_parts(proof_type, Context.signature(ctx)),
-         ty = Kernel.normalize(ctx, Quote.reify(ty_value, depth)),
-         a = Kernel.normalize(ctx, Quote.reify(a_value, depth)),
-         b = Kernel.normalize(ctx, Quote.reify(b_value, depth)),
-         normalized_expected = Kernel.normalize(ctx, expected_core),
-         {:ok, build, body_expected} <- Rewrite.legacy_plan(proof_term, ty, a, b, normalized_expected),
-         {:ok, body_term} <- elaborate_expr_checked(body_ast, body_expected, names, ctx, env),
-         term = build.(body_term),
-         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-      {:ok, term}
-    end
+    result =
+      with {:ok, proof_term, proof_type} <- elaborate_expr_typed(proof_ast, names, ctx, env),
+           {:ok, ty_value, a_value, b_value} <- Rewrite.eq_parts(proof_type, Context.signature(ctx)),
+           ty = Kernel.normalize(ctx, Quote.reify(ty_value, depth)),
+           a = Kernel.normalize(ctx, Quote.reify(a_value, depth)),
+           b = Kernel.normalize(ctx, Quote.reify(b_value, depth)),
+           normalized_expected = Kernel.normalize(ctx, expected_core),
+           {:ok, build, body_expected} <- Rewrite.legacy_plan(proof_term, ty, a, b, normalized_expected),
+           {:ok, body_term} <- elaborate_expr_checked(body_ast, body_expected, names, ctx, env),
+           term = build.(body_term),
+           :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+        {:ok, term}
+      end
+
+    attach_rewrite_context(result, meta, proof_ast, body_ast)
   end
 
   def elaborate_expr_checked({:proof_chain, _meta, _children} = chain, expected_core, names, ctx, env) do
@@ -2586,6 +2590,42 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
+  defp attach_rewrite_context({:error, {:source_context, _, _}} = error, _meta, _proof, _body), do: error
+
+  defp attach_rewrite_context({:error, reason}, meta, proof_ast, body_ast)
+       when reason == :rewrite_proof_not_equality or
+              (is_tuple(reason) and elem(reason, 0) == :rewrite_no_match) do
+    {:error, {:source_context, reason, rewrite_source_context(meta, proof_ast, body_ast)}}
+  end
+
+  defp attach_rewrite_context(result, _meta, _proof, _body), do: result
+
+  defp rewrite_source_context(meta, proof_ast, body_ast) do
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+    opener_span = if(source_info, do: source_info.opener || source_info.whole)
+    body_span = surface_expression_span(body_ast)
+
+    %{
+      span: rewrite_span(opener_span, body_span),
+      opener_span: opener_span,
+      proof_span: surface_expression_span(proof_ast),
+      body_span: body_span,
+      expectation_origin: :rewrite,
+      expression_category: :rewrite_expr
+    }
+  end
+
+  defp rewrite_span(%Cure.Diagnostic.Span{} = opener, %Cure.Diagnostic.Span{} = body) do
+    %Cure.Diagnostic.Span{
+      opener
+      | end_byte: body.end_byte,
+        end_line: body.end_line,
+        end_column: body.end_column
+    }
+  end
+
+  defp rewrite_span(opener, _body), do: opener
 
   defp attach_expectation_context({:source_context, reason, context}, expression, origin, owner, index)
        when is_map(context) do
