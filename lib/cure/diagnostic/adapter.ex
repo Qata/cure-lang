@@ -2562,6 +2562,21 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:macro_check_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:refinement_type_syntax, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -5145,6 +5160,15 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :induction_block_indent_missing}),
     do: "Induction cases must be indented"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_check_else_missing}),
+    do: "Macro check needs `else`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_check_fail_missing}),
+    do: "Macro check needs `fail`"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_check_failure_constructor_invalid}),
+    do: "Macro check needs a failure value"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "Explanation clause arrow is missing"
 
@@ -5638,6 +5662,18 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :induction_block_indent_missing}),
     do: "The `case` branches of an induction expression must form an indented block below its subject."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_check_else_missing, observed: observed}),
+    do:
+      "A macro check uses `else` between its condition and failure value; #{authored_syntax(observed)} appears where `else` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_check_fail_missing, observed: observed}),
+    do:
+      "The rejected branch of a macro check starts with `fail`; #{authored_syntax(observed)} appears where `fail` belongs."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_check_failure_constructor_invalid, observed: observed}),
+    do:
+      "After `fail`, write a declared macro failure with its arguments, such as `BadInput(value)`; #{authored_syntax(observed)} is not a failure constructor call."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "An explanation clause needs `=>` between its failure point and message."
@@ -6234,6 +6270,15 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :induction_block_indent_missing}),
     do: "indent the induction cases below the subject"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :macro_check_else_missing}),
+    do: "insert `else` before the rejected branch"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :macro_check_fail_missing}),
+    do: "insert `fail` before this failure value"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :macro_check_failure_constructor_invalid}),
+    do: "call a declared macro failure here"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :explain_clause}}),
     do: "insert `=>` before this explanation message"
 
@@ -6806,6 +6851,33 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(opener, :secondary, "this induction expression starts here"),
       pickup_label(previous, :secondary, "the induction subject ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: kind, opener: %Span{} = opener, previous: previous},
+         primary_span
+       )
+       when kind in [
+              :macro_check_else_missing,
+              :macro_check_fail_missing,
+              :macro_check_failure_constructor_invalid
+            ] do
+    previous_message =
+      case kind do
+        :macro_check_else_missing -> "the checked condition ends here"
+        :macro_check_fail_missing -> "the rejected branch starts after this `else`"
+        :macro_check_failure_constructor_invalid -> "this `fail` needs a failure constructor call"
+      end
+
+    [
+      pickup_label(opener, :secondary, "this macro check starts here"),
+      pickup_label(previous, :secondary, previous_message)
     ]
     |> Enum.reject(fn
       nil -> true
@@ -7709,6 +7781,27 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Insert `in` before the expression to rewrite",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: "in "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: kind, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when kind in [:macro_check_else_missing, :macro_check_fail_missing] and
+              type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    {keyword, branch} =
+      case kind do
+        :macro_check_else_missing -> {"else", "the rejected branch"}
+        :macro_check_fail_missing -> {"fail", "this failure value"}
+      end
+
+    [
+      %Suggestion{
+        message: "Insert `#{keyword}` before #{branch}",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "#{keyword} "}]
       }
     ]
   end
@@ -8853,6 +8946,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_name(:keyword), do: "a keyword"
   defp syntax_name(:integer), do: "an integer"
   defp syntax_name(:positive_integer), do: "a positive integer"
+  defp syntax_name(:failure_constructor), do: "a failure constructor call"
   defp syntax_name(:float), do: "a number"
   defp syntax_name(:string), do: "a string"
   defp syntax_name(:char), do: "a character"

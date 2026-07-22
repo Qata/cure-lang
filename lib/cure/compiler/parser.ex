@@ -3445,34 +3445,87 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
     {condition, state} = parse_expr(state, 0)
 
-    state =
+    {else_token, state} =
       case peek(state) do
-        %Token{type: :keyword, value: :else} ->
-          advance(state)
+        %Token{type: :keyword, value: :else} = else_token ->
+          {else_token, advance(state)}
 
-        t ->
-          add_error(state, {:expected, :else, :got, t.type, t.line, t.col, t.span})
+        observed ->
+          state =
+            add_error(
+              state,
+              {:macro_check_syntax,
+               %{
+                 kind: :macro_check_else_missing,
+                 expected: :else,
+                 observed: observed.value || observed.type,
+                 token_type: observed.type,
+                 span: zero_width_start(observed.span),
+                 observed_span: observed.span,
+                 opener_span: token.span,
+                 previous_span: ast_source_span(condition),
+                 line: observed.line,
+                 column: observed.col
+               }}
+            )
+
+          {nil, state}
       end
 
-    {failure_kw, state} =
+    {fail_token, state} =
       case peek(state) do
-        %Token{type: :identifier, value: "fail"} -> {true, advance(state)}
-        _ -> {false, state}
+        %Token{type: :identifier, value: "fail"} = fail_token ->
+          {fail_token, advance(state)}
+
+        observed ->
+          state =
+            add_error(
+              state,
+              {:macro_check_syntax,
+               %{
+                 kind: :macro_check_fail_missing,
+                 expected: :fail,
+                 observed: observed.value || observed.type,
+                 token_type: observed.type,
+                 span: zero_width_start(observed.span),
+                 observed_span: observed.span,
+                 opener_span: token.span,
+                 previous_span: (else_token && else_token.span) || ast_source_span(condition),
+                 line: observed.line,
+                 column: observed.col
+               }}
+            )
+
+          {nil, state}
       end
 
+    failure_start = peek(state)
     {failure_call, state} = parse_expr(state, 0)
 
-    case {failure_kw, failure_call} do
-      {true, {:function_call, failure_meta, args}} ->
+    case failure_call do
+      {:function_call, failure_meta, args} ->
         name = Keyword.get(failure_meta, :name, "?")
         check_meta = [line: token.line, col: token.col, failure: name]
         failure_meta = [line: token.line, col: token.col, name: name]
         {{:macro_check, check_meta, [condition, {:macro_fail, failure_meta, args}]}, state}
 
       _ ->
-        t = peek(state)
-
-        state = add_error(state, {:expected, :failure_constructor, :got, t.type, t.line, t.col, t.span})
+        state =
+          add_error(
+            state,
+            {:macro_check_syntax,
+             %{
+               kind: :macro_check_failure_constructor_invalid,
+               expected: :failure_constructor,
+               observed: failure_start.value || failure_start.type,
+               token_type: failure_start.type,
+               span: ast_source_span(failure_call) || failure_start.span,
+               opener_span: token.span,
+               previous_span: (fail_token && fail_token.span) || (else_token && else_token.span),
+               line: failure_start.line,
+               column: failure_start.col
+             }}
+          )
 
         {{:macro_check, [line: token.line, col: token.col], [condition, {:macro_fail, [name: "?"], []}]}, state}
     end
