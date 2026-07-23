@@ -7,7 +7,81 @@ defmodule Cure.Diagnostic.Adapter.Type do
   """
 
   alias Cure.Diagnostic
-  alias Cure.Diagnostic.{Doc, ExpectationOrigin, Label, Span, Suggestion, TypeProblem}
+
+  alias Cure.Diagnostic.{
+    Doc,
+    ExpectationOrigin,
+    Label,
+    ProvenanceFrame,
+    Span,
+    Suggestion,
+    TypeProblem
+  }
+
+  @spec from_family_error(term(), map(), keyword()) :: {:ok, Diagnostic.t()} | :error
+  def from_family_error(cause, details, opts \\ [])
+
+  def from_family_error({:source_context, reason, context}, details, opts)
+      when is_map(context) do
+    with origin when not is_nil(origin) <- family_origin(details) do
+      context =
+        context
+        |> Map.put(:expectation_origin, origin)
+        |> Map.put(:checking, Map.get(details, :module))
+
+      case reason do
+        {:index_mismatch, {:cannot_unify, actual, expected}} ->
+          {:ok,
+           family_type_problem(
+             :index_mismatch,
+             actual,
+             expected,
+             origin,
+             context,
+             details,
+             opts
+           )}
+
+        {:cannot_unify, actual, expected} ->
+          {:ok,
+           family_type_problem(
+             :cannot_unify,
+             actual,
+             expected,
+             origin,
+             context,
+             details,
+             opts
+           )}
+
+        {:conversion_failure, actual, expected} ->
+          {:ok,
+           family_type_problem(
+             :conversion_failure,
+             actual,
+             expected,
+             origin,
+             context,
+             details,
+             opts
+           )}
+
+        reason when is_tuple(reason) ->
+          if family_boundary_reason?(reason) do
+            {:ok, family_boundary_failure(origin, details, reason, opts)}
+          else
+            :error
+          end
+
+        _ ->
+          :error
+      end
+    else
+      _ -> :error
+    end
+  end
+
+  def from_family_error(_cause, _details, _opts), do: :error
 
   @spec from_error(term(), keyword()) :: Diagnostic.t()
   def from_error(error, opts \\ [])
@@ -1283,6 +1357,119 @@ defmodule Cure.Diagnostic.Adapter.Type do
 
   defp plural(1, singular), do: singular
   defp plural(_count, singular), do: singular <> "s"
+
+  defp family_type_problem(
+         kind,
+         actual,
+         expected,
+         origin,
+         context,
+         details,
+         opts
+       ) do
+    opts =
+      Keyword.put_new(
+        opts,
+        :provenance,
+        family_provenance(details, opts)
+      )
+
+    from_error(
+      %TypeProblem{
+        kind: kind,
+        actual: actual,
+        expected: expected,
+        origin: %ExpectationOrigin{
+          kind: origin,
+          span: Map.get(context, :expectation_span),
+          owner: Map.get(context, :checking),
+          index: Map.get(context, :argument_index)
+        },
+        expression: Map.get(context, :expression_category, :expression),
+        span: Keyword.get(opts, :span, Map.get(context, :span)),
+        debug: %{cause: {kind, actual, expected}, checking: Map.get(context, :checking)}
+      },
+      opts
+    )
+  end
+
+  defp family_boundary_reason?({:foreign_ctor, _}), do: true
+  defp family_boundary_reason?({:unknown_ctor, _}), do: true
+  defp family_boundary_reason?(_reason), do: false
+
+  defp family_boundary_failure(origin, details, reason, opts) do
+    family = family_origin_name(origin)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "#{family} callback has the wrong type",
+      body:
+        Doc.paragraph(
+          "This authored #{String.downcase(family)} callback does not produce the protocol value required by its generated module."
+        ),
+      primary:
+        primary(
+          opts,
+          "this #{String.downcase(family)} callback has the wrong type"
+        ),
+      provenance: family_provenance(details, opts),
+      payload: %{
+        origin: %{kind: origin, owner: Map.get(details, :module)},
+        cause: inspect(reason),
+        module: Map.get(details, :module),
+        behaviour: Map.get(details, :behaviour)
+      }
+    )
+  end
+
+  defp family_origin_name(:actor), do: "Actor"
+  defp family_origin_name(:fsm), do: "FSM"
+  defp family_origin_name(:supervisor), do: "Supervisor"
+
+  defp family_origin(details) do
+    case Map.get(details, :behaviour) do
+      :gen_server -> :actor
+      :gen_statem -> :fsm
+      :supervisor -> :supervisor
+      _ -> nil
+    end
+  end
+
+  defp family_provenance(details, opts) do
+    source = Map.get(details, :source_provenance) || %{}
+    invocation = Keyword.get(opts, :span)
+
+    chain_frames =
+      details
+      |> Map.get(:expansion_provenance, [])
+      |> Enum.map(fn frame ->
+        %ProvenanceFrame{
+          kind: :macro_expansion,
+          name: Map.get(frame, :keyword) || "macro",
+          invocation: invocation
+        }
+      end)
+
+    source_frames =
+      case Map.get(source, :macro) do
+        nil ->
+          []
+
+        macro ->
+          [
+            %ProvenanceFrame{
+              kind: :macro_expansion,
+              name: macro,
+              invocation: invocation
+            }
+          ]
+      end
+
+    (chain_frames ++ source_frames)
+    |> Enum.uniq_by(& &1.name)
+  end
 
   defp record_update_base(details, context, opts) do
     record = Map.fetch!(details, :record)

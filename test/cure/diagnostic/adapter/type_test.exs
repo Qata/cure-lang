@@ -700,4 +700,48 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert rendered =~ "REMATCH PATTERN MUST DESCRIBE A SHAPE"
     assert rendered =~ "Hint: Replace this expression with a variable or constructor pattern"
   end
+
+  test "generated OTP family failures retain authored type origins" do
+    source = "actor Bad\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:actor, source, "actor.cure")
+    {:ok, invocation} = SourceRegistry.span(registry, :actor, 0, 9)
+
+    details = %{
+      module: "Cure.Generated.Bad",
+      behaviour: :gen_server,
+      source_provenance: %{macro: "actor"},
+      expansion_provenance: []
+    }
+
+    cause =
+      {:source_context, {:cannot_unify, :bool, :int},
+       %{checking: :handle_cast, expression_category: :literal, span: invocation}}
+
+    assert {:ok, direct} =
+             TypeAdapter.from_family_error(cause, details, span: invocation)
+
+    public =
+      Adapter.from_error(
+        {:lift_module_error, Map.put(details, :cause, cause)},
+        span: invocation
+      )
+
+    assert public == direct
+    assert direct.code == "E093"
+    assert direct.payload.origin.kind == :actor
+    assert direct.payload.origin.owner == "Cure.Generated.Bad"
+    assert direct.primary.span == invocation
+    assert [%{name: "actor", invocation: ^invocation}] = direct.provenance
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "ACTOR MESSAGE HAS THE WRONG TYPE"
+    assert rendered =~ "this actor message has the wrong type"
+
+    assert :error =
+             TypeAdapter.from_family_error(
+               cause,
+               %{details | behaviour: :unknown},
+               span: invocation
+             )
+  end
 end
