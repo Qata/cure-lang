@@ -65,4 +65,44 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
       MacroAdapter.from_error({:unknown_macro_producer, %{}})
     end
   end
+
+  test "expansion failures blame authored invocation frames" do
+    source = "outer inner\n"
+
+    registry =
+      SourceRegistry.new()
+      |> SourceRegistry.register(:expansion, source, "expansion.cure")
+
+    {:ok, outer} = SourceRegistry.span(registry, :expansion, 0, 5)
+    {:ok, inner} = SourceRegistry.span(registry, :expansion, 6, 11)
+
+    frames = [
+      %{keyword: "outer", invocation: outer},
+      %{keyword: "inner", invocation: inner, parent: outer}
+    ]
+
+    errors = [
+      {:macro_expansion_cycle, frames},
+      {:macro_expansion_budget, :expansion_count, frames},
+      {:expansion_ill_typed, %{keyword: "inner", input: :input, expansion: :output, reason: :bad}}
+    ]
+
+    for error <- errors do
+      opts = [span: inner]
+      direct = MacroAdapter.from_error(error, opts)
+      assert Adapter.from_error(error, opts) == direct
+      assert direct.code == "E092"
+      assert direct.primary.span == inner
+    end
+
+    cycle = MacroAdapter.from_error(hd(errors))
+    assert hd(cycle.secondary).span == outer
+    assert Enum.map(cycle.provenance, & &1.name) == ["outer", "inner"]
+    assert cycle.suggestions != []
+
+    rendered = Renderer.plain(cycle, registry, width: 80)
+    assert rendered =~ "MACRO EXPANSION CYCLE [E092]"
+    assert rendered =~ "this invocation closes the expansion cycle"
+    assert rendered =~ "Hint: Make recursive macro expansion consume input"
+  end
 end
