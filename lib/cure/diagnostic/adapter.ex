@@ -3003,6 +3003,15 @@ defmodule Cure.Diagnostic.Adapter do
 
     secondary = expectation_labels(problem.origin, primary_span, problem.related)
 
+    payload =
+      %{
+        expected_surface: expected_surface,
+        actual_surface: actual_surface,
+        origin: Map.from_struct(problem.origin),
+        expression_category: problem.expression
+      }
+      |> maybe_put_type_debug(problem.expected, problem.actual, problem.debug, opts)
+
     Diagnostic.new(
       code: "E093",
       key: problem.kind,
@@ -3017,15 +3026,7 @@ defmodule Cure.Diagnostic.Adapter do
       secondary: secondary,
       notes: Keyword.get(opts, :notes, []),
       provenance: Keyword.get(opts, :provenance, []),
-      payload: %{
-        expected_surface: expected_surface,
-        actual_surface: actual_surface,
-        origin: Map.from_struct(problem.origin),
-        expression_category: problem.expression,
-        expected_core: inspect(problem.expected),
-        actual_core: inspect(problem.actual),
-        debug: problem.debug
-      }
+      payload: payload
     )
   end
 
@@ -3069,6 +3070,13 @@ defmodule Cure.Diagnostic.Adapter do
     actual_surface = print_core(actual)
     expected_surface = print_core(expected)
 
+    payload =
+      %{
+        expected_surface: expected_surface,
+        actual_surface: actual_surface
+      }
+      |> maybe_put_type_debug(expected, actual, %{}, opts)
+
     Diagnostic.new(
       code: "E093",
       key: :conversion_failure,
@@ -3078,12 +3086,7 @@ defmodule Cure.Diagnostic.Adapter do
       primary: primary_label(opts, "this expression has the wrong type"),
       notes: Keyword.get(opts, :notes, []),
       provenance: Keyword.get(opts, :provenance, []),
-      payload: %{
-        expected_surface: expected_surface,
-        actual_surface: actual_surface,
-        expected_core: inspect(expected),
-        actual_core: inspect(actual)
-      }
+      payload: payload
     )
   end
 
@@ -5679,6 +5682,18 @@ defmodule Cure.Diagnostic.Adapter do
       },
       opts
     )
+  end
+
+  defp maybe_put_type_debug(payload, expected, actual, details, opts) do
+    if Keyword.get(opts, :debug, false) do
+      Map.put(payload, :debug, %{
+        expected_core: inspect(expected),
+        actual_core: inspect(actual),
+        details: details
+      })
+    else
+      payload
+    end
   end
 
   defp macro_expansion_failure(kind, message, frames, opts) do
