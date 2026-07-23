@@ -482,13 +482,6 @@ defmodule Cure.Compiler.Errors do
        ),
        do: {:ok, start_byte, end_byte}
 
-  defp hole_span({:unfilled_hole, _name}, source) do
-    case Regex.run(~r/\?{3}|\?{1,2}[A-Za-z_][A-Za-z0-9_]*/, source, return: :index) do
-      [{start_byte, length}] -> {:ok, start_byte, start_byte + length}
-      _ -> :error
-    end
-  end
-
   defp hole_span(_error, _source), do: :error
 
   defp insertion_at_eof?({:lex_error, {kind, _line, _column}})

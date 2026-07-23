@@ -151,6 +151,27 @@ defmodule Cure.Compiler.HoleDiagnosticTest do
     refute Renderer.plain(diagnostic, registry) =~ "?first"
   end
 
+  test "a locationless hole never infers blame from hole-looking source text" do
+    source = """
+    mod Locationless
+      # ??? belongs to this comment, not the independently supplied error
+      fn complete() -> Int = 1
+    end
+    """
+
+    {diagnostic, registry} =
+      Errors.to_diagnostic({:unfilled_hole, :missing}, "locationless.cure", source)
+
+    assert diagnostic.primary == nil
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- UNFILLED HOLE [E014] --------------------------------------------------------
+
+             The compiler reached the unfinished hole `?missing`.
+             """)
+  end
+
   defp byte_offset!(source, needle, occurrence \\ 1) do
     {offset, _length} = source |> :binary.matches(needle) |> Enum.at(occurrence - 1)
     offset
