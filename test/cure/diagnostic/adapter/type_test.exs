@@ -655,4 +655,49 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert gap.primary.span.start_byte == gap.primary.span.end_byte
     assert hd(gap.secondary).span == condition
   end
+
+  test "with rematch failures retain paired authored patterns" do
+    source = "original restated | with_pattern\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:rematch, source, "rematch.cure")
+    {:ok, original} = SourceRegistry.span(registry, :rematch, 0, 8)
+    {:ok, restated} = SourceRegistry.span(registry, :rematch, 9, 17)
+    {:ok, separator} = SourceRegistry.span(registry, :rematch, 18, 19)
+    {:ok, with_pattern} = SourceRegistry.span(registry, :rematch, 20, 32)
+
+    enriched =
+      {:source_context, {:with_rematch_non_constructor_pattern, :binary_op},
+       %{
+         checking: :run,
+         span: restated,
+         original_pattern_spans: [original],
+         restated_pattern_spans: [restated],
+         original_pattern_count: 1,
+         restated_pattern_count: 1,
+         rematch_separator_span: separator,
+         with_pattern_span: with_pattern
+       }}
+
+    bare =
+      {:source_context, {:with_rematch_ctor_mismatch, :Some, :None}, %{checking: :run, span: restated}}
+
+    for error <- [enriched, bare] do
+      direct = TypeAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E093"
+      assert direct.primary
+    end
+
+    direct = TypeAdapter.from_error(enriched)
+    assert direct.primary.span == restated
+
+    assert Enum.map(direct.secondary, & &1.span) == [
+             original,
+             separator,
+             with_pattern
+           ]
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "REMATCH PATTERN MUST DESCRIBE A SHAPE"
+    assert rendered =~ "Hint: Replace this expression with a variable or constructor pattern"
+  end
 end
