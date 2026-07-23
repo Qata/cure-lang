@@ -2234,8 +2234,14 @@ defmodule Cure.Elab.Elaborator do
                   # constructor). Keep the fallback around the whole inference
                   # attempt, not only elaborate_ctor_app/5.
                   case elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core) do
-                    {:ok, _} = ok -> ok
-                    {:error, _} -> orig
+                    {:ok, _} = ok ->
+                      ok
+
+                    {:error, {:constructor_result_mismatch, details}} ->
+                      attach_constructor_result_mismatch(orig, details, meta, args)
+
+                    {:error, _} ->
+                      orig
                   end
               end
           end
@@ -10040,7 +10046,8 @@ defmodule Cure.Elab.Elaborator do
             # metavariable or a kernel type error, never silent acceptance.
             case partial_pin_result(result_term, expected_core, mctx, env) do
               :mismatch ->
-                {:error, {:constructor_result_mismatch, cname}}
+                {:error,
+                 {:constructor_result_mismatch, %{constructor: cname, actual: result_term, expected: expected_core}}}
 
               {mctx, deferred} ->
                 # Params that pinned structurally are passed for the de Bruijn frame;
@@ -10051,6 +10058,31 @@ defmodule Cure.Elab.Elaborator do
             end
         end
     end
+  end
+
+  defp attach_constructor_result_mismatch({:error, {:source_context, reason, existing}}, details, meta, args) do
+    {:error, {:source_context, reason, Map.merge(constructor_result_mismatch_context(details, meta, args), existing)}}
+  end
+
+  defp attach_constructor_result_mismatch({:error, reason}, details, meta, args) do
+    {:error, {:source_context, reason, constructor_result_mismatch_context(details, meta, args)}}
+  end
+
+  defp constructor_result_mismatch_context(details, meta, args) do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+
+    %{
+      span: info && info.whole,
+      application_span: info && info.whole,
+      callee_span: info && info.callee,
+      argument_spans: Enum.map(args, &surface_expression_span/1),
+      constructor: Map.get(details, :constructor),
+      constructor_actual_type: Map.get(details, :actual),
+      constructor_expected_type: Map.get(details, :expected),
+      constructor_result_mismatch: true,
+      expectation_origin: :annotation,
+      expression_category: :constructor_application
+    }
   end
 
   # Assemble a constructor's argument list against the solved parameters and the
@@ -10172,15 +10204,56 @@ defmodule Cure.Elab.Elaborator do
   defp partial_pin_result({:data, fam, ap, ai}, {:data, fam, ep, ei}, mctx, env)
        when length(ap) == length(ep) and length(ai) == length(ei) do
     Enum.zip(ap ++ ai, ep ++ ei)
-    |> Enum.reduce({mctx, []}, fn {actual, expected}, {m, deferred} ->
+    |> Enum.reduce_while({mctx, []}, fn {actual, expected}, {m, deferred} ->
       case Unify.unify(actual, expected, m, env) do
-        {:ok, m2} -> {m2, deferred}
-        {:error, _} -> {m, [{actual, expected} | deferred]}
+        {:ok, m2} ->
+          {:cont, {m2, deferred}}
+
+        {:error, _} ->
+          if definite_constructor_result_clash?(Unify.zonk(actual, m), Unify.zonk(expected, m)) do
+            {:halt, :mismatch}
+          else
+            {:cont, {m, [{actual, expected} | deferred]}}
+          end
       end
     end)
   end
 
   defp partial_pin_result(_actual, _expected, _mctx, _env), do: :mismatch
+
+  defp definite_constructor_result_clash?({:data, left, _, _}, {:data, right, _, _}),
+    do: left != right
+
+  defp definite_constructor_result_clash?({:ctor, left, _}, {:ctor, right, _}),
+    do: left != right
+
+  defp definite_constructor_result_clash?({:global, left}, {:global, right}),
+    do: left != right
+
+  defp definite_constructor_result_clash?({:global, left}, {:data, right, _, _}),
+    do: left != right
+
+  defp definite_constructor_result_clash?({:data, left, _, _}, {:global, right}),
+    do: left != right
+
+  defp definite_constructor_result_clash?(left, right)
+       when is_tuple(left) and is_tuple(right) and tuple_size(left) == 1 and tuple_size(right) == 1 do
+    primitive_type_head?(elem(left, 0)) and primitive_type_head?(elem(right, 0)) and left != right
+  end
+
+  defp definite_constructor_result_clash?(_left, _right), do: false
+
+  defp primitive_type_head?(head),
+    do:
+      head in [
+        :int_type,
+        :float_type,
+        :string_type,
+        :binary_type,
+        :atom_type,
+        :char_type,
+        :type
+      ]
 
   # Retry each deferred result-index equation after zonking both sides. Solved
   # equations are dropped; unsolved ones are kept for a later sweep. Returns the
