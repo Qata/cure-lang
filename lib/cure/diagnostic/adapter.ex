@@ -1645,6 +1645,9 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:source_context, :with_scrutinee_not_data, context}, opts) when is_map(context),
     do: with_scrutinee_not_data_failure(context, opts)
 
+  def from_error({:source_context, :match_scrutinee_not_data, context}, opts) when is_map(context),
+    do: match_scrutinee_not_data_failure(context, opts)
+
   def from_error({:source_context, {:rewrite_no_match, _left, _right}, context}, opts)
       when is_map(context),
       do: rewrite_failure(:rewrite_no_match, context, opts)
@@ -6652,6 +6655,80 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp with_non_data_branch_label(_ordinary),
     do: "this branch cannot refine a value without constructors"
+
+  defp match_scrutinee_not_data_failure(context, opts) do
+    actual_type = context |> Map.get(:actual_type) |> surface_type()
+    scrutinee_span = Map.get(context, :scrutinee_span) || Map.get(context, :span)
+
+    constructor_patterns =
+      context
+      |> Map.get(:branch_patterns, [])
+      |> Enum.filter(&(Map.get(&1, :kind) == :constructor and match?(%Span{}, Map.get(&1, :pattern_span))))
+
+    pattern_labels =
+      Enum.map(constructor_patterns, fn pattern ->
+        %Label{
+          span: pattern.pattern_span,
+          style: :secondary,
+          message: "`#{Map.get(pattern, :name, "this pattern")}` expects a data constructor"
+        }
+      end)
+
+    {primary, remaining_patterns} =
+      case pattern_labels do
+        [%Label{} = first | rest] ->
+          {%Label{
+             first
+             | style: :primary,
+               message: "this constructor pattern cannot match `#{actual_type}`"
+           }, rest}
+
+        [] ->
+          {%Label{
+             span: scrutinee_span || Keyword.get(opts, :span),
+             style: :primary,
+             message: "`#{actual_type}` does not provide data constructors"
+           }, []}
+      end
+
+    scrutinee_label =
+      if match?(%Span{}, scrutinee_span) and scrutinee_span != primary.span do
+        [%Label{span: scrutinee_span, style: :secondary, message: "this expression has type `#{actual_type}`"}]
+      else
+        []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Constructor patterns cannot match #{actual_type}",
+      body:
+        Doc.stack([
+          Doc.paragraph(
+            "The value being matched has type `#{actual_type}`, but these branches try to deconstruct it with data constructors."
+          ),
+          Doc.paragraph(
+            "Constructor patterns work only when the scrutinee belongs to the same constructor-defined data type."
+          )
+        ]),
+      primary: primary,
+      secondary: scrutinee_label ++ remaining_patterns,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Use a variable or wildcard for the whole `#{actual_type}` value, a supported literal pattern for a primitive, or match constructor-defined data",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :match_scrutinee_not_data,
+        checking: Map.get(context, :checking),
+        actual_type: actual_type,
+        constructor_patterns: Enum.map(constructor_patterns, &Map.get(&1, :name))
+      }
+    )
+  end
 
   defp contextual_type_failure(kind, details, opts) do
     {title, message, label} =

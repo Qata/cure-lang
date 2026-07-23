@@ -4141,7 +4141,13 @@ defmodule Cure.Elab.Elaborator do
           end
 
         _ ->
-          {:error, :match_scrutinee_not_data}
+          {:error,
+           {:source_context, :match_scrutinee_not_data,
+            %{
+              span: surface_expression_span(scrut_expr),
+              scrutinee_span: surface_expression_span(scrut_expr),
+              actual_type: scrut_type
+            }}}
       end
     end
   end
