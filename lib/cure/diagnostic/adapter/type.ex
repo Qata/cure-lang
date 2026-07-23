@@ -327,6 +327,12 @@ defmodule Cure.Diagnostic.Adapter.Type do
       when is_map(context),
       do: projection_receiver(record, context, opts)
 
+  def from_error({:projection_not_a_record, record}, opts),
+    do: legacy_contextual_failure(:projection_not_a_record, %{record: record}, opts)
+
+  def from_error({:bad_projection, details}, opts),
+    do: legacy_contextual_failure(:bad_projection, %{details: details}, opts)
+
   def from_error({:source_context, {:projection_non_record, field}, context}, opts)
       when is_map(context),
       do: projection_receiver(nil, Map.put_new(context, :field, field), opts)
@@ -346,6 +352,18 @@ defmodule Cure.Diagnostic.Adapter.Type do
       payload: %{kind: :typed_pattern, annotation: pattern_annotation(type_ast)}
     )
   end
+
+  def from_error({:typed_pattern_type_error, reason}, opts),
+    do: legacy_contextual_failure(:typed_pattern_type_error, %{reason: reason}, opts)
+
+  def from_error({:unsolved_index, constructor}, opts),
+    do: legacy_contextual_failure(:unsolved_index, %{constructor: constructor}, opts)
+
+  def from_error({:unsolved_field_type, constructor}, opts),
+    do: legacy_contextual_failure(:unsolved_field_type, %{constructor: constructor}, opts)
+
+  def from_error({:unsolved_parameters, constructor}, opts),
+    do: legacy_contextual_failure(:unsolved_parameters, %{constructor: constructor}, opts)
 
   def from_error(
         {:source_context, {:typed_pattern_type_mismatch, _type_ast}, %{field_type: field_type} = context},
@@ -3274,6 +3292,40 @@ defmodule Cure.Diagnostic.Adapter.Type do
       suggestions: [%Suggestion{message: hint, applicability: :manual}],
       payload: %{kind: kind, value: value}
     )
+  end
+
+  defp legacy_contextual_failure(kind, details, opts) do
+    {title, message, label} =
+      case kind do
+        :projection_not_a_record ->
+          {"Record projection requires a record", "This projection was applied to a value that is not a record.",
+           "project a field from a record value"}
+
+        :bad_projection ->
+          {"Invalid record projection", "This record projection is not valid for the value's type.",
+           "use a field declared by the record"}
+
+        :typed_pattern_type_error ->
+          {"Pattern annotation does not match",
+           "The type annotation on this pattern is incompatible with the value it matches.",
+           "change the pattern or its annotation"}
+
+        :unsolved_index ->
+          {"Indexed constructor has an unresolved index",
+           "Cure could not determine an index required by this constructor.",
+           "provide an annotation or make the index explicit"}
+
+        :unsolved_field_type ->
+          {"Constructor field type is unresolved", "Cure could not determine the type of a field in this constructor.",
+           "add an annotation that determines the field type"}
+
+        :unsolved_parameters ->
+          {"Constructor parameters are unresolved",
+           "Cure could not determine all parameters required by this constructor.",
+           "add an annotation or make the constructor parameters explicit"}
+      end
+
+    contextual_failure(kind, details, opts, {title, message, label})
   end
 
   @doc false

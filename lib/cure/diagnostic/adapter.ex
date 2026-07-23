@@ -1974,22 +1974,22 @@ defmodule Cure.Diagnostic.Adapter do
     do: NameAdapter.ambiguous_member(method, interfaces, opts)
 
   def from_error({:projection_not_a_record, record}, opts),
-    do: contextual_type_failure(:projection_not_a_record, %{record: record}, opts)
+    do: TypeAdapter.from_error({:projection_not_a_record, record}, opts)
 
   def from_error({:bad_projection, details}, opts),
-    do: contextual_type_failure(:bad_projection, %{details: details}, opts)
+    do: TypeAdapter.from_error({:bad_projection, details}, opts)
 
   def from_error({:typed_pattern_arity, position}, opts),
     do: arity_failure(:typed_pattern, %{position: position}, opts)
 
   def from_error({:typed_pattern_type_error, reason}, opts),
-    do: contextual_type_failure(:typed_pattern_type_error, %{reason: reason}, opts)
+    do: TypeAdapter.from_error({:typed_pattern_type_error, reason}, opts)
 
   def from_error({:unsolved_index, constructor}, opts),
-    do: contextual_type_failure(:unsolved_index, %{constructor: constructor}, opts)
+    do: TypeAdapter.from_error({:unsolved_index, constructor}, opts)
 
   def from_error({:unsolved_field_type, constructor}, opts),
-    do: contextual_type_failure(:unsolved_field_type, %{constructor: constructor}, opts)
+    do: TypeAdapter.from_error({:unsolved_field_type, constructor}, opts)
 
   def from_error({:forced_pattern_not_in_pattern, _meta} = error, opts),
     do: SyntaxAdapter.from_error(error, opts)
@@ -1998,7 +1998,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: SyntaxAdapter.from_error(error, opts)
 
   def from_error({:unsolved_parameters, constructor}, opts),
-    do: contextual_type_failure(:unsolved_parameters, %{constructor: constructor}, opts)
+    do: TypeAdapter.from_error({:unsolved_parameters, constructor}, opts)
 
   def from_error({:untyped_parameter, %{name: _name}} = error, opts),
     do: TypeAdapter.from_error(error, opts)

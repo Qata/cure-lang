@@ -104,6 +104,21 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
            }
   end
 
+  test "legacy constructor and projection failures are owned by the type family" do
+    for error <- [
+          {:projection_not_a_record, :Int},
+          {:bad_projection, %{field: :missing}},
+          {:typed_pattern_type_error, :incompatible},
+          {:unsolved_index, :VCons},
+          {:unsolved_field_type, :VCons},
+          {:unsolved_parameters, :VCons}
+        ] do
+      assert Adapter.from_error(error) == TypeAdapter.from_error(error)
+      assert TypeAdapter.from_error(error).code == "E093"
+      assert TypeAdapter.from_error(error).key == :type_mismatch
+    end
+  end
+
   test "legacy contextual failures expose their retained repair as a source-tagged hint" do
     source = "value\n"
     registry = SourceRegistry.new() |> SourceRegistry.register(:legacy_type, source, "type_context.cure")
