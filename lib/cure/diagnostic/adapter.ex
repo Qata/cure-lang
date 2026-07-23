@@ -2320,7 +2320,7 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:effect_arity, name, expected, actual}, opts),
     do: contextual_type_failure(:effect_arity, %{name: name, expected: expected, actual: actual}, opts)
 
-  def from_error({kind, details}, opts)
+  def from_error({kind, details} = error, opts)
       when kind in [
              :bad_result_type,
              :non_integer_index,
@@ -2329,7 +2329,7 @@ defmodule Cure.Diagnostic.Adapter do
              :unsupported_index_operator,
              :sigma_projection_needs_ctx
            ] and is_map(details),
-      do: index_lowering_failure(kind, details, opts)
+      do: SyntaxAdapter.from_error(error, opts)
 
   def from_error({kind, detail}, opts)
       when kind in [
@@ -5352,94 +5352,6 @@ defmodule Cure.Diagnostic.Adapter do
         covered
       end
     end)
-  end
-
-  defp index_lowering_failure(kind, details, opts) do
-    {title, message, label, hint} = index_lowering_content(kind, details)
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(Keyword.put(opts, :span, span), label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{
-        kind: kind,
-        shape: Map.get(details, :shape),
-        family: Map.get(details, :family),
-        value: Map.get(details, :value),
-        subtype: Map.get(details, :subtype),
-        operator: Map.get(details, :operator),
-        projection: Map.get(details, :projection)
-      }
-    )
-  end
-
-  defp index_lowering_content(:bad_result_type, details) do
-    family = Map.get(details, :family)
-
-    {
-      "Constructor result does not name its indexed family",
-      "An indexed constructor must return `#{name_to_string(family)}(...)`, but this result has a different type shape. The constructor's result is where its refined indices are declared.",
-      "return the indexed family from this constructor",
-      "Write this result as `#{name_to_string(family)}(...)` with one value for every declared index"
-    }
-  end
-
-  defp index_lowering_content(:non_integer_index, details) do
-    value = name_to_string(Map.get(details, :value))
-
-    {
-      "Dependent index must be a whole number",
-      "`#{value}` is fractional, but a numeric dependent index denotes a natural number. Fractional values cannot identify a constructor position or bounded size.",
-      "this index is not a whole number",
-      "Use a non-negative integer index, or change the indexed family to carry a different numeric type"
-    }
-  end
-
-  defp index_lowering_content(:unsupported_index_literal, details) do
-    subtype = details |> Map.get(:subtype) |> name_to_string()
-
-    {
-      "Literal cannot be used as a dependent index",
-      "A `#{subtype}` literal has no supported type-level representation in this index position. Index literals must have a representation the kernel can check and normalize.",
-      "this literal is not supported in an index",
-      "Use a constructor or supported numeric index, or bind this information in an ordinary runtime field"
-    }
-  end
-
-  defp index_lowering_content(:unsupported_index_expr, _details) do
-    {
-      "Expression cannot be lowered as a dependent index",
-      "This expression form has no syntax-directed type-level lowering. Dependent indices may use bound names, constructors, total function applications, supported propositions, and dependent type formers.",
-      "this expression is not available at the type level",
-      "Move the computation into a total named function, then call that function from the index"
-    }
-  end
-
-  defp index_lowering_content(:unsupported_index_operator, details) do
-    operator = details |> Map.get(:operator) |> name_to_string()
-
-    {
-      "`#{operator}` is not supported directly in an index",
-      "The index lowerer recognizes comparisons and boolean connectives directly, but `#{operator}` has no unambiguous type-level builtin in this position.",
-      "this operator has no direct index lowering",
-      "Define the computation as a total function and call it from the index instead"
-    }
-  end
-
-  defp index_lowering_content(:sigma_projection_needs_ctx, details) do
-    projection = Map.get(details, :projection)
-
-    {
-      "Tuple projection lacks a checking context",
-      "The `.#{projection}` projection needs the surrounding dependent checking context to infer its erased component types, but this index position does not provide one.",
-      "this projection cannot infer its dependent components here",
-      "Bind the projected component explicitly, or move the projection into a checked return-type index"
-    }
   end
 
   defp contextual_type_fallback(_kind, opts) do

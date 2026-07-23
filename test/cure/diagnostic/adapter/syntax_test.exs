@@ -108,4 +108,39 @@ defmodule Cure.Diagnostic.Adapter.SyntaxTest do
       assert Adapter.from_error(error) == SyntaxAdapter.from_error(error)
     end
   end
+
+  test "dependent-index lowering failures retain the complete authored form" do
+    source = "Z + Z\n"
+
+    registry =
+      SourceRegistry.new()
+      |> SourceRegistry.register(:index, source, "index.cure")
+
+    {:ok, span} = SourceRegistry.span(registry, :index, 0, 5)
+
+    errors = [
+      {:bad_result_type, %{family: :Vector, shape: :tuple_type, span: span}},
+      {:non_integer_index, %{value: "1.5", span: span}},
+      {:unsupported_index_literal, %{subtype: :symbol, span: span}},
+      {:unsupported_index_expr, %{shape: :list, span: span}},
+      {:unsupported_index_operator, %{operator: :+, span: span}},
+      {:sigma_projection_needs_ctx, %{projection: 1, span: span}}
+    ]
+
+    for error <- errors do
+      direct = SyntaxAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E093"
+      assert direct.primary.span == span
+      assert direct.suggestions != []
+    end
+
+    rendered =
+      SyntaxAdapter.from_error({:unsupported_index_operator, %{operator: :+, span: span}})
+      |> Renderer.plain(registry, width: 80)
+
+    assert rendered =~ "`+` IS NOT SUPPORTED DIRECTLY IN AN INDEX"
+    assert rendered =~ "^^^^^ this operator has no direct index lowering"
+    assert rendered =~ "Hint: Define the computation as a total function"
+  end
 end
