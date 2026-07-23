@@ -1646,6 +1646,13 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: constructor_result_family_failure(family, context, opts)
 
+  def from_error(
+        {:source_context, {:typed_pattern_type_mismatch, _type_ast}, %{field_type: field_type} = context},
+        opts
+      )
+      when not is_nil(field_type),
+      do: typed_pattern_annotation_failure(context, opts)
+
   def from_error({:source_context, {:applied_non_function, details}, context}, opts)
       when is_map(details) and is_map(context),
       do: non_callable_application(details, context, opts)
@@ -2636,7 +2643,7 @@ defmodule Cure.Diagnostic.Adapter do
       title: "Pattern annotation does not match",
       body: Doc.paragraph("This pattern's annotation is incompatible with the value it matches."),
       primary: primary_label(opts, "change the pattern or its type annotation"),
-      payload: %{kind: :typed_pattern, annotation: type_ast}
+      payload: %{kind: :typed_pattern, annotation: surface_pattern_annotation(type_ast)}
     )
   end
 
@@ -4577,6 +4584,64 @@ defmodule Cure.Diagnostic.Adapter do
   defp constructor_result_surface_type({:global, name}), do: surface_declaration_name(name)
   defp constructor_result_surface_type({:meta, _id}), do: "?"
   defp constructor_result_surface_type(other), do: surface_type(other)
+
+  defp typed_pattern_annotation_failure(context, opts) do
+    constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
+    binder = name_to_string(Map.get(context, :binder, "field"))
+    annotated = constructor_result_surface_type(Map.get(context, :annotated_type))
+    field_type = constructor_result_surface_type(Map.get(context, :field_type))
+    argument_index = Map.get(context, :argument_index, 0)
+    primary_span = Map.get(context, :annotation_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      [
+        sibling_dependency_label(
+          Map.get(context, :binder_span) || Map.get(context, :typed_pattern_span),
+          primary_span,
+          "`#{binder}` is the field being annotated"
+        ),
+        sibling_dependency_label(
+          Map.get(context, :constructor_pattern_span) || Map.get(context, :constructor_name_span),
+          primary_span,
+          "`#{constructor}` provides this field as `#{field_type}`"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "`#{binder}` is annotated as `#{annotated}`, but `#{constructor}` stores `#{field_type}`",
+      body:
+        Doc.paragraph(
+          "Visible field #{argument_index + 1} of `#{constructor}` has type `#{field_type}`. This pattern annotates `#{binder}` as `#{annotated}`, so the annotation cannot describe the value selected by the constructor."
+        ),
+      primary:
+        pickup_label(
+          primary_span,
+          :primary,
+          "this says `#{annotated}`, but the constructor field is `#{field_type}`"
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Change the annotation to `#{field_type}`, or remove it and let `#{constructor}` determine the field type",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :typed_pattern_type_mismatch,
+        constructor: constructor,
+        binder: binder,
+        argument_index: argument_index,
+        annotated: annotated,
+        field_type: field_type,
+        checking: Map.get(context, :checking, :pattern)
+      }
+    )
+  end
 
   defp constructor_result_hint(family, 0, 0),
     do: "End this constructor signature with `#{family}`"
@@ -14918,6 +14983,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp surface_type(type) when is_binary(type), do: type
   defp surface_type(type), do: print_core(type)
+
+  defp surface_pattern_annotation({:variable, _meta, name}), do: name_to_string(name)
+  defp surface_pattern_annotation(type), do: surface_type(type)
 
   defp macro_title(macro), do: macro |> name_to_string() |> String.capitalize()
 

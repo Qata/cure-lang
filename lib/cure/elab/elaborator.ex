@@ -8671,7 +8671,7 @@ defmodule Cure.Elab.Elaborator do
       rest,
       index + 1,
       [{:variable, pattern_meta, name} | args],
-      [{index, type_ast} | annotations]
+      [{index, name, type_ast, pattern_meta} | annotations]
     )
   end
 
@@ -8695,7 +8695,17 @@ defmodule Cure.Elab.Elaborator do
             with {:ok, {cname, _pattern_vars}} <- constructor_pattern(pattern),
                  %{args: telescope, quantities: quantities} <- Inductive.get_ctor(env, cname),
                  branch_ctx <- extend_context(ctx, telescope, param_vals),
-                 :ok <- validate_constructor_payload_types(annotations, telescope, quantities, branch_ctx, names, env) do
+                 :ok <-
+                   validate_constructor_payload_types(
+                     annotations,
+                     telescope,
+                     quantities,
+                     branch_ctx,
+                     names,
+                     env,
+                     cname,
+                     pattern
+                   ) do
               {:cont, :ok}
             else
               {:error, _} = error -> {:halt, error}
@@ -8714,14 +8724,23 @@ defmodule Cure.Elab.Elaborator do
 
   defp validate_typed_pattern_annotations(_arms, _scrut_type, _names, _ctx, _env), do: :ok
 
-  defp validate_constructor_payload_types(annotations, telescope, quantities, branch_ctx, names, env) do
+  defp validate_constructor_payload_types(
+         annotations,
+         telescope,
+         quantities,
+         branch_ctx,
+         names,
+         env,
+         constructor,
+         pattern
+       ) do
     present_positions =
       quantities
       |> Enum.with_index()
       |> Enum.filter(fn {quantity, _index} -> Grade.present?(quantity) end)
       |> Enum.map(&elem(&1, 1))
 
-    Enum.reduce_while(annotations, :ok, fn {position, type_ast}, :ok ->
+    Enum.reduce_while(annotations, :ok, fn {position, binder, type_ast, pattern_meta}, :ok ->
       case Enum.at(present_positions, position) do
         nil ->
           {:halt, {:error, {:typed_pattern_arity, position}}}
@@ -8730,34 +8749,46 @@ defmodule Cure.Elab.Elaborator do
           branch_index = length(telescope) - 1 - telescope_position
           actual = Context.lookup(branch_ctx, branch_index)
 
-          with {:ok, annotated} <- elaborate_type(type_ast, names, env),
-               actual when not is_nil(actual) <- actual,
-               actual_term <- Quote.reify(actual, Context.length(branch_ctx)),
-               expected_term <- Subst.shift(annotated, length(telescope), 0),
-               true <-
-                 Conv.conv?(
+          case elaborate_type(type_ast, names, env) do
+            {:ok, annotated} when not is_nil(actual) ->
+              actual_term = Quote.reify(actual, Context.length(branch_ctx))
+              expected_term = Subst.shift(annotated, length(telescope), 0)
+
+              if Conv.conv?(
                    expected_term,
                    actual_term,
                    Context.env(branch_ctx),
                    Context.length(branch_ctx),
                    Context.signature(branch_ctx)
                  ) do
-            {:cont, :ok}
-          else
-            false ->
-              {:halt,
-               typed_pattern_annotation_error(
-                 {:typed_pattern_type_mismatch, type_ast},
-                 type_ast,
-                 position
-               )}
+                {:cont, :ok}
+              else
+                {:halt,
+                 typed_pattern_annotation_error(
+                   {:typed_pattern_type_mismatch, type_ast},
+                   type_ast,
+                   position,
+                   binder,
+                   pattern_meta,
+                   constructor,
+                   pattern,
+                   actual_term,
+                   expected_term
+                 )}
+              end
 
-            nil ->
+            {:ok, annotated} ->
               {:halt,
                typed_pattern_annotation_error(
                  {:typed_pattern_type_mismatch, type_ast},
                  type_ast,
-                 position
+                 position,
+                 binder,
+                 pattern_meta,
+                 constructor,
+                 pattern,
+                 nil,
+                 annotated
                )}
 
             {:error, reason} ->
@@ -8765,16 +8796,35 @@ defmodule Cure.Elab.Elaborator do
                typed_pattern_annotation_error(
                  {:typed_pattern_type_error, reason},
                  type_ast,
-                 position
+                 position,
+                 binder,
+                 pattern_meta,
+                 constructor,
+                 pattern,
+                 nil,
+                 nil
                )}
           end
       end
     end)
   end
 
-  defp typed_pattern_annotation_error(reason, type_ast, position) do
+  defp typed_pattern_annotation_error(
+         reason,
+         type_ast,
+         position,
+         binder,
+         pattern_meta,
+         constructor,
+         pattern,
+         actual_type,
+         annotated_type
+       ) do
     case surface_expression_span(type_ast) do
       %Cure.Diagnostic.Span{} = span ->
+        pattern_info = Cure.MetaAST.Metadata.source_info(pattern_meta)
+        constructor_info = pattern |> elem(1) |> Cure.MetaAST.Metadata.source_info()
+
         {:error,
          {:source_context, reason,
           %{
@@ -8786,7 +8836,16 @@ defmodule Cure.Elab.Elaborator do
             checking: :pattern,
             expression_category: :pattern,
             expectation_origin: :pattern,
-            argument_index: position
+            argument_index: position,
+            binder: binder,
+            typed_pattern_span: pattern_info && pattern_info.whole,
+            binder_span: pattern_info && pattern_info.name,
+            annotation_span: pattern_info && pattern_info.annotation,
+            constructor_pattern_span: constructor_info && constructor_info.whole,
+            constructor_name_span: constructor_info && constructor_info.name,
+            constructor: constructor,
+            annotated_type: annotated_type,
+            field_type: actual_type
           }}}
 
       _ ->
@@ -10049,6 +10108,9 @@ defmodule Cure.Elab.Elaborator do
                 {:error,
                  {:constructor_result_mismatch, %{constructor: cname, actual: result_term, expected: expected_core}}}
 
+              :not_applicable ->
+                {:error, :constructor_result_not_applicable}
+
               {mctx, deferred} ->
                 # Params that pinned structurally are passed for the de Bruijn frame;
                 # any still-open param is caught downstream (unsolved metavariable /
@@ -10219,7 +10281,10 @@ defmodule Cure.Elab.Elaborator do
     end)
   end
 
-  defp partial_pin_result(_actual, _expected, _mctx, _env), do: :mismatch
+  # A goal with a different outer type is not an indexed-result clash. Let the
+  # original inference/checking error explain that call; this specialized path is
+  # only for constructors whose own family matches the expected family.
+  defp partial_pin_result(_actual, _expected, _mctx, _env), do: :not_applicable
 
   defp definite_constructor_result_clash?({:data, left, _, _}, {:data, right, _, _}),
     do: left != right
