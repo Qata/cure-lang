@@ -95,18 +95,8 @@ defmodule Cure.Diagnostic.Adapter do
              :reserved_union_type_name,
              :constructor_function_collision,
              :duplicate_definition
-           ] do
-    if is_map(name) do
-      declaration_conflict(kind, name, opts)
-    else
-      declaration_conflict(kind, %{name: name}, opts)
-    end
-  end
-
-  def from_error({kind, %{name: _name} = details}, opts)
-      when kind in [:duplicate_parameter, :duplicate_field, :duplicate_index] do
-    declaration_conflict(kind, details, opts)
-  end
+           ],
+      do: NameAdapter.from_error({kind, name}, opts)
 
   def from_error({:overlapping_overload, _name, _arity} = error, opts),
     do: NameAdapter.from_error(error, opts)

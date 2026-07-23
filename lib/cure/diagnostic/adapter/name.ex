@@ -177,6 +177,20 @@ defmodule Cure.Diagnostic.Adapter.Name do
   def from_error({:overlapping_named_instance, %{name: name} = details}, opts),
     do: overlapping_named_instance(name, details, opts)
 
+  def from_error({kind, name}, opts)
+      when kind in [
+             :duplicate_type,
+             :duplicate_ctor,
+             :duplicate_constructor,
+             :duplicate_field,
+             :duplicate_parameter,
+             :duplicate_index,
+             :reserved_union_type_name,
+             :constructor_function_collision,
+             :duplicate_definition
+           ],
+      do: duplicate_declaration(kind, if(is_map(name), do: name, else: %{name: name}), opts)
+
   def from_error(
         {:source_context, {:unsupported_guard, %{reason: :shadowed} = details}, context},
         opts
@@ -452,6 +466,105 @@ defmodule Cure.Diagnostic.Adapter.Name do
       }
     )
   end
+
+  @doc false
+  def duplicate_declaration(kind, details, opts) do
+    name = name_to_string(Map.get(details, :name, :declaration))
+
+    detail =
+      case kind do
+        :duplicate_field ->
+          if Map.has_key?(details, :operation),
+            do:
+              " while #{if(details.operation == :update, do: "updating", else: "constructing")} `#{surface_name(details.record)}`",
+            else: ""
+
+        _ ->
+          ""
+      end
+
+    spans = Map.get(details, :spans, [])
+
+    first_message =
+      if Map.get(details, :operation),
+        do: "this field was first supplied here",
+        else: "the name was first declared here"
+
+    {primary_label_value, secondary} =
+      duplicate_labels(spans, opts, duplicate_primary_label(kind, details), first_message)
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: duplicate_title(kind),
+      body: Doc.paragraph(duplicate_message(kind, name, details, detail)),
+      primary: primary_label_value,
+      secondary: secondary,
+      suggestions: duplicate_suggestions(kind, details),
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp duplicate_title(:duplicate_parameter), do: "Duplicate parameter"
+  defp duplicate_title(:duplicate_field), do: "Duplicate field"
+  defp duplicate_title(:duplicate_index), do: "Duplicate index"
+  defp duplicate_title(:duplicate_type), do: "Duplicate type declaration"
+  defp duplicate_title(:duplicate_constructor), do: "Duplicate constructor"
+  defp duplicate_title(:duplicate_ctor), do: "Duplicate constructor"
+  defp duplicate_title(_kind), do: "Declaration conflict"
+
+  defp duplicate_message(:duplicate_parameter, name, _details, _detail),
+    do:
+      "The parameter `#{name}` is declared more than once. Rename or remove one occurrence so every parameter has a unique name."
+
+  defp duplicate_message(:duplicate_field, name, %{operation: operation, record: record}, _detail)
+       when operation in [:construction, :update],
+       do:
+         "The field `#{name}` is supplied more than once while #{if(operation == :update, do: "updating", else: "constructing")} `#{surface_name(record)}`. A record value can provide each field only once."
+
+  defp duplicate_message(:duplicate_field, name, _details, _detail),
+    do:
+      "The field `#{name}` is declared more than once. Rename or remove one occurrence so every record field has a unique name."
+
+  defp duplicate_message(:duplicate_type, name, _details, _detail),
+    do:
+      "The type `#{name}` is declared more than once in this module. Rename or remove one declaration so the type has a unique identity."
+
+  defp duplicate_message(kind, name, _details, _detail) when kind in [:duplicate_ctor, :duplicate_constructor],
+    do:
+      "The constructor `#{name}` is declared more than once in this module. Rename or remove one declaration so pattern matching stays unambiguous."
+
+  defp duplicate_message(_kind, name, _details, detail),
+    do: "The declaration `#{name}` conflicts with another visible declaration#{if(detail == "", do: "", else: detail)}."
+
+  defp duplicate_primary_label(:duplicate_parameter, _details), do: "this parameter repeats an earlier name"
+
+  defp duplicate_primary_label(:duplicate_field, %{operation: operation}) when operation in [:construction, :update],
+    do: "this field is supplied again"
+
+  defp duplicate_primary_label(:duplicate_field, _details), do: "this field repeats an earlier name"
+  defp duplicate_primary_label(:duplicate_index, _details), do: "this index repeats an earlier name"
+  defp duplicate_primary_label(:duplicate_type, _details), do: "this type repeats an earlier declaration"
+
+  defp duplicate_primary_label(kind, _details) when kind in [:duplicate_ctor, :duplicate_constructor],
+    do: "this constructor repeats an earlier declaration"
+
+  defp duplicate_primary_label(_kind, _details), do: "rename this declaration or make its identity unique"
+
+  defp duplicate_suggestions(:duplicate_field, %{operation: operation, name: name})
+       when operation in [:construction, :update],
+       do: [%Suggestion{message: "Remove one `#{name}` field", applicability: :manual}]
+
+  defp duplicate_suggestions(_kind, _details), do: []
+
+  defp duplicate_labels([first, second | rest], _opts, primary_message, first_message) do
+    {%Label{span: second, style: :primary, message: primary_message},
+     [%Label{span: first, style: :secondary, message: first_message}] ++
+       Enum.map(rest, &%Label{span: &1, style: :secondary, message: "another duplicate is here"})}
+  end
+
+  defp duplicate_labels(_, opts, primary_message, _first_message), do: {primary(opts, primary_message), []}
 
   defp overload_signature(name, member) do
     parameters = Enum.map_join(Map.get(member, :parameters, []), ", ", &overload_type_surface/1)

@@ -130,6 +130,10 @@ defmodule Cure.Diagnostic.Adapter.NameTest do
     assert named_instance == Adapter.from_error({:overlapping_named_instance, :fast, :Eqs, :Int})
     assert named_instance.code == "E105"
 
+    duplicate = NameAdapter.from_error({:duplicate_parameter, :value})
+    assert duplicate == Adapter.from_error({:duplicate_parameter, :value})
+    assert duplicate.code == "E105"
+
     assert_raise Cure.Diagnostic.UnhandledError, fn ->
       NameAdapter.from_error({:ordinary_type_failure, :not_a_name_error})
     end
