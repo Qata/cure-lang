@@ -320,6 +320,9 @@ defmodule Cure.Diagnostic.Adapter.Macro do
   def from_error({:ambiguous_macro_extension, keywords}, opts),
     do: module_failure(:ambiguous_macro_extension, %{keywords: keywords}, opts)
 
+  def from_error({:invalid_macro_family, details}, opts) when is_map(details),
+    do: family_failure(details, opts)
+
   def from_error({kind, _detail}, opts) when kind in [:module_rule_not_fully_consumed, :not_a_module_rule],
     do: module_failure(kind, %{}, opts)
 
@@ -333,6 +336,26 @@ defmodule Cure.Diagnostic.Adapter.Macro do
              :invalid_macro_extension_rule
            ],
       do: module_failure(kind, %{}, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :invalid_macro_rules,
+             :expander_without_accepts,
+             :accepts_without_syntax_family,
+             :accepts_without_expander,
+             :multiple_accepts_declarations,
+             :multiple_expands_declarations
+           ],
+      do: family_failure(kind, opts)
+
+  def from_error({kind, detail}, opts)
+      when kind in [
+             :unknown_syntax_family,
+             :duplicate_syntax_family,
+             :duplicate_syntax_family_field,
+             :syntax_family_cycle
+           ],
+      do: family_failure({kind, detail}, opts)
 
   def from_error({kind, _detail}, opts)
       when kind in [
@@ -1020,6 +1043,119 @@ defmodule Cure.Diagnostic.Adapter.Macro do
       {"Macro extension is ambiguous",
        "These extension keywords match more than one family: #{Enum.map_join(keywords, ", ", &name_to_string/1)}.",
        "make the extension unambiguous", "Choose keywords owned by exactly one syntax family"}
+
+  @doc false
+  def family_failure(details, opts) when is_map(details) do
+    reason = Map.get(details, :reason)
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      details
+      |> Map.get(:related_spans, [])
+      |> Enum.map(&label(&1, :secondary, family_related_label(reason)))
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :invalid_macro_family,
+      severity: :error,
+      title: family_title(reason),
+      body: Doc.paragraph(family_body(reason)),
+      primary: label(span, :primary, family_primary_label(reason)),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: family_hint(reason), applicability: :manual}],
+      payload: details
+    )
+  end
+
+  @doc false
+  def family_failure(reason, opts),
+    do: simple_macro_failure(:invalid_macro_family, reason, family_content(reason), opts)
+
+  defp family_content(reason),
+    do: {family_title(reason), family_body(reason), family_primary_label(reason), family_hint(reason)}
+
+  defp family_title({:unknown_syntax_family, _name}), do: "Included syntax family is unknown"
+  defp family_title({:syntax_family_cycle, _names}), do: "Syntax families form a cycle"
+  defp family_title({:duplicate_syntax_family, _names}), do: "Syntax family name is repeated"
+  defp family_title({:duplicate_syntax_family_field, _pairs}), do: "Syntax-family field is duplicated"
+  defp family_title(:invalid_macro_rules), do: "Macro rule list is malformed"
+  defp family_title(:expander_without_accepts), do: "Macro expander has no accepted family"
+  defp family_title(:accepts_without_syntax_family), do: "Accepted syntax family is not declared"
+  defp family_title(:accepts_without_expander), do: "Accepted syntax family has no expander"
+  defp family_title(:multiple_accepts_declarations), do: "Macro accepts more than one family"
+  defp family_title(:multiple_expands_declarations), do: "Macro declares more than one expander"
+  defp family_title(_reason), do: "Syntax-family declaration is invalid"
+
+  defp family_body({:unknown_syntax_family, name}),
+    do: "`#{name}` is included here, but this macro does not declare a syntax family with that name."
+
+  defp family_body({:syntax_family_cycle, names}),
+    do: "These syntax families include one another in a cycle: #{Enum.map_join(names, " → ", &to_string/1)}."
+
+  defp family_body({:duplicate_syntax_family, names}),
+    do:
+      "The same syntax family name is declared more than once: #{Enum.map_join(names, ", ", &"`#{name_to_string(&1)}`")}."
+
+  defp family_body({:duplicate_syntax_family_field, pairs}) do
+    fields = Enum.map_join(pairs, ", ", fn {family, field} -> "`#{family}.#{field}`" end)
+    "The same field is declared more than once: #{fields}."
+  end
+
+  defp family_body(:invalid_macro_rules), do: "Structured macro validation expected a list of well-formed macro rules."
+
+  defp family_body(:expander_without_accepts),
+    do: "This macro declares how to expand a syntax family but never declares which family it accepts."
+
+  defp family_body(:accepts_without_syntax_family),
+    do: "This macro accepts a syntax family but does not declare any syntax-family shape for that input."
+
+  defp family_body(:accepts_without_expander),
+    do: "This macro accepts structured syntax but does not declare the function that expands it."
+
+  defp family_body(:multiple_accepts_declarations),
+    do: "A structured macro can have only one `accepts` declaration, but this macro has more than one."
+
+  defp family_body(:multiple_expands_declarations),
+    do: "A structured macro can have only one `expands with` declaration, but this macro has more than one."
+
+  defp family_body(reason), do: "The syntax-family declarations are inconsistent: #{name_to_string(reason)}."
+
+  defp family_primary_label({:unknown_syntax_family, _name}), do: "this included family is not declared"
+  defp family_primary_label({:syntax_family_cycle, _names}), do: "the inclusion cycle starts here"
+  defp family_primary_label({:duplicate_syntax_family, _names}), do: "this family name is declared again"
+  defp family_primary_label({:duplicate_syntax_family_field, _pairs}), do: "this field is declared again"
+  defp family_primary_label(:invalid_macro_rules), do: "rewrite these macro rules"
+  defp family_primary_label(:expander_without_accepts), do: "this expander has no matching `accepts` declaration"
+  defp family_primary_label(:accepts_without_syntax_family), do: "this accepted family has no declaration"
+  defp family_primary_label(:accepts_without_expander), do: "this accepted family has no expander"
+  defp family_primary_label(:multiple_accepts_declarations), do: "remove this additional `accepts` declaration"
+  defp family_primary_label(:multiple_expands_declarations), do: "remove this additional expander declaration"
+  defp family_primary_label(_reason), do: "this macro family is inconsistent"
+
+  defp family_related_label({:syntax_family_cycle, _names}), do: "this family also participates in the cycle"
+  defp family_related_label({:duplicate_syntax_family, _names}), do: "the family name was first declared here"
+  defp family_related_label({:duplicate_syntax_family_field, _pairs}), do: "the field was already declared here"
+  defp family_related_label(:multiple_accepts_declarations), do: "another `accepts` declaration is here"
+  defp family_related_label(:multiple_expands_declarations), do: "another expander declaration is here"
+  defp family_related_label(_reason), do: "related family declaration"
+
+  defp family_hint({:unknown_syntax_family, name}),
+    do: "Declare `syntax family #{name}` or change `includes` to a declared family"
+
+  defp family_hint({:syntax_family_cycle, _names}), do: "Remove one `includes` edge so the family graph is acyclic"
+
+  defp family_hint({:duplicate_syntax_family, _names}),
+    do: "Rename one family or combine their fields into a single declaration"
+
+  defp family_hint({:duplicate_syntax_family_field, _pairs}), do: "Keep one declaration of the field"
+  defp family_hint(:invalid_macro_rules), do: "Provide a list of parsed macro rules"
+  defp family_hint(:expander_without_accepts), do: "Add `accepts FamilyName` for the expander's input"
+  defp family_hint(:accepts_without_syntax_family), do: "Declare the accepted family with `syntax family`"
+  defp family_hint(:accepts_without_expander), do: "Add `expands with function_name`"
+  defp family_hint(:multiple_accepts_declarations), do: "Keep exactly one `accepts` declaration"
+  defp family_hint(:multiple_expands_declarations), do: "Keep exactly one `expands with` declaration"
+  defp family_hint(_reason), do: "Make the syntax-family declarations consistent"
 
   @doc false
   def syntax_decode_failure(kind, details, opts),

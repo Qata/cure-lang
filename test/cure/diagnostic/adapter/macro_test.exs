@@ -300,6 +300,38 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
     end
   end
 
+  test "syntax-family validation producers preserve their reason and related spans" do
+    errors = [
+      :invalid_macro_rules,
+      :expander_without_accepts,
+      :accepts_without_syntax_family,
+      :accepts_without_expander,
+      :multiple_accepts_declarations,
+      :multiple_expands_declarations,
+      {:unknown_syntax_family, :Expression},
+      {:syntax_family_cycle, [:Expression, :Pattern, :Expression]},
+      {:duplicate_syntax_family, [:Expression, :Expression]},
+      {:duplicate_syntax_family_field, [{:Expression, :span}]}
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.key == :invalid_macro_family
+      assert direct.suggestions != []
+    end
+
+    details = %{
+      reason: {:syntax_family_cycle, [:Expression, :Pattern, :Expression]},
+      related_spans: []
+    }
+
+    direct = MacroAdapter.from_error({:invalid_macro_family, details})
+    assert Adapter.from_error({:invalid_macro_family, details}) == direct
+    assert direct.payload == details
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 
