@@ -1579,10 +1579,10 @@ defmodule Cure.Diagnostic.Adapter do
     do: NameAdapter.from_error({:module_path_identity_mismatch, path, declared, requested}, opts)
 
   def from_error({:char_literal_needs_bounded, value}, opts),
-    do: contextual_type_failure(:char_literal_needs_bounded, %{value: value}, opts)
+    do: TypeAdapter.from_error({:char_literal_needs_bounded, value}, opts)
 
   def from_error({:char_literal_out_of_range, value}, opts),
-    do: contextual_type_failure(:char_literal_out_of_range, %{value: value}, opts)
+    do: TypeAdapter.from_error({:char_literal_out_of_range, value}, opts)
 
   def from_error({:extern_returns_union, _name, _codomain} = error, opts),
     do: TypeAdapter.from_error(error, opts)

@@ -66,6 +66,18 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert hd(direct.suggestions).message =~ "arguments required"
   end
 
+  test "character literal failures are owned by the type family" do
+    error = {:char_literal_needs_bounded, 97}
+    direct = TypeAdapter.from_error(error)
+
+    assert Adapter.from_error(error) == direct
+    assert direct.code == "E093"
+    assert direct.key == :type_mismatch
+    assert direct.title == "Character literal needs a bound"
+    assert hd(direct.suggestions).message == "Add the required bounded character annotation"
+    assert direct.payload == %{kind: :char_literal_needs_bounded, value: 97}
+  end
+
   test "legacy contextual failures expose their retained repair as a source-tagged hint" do
     source = "value\n"
     registry = SourceRegistry.new() |> SourceRegistry.register(:legacy_type, source, "type_context.cure")

@@ -223,6 +223,12 @@ defmodule Cure.Diagnostic.Adapter.Type do
          "provide the arguments required by the effect operation"}
       )
 
+  def from_error({:char_literal_needs_bounded, value}, opts),
+    do: character_literal_failure(:char_literal_needs_bounded, value, opts)
+
+  def from_error({:char_literal_out_of_range, value}, opts),
+    do: character_literal_failure(:char_literal_out_of_range, value, opts)
+
   def from_error(:branch_type, opts), do: branch_failure(%{}, opts)
 
   def from_error({:source_context, :branch_type, context}, opts) when is_map(context),
@@ -3200,6 +3206,38 @@ defmodule Cure.Diagnostic.Adapter.Type do
         }
       ],
       payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp character_literal_failure(kind, value, opts) do
+    {title, message, label, hint} =
+      case kind do
+        :char_literal_needs_bounded ->
+          {
+            "Character literal needs a bound",
+            "This character literal requires an explicit bounded character type.",
+            "this character literal needs a bounded character type",
+            "Add the required bounded character annotation"
+          }
+
+        :char_literal_out_of_range ->
+          {
+            "Character literal is out of range",
+            "The character value `#{inspect(value)}` is outside the supported character range.",
+            "use a character value in the supported range",
+            "Use a valid character literal"
+          }
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{kind: kind, value: value}
     )
   end
 
