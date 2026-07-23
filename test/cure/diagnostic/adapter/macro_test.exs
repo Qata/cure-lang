@@ -66,6 +66,28 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
     end
   end
 
+  test "packet validation producers are owned by the macro family" do
+    errors = [
+      {:invalid_packet_name, :Frame},
+      {:invalid_packet_endian, :middle},
+      {:unknown_packet_scalar, :u128},
+      {:missing_packet_endian, :length},
+      {:invalid_packet_field, :bad},
+      {:forward_packet_length, :payload, :length},
+      {:invalid_packet_crc_fields, :checksum, [:payload]},
+      :invalid_packet_field_name,
+      :duplicate_packet_field
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.key == :macro_packet_validation
+      assert direct.suggestions != []
+    end
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 
