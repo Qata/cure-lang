@@ -248,6 +248,9 @@ defmodule Cure.Diagnostic.Adapter.Type do
   def from_error({:no_instance, interface, head}, opts),
     do: instance_failure(interface, head, %{}, opts)
 
+  def from_error({:ambiguous_instance_for_expected_type, interface, expected}, opts),
+    do: ambiguous_instance_failure(interface, expected, opts)
+
   def from_error({:union_member_not_ground, member}, opts),
     do: union_declaration_failure(:union_member_not_ground, %{member: member}, opts)
 
@@ -2842,6 +2845,34 @@ defmodule Cure.Diagnostic.Adapter.Type do
         head_id: head.id,
         expectation_origin: Map.get(context, :expectation_origin, :implicit),
         checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp ambiguous_instance_failure(interface, expected, opts) do
+    interface = name(interface)
+    expected_surface = surface_type(expected)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Instance resolution is ambiguous",
+      body:
+        Doc.paragraph(
+          "More than one `#{interface}` implementation can satisfy the expected type `#{expected_surface}`."
+        ),
+      primary: primary(opts, "make the `#{interface}` implementation choice unambiguous"),
+      suggestions: [
+        %Suggestion{
+          message: "Qualify the implementation, add an annotation, or remove the overlapping instance",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :ambiguous_instance,
+        interface: interface,
+        expected_surface: expected_surface
       }
     )
   end

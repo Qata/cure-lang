@@ -1951,7 +1951,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: TypeAdapter.from_error(error, opts)
 
   def from_error({:ambiguous_instance_for_expected_type, interface, expected}, opts),
-    do: contextual_type_failure(:ambiguous_instance, %{interface: interface, expected: expected}, opts)
+    do: TypeAdapter.from_error({:ambiguous_instance_for_expected_type, interface, expected}, opts)
 
   def from_error({:no_matching_overload, _name, _arguments} = error, opts),
     do: TypeAdapter.from_error(error, opts)

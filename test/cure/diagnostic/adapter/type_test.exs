@@ -89,6 +89,21 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert direct.payload.branch == :Cons
   end
 
+  test "ambiguous expected-type instances are owned by the type family" do
+    error = {:ambiguous_instance_for_expected_type, :Eq, {:data, :Int, [], []}}
+    direct = TypeAdapter.from_error(error)
+
+    assert Adapter.from_error(error) == direct
+    assert direct.code == "E093"
+    assert direct.title == "Instance resolution is ambiguous"
+
+    assert direct.payload == %{
+             kind: :ambiguous_instance,
+             interface: "Eq",
+             expected_surface: "Int"
+           }
+  end
+
   test "legacy contextual failures expose their retained repair as a source-tagged hint" do
     source = "value\n"
     registry = SourceRegistry.new() |> SourceRegistry.register(:legacy_type, source, "type_context.cure")
