@@ -194,6 +194,15 @@ defmodule Cure.Diagnostic.RegistryTest do
            }
   end
 
+  test "E117 shares the static-analysis converter without sharing a generic fallback" do
+    entry = Registry.fetch!("E117")
+    assert entry.converter == Cure.Diagnostic.Adapter.StaticAnalysis
+
+    assert entry.producer_converters == %{
+             elaboration: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
+           }
+  end
+
   test "producer catalog validation requires every code and producer branch independently" do
     entry = Registry.fetch!("E094")
     assert entry.producers |> Enum.sort() == [:lexer, :parser]

@@ -79,9 +79,8 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:erased_used_relevantly, details} = error, opts) when is_map(details),
     do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:usage_violation, details}, opts) when is_map(details) do
-    usage_failure(details, %{}, opts)
-  end
+  def from_error({:usage_violation, details} = error, opts) when is_map(details),
+    do: StaticAnalysis.from_error(error, opts)
 
   def from_error({kind, name}, opts)
       when kind in [
@@ -1569,19 +1568,9 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(details) and is_map(context),
       do: StaticAnalysis.from_error(error, opts)
 
-  def from_error(
-        {:source_context, {:usage_violation, details}, context},
-        opts
-      )
-      when is_map(details) and is_map(context) do
-    opts =
-      case Map.get(context, :span) do
-        %Span{} = span -> Keyword.put_new(opts, :span, span)
-        _ -> opts
-      end
-
-    usage_failure(details, context, opts)
-  end
+  def from_error({:source_context, {:usage_violation, details}, context} = error, opts)
+      when is_map(details) and is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
 
   def from_error({:source_context, {:totality_required, name}, context}, opts) when is_map(context) do
     totality_failure(name, context, opts)
@@ -10354,133 +10343,8 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp pickup_spans(spans), do: Enum.filter(spans, &match?(%Span{}, &1))
 
-  defp usage_failure(details, context, opts) do
-    declared = Map.get(details, :declared, :unknown)
-    used = Map.get(details, :used, :unknown)
-    binder = Map.get(details, :binder)
-    binder_name = Map.get(context, :binder_name)
-    display_name = if binder_name, do: "`#{binder_name}`", else: "A binding"
-
-    {title, body, primary_message, hint} =
-      usage_copy(display_name, binder_name, declared, used, Map.get(context, :use_spans, []))
-
-    primary_span = Keyword.get(opts, :span)
-
-    secondary =
-      usage_secondary_labels(context, primary_span, declared, used)
-
-    Diagnostic.new(
-      code: "E117",
-      key: :resource_usage_violation,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(body),
-      primary: primary_label(opts, primary_message),
-      secondary: secondary,
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: Map.put(details, :binder_name, binder_name || binder)
-    )
-  end
-
-  defp usage_copy(name, binder_name, :linear, :erased, _uses) do
-    action_name = usage_action_name(name, binder_name)
-
-    {
-      "Linear value is not used",
-      "#{name} is linear, so every path through this function must use it exactly once. This function does not use it.",
-      "this linear parameter must be used exactly once",
-      "Use #{action_name} once on every path, or declare it `:affine` if it may be dropped"
-    }
-  end
-
-  defp usage_copy(name, binder_name, :linear, :unrestricted, uses) do
-    action_name = usage_action_name(name, binder_name)
-
-    body =
-      if length(uses) > 1 do
-        "#{name} is linear, but this path can use it more than once. A linear value must be consumed exactly once."
-      else
-        "#{name} is linear, but this use passes it to a context that may consume it any number of times."
-      end
-
-    {
-      "Linear value may be used more than once",
-      body,
-      "this use does not preserve linear ownership",
-      "Pass #{action_name} only to linear parameters, and consume it exactly once on every path"
-    }
-  end
-
-  defp usage_copy(name, binder_name, :affine, :unrestricted, uses) do
-    action_name = usage_action_name(name, binder_name)
-
-    body =
-      if length(uses) > 1 do
-        "#{name} is affine, but this path can use it more than once. An affine value may be used once or not at all."
-      else
-        "#{name} is affine, but this use passes it to a context that may consume it any number of times."
-      end
-
-    {
-      "Affine value may be used more than once",
-      body,
-      "this use does not preserve affine ownership",
-      "Pass #{action_name} only to affine or linear parameters, and use it at most once"
-    }
-  end
-
-  defp usage_copy(name, binder_name, declared, used, _uses) do
-    action_name = usage_action_name(name, binder_name)
-
-    {
-      "Resource usage violates its grade",
-      "#{name} is declared `#{declared}` but its inferred usage is `#{used}`.",
-      "this use is incompatible with the declared resource grade",
-      "Use #{action_name} according to its declared `#{declared}` grade"
-    }
-  end
-
-  defp usage_action_name(name, binder_name) when not is_nil(binder_name), do: name
-  defp usage_action_name(_name, _binder_name), do: "the binding"
-
-  defp usage_secondary_labels(context, primary_span, declared, :erased) do
-    [
-      pickup_label(
-        Map.get(context, :grade_span),
-        :secondary,
-        "this parameter is declared `#{declared}` here"
-      )
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.reject(&same_span_coordinates?(&1.span, primary_span))
-  end
-
-  defp usage_secondary_labels(context, primary_span, declared, _used) do
-    binder =
-      pickup_label(
-        Map.get(context, :binder_span),
-        :secondary,
-        "this parameter is declared `#{declared}` here"
-      )
-
-    earlier_uses =
-      context
-      |> Map.get(:use_spans, [])
-      |> Enum.reject(&same_span_coordinates?(&1, primary_span))
-      |> Enum.map(&pickup_label(&1, :secondary, "another use on this path is here"))
-
-    [binder | earlier_uses] |> Enum.reject(&is_nil/1)
-  end
-
   defp pickup_label(%Span{} = span, style, message), do: %Label{span: span, style: style, message: message}
   defp pickup_label(_, _style, _message), do: nil
-
-  defp same_span_coordinates?(%Span{} = left, %Span{} = right) do
-    left.start_byte == right.start_byte and left.end_byte == right.end_byte and
-      left.start_line == right.start_line and left.end_line == right.end_line
-  end
-
-  defp same_span_coordinates?(_left, _right), do: false
 
   defp edition_replacement_suggestion(%{
          argument_span: %Span{} = span,

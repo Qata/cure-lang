@@ -38,4 +38,31 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysisTest do
       StaticAnalysis.from_error({:conversion_failure, :actual, :expected})
     end
   end
+
+  test "resource usage preserves declaration and earlier-use regions" do
+    source = "x x x\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:usage, source, "usage.cure")
+    {:ok, binder_span} = SourceRegistry.span(registry, :usage, 0, 1)
+    {:ok, first_use} = SourceRegistry.span(registry, :usage, 2, 3)
+    {:ok, second_use} = SourceRegistry.span(registry, :usage, 4, 5)
+
+    error =
+      {:source_context, {:usage_violation, %{binder: 0, declared: :linear, used: :unrestricted}},
+       %{
+         span: second_use,
+         binder_span: binder_span,
+         binder_name: :x,
+         use_spans: [first_use, second_use]
+       }}
+
+    direct = StaticAnalysis.from_error(error)
+    assert Adapter.from_error(error) == direct
+    assert direct.code == "E117"
+    assert Enum.map(direct.secondary, & &1.span) == [binder_span, first_use]
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "another use on this path is here"
+    assert rendered =~ "this parameter is declared `linear` here"
+    assert rendered =~ "Hint: Pass `x` only to linear parameters"
+  end
 end
