@@ -7,7 +7,7 @@ defmodule Cure.Diagnostic.Adapter.Type do
   """
 
   alias Cure.Diagnostic
-  alias Cure.Diagnostic.{Doc, ExpectationOrigin, Label, Span, TypeProblem}
+  alias Cure.Diagnostic.{Doc, ExpectationOrigin, Label, Span, Suggestion, TypeProblem}
 
   @spec from_error(TypeProblem.t(), keyword()) :: Diagnostic.t()
   def from_error(%TypeProblem{} = problem, opts \\ []) do
@@ -40,6 +40,26 @@ defmodule Cure.Diagnostic.Adapter.Type do
       notes: Keyword.get(opts, :notes, []),
       provenance: Keyword.get(opts, :provenance, []),
       payload: payload
+    )
+  end
+
+  @doc false
+  @spec contextual_failure(atom(), map(), keyword(), {String.t(), String.t(), String.t()}) :: Diagnostic.t()
+  def contextual_failure(kind, details, opts, {title, message, label}) do
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary(opts, label),
+      suggestions: [
+        %Suggestion{
+          message: sentence_case(label),
+          applicability: :manual
+        }
+      ],
+      payload: Map.put(details, :kind, kind)
     )
   end
 
@@ -150,6 +170,21 @@ defmodule Cure.Diagnostic.Adapter.Type do
       payload
     end
   end
+
+  defp primary(opts, message) do
+    case Keyword.get(opts, :span) do
+      %Span{} = span ->
+        %Label{span: span, style: :primary, message: Keyword.get(opts, :label, message)}
+
+      nil ->
+        nil
+    end
+  end
+
+  defp sentence_case(<<first::utf8, rest::binary>>),
+    do: String.upcase(<<first::utf8>>) <> rest
+
+  defp sentence_case(""), do: "Revise this expression"
 
   defp title(%ExpectationOrigin{kind: :annotation}), do: "Annotation does not match"
   defp title(%ExpectationOrigin{kind: :local_fact}), do: "Local fact does not match"

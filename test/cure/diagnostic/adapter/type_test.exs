@@ -55,4 +55,26 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert debug.payload.debug.details == problem.debug
     assert Renderer.json(debug) =~ "cannot_unify"
   end
+
+  test "legacy contextual failures expose their retained repair as a source-tagged hint" do
+    source = "value\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:legacy_type, source, "type_context.cure")
+    {:ok, span} = SourceRegistry.span(registry, :legacy_type, 0, 5)
+
+    diagnostic = Adapter.from_error(:not_a_function, span: span)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             """
+             -- APPLICATION TARGET IS NOT CALLABLE [E093] ----------------- type_context.cure
+
+             This value is used as a function, but its type is not callable.
+
+             at type_context.cure:1:1
+             1 | value
+               | ^^^^^ apply a function or constructor value
+
+             Hint: Apply a function or constructor value
+             """
+             |> String.trim_trailing()
+  end
 end

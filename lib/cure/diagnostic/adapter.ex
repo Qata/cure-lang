@@ -8402,15 +8402,7 @@ defmodule Cure.Diagnostic.Adapter do
           contextual_type_fallback(kind, opts)
       end
 
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      payload: Map.put(details, :kind, kind)
-    )
+    TypeAdapter.contextual_failure(kind, details, opts, {title, message, label})
   end
 
   defp surface_structure_failure(kind, detail, opts) do
