@@ -191,6 +191,15 @@ defmodule Cure.Diagnostic.Adapter.Name do
            ],
       do: duplicate_declaration(kind, if(is_map(name), do: name, else: %{name: name}), opts)
 
+  def from_error({:missing_method, interface, method}, opts),
+    do: missing_method(interface, method, opts)
+
+  def from_error({:missing_method, %{interface: interface, method: method} = details}, opts),
+    do: missing_method(interface, method, details, opts)
+
+  def from_error({:missing_method, details}, opts) when is_map(details),
+    do: missing_method(Map.get(details, :interface), Map.get(details, :method), details, opts)
+
   def from_error(
         {:source_context, {:unsupported_guard, %{reason: :shadowed} = details}, context},
         opts
@@ -503,6 +512,55 @@ defmodule Cure.Diagnostic.Adapter.Name do
       secondary: secondary,
       suggestions: duplicate_suggestions(kind, details),
       payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  @doc false
+  def missing_method(interface, method, opts) do
+    interface = name_to_string(interface)
+    method = name_to_string(method)
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Interface method is missing",
+      body: Doc.paragraph("The implementation of `#{interface}` does not define required method `#{method}`."),
+      primary: primary(opts, "implement this required method"),
+      suggestions: [
+        %Suggestion{
+          message: "Implement `#{method}` with the signature required by `#{interface}`",
+          applicability: :manual
+        }
+      ],
+      payload: %{kind: :missing_method, interface: interface, method: method}
+    )
+  end
+
+  def missing_method(interface, method, details, opts) do
+    interface = name_to_string(interface)
+    method = name_to_string(method)
+    head = name_to_string(Map.get(details, :for, Cure.Elab.Name.base(Map.get(details, :head)) || "this type"))
+    head_id = name_to_string(Map.get(details, :head, head))
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Implementation is missing `#{method}`",
+      body:
+        Doc.paragraph(
+          "`#{interface}` requires a method named `#{method}`, but this implementation for `#{head}` does not provide it and the interface has no default implementation."
+        ),
+      primary: pickup_label(span, :primary, "add `#{method}` beneath this implementation"),
+      suggestions: [
+        %Suggestion{
+          message: "Implement `#{method}` with the signature required by `#{interface}`",
+          applicability: :manual
+        }
+      ],
+      payload: %{kind: :missing_method, interface: interface, method: method, head: head, head_id: head_id}
     )
   end
 

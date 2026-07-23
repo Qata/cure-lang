@@ -1190,45 +1190,10 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   def from_error({:missing_method, interface, method}, opts),
-    do: interface_failure(:missing_method, %{interface: interface, method: method}, opts)
+    do: NameAdapter.from_error({:missing_method, interface, method}, opts)
 
-  def from_error({:missing_method, %{interface: interface, method: method} = details}, opts) do
-    interface = name_to_string(interface)
-    method = name_to_string(method)
-
-    head =
-      details
-      |> Map.get(:for, Cure.Elab.Name.base(Map.get(details, :head)) || "this type")
-      |> name_to_string()
-
-    head_id = name_to_string(Map.get(details, :head, head))
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
-
-    Diagnostic.new(
-      code: "E105",
-      key: :declaration_conflict,
-      severity: :error,
-      title: "Implementation is missing `#{method}`",
-      body:
-        Doc.paragraph(
-          "`#{interface}` requires a method named `#{method}`, but this implementation for `#{head}` does not provide it and the interface has no default implementation."
-        ),
-      primary: pickup_label(span, :primary, "add `#{method}` beneath this implementation"),
-      suggestions: [
-        %Suggestion{
-          message: "Implement `#{method}` with the signature required by `#{interface}`",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :missing_method,
-        interface: interface,
-        method: method,
-        head: head,
-        head_id: head_id
-      }
-    )
-  end
+  def from_error({:missing_method, %{interface: _interface, method: _method} = details}, opts),
+    do: NameAdapter.from_error({:missing_method, details}, opts)
 
   def from_error({:method_signature_mismatch, interface, method}, opts),
     do: interface_failure(:method_signature_mismatch, %{interface: interface, method: method}, opts)
