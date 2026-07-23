@@ -206,6 +206,7 @@ defmodule Cure.Diagnostic.RegistryTest do
   test "totality and pattern coverage have exhaustive static-analysis ownership" do
     for {code, producer} <- [
           {"E013", :totality_checker},
+          {"E102", :elaboration},
           {"E118", :elaboration},
           {"E119", :elaboration}
         ] do

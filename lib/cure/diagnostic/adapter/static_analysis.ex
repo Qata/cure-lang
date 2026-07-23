@@ -93,7 +93,117 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysis do
   def from_error({kind}, opts) when kind in [:binary_match_needs_default, :map_match_needs_default],
     do: pattern_structure_failure(kind, nil, %{}, opts)
 
+  def from_error({:unknown_erasure_class, name, class}, opts),
+    do: erasure_failure(:unknown_erasure_class, %{name: name, class: class}, %{}, opts)
+
+  def from_error({:erases_on_non_opaque, name}, opts),
+    do: erasure_failure(:erases_on_non_opaque, %{name: name}, %{}, opts)
+
+  def from_error({:source_context, {:unknown_erasure_class, name, class}, context}, opts)
+      when is_map(context),
+      do: erasure_failure(:unknown_erasure_class, %{name: name, class: class}, context, opts)
+
+  def from_error({:source_context, {:erases_on_non_opaque, name}, context}, opts)
+      when is_map(context),
+      do: erasure_failure(:erases_on_non_opaque, %{name: name}, context, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp erasure_failure(kind, details, context, opts) do
+    {title, body, primary_message} = erasure_copy(kind, details)
+    decorator_span = Map.get(context, :decorator_span) || Keyword.get(opts, :span)
+    arguments = Map.get(context, :argument_spans, [])
+    name_span = Map.get(context, :name_span)
+
+    primary_span =
+      case {kind, arguments} do
+        {:unknown_erasure_class, [argument]} -> argument
+        _ -> decorator_span
+      end
+
+    secondary =
+      [
+        if(decorator_span != primary_span,
+          do: label(decorator_span, :secondary, "this is the complete erasure declaration")
+        ),
+        if(name_span != primary_span, do: label(name_span, :secondary, "this type receives the erasure declaration"))
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E102",
+      key: :erasure_violation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: label(primary_span, :primary, primary_message),
+      secondary: secondary,
+      suggestions: erasure_suggestions(kind, details),
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp erasure_copy(:unknown_erasure_class, %{name: name, class: :missing_argument}) do
+    {
+      "Erasure class is missing",
+      "`@erases` on `#{name_to_string(name)}` needs exactly one atom naming the runtime class of this opaque carrier.",
+      "add one supported erasure class inside these parentheses"
+    }
+  end
+
+  defp erasure_copy(:unknown_erasure_class, %{name: name, class: {:too_many_arguments, count}}) do
+    {
+      "Erasure declaration has too many classes",
+      "`@erases` on `#{name_to_string(name)}` accepts one runtime class, but this declaration supplies #{count}. One opaque carrier must have one unambiguous runtime representation.",
+      "keep exactly one erasure class"
+    }
+  end
+
+  defp erasure_copy(:unknown_erasure_class, %{name: name, class: :not_an_atom_literal}) do
+    {
+      "Erasure class must be an atom",
+      "`@erases` on `#{name_to_string(name)}` expects an atom such as `:pid`; a bare name is not an erasure-class declaration.",
+      "write the runtime class as an atom"
+    }
+  end
+
+  defp erasure_copy(:unknown_erasure_class, %{name: name, class: class}) do
+    {
+      "Unknown erasure class `#{name_to_string(class)}`",
+      "`#{name_to_string(class)}` is not a supported runtime class for opaque type `#{name_to_string(name)}`. Supported classes: #{erasure_classes()}.",
+      "this runtime class is not supported"
+    }
+  end
+
+  defp erasure_copy(:erases_on_non_opaque, %{name: name}) do
+    {
+      "Constructed type cannot declare an erasure class",
+      "`#{name_to_string(name)}` has constructors, so its runtime representation is already determined by those constructors. `@erases` is only valid on a constructor-less `opaque type`.",
+      "remove this erasure declaration"
+    }
+  end
+
+  defp erasure_suggestions(:unknown_erasure_class, %{class: :missing_argument}),
+    do: [%Suggestion{message: "Add one of #{erasure_classes()}", applicability: :manual}]
+
+  defp erasure_suggestions(:unknown_erasure_class, %{class: {:too_many_arguments, _}}),
+    do: [%Suggestion{message: "Keep exactly one of #{erasure_classes()}", applicability: :manual}]
+
+  defp erasure_suggestions(:unknown_erasure_class, %{class: :not_an_atom_literal}),
+    do: [%Suggestion{message: "Write the class as an atom, for example `:pid`", applicability: :manual}]
+
+  defp erasure_suggestions(:unknown_erasure_class, _details),
+    do: [%Suggestion{message: "Choose one of #{erasure_classes()}", applicability: :manual}]
+
+  defp erasure_suggestions(:erases_on_non_opaque, _details),
+    do: [
+      %Suggestion{message: "Remove `@erases`, or make this a constructor-less `opaque type`", applicability: :manual}
+    ]
+
+  defp erasure_classes do
+    [:pid, :reference, :integer, :float, :binary, :atom, :boolean, :list]
+    |> Enum.map_join(", ", &Atom.to_string/1)
+  end
 
   defp pattern_structure_failure(kind, detail, context, opts) do
     {title, body, primary, secondary, hint} = pattern_structure_copy(kind, detail, context, opts)

@@ -174,4 +174,32 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysisTest do
       assert direct.suggestions != []
     end
   end
+
+  test "erasure validation labels the decorator argument and owning type" do
+    source = "@erases(:banana)\nopaque type Handle\n"
+
+    registry =
+      SourceRegistry.new()
+      |> SourceRegistry.register(:erasure, source, "erasure.cure")
+
+    {:ok, decorator} = SourceRegistry.span(registry, :erasure, 0, 16)
+    {:ok, argument} = SourceRegistry.span(registry, :erasure, 8, 15)
+    {:ok, name} = SourceRegistry.span(registry, :erasure, 29, 35)
+
+    error =
+      {:source_context, {:unknown_erasure_class, :Handle, :banana},
+       %{decorator_span: decorator, argument_spans: [argument], name_span: name}}
+
+    direct = StaticAnalysis.from_error(error)
+    assert Adapter.from_error(error) == direct
+    assert direct.code == "E102"
+    assert direct.primary.span == argument
+    assert Enum.map(direct.secondary, & &1.span) == [decorator, name]
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "^^^^^^^ this runtime class is not supported"
+    assert rendered =~ "this is the complete erasure declaration"
+    assert rendered =~ "this type receives the erasure declaration"
+    assert rendered =~ "Hint: Choose one of pid, reference"
+  end
 end
