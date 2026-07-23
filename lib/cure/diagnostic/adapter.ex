@@ -237,101 +237,11 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:simplification_failed, %SimplificationProblem{} = problem}, opts),
     do: ProofAdapter.from_error({:simplification_failed, problem}, opts)
 
-  def from_error({:induction_failed, %InductionProblem{} = problem}, opts) do
-    {title, message, label} =
-      case problem.kind do
-        :non_inductive_subject ->
-          {"Cannot induct over this value", "The selected subject does not have an inductive datatype.",
-           "this subject is not inductive"}
+  def from_error({:induction_failed, %InductionProblem{} = problem}, opts),
+    do: ProofAdapter.from_error({:induction_failed, problem}, opts)
 
-        :missing_case ->
-          {"Induction case is missing", "The induction block does not cover every possible constructor.",
-           "add the missing constructor case"}
-
-        :duplicate_case ->
-          {"Induction case is duplicated", "A constructor may appear only once in an induction block.",
-           "this constructor case is duplicated"}
-
-        :impossible_case ->
-          {"Induction case is reachable",
-           "This case was marked impossible, but the subject indices permit its constructor.",
-           "this constructor case is possible"}
-
-        :unknown_case ->
-          {"Unknown induction constructor", "This pattern does not name a constructor of the subject datatype.",
-           "this constructor is unavailable"}
-
-        :wrong_case_fields ->
-          {"Induction case has the wrong fields",
-           "Bind every ordinary constructor field, followed by one induction hypothesis for each recursive field.",
-           "this constructor pattern has the wrong shape"}
-
-        :unavailable_hypothesis ->
-          {"Invalid induction hypothesis binder", "An induction hypothesis must be bound by an ordinary name.",
-           "name this induction hypothesis"}
-
-        :mistyped_hypothesis ->
-          {"Induction hypothesis has the wrong proposition",
-           "This induction hypothesis is specialized for its recursive field, but that proposition does not satisfy this use.",
-           "this induction hypothesis has a different proposition"}
-
-        :unknown_subject_type ->
-          {"Cannot determine the induction subject type",
-           "Give the local value a type annotation or induct over an expression whose result type is declared.",
-           "the subject type is not available"}
-
-        :local_subject_requires_return_annotation ->
-          {"Local induction needs a declared result type",
-           "Closure-lifted induction needs the enclosing proposition in order to construct its motive.",
-           "declare this function's result proposition"}
-
-        _ ->
-          {"Induction could not be elaborated", "The induction block could not be lowered to checked total recursion.",
-           "this induction block is invalid"}
-      end
-
-    Diagnostic.new(
-      code: "E113",
-      key: :induction_failed,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(induction_message(message, problem)),
-      primary: induction_primary(problem, opts, label),
-      secondary: induction_labels(problem),
-      suggestions: induction_suggestions(problem),
-      payload: problem
-    )
-  end
-
-  def from_error({:defining_equation_unavailable, %DefiningEquationProblem{} = problem}, opts) do
-    {title, message, label} =
-      case problem.kind do
-        :inaccessible_equation ->
-          {"Defining equation is private", "This generated equation follows its function's private visibility.",
-           "this equation is not visible here"}
-
-        :friendly_name_collision ->
-          {"Defining equation name is ambiguous",
-           "More than one certified branch has this friendly constructor name. Select its structural pattern key.",
-           "this friendly equation name is ambiguous"}
-
-        _ ->
-          {"Defining equation is unavailable",
-           "This function has no certified defining equation with the requested constructor path.",
-           "no such defining equation is available"}
-      end
-
-    Diagnostic.new(
-      code: "E114",
-      key: :defining_equation_unavailable,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      secondary: defining_equation_labels(problem, Keyword.get(opts, :span)),
-      payload: problem
-    )
-  end
+  def from_error({:defining_equation_unavailable, %DefiningEquationProblem{} = problem}, opts),
+    do: ProofAdapter.from_error({:defining_equation_unavailable, problem}, opts)
 
   def from_error({:named_argument_mismatch, variant, details}, opts) when is_map(details) do
     NameAdapter.from_error({:named_argument_mismatch, variant, details}, opts)
@@ -4473,83 +4383,6 @@ defmodule Cure.Diagnostic.Adapter do
       nil ->
         nil
     end
-  end
-
-  defp induction_primary(problem, opts, message) do
-    span =
-      problem.pattern_range || problem.case_range || problem.subject_range || problem.construct ||
-        Keyword.get(opts, :span)
-
-    if match?(%Span{}, span), do: %Label{span: span, style: :primary, message: message}, else: nil
-  end
-
-  defp induction_labels(problem) do
-    [
-      {problem.subject_range, "induction subject"},
-      {problem.constructor_range, "constructor declared here"},
-      {problem.hypothesis_range, "induction hypothesis used here"}
-    ]
-    |> Enum.flat_map(fn
-      {%Span{} = span, message} -> [%Label{span: span, style: :secondary, message: message}]
-      _ -> []
-    end)
-  end
-
-  defp induction_message(message, %InductionProblem{kind: :missing_case, missing: missing}) do
-    message <> " Missing: " <> Enum.map_join(List.wrap(missing), ", ", &Cure.Elab.Name.base/1) <> "."
-  end
-
-  defp induction_message(message, %InductionProblem{kind: :wrong_case_fields} = problem) do
-    message <>
-      " Expected #{problem.expected_fields} bindings but found #{problem.observed_fields}; recursive fields at positions " <>
-      Enum.map_join(List.wrap(problem.recursive_fields), ", ", &Integer.to_string(&1 + 1)) <> " produce hypotheses."
-  end
-
-  defp induction_message(message, %InductionProblem{kind: :mistyped_hypothesis} = problem) do
-    message <>
-      " Available: #{surface_type(problem.available)}. Required here: #{surface_type(problem.required)}."
-  end
-
-  defp induction_message(message, _problem), do: message
-
-  defp induction_suggestions(%InductionProblem{
-         kind: :missing_case,
-         missing_case_skeletons: skeletons,
-         insertion: %Span{} = insertion,
-         case_indent: case_indent
-       })
-       when is_list(skeletons) and skeletons != [] do
-    indent = String.duplicate(" ", max(case_indent || 0, 0))
-    replacement = "\n" <> Enum.map_join(skeletons, "\n", &(indent <> &1))
-
-    [
-      %Suggestion{
-        message: "Add missing induction cases",
-        applicability: :machine_applicable,
-        edits: [%TextEdit{span: insertion, replacement: replacement}]
-      }
-    ]
-  end
-
-  defp induction_suggestions(%InductionProblem{kind: :missing_case, missing: missing}) do
-    [
-      %Suggestion{
-        message: "Add cases for " <> Enum.map_join(List.wrap(missing), ", ", &Cure.Elab.Name.base/1),
-        applicability: :manual,
-        edits: []
-      }
-    ]
-  end
-
-  defp induction_suggestions(_problem), do: []
-
-  defp defining_equation_labels(problem, primary) do
-    ([{problem.function_definition, "function is defined here"}] ++
-       Enum.map(problem.candidate_equations || [], &{&1, "candidate defining equation"}))
-    |> Enum.flat_map(fn
-      {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
-      _ -> []
-    end)
   end
 
   defp pickup_spans(spans), do: Enum.filter(spans, &match?(%Span{}, &1))
