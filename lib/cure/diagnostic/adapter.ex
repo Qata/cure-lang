@@ -108,53 +108,11 @@ defmodule Cure.Diagnostic.Adapter do
     declaration_conflict(kind, details, opts)
   end
 
-  def from_error({:overlapping_overload, name, arity}, opts) do
-    declaration_conflict(:overlapping_overload, %{name: name, arity: arity}, opts)
-  end
+  def from_error({:overlapping_overload, _name, _arity} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:overlapping_overload, %{name: name, first: first, second: second} = details}, opts) do
-    name = name_to_string(name)
-    first_signature = overload_declaration_signature(name, first)
-    second_signature = overload_declaration_signature(name, second)
-    primary_span = Map.get(second, :span) || Keyword.get(opts, :span)
-
-    secondary =
-      case Map.get(first, :span) do
-        %Span{} = span when span != primary_span ->
-          [pickup_label(span, :secondary, "the first indistinguishable `#{name}` overload is here")]
-
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: "E105",
-      key: :declaration_conflict,
-      severity: :error,
-      title: "Overloads of `#{name}` cannot be distinguished",
-      body:
-        Doc.paragraph(
-          "Both declarations accept the same parameter types and required argument labels. A call cannot provide enough information to choose between them."
-        ),
-      primary: pickup_label(primary_span, :primary, "this overload has the same callable signature as the first"),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Change a parameter type or required argument label, or rename one function",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :overlapping_overload,
-        name: name,
-        arity: Map.get(details, :arity),
-        first_signature: first_signature,
-        second_signature: second_signature,
-        first_id: name_to_string(Map.get(first, :id, name)),
-        second_id: name_to_string(Map.get(second, :id, name))
-      }
-    )
-  end
+  def from_error({:overlapping_overload, %{name: _name, first: _first, second: _second}} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
   def from_error({:overlapping_instance, interface, head}, opts) do
     declaration_conflict(:overlapping_instance, %{interface: interface, head: head}, opts)
@@ -4411,7 +4369,8 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp overload_type_surface(type), do: surface_type(type)
 
-  defp overload_declaration_signature(name, member) do
+  @doc false
+  def overload_declaration_signature(name, member) do
     parameters = Enum.map_join(Map.get(member, :parameters, []), ", ", &overload_type_surface/1)
     "#{name}(#{parameters})"
   end

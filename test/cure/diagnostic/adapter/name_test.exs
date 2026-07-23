@@ -118,6 +118,10 @@ defmodule Cure.Diagnostic.Adapter.NameTest do
     assert sibling == Adapter.from_error({:sibling_module_collision, :run, [:Left, :Right]})
     assert sibling.code == "E105"
 
+    overload = NameAdapter.from_error({:overlapping_overload, :move, 1})
+    assert overload == Adapter.from_error({:overlapping_overload, :move, 1})
+    assert overload.code == "E105"
+
     assert_raise Cure.Diagnostic.UnhandledError, fn ->
       NameAdapter.from_error({:ordinary_type_failure, :not_a_name_error})
     end

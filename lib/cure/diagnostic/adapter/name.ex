@@ -159,6 +159,12 @@ defmodule Cure.Diagnostic.Adapter.Name do
   def from_error({:conflicting_precedence_group, details}, opts) when is_map(details),
     do: operator_conflict(:conflicting_precedence_group, details, opts)
 
+  def from_error({:overlapping_overload, name, arity}, opts),
+    do: overlapping_overload(name, arity, opts)
+
+  def from_error({:overlapping_overload, %{name: name, first: first, second: second} = details}, opts),
+    do: overlapping_overload(name, first, second, details, opts)
+
   def from_error(
         {:source_context, {:unsupported_guard, %{reason: :shadowed} = details}, context},
         opts
@@ -243,6 +249,82 @@ defmodule Cure.Diagnostic.Adapter.Name do
       suggestions: [],
       payload: Map.merge(details, %{kind: :sibling_module_collision, name: name, owners: owners})
     )
+  end
+
+  @doc false
+  def overlapping_overload(name, arity, opts) do
+    name = name_to_string(name)
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Declaration conflict",
+      body: Doc.paragraph("The declaration `#{name}` conflicts with another visible declaration with arity #{arity}."),
+      primary: primary(opts, "rename this declaration or make its identity unique"),
+      suggestions: [],
+      payload: %{kind: :overlapping_overload, name: name, arity: arity}
+    )
+  end
+
+  def overlapping_overload(name, first, second, details, opts) do
+    name = name_to_string(name)
+    first_signature = overload_signature(name, first)
+    second_signature = overload_signature(name, second)
+    primary_span = Map.get(second, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(first, :span) do
+        %Span{} = span when span != primary_span ->
+          [%Label{span: span, style: :secondary, message: "the first indistinguishable `#{name}` overload is here"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Overloads of `#{name}` cannot be distinguished",
+      body:
+        Doc.paragraph(
+          "Both declarations accept the same parameter types and required argument labels. A call cannot provide enough information to choose between them."
+        ),
+      primary: pickup_label(primary_span, :primary, "this overload has the same callable signature as the first"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Change a parameter type or required argument label, or rename one function",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :overlapping_overload,
+        name: name,
+        arity: Map.get(details, :arity),
+        first_signature: first_signature,
+        second_signature: second_signature,
+        first_id: name_to_string(Map.get(first, :id, name)),
+        second_id: name_to_string(Map.get(second, :id, name))
+      }
+    )
+  end
+
+  defp overload_signature(name, member) do
+    parameters = Enum.map_join(Map.get(member, :parameters, []), ", ", &overload_type_surface/1)
+    "#{name}(#{parameters})"
+  end
+
+  defp overload_type_surface(type) when is_atom(type) or is_binary(type),
+    do: name_to_string(Cure.Elab.Name.base(type) || type)
+
+  defp overload_type_surface(type), do: surface_type(type)
+
+  defp surface_type(type) do
+    Cure.Core.Printer.print(type)
+  rescue
+    ArgumentError -> inspect(type)
   end
 
   defp declaration_labels([first, second | rest], _opts, primary_message) do
