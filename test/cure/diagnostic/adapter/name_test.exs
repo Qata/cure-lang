@@ -134,6 +134,18 @@ defmodule Cure.Diagnostic.Adapter.NameTest do
     assert duplicate == Adapter.from_error({:duplicate_parameter, :value})
     assert duplicate.code == "E105"
 
+    conformance = NameAdapter.from_error({:method_signature_mismatch, :Eqs, :eqs})
+    assert conformance == Adapter.from_error({:method_signature_mismatch, :Eqs, :eqs})
+    assert conformance.code == "E105"
+
+    head = NameAdapter.from_error({:instance_head_ill_formed, :not_type_head})
+    assert head == Adapter.from_error({:instance_head_ill_formed, :not_type_head})
+    assert head.code == "E105"
+
+    superinterface = NameAdapter.from_error({:missing_superinterface, :Ord, :Eq, :Int})
+    assert superinterface == Adapter.from_error({:missing_superinterface, :Ord, :Eq, :Int})
+    assert superinterface.code == "E105"
+
     assert_raise Cure.Diagnostic.UnhandledError, fn ->
       NameAdapter.from_error({:ordinary_type_failure, :not_a_name_error})
     end

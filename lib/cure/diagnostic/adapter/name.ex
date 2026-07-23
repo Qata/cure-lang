@@ -8,6 +8,7 @@ defmodule Cure.Diagnostic.Adapter.Name do
 
   alias Cure.Diagnostic
   alias Cure.Diagnostic.{Doc, Label, Span, Suggestion, TextEdit}
+  alias Cure.Diagnostic.Adapter.Type, as: TypeAdapter
   alias Cure.Diagnostic.Suggest
 
   @spec from_error(term(), keyword()) :: Diagnostic.t()
@@ -199,6 +200,31 @@ defmodule Cure.Diagnostic.Adapter.Name do
 
   def from_error({:missing_method, details}, opts) when is_map(details),
     do: missing_method(Map.get(details, :interface), Map.get(details, :method), details, opts)
+
+  def from_error({:method_signature_mismatch, interface, method}, opts),
+    do: interface_failure(:method_signature_mismatch, %{interface: interface, method: method}, opts)
+
+  def from_error({:method_signature_mismatch, %{interface: _interface, method: _method} = details}, opts),
+    do: method_signature_failure(details, opts)
+
+  def from_error({:instance_head_ill_formed, %{reason: reason} = details}, opts),
+    do: instance_head_failure(reason, details, opts)
+
+  def from_error({:instance_head_ill_formed, reason}, opts),
+    do: interface_failure(:instance_head_ill_formed, %{reason: reason}, opts)
+
+  def from_error({:missing_superinterface, interface, super_interface, head}, opts),
+    do: missing_superinterface(interface, super_interface, %{head: head}, opts)
+
+  def from_error(
+        {:missing_superinterface,
+         %{interface: interface, superinterface: super_interface, head: canonical_head} = details},
+        opts
+      ),
+      do: missing_superinterface(interface, super_interface, Map.put(details, :canonical_head, canonical_head), opts)
+
+  def from_error({:missing_superinterface, %{interface: interface, superinterface: super_interface} = details}, opts),
+    do: missing_superinterface(interface, super_interface, details, opts)
 
   def from_error(
         {:source_context, {:unsupported_guard, %{reason: :shadowed} = details}, context},
@@ -561,6 +587,140 @@ defmodule Cure.Diagnostic.Adapter.Name do
         }
       ],
       payload: %{kind: :missing_method, interface: interface, method: method, head: head, head_id: head_id}
+    )
+  end
+
+  @doc false
+  def interface_failure(kind, details, opts) do
+    {title, message, label} =
+      case kind do
+        :method_signature_mismatch ->
+          {"Interface method signature mismatch",
+           "Method `#{name_to_string(details.method)}` does not match the signature required by `#{name_to_string(details.interface)}`.",
+           "make this method match the interface signature"}
+
+        :instance_head_ill_formed ->
+          {"Instance head is not well formed",
+           "The interface instance head cannot be used as a valid implementation head.",
+           "use a well-formed instance head"}
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary(opts, label),
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  @doc false
+  def instance_head_failure(reason, details, opts) do
+    interface = name_to_string(Map.get(details, :interface, "this interface"))
+    authored_head = name_to_string(Map.get(details, :for, "this expression"))
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    {explanation, label, hint} =
+      case reason do
+        :not_type_head ->
+          {
+            "`#{authored_head}` is a value, but an implementation can only be declared for a type. Cure needs a type constructor here so it can select this implementation consistently.",
+            "this is a value, not an implementation type",
+            "Replace `#{authored_head}` with the name of a type that implements `#{interface}`"
+          }
+
+        :lowering_failed ->
+          {
+            "Cure could not interpret `#{authored_head}` as a type for this `#{interface}` implementation.",
+            "this implementation head is not a valid type",
+            "Use a well-formed type after `for`"
+          }
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Implementation head is not a type",
+      body: Doc.paragraph(explanation),
+      primary: pickup_label(span, :primary, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{kind: :instance_head_ill_formed, reason: reason, interface: interface, authored_head: authored_head}
+    )
+  end
+
+  @doc false
+  def missing_superinterface(interface, super_interface, details, opts) do
+    interface = name_to_string(interface)
+    super_interface = name_to_string(super_interface)
+    canonical_head = Map.get(details, :canonical_head, Map.get(details, :head))
+
+    head =
+      name_to_string(
+        Map.get(details, :for, if(canonical_head, do: Cure.Elab.Name.base(canonical_head), else: "this type"))
+      )
+
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Required implementation is missing",
+      body:
+        Doc.paragraph(
+          "`#{interface}` requires `#{super_interface}`, so implementing `#{interface}` for `#{head}` also requires an implementation of `#{super_interface}` for `#{head}`."
+        ),
+      primary: pickup_label(span, :primary, "this implementation also needs `#{super_interface}` for `#{head}`"),
+      suggestions: [
+        %Suggestion{message: "Add `implementation #{super_interface} for #{head}`", applicability: :manual}
+      ],
+      payload: %{
+        kind: :missing_superinterface,
+        interface: interface,
+        superinterface: super_interface,
+        head: head,
+        head_id: name_to_string(canonical_head)
+      }
+    )
+  end
+
+  @doc false
+  def method_signature_failure(details, opts) do
+    interface = name_to_string(details.interface)
+    method = name_to_string(details.method)
+    expected_surface = if(details.expected, do: surface_type(details.expected), else: "the interface signature")
+    actual_surface = if(details.actual, do: surface_type(details.actual), else: "an invalid method signature")
+    primary_span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Implementation method has the wrong signature",
+      body:
+        Doc.stack([
+          Doc.paragraph(
+            "`#{method}` in this `#{interface}` implementation has a different signature from the method declared by the interface. Every parameter and the result must agree after substituting the implementation type."
+          ),
+          TypeAdapter.comparison_doc(details.expected || expected_surface, details.actual || actual_surface)
+        ]),
+      primary: pickup_label(primary_span, :primary, "this implementation provides the incompatible signature"),
+      suggestions: [
+        %Suggestion{
+          message: "Change `#{method}` to use the parameter and result types required by `#{interface}`",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :method_signature_mismatch,
+        interface: interface,
+        method: method,
+        expected_surface: expected_surface,
+        actual_surface: actual_surface
+      }
     )
   end
 
