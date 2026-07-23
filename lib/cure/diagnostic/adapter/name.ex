@@ -145,6 +145,20 @@ defmodule Cure.Diagnostic.Adapter.Name do
     unknown_name(:member, method, opts)
   end
 
+  def from_error({:source_context, {:no_named_instance, name}, context}, opts) when is_map(context) do
+    span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E011",
+      key: :missing_implicit_argument,
+      severity: :error,
+      title: "Named instance not found",
+      body: Doc.paragraph("The named instance `#{name_to_string(name)}` is not available in this scope."),
+      primary: pickup_label(span, :primary, "import or define this named instance"),
+      payload: %{kind: :no_named_instance, name: name, checking: Map.get(context, :checking)}
+    )
+  end
+
   def from_error({:implementation_scope, %{kind: kind} = details}, opts)
       when kind in [:member_outside, :empty],
       do: implementation_scope_failure(kind, details, opts)

@@ -460,19 +460,8 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: NameAdapter.from_error({:source_context, {:inconsistent_head_kind, interface}, context}, opts)
 
-  def from_error({:source_context, {:no_named_instance, name}, context}, opts) when is_map(context) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
-
-    Diagnostic.new(
-      code: "E011",
-      key: :missing_implicit_argument,
-      severity: :error,
-      title: "Named instance not found",
-      body: Doc.paragraph("The named instance `#{name_to_string(name)}` is not available in this scope."),
-      primary: primary_label(opts, "import or define this named instance"),
-      payload: %{kind: :no_named_instance, name: name, checking: Map.get(context, :checking)}
-    )
-  end
+  def from_error({:source_context, {:no_named_instance, name}, context}, opts) when is_map(context),
+    do: NameAdapter.from_error({:source_context, {:no_named_instance, name}, context}, opts)
 
   def from_error({:source_context, {:missing_branch, _branch}, context} = error, opts)
       when is_map(context),
