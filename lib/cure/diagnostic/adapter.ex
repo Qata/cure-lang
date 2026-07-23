@@ -1672,13 +1672,13 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(details) and is_map(context),
       do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {:forced_pattern_not_in_pattern, _meta}, context}, opts)
+  def from_error({:source_context, {:forced_pattern_not_in_pattern, _meta}, context} = error, opts)
       when is_map(context),
-      do: pattern_only_syntax(:forced_pattern, context, opts)
+      do: SyntaxAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {:named_implicit_not_in_pattern, _meta}, context}, opts)
+  def from_error({:source_context, {:named_implicit_not_in_pattern, _meta}, context} = error, opts)
       when is_map(context),
-      do: pattern_only_syntax(:named_implicit_pattern, context, opts)
+      do: SyntaxAdapter.from_error(error, opts)
 
   def from_error({:source_context, kind, context} = error, opts)
       when kind in [:rewrite_requires_expected_type, :rewrite_proof_not_equality] and is_map(context),
@@ -2261,11 +2261,11 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unsolved_field_type, constructor}, opts),
     do: contextual_type_failure(:unsolved_field_type, %{constructor: constructor}, opts)
 
-  def from_error({:forced_pattern_not_in_pattern, meta}, opts),
-    do: contextual_type_failure(:forced_pattern_not_in_pattern, %{detail: meta}, opts)
+  def from_error({:forced_pattern_not_in_pattern, _meta} = error, opts),
+    do: SyntaxAdapter.from_error(error, opts)
 
-  def from_error({:named_implicit_not_in_pattern, meta}, opts),
-    do: contextual_type_failure(:named_implicit_not_in_pattern, %{detail: meta}, opts)
+  def from_error({:named_implicit_not_in_pattern, _meta} = error, opts),
+    do: SyntaxAdapter.from_error(error, opts)
 
   def from_error({:unsolved_parameters, constructor}, opts),
     do: contextual_type_failure(:unsolved_parameters, %{constructor: constructor}, opts)
@@ -4033,60 +4033,6 @@ defmodule Cure.Diagnostic.Adapter do
     do: pickup_label(span, :secondary, message)
 
   defp sibling_dependency_label(_span, _primary_span, _message), do: nil
-
-  defp pattern_only_syntax(kind, context, opts) do
-    whole = Map.get(context, :span) || Keyword.get(opts, :span)
-    opener = Map.get(context, :opener_span)
-    name = Map.get(context, :name_span)
-    body_span = Map.get(context, :body_span)
-
-    {title, body, primary_span, primary_message, labels, hint} =
-      case kind do
-        :forced_pattern ->
-          {
-            "Forced value appears outside a pattern",
-            "A leading dot marks a value that a constructor pattern must equal; it does not evaluate or access that value as an ordinary expression. This dot appears in expression position, where there is no surrounding pattern to force.",
-            opener || whole,
-            "this dot introduces pattern-only syntax",
-            [{body_span, "this is the value the pattern would be forced to equal"}],
-            "Remove the leading dot to use an ordinary expression, or move the forced value into a constructor pattern"
-          }
-
-        :named_implicit_pattern ->
-          {
-            "Named implicit appears outside a pattern",
-            "`{name = pattern}` selects an implicit constructor field while matching a value. It cannot stand alone as an expression because no constructor pattern owns this implicit field.",
-            whole,
-            "this named implicit has no surrounding constructor pattern",
-            [
-              {name, "this names the constructor's implicit field"},
-              {body_span, "this pattern would constrain that field"}
-            ],
-            "Move this named implicit inside a constructor pattern, or replace it with an ordinary expression"
-          }
-      end
-
-    secondary =
-      labels
-      |> Enum.filter(fn {span, _message} -> match?(%Span{}, span) and span != primary_span end)
-      |> Enum.map(fn {span, message} -> pickup_label(span, :secondary, message) end)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(body),
-      primary: pickup_label(primary_span, :primary, primary_message),
-      secondary: secondary,
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{
-        kind: kind,
-        expression_category: Map.get(context, :expression_category),
-        checking: Map.get(context, :checking)
-      }
-    )
-  end
 
   defp argument_count(1), do: "1 argument"
   defp argument_count(count) when is_integer(count), do: "#{count} arguments"

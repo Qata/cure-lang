@@ -95,8 +95,119 @@ defmodule Cure.Diagnostic.Adapter.Syntax do
     )
   end
 
+  def from_error(
+        {:source_context, {:forced_pattern_not_in_pattern, _meta}, context},
+        opts
+      )
+      when is_map(context),
+      do: pattern_only_syntax(:forced_pattern, context, opts)
+
+  def from_error(
+        {:source_context, {:named_implicit_not_in_pattern, _meta}, context},
+        opts
+      )
+      when is_map(context),
+      do: pattern_only_syntax(:named_implicit_pattern, context, opts)
+
+  def from_error({:forced_pattern_not_in_pattern, detail}, opts),
+    do:
+      generic_pattern_only_failure(
+        :forced_pattern_not_in_pattern,
+        detail,
+        opts
+      )
+
+  def from_error({:named_implicit_not_in_pattern, detail}, opts),
+    do:
+      generic_pattern_only_failure(
+        :named_implicit_not_in_pattern,
+        detail,
+        opts
+      )
+
   def from_error(error, _opts),
     do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp pattern_only_syntax(kind, context, opts) do
+    whole = Map.get(context, :span) || Keyword.get(opts, :span)
+    opener = Map.get(context, :opener_span)
+    name_span = Map.get(context, :name_span)
+    body_span = Map.get(context, :body_span)
+
+    {title, body, primary_span, primary_message, labels, hint} =
+      case kind do
+        :forced_pattern ->
+          {
+            "Forced value appears outside a pattern",
+            "A leading dot marks a value that a constructor pattern must equal; it does not evaluate or access that value as an ordinary expression. This dot appears in expression position, where there is no surrounding pattern to force.",
+            opener || whole,
+            "this dot introduces pattern-only syntax",
+            [
+              {body_span, "this is the value the pattern would be forced to equal"}
+            ],
+            "Remove the leading dot to use an ordinary expression, or move the forced value into a constructor pattern"
+          }
+
+        :named_implicit_pattern ->
+          {
+            "Named implicit appears outside a pattern",
+            "`{name = pattern}` selects an implicit constructor field while matching a value. It cannot stand alone as an expression because no constructor pattern owns this implicit field.",
+            whole,
+            "this named implicit has no surrounding constructor pattern",
+            [
+              {name_span, "this names the constructor's implicit field"},
+              {body_span, "this pattern would constrain that field"}
+            ],
+            "Move this named implicit inside a constructor pattern, or replace it with an ordinary expression"
+          }
+      end
+
+    secondary =
+      labels
+      |> Enum.map(fn {span, message} ->
+        if span == primary_span, do: nil, else: label(span, :secondary, message)
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: label(primary_span, :primary, primary_message),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind: kind,
+        expression_category: Map.get(context, :expression_category),
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp generic_pattern_only_failure(kind, detail, opts) do
+    {title, body, message} =
+      case kind do
+        :forced_pattern_not_in_pattern ->
+          {"Forced pattern is unavailable", "This forced pattern refers to a name that is not bound by the pattern.",
+           "bind the name in the pattern before forcing it"}
+
+        :named_implicit_not_in_pattern ->
+          {"Named implicit is unavailable", "This named implicit is not bound by the surrounding pattern.",
+           "bind the implicit in the pattern or remove the reference"}
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: fallback_label(opts, message),
+      payload: %{kind: kind, detail: detail}
+    )
+  end
 
   defp grade_suggestions(
          %{grade: grade, supported: supported},
@@ -143,4 +254,7 @@ defmodule Cure.Diagnostic.Adapter.Syntax do
     do: %Label{span: span, style: style, message: message}
 
   defp label(_span, _style, _message), do: nil
+
+  defp fallback_label(opts, message),
+    do: label(Keyword.get(opts, :span), :primary, message)
 end
