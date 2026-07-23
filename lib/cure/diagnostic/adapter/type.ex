@@ -192,7 +192,102 @@ defmodule Cure.Diagnostic.Adapter.Type do
       when is_map(context),
       do: non_data_match(context, opts)
 
+  def from_error({:source_context, :with_mixed_rematch_arms, context}, opts)
+      when is_map(context),
+      do: mixed_with_arms(context, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp mixed_with_arms(context, opts) do
+    arms =
+      context
+      |> Map.get(:with_arms, [])
+      |> Enum.filter(&match?(%{style: style, span: %Span{}} when style in [:ordinary, :rematch], &1))
+
+    frequencies = Enum.frequencies_by(arms, & &1.style)
+
+    outlier_index =
+      Enum.find_index(arms, fn arm ->
+        Map.get(frequencies, arm.style) == 1 and
+          Enum.any?(frequencies, fn {style, count} -> style != arm.style and count > 1 end)
+      end)
+
+    labels =
+      arms
+      |> Enum.with_index()
+      |> Enum.map(fn {arm, index} ->
+        %{span: arm.span, message: with_arm_label(arm.style, index == outlier_index), index: index}
+      end)
+
+    {primary, secondary} =
+      case labels do
+        [] ->
+          {primary(Keyword.put_new(opts, :span, Map.get(context, :span)), "use one branch form throughout"), []}
+
+        available ->
+          chosen_index = outlier_index || 0
+          chosen = Enum.at(available, chosen_index)
+
+          secondary =
+            available
+            |> Enum.reject(&(&1.index == chosen_index))
+            |> Enum.map(&%Label{span: &1.span, style: :secondary, message: &1.message})
+
+          {%Label{span: chosen.span, style: :primary, message: chosen.message}, secondary}
+      end
+
+    body =
+      if outlier_index do
+        style = arms |> Enum.at(outlier_index) |> Map.fetch!(:style)
+
+        Doc.stack([
+          Doc.paragraph(
+            "Possible outlier: only one branch uses the #{with_arm_style(style)} form; the other branches use the other form."
+          ),
+          Doc.paragraph(
+            "A `with` block must use one shape throughout: either `Pattern -> body` in every branch, or `ParentPattern | WithPattern -> body` in every branch."
+          )
+        ])
+      else
+        Doc.stack([
+          Doc.paragraph("These branches mix the two forms accepted by a `with` block."),
+          Doc.paragraph(
+            "Use either `Pattern -> body` in every branch, or `ParentPattern | WithPattern -> body` in every branch."
+          )
+        ])
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "With branches use incompatible forms",
+      body: body,
+      primary: primary,
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Make every branch use the same `with` form; changing forms may change which values are refined",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :with_mixed_rematch_arms,
+        checking: Map.get(context, :checking),
+        branch_forms: Enum.map(arms, & &1.style),
+        outlier_branch: outlier_index
+      }
+    )
+  end
+
+  defp with_arm_label(style, true),
+    do: "possible outlier: this is the only #{with_arm_style(style)} branch"
+
+  defp with_arm_label(:ordinary, false), do: "ordinary branch: `Pattern -> body`"
+  defp with_arm_label(:rematch, false), do: "rematch branch: `ParentPattern | WithPattern -> body`"
+
+  defp with_arm_style(:ordinary), do: "ordinary `Pattern -> body`"
+  defp with_arm_style(:rematch), do: "rematch `ParentPattern | WithPattern -> body`"
 
   defp non_data_with(context, opts) do
     actual_type = context |> Map.get(:actual_type) |> surface_type()

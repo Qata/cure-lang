@@ -331,4 +331,33 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert rendered =~ "this expression has type `Float`"
     assert rendered =~ "Hint: Use a variable or wildcard"
   end
+
+  test "mixed with branches single out a unique authored form" do
+    source = "A -> a\nB -> b\nC | C -> c\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:mixed_with, source, "mixed_with.cure")
+    {:ok, first} = SourceRegistry.span(registry, :mixed_with, 0, 6)
+    {:ok, second} = SourceRegistry.span(registry, :mixed_with, 7, 13)
+    {:ok, outlier} = SourceRegistry.span(registry, :mixed_with, 14, 24)
+
+    error =
+      {:source_context, :with_mixed_rematch_arms,
+       %{
+         with_arms: [
+           %{style: :ordinary, span: first},
+           %{style: :ordinary, span: second},
+           %{style: :rematch, span: outlier}
+         ]
+       }}
+
+    direct = TypeAdapter.from_error(error)
+    assert Adapter.from_error(error) == direct
+    assert direct.primary.span == outlier
+    assert Enum.map(direct.secondary, & &1.span) == [first, second]
+    assert direct.payload.outlier_branch == 2
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "Possible outlier: only one branch uses the rematch"
+    assert rendered =~ "possible outlier: this is the only rematch"
+    assert rendered =~ "Hint: Make every branch use the same `with` form"
+  end
 end
