@@ -508,7 +508,13 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:source_context, {:unsupported_expression, {:lambda, _, _}}, _}} = Program.elaborate(src)
+      assert {:error,
+              {:source_context,
+               {:let_needs_annotation, %{name: "n", reason: :shadowed_before_use, shadow_span: shadow_span}}, _}} =
+               Program.elaborate(src)
+
+      assert shadow_span.start_line == 7
+      assert shadow_span.start_column == 7
     end
 
     test "a nested match rebinding the sub-union arm's name is refused, not silently corrupted" do

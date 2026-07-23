@@ -8071,7 +8071,7 @@ defmodule Cure.Elab.Elaborator do
       # check-only shape. Surface substitution never had to infer it: it
       # re-elaborated the rhs in CHECKING mode at each use site. A `:let` must
       # commit to one type up front, so it needs `let x : T = e` (`let_ascribed/8`).
-      {:error, _} = err ->
+      {:error, _} ->
         cond do
           # A GRADE cannot survive this branch. Every path below abandons the `:let`
           # node and surface-substitutes the rhs, so there is nowhere to record the
@@ -8089,9 +8089,20 @@ defmodule Cure.Elab.Elaborator do
              )}
 
           # Shadowing + non-inferable is unrepresentable: substitution would
-          # capture and `:let` cannot be built. Surface the inference error.
+          # capture and an unannotated `:let` cannot be built. Report the
+          # actionable local-binding problem rather than leaking the rhs's
+          # infer-only `:unsupported_expression` failure.
           Enum.any?(rest, &binds_any?(&1, [name])) ->
-            err
+            {:error,
+             local_binding_annotation_error(
+               :let_needs_annotation,
+               name,
+               meta,
+               rhs,
+               count_surface_uses(rest, name),
+               :shadowed_before_use,
+               first_binding_span(rest, name)
+             )}
 
           # Substitution is only safe at EXACTLY ONE use:
           #
@@ -8124,22 +8135,86 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp local_binding_annotation_error(kind, name, meta, rhs, use_count) do
+  defp local_binding_annotation_error(
+         kind,
+         name,
+         meta,
+         rhs,
+         use_count,
+         reason \\ :initializer_not_inferable,
+         shadow_span \\ nil
+       ) do
     info = Cure.MetaAST.Metadata.source_info(meta)
 
     details = %{
       name: name,
       grade: Keyword.get(meta, :grade),
       use_count: use_count,
-      reason: :initializer_not_inferable,
+      reason: reason,
       span: info && info.whole,
       name_span: info && info.name,
       grade_span: info && info.annotation,
-      initializer_span: surface_expression_span(rhs)
+      initializer_span: surface_expression_span(rhs),
+      shadow_span: shadow_span
     }
 
     {kind, details}
   end
+
+  defp first_binding_span(list, name) when is_list(list) do
+    Enum.find_value(list, &first_binding_span(&1, name))
+  end
+
+  defp first_binding_span({:match_arm, meta, body}, name) do
+    pattern = Keyword.get(meta, :pattern)
+    pattern_binder_span(pattern, name) || first_binding_span(body, name)
+  end
+
+  defp first_binding_span({:lambda, meta, children}, name) do
+    parameter_span =
+      Enum.find_value(Keyword.get(meta, :params, []), fn
+        {:param, pmeta, ^name} ->
+          case Cure.MetaAST.Metadata.source_info(pmeta) do
+            %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+            %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end)
+
+    parameter_span || first_binding_span(List.wrap(children), name)
+  end
+
+  defp first_binding_span({_tag, _meta, children}, name) when is_list(children),
+    do: first_binding_span(children, name)
+
+  defp first_binding_span(_other, _name), do: nil
+
+  defp pattern_binder_span({:variable, meta, name}, name) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp pattern_binder_span({:typed_pattern, meta, [name, _type]}, name) when is_binary(name) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp pattern_binder_span({_tag, _meta, children}, name) when is_list(children),
+    do: Enum.find_value(children, &pattern_binder_span(&1, name))
+
+  defp pattern_binder_span(list, name) when is_list(list),
+    do: Enum.find_value(list, &pattern_binder_span(&1, name))
+
+  defp pattern_binder_span(_other, _name), do: nil
 
   # `let x : T = e ⏎ rest`  ⟶  `{:let, Cure.Core.Grade.unrestricted(), T, e, rest}` with `x := e` in the context.
   defp bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env) do

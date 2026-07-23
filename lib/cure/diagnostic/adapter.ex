@@ -5304,8 +5304,8 @@ defmodule Cure.Diagnostic.Adapter do
     use_count = Map.get(details, :use_count)
 
     {title, body, primary_message, hint} =
-      case {kind, use_count} do
-        {:graded, _} ->
+      case {kind, use_count, Map.get(details, :reason)} do
+        {:graded, _, _} ->
           grade = Map.get(details, :grade, :graded) |> name_to_string()
 
           {
@@ -5315,7 +5315,15 @@ defmodule Cure.Diagnostic.Adapter do
             "Write the initializer's type after `:#{grade}`, before `=`"
           }
 
-        {:ungraded, 0} ->
+        {:ungraded, _, :shadowed_before_use} ->
+          {
+            "Shadowed binding needs a type",
+            "Cure cannot synthesize a type for `#{name}`'s initializer. A later binder also uses the name `#{name}`, so substituting this initializer would cross that binding boundary and could capture the wrong value.",
+            "this binding needs a type before it can cross a shadowing scope",
+            "Add a type between `#{name}` and `=` so this value is bound once before the inner `#{name}`"
+          }
+
+        {:ungraded, 0, _} ->
           {
             "Unused binding needs a type",
             "Cure cannot synthesize a type for `#{name}`'s initializer. Because the binding is unused, substituting it would discard the initializer without checking or evaluating it.",
@@ -5323,7 +5331,7 @@ defmodule Cure.Diagnostic.Adapter do
             "Add a type between `#{name}` and `=` so the initializer is checked exactly once"
           }
 
-        {:ungraded, count} when is_integer(count) and count > 1 ->
+        {:ungraded, count, _} when is_integer(count) and count > 1 ->
           {
             "Repeated binding needs a type",
             "Cure cannot synthesize a type for `#{name}`'s initializer. Substituting the initializer at its #{count} uses would duplicate the expression instead of evaluating and binding it once.",
@@ -5347,13 +5355,23 @@ defmodule Cure.Diagnostic.Adapter do
       end || Keyword.get(opts, :span)
 
     secondary =
-      case Map.get(details, :initializer_span) do
-        %Span{} = span when span != primary_span ->
-          [pickup_label(span, :secondary, "this initializer needs an expected type")]
+      [
+        case Map.get(details, :initializer_span) do
+          %Span{} = span when span != primary_span ->
+            pickup_label(span, :secondary, "this initializer needs an expected type")
 
-        _ ->
-          []
-      end
+          _ ->
+            nil
+        end,
+        case Map.get(details, :shadow_span) do
+          %Span{} = span when span != primary_span ->
+            pickup_label(span, :secondary, "this inner binder shadows `#{name}`")
+
+          _ ->
+            nil
+        end
+      ]
+      |> Enum.reject(&is_nil/1)
 
     Diagnostic.new(
       code: "E093",
