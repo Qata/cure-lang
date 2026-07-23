@@ -8743,7 +8743,16 @@ defmodule Cure.Elab.Elaborator do
     Enum.reduce_while(annotations, :ok, fn {position, binder, type_ast, pattern_meta}, :ok ->
       case Enum.at(present_positions, position) do
         nil ->
-          {:halt, {:error, {:typed_pattern_arity, position}}}
+          {:halt,
+           typed_pattern_arity_error(
+             position,
+             binder,
+             type_ast,
+             pattern_meta,
+             constructor,
+             pattern,
+             length(present_positions)
+           )}
 
         telescope_position ->
           branch_index = length(telescope) - 1 - telescope_position
@@ -8807,6 +8816,37 @@ defmodule Cure.Elab.Elaborator do
           end
       end
     end)
+  end
+
+  defp typed_pattern_arity_error(position, binder, type_ast, pattern_meta, constructor, pattern, visible_arity) do
+    pattern_info = Cure.MetaAST.Metadata.source_info(pattern_meta)
+    constructor_info = pattern |> elem(1) |> Cure.MetaAST.Metadata.source_info()
+    supplied_arity = pattern |> elem(2) |> length()
+    annotation_span = surface_expression_span(type_ast)
+    typed_pattern_span = rewrite_span(pattern_info && pattern_info.whole, annotation_span)
+    span = typed_pattern_span || (constructor_info && constructor_info.whole)
+
+    {:error,
+     {:source_context, {:typed_pattern_arity, position},
+      %{
+        line: span && span.start_line,
+        column: span && span.start_column,
+        length: span && max(1, span.end_byte - span.start_byte),
+        span: span,
+        typed_pattern_span: typed_pattern_span,
+        binder_span: pattern_info && pattern_info.name,
+        annotation_span: annotation_span,
+        constructor_pattern_span: constructor_info && constructor_info.whole,
+        constructor_name_span: constructor_info && (constructor_info.name || constructor_info.callee),
+        constructor: constructor,
+        binder: binder,
+        argument_index: position,
+        supplied_arity: supplied_arity,
+        visible_arity: visible_arity,
+        checking: :pattern,
+        expression_category: :pattern,
+        expectation_origin: :pattern
+      }}}
   end
 
   defp typed_pattern_annotation_error(

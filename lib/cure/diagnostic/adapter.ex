@@ -1653,6 +1653,12 @@ defmodule Cure.Diagnostic.Adapter do
       when not is_nil(field_type),
       do: typed_pattern_annotation_failure(context, opts)
 
+  def from_error(
+        {:source_context, {:typed_pattern_arity, _position}, %{visible_arity: _} = context},
+        opts
+      ),
+      do: typed_pattern_arity_failure(context, opts)
+
   def from_error({:source_context, {:applied_non_function, details}, context}, opts)
       when is_map(details) and is_map(context),
       do: non_callable_application(details, context, opts)
@@ -4643,6 +4649,58 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  defp typed_pattern_arity_failure(context, opts) do
+    constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
+    binder = name_to_string(Map.get(context, :binder, "field"))
+    supplied = Map.get(context, :supplied_arity, 0)
+    accepted = Map.get(context, :visible_arity, 0)
+    argument_index = Map.get(context, :argument_index, accepted)
+    primary_span = Map.get(context, :typed_pattern_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      [
+        sibling_dependency_label(
+          Map.get(context, :constructor_name_span),
+          primary_span,
+          "`#{constructor}` accepts #{count_phrase(accepted, "visible field")}"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "`#{constructor}` pattern has #{count_phrase(supplied, "field")}, but the constructor has #{accepted}",
+      body:
+        Doc.paragraph(
+          "`#{binder}` is field #{argument_index + 1} in this pattern, but `#{constructor}` exposes only #{count_phrase(accepted, "field")} to match. The pattern cannot bind a field that the constructor does not contain."
+        ),
+      primary:
+        pickup_label(
+          primary_span,
+          :primary,
+          "this extra field has no matching position in `#{constructor}`"
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Remove the extra field, or use a constructor with #{count_phrase(supplied, "visible field")}",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :typed_pattern_arity,
+        constructor: constructor,
+        binder: binder,
+        argument_index: argument_index,
+        supplied_arity: supplied,
+        visible_arity: accepted,
+        checking: Map.get(context, :checking, :pattern)
+      }
+    )
+  end
+
   defp constructor_result_hint(family, 0, 0),
     do: "End this constructor signature with `#{family}`"
 
@@ -6658,6 +6716,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp plural(1, singular), do: singular
   defp plural(_count, singular), do: singular <> "s"
+  defp count_phrase(count, singular), do: "#{count} #{plural(count, singular)}"
 
   defp kernel_type_failure(kind, opts) do
     {title, message, label} =
