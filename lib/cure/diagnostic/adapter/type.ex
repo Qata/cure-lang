@@ -313,6 +313,9 @@ defmodule Cure.Diagnostic.Adapter.Type do
       when is_map(context),
       do: dependent_match_inference(context, opts)
 
+  def from_error({:cannot_infer_dependent_match, branch}, opts),
+    do: dependent_match_inference(%{branch_patterns: [%{name: branch}]}, opts)
+
   def from_error({:source_context, {:record_update_base_mismatch, details}, context}, opts)
       when is_map(details) and is_map(context),
       do: record_update_base(details, context, opts)
@@ -2319,7 +2322,8 @@ defmodule Cure.Diagnostic.Adapter.Type do
   defp short_name(value), do: value |> name() |> String.split("#") |> List.last()
 
   defp dependent_match_inference(context, opts) do
-    branch = Enum.find(Map.get(context, :branch_patterns, []), &match?(%{span: %Span{}}, &1))
+    branch_patterns = Map.get(context, :branch_patterns, [])
+    branch = Enum.find(branch_patterns, &match?(%{span: %Span{}}, &1)) || List.first(branch_patterns)
     match_span = Map.get(context, :opener_span) || Map.get(context, :span) || Keyword.get(opts, :span)
     branch_name = branch && Map.get(branch, :name)
 

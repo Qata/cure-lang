@@ -1591,7 +1591,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: TypeAdapter.from_error(error, opts)
 
   def from_error({:cannot_infer_dependent_match, branch}, opts),
-    do: contextual_type_failure(:cannot_infer_dependent_match, %{branch: branch}, opts)
+    do: TypeAdapter.from_error({:cannot_infer_dependent_match, branch}, opts)
 
   def from_error({:generated_hole_not_well_typed, term}, opts),
     do: generated_hole_invariant_failure(%{term: term}, %{}, opts)

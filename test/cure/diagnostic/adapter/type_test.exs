@@ -78,6 +78,17 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert direct.payload == %{kind: :char_literal_needs_bounded, value: 97}
   end
 
+  test "legacy dependent-match failures are owned by the type family" do
+    error = {:cannot_infer_dependent_match, :Cons}
+    direct = TypeAdapter.from_error(error)
+
+    assert Adapter.from_error(error) == direct
+    assert direct.code == "E093"
+    assert direct.title == "Dependent match result needs an annotation"
+    assert direct.payload.kind == :cannot_infer_dependent_match
+    assert direct.payload.branch == :Cons
+  end
+
   test "legacy contextual failures expose their retained repair as a source-tagged hint" do
     source = "value\n"
     registry = SourceRegistry.new() |> SourceRegistry.register(:legacy_type, source, "type_context.cure")
