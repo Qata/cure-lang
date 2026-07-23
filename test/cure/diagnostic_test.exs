@@ -271,7 +271,6 @@ defmodule Cure.DiagnosticTest do
       {{:extern_returns_union, "foreign", {:union, []}}, "E093"},
       {{:extern_union_indistinct, "foreign", :duplicate}, "E093"},
       {{:cannot_infer_dependent_match, :branch}, "E093"},
-      {{:bidirectional_erased_field, "Ctor"}, "E093"},
       {{:named_argument_mismatch, :unknown_label, %{label: "bad", written: ["bad"]}}, "E115"},
       {{:forced_pattern_not_in_pattern, :name}, "E093"},
       {{:named_implicit_not_in_pattern, :implicit}, "E093"},

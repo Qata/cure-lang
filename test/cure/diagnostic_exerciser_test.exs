@@ -140,7 +140,6 @@ defmodule Cure.DiagnosticExerciserTest do
       {"character range failure", "E093", {:char_literal_out_of_range, 0x110000}},
       {"extern returns union", "E093", {:extern_returns_union, :foreign, {:union, []}}},
       {"dependent match inference", "E093", {:cannot_infer_dependent_match, :branch}},
-      {"erased field inference", "E093", {:bidirectional_erased_field, :Ctor}},
       {"unbound kernel variable", "E091", {:unbound_var, :missing}},
       {"unknown type family", "E091", {:unknown_family, :Missing}},
       {"unknown constructor", "E091", {:unknown_ctor, :Missing}},

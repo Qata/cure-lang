@@ -1902,9 +1902,6 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:cannot_infer_dependent_match, branch}, opts),
     do: contextual_type_failure(:cannot_infer_dependent_match, %{branch: branch}, opts)
 
-  def from_error({:bidirectional_erased_field, constructor}, opts),
-    do: contextual_type_failure(:bidirectional_erased_field, %{constructor: constructor}, opts)
-
   def from_error({:generated_hole_not_well_typed, term}, opts),
     do: generated_hole_invariant_failure(%{term: term}, %{}, opts)
 
@@ -7912,10 +7909,6 @@ defmodule Cure.Diagnostic.Adapter do
         :cannot_infer_dependent_match ->
           {"Dependent match needs an expected type", "Cure cannot infer the indexed result of this match expression.",
            "add an annotation that determines the dependent result"}
-
-        :bidirectional_erased_field ->
-          {"Erased field cannot be inferred here", "This erased constructor field requires checking information.",
-           "add an annotation or make the field relevant"}
 
         :applied_non_function ->
           {"Application target is not callable", "This expression is applied but does not have a callable type.",
