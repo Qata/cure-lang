@@ -232,6 +232,18 @@ defmodule Cure.Diagnostic.Adapter.Type do
   def from_error({:no_instance, interface, head}, opts),
     do: instance_failure(interface, head, %{}, opts)
 
+  def from_error({:union_member_not_ground, member}, opts),
+    do: union_declaration_failure(:union_member_not_ground, %{member: member}, opts)
+
+  def from_error({:unsupported_member_shape, members}, opts),
+    do: union_declaration_failure(:unsupported_member_shape, %{members: members}, opts)
+
+  def from_error({:same_runtime_shape, members}, opts),
+    do: union_declaration_failure(:same_runtime_shape, %{members: members}, opts)
+
+  def from_error({:same_erased_literal, members}, opts),
+    do: union_declaration_failure(:same_erased_literal, %{members: members}, opts)
+
   def from_error({:source_context, {:no_instance, interface, head}, context}, opts)
       when is_map(context),
       do: instance_failure(interface, head, context, Keyword.put_new(opts, :span, Map.get(context, :span)))
@@ -1661,6 +1673,40 @@ defmodule Cure.Diagnostic.Adapter.Type do
       title: title,
       body: Doc.paragraph(body),
       primary: primary(opts, message),
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  @doc false
+  def union_declaration_failure(kind, details, opts) do
+    {title, message, label} =
+      case kind do
+        :union_member_not_ground ->
+          {"Union member is not ground", "Every union member must be a concrete, fully-resolved type.",
+           "make this union member concrete"}
+
+        :unsupported_member_shape ->
+          {"Unsupported union member shape", "This union member has a runtime shape that Cure cannot represent safely.",
+           "use a supported union member shape"}
+
+        :same_runtime_shape ->
+          {"Union members have the same runtime shape",
+           "Two union members erase to the same runtime representation and cannot be distinguished.",
+           "change one member's runtime shape"}
+
+        :same_erased_literal ->
+          {"Union members have the same erased literal",
+           "Two union members erase to the same literal value and would overlap at runtime.",
+           "use distinct literal values"}
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary(opts, label),
       payload: Map.put(details, :kind, kind)
     )
   end
