@@ -22,6 +22,7 @@ defmodule Cure.Diagnostic.Adapter do
   }
 
   alias Cure.Diagnostic.Adapter.Codegen
+  alias Cure.Diagnostic.Adapter.Arity
   alias Cure.Diagnostic.Adapter.Kernel, as: KernelAdapter
   alias Cure.Diagnostic.Adapter.Macro, as: MacroAdapter
   alias Cure.Diagnostic.Adapter.Name, as: NameAdapter
@@ -1546,194 +1547,25 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:arity_mismatch, message, meta}, opts) when is_binary(message) and is_list(meta) do
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Arity mismatch",
-      message: message,
-      primary: primary_label(opts, "the number of arguments does not match"),
-      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
-    )
-  end
+  def from_error({:arity_mismatch, _, _} = error, opts), do: Arity.from_error(error, opts)
 
-  def from_error({:extern_arity_mismatch, name, declared, present}, opts)
-      when is_integer(declared) and is_integer(present) do
-    from_error(
-      {:extern_arity_mismatch, %{name: name, declared: declared, present: present}},
-      opts
-    )
-  end
+  def from_error({:extern_arity_mismatch, _, _, _} = error, opts), do: Arity.from_error(error, opts)
 
-  def from_error({:call_arity_mismatch, %{name: name, expected: expected, actual: actual} = details}, opts)
-      when is_integer(expected) and is_integer(actual) do
-    difference = abs(expected - actual)
+  def from_error({:call_arity_mismatch, _details} = error, opts), do: Arity.from_error(error, opts)
 
-    {label, hint} =
-      if actual < expected do
-        {"add #{argument_count(difference)} to this call",
-         "Supply the remaining #{argument_count(difference)}, or use this partial application where a function is expected."}
-      else
-        {"remove #{argument_count(difference)} from this call",
-         "Remove the extra #{argument_count(difference)}, or call the returned function separately if that was intended."}
-      end
+  def from_error({:extern_arity_mismatch, %{name: _name} = _details} = error, opts), do: Arity.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Function arity mismatch",
-      body:
-        Doc.paragraph(
-          "`#{name_to_string(name)}` accepts #{argument_count(expected)}, but this call supplies #{argument_count(actual)}."
-        ),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: Map.put(details, :kind, :function)
-    )
-  end
+  def from_error({:constructor_arity_mismatch, %{name: _name} = _details} = error, opts),
+    do: Arity.from_error(error, opts)
 
-  def from_error(
-        {:extern_arity_mismatch, %{name: name, declared: declared, present: present} = details},
-        opts
-      )
-      when is_integer(declared) and is_integer(present) do
-    opts = Keyword.put_new(opts, :span, Map.get(details, :span))
+  def from_error({:constructor_arity_mismatch, _name} = error, opts), do: Arity.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Arity mismatch",
-      body:
-        Doc.paragraph(
-          "Extern `#{name_to_string(name)}` declares target arity #{declared}, but its present Cure arity is #{present}."
-        ),
-      primary:
-        primary_label(
-          opts,
-          "change this target arity to #{present} so it matches the values present at runtime"
-        ),
-      suggestions: [
-        %Suggestion{
-          message: "Use target arity #{present}; erased parameters do not cross the FFI boundary.",
-          applicability: :manual
-        }
-      ],
-      payload:
-        details
-        |> Map.put(:name, name_to_string(name))
-        |> Map.put(:kind, :extern)
-    )
-  end
+  def from_error({:pattern_arity_mismatch, %{constructor: _} = _details} = error, opts),
+    do: Arity.from_error(error, opts)
 
-  def from_error({:constructor_arity_mismatch, %{name: name} = details}, opts) do
-    expected = Map.get(details, :expected)
-    actual = Map.get(details, :actual)
-    display_name = Map.get(details, :display_name) || name_to_string(name)
+  def from_error({:tuple_arity_mismatch, _, _} = error, opts), do: Arity.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Constructor arity mismatch",
-      body:
-        Doc.paragraph(
-          "Constructor `#{display_name}` requires #{argument_count(expected)}, but this call supplies #{argument_count(actual)}."
-        ),
-      primary: primary_label(opts, constructor_arity_label(expected, actual)),
-      payload:
-        details
-        |> Map.put(:kind, :constructor)
-        |> Map.put(:constructor, display_name)
-    )
-  end
-
-  def from_error({:constructor_arity_mismatch, name}, opts),
-    do: from_error({:constructor_arity_mismatch, %{name: name}}, opts)
-
-  def from_error(
-        {:pattern_arity_mismatch, %{constructor: constructor, expected: expected, actual: actual} = details},
-        opts
-      ) do
-    opts = Keyword.put(opts, :span, Map.get(details, :span))
-    difference = abs(expected - actual)
-    display_name = Map.get(details, :display_name) || name_to_string(constructor)
-
-    {label, hint} =
-      if actual < expected do
-        {"add #{argument_count(difference)} to this pattern",
-         "Bind the remaining constructor field#{if difference == 1, do: "", else: "s"}, or use `_` for fields you do not need."}
-      else
-        {"remove #{argument_count(difference)} from this pattern",
-         "Remove the extra pattern field#{if difference == 1, do: "", else: "s"}; this constructor does not contain them."}
-      end
-
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Pattern arity mismatch",
-      body:
-        Doc.paragraph(
-          "Constructor `#{display_name}` has #{argument_count(expected)}, but this pattern matches #{argument_count(actual)}."
-        ),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: Map.put(details, :kind, :pattern)
-    )
-  end
-
-  def from_error({:tuple_arity_mismatch, expected, actual}, opts)
-      when is_integer(expected) and is_integer(actual) do
-    difference = abs(expected - actual)
-
-    {label, hint} =
-      if actual < expected do
-        {"add #{argument_count(difference)} to this tuple pattern",
-         "Add #{argument_count(difference)} to match all #{expected} tuple elements; use `_` for values you do not need."}
-      else
-        {"remove #{argument_count(difference)} from this tuple pattern",
-         "Remove #{argument_count(difference)}; this value has only #{argument_count(expected)}."}
-      end
-
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Tuple pattern has the wrong size",
-      body:
-        Doc.paragraph("This value has #{argument_count(expected)}, but the pattern contains #{argument_count(actual)}."),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{kind: :tuple_pattern, expected: expected, actual: actual}
-    )
-  end
-
-  def from_error({:tuple_arity_mismatch, direction, details}, opts) do
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Tuple arity mismatch",
-      body: Doc.paragraph("This tuple pattern has the wrong number of elements (#{direction})."),
-      primary: primary_label(opts, "make the tuple pattern match the value's arity"),
-      payload: %{kind: :tuple, direction: direction, details: details}
-    )
-  end
-
-  def from_error({:with_rematch_arity_mismatch, expected, actual}, opts) do
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "With-pattern arity mismatch",
-      body: Doc.paragraph("The original `with` match has #{expected} pattern(s), but its rematch has #{actual}."),
-      primary: primary_label(opts, "keep the rematched patterns aligned with the original values"),
-      payload: %{kind: :with_rematch, expected: expected, actual: actual}
-    )
-  end
+  def from_error({:with_rematch_arity_mismatch, _, _} = error, opts), do: Arity.from_error(error, opts)
 
   def from_error({:typed_pattern_type_mismatch, _type_ast} = error, opts),
     do: TypeAdapter.from_error(error, opts)
@@ -2775,21 +2607,6 @@ defmodule Cure.Diagnostic.Adapter do
     do: pickup_label(span, :secondary, message)
 
   defp sibling_dependency_label(_span, _primary_span, _message), do: nil
-
-  defp argument_count(1), do: "1 argument"
-  defp argument_count(count) when is_integer(count), do: "#{count} arguments"
-  defp argument_count(_count), do: "a different number of arguments"
-
-  defp constructor_arity_label(expected, actual)
-       when is_integer(expected) and is_integer(actual) and actual < expected,
-       do: "add #{argument_count(expected - actual)} to this constructor call"
-
-  defp constructor_arity_label(expected, actual)
-       when is_integer(expected) and is_integer(actual) and actual > expected,
-       do: "remove #{argument_count(actual - expected)} from this constructor call"
-
-  defp constructor_arity_label(_expected, _actual),
-    do: "provide the arguments required by this constructor"
 
   defp contextual_type_problem(kind, actual, expected, origin, context, opts) do
     from_error(
