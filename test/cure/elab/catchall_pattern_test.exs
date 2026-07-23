@@ -109,6 +109,70 @@ defmodule Cure.Elab.CatchallPatternTest do
     assert {:ok, _environment} = Program.elaborate(fixed, file: "catchall_shadow_fixed.cure")
   end
 
+  test "fallback shadowing is rejected before join sharing and labels both binders" do
+    src =
+      "mod M\n" <>
+        "  type Color = Red | Green | Blue | Gold\n" <>
+        "  fn f(c: Color) -> Color = match c\n" <>
+        "    Red() -> Red()\n" <>
+        "    rest ->\n" <>
+        "      let g : (Color) -> Color = fn(rest) -> rest\n" <>
+        "      g(c)\n" <>
+        "end\n"
+
+    assert {:error,
+            {:source_context,
+             {:unsupported_pattern,
+              %{reason: :shadowed_default, name: "rest", span: outer_span, shadow_span: shadow_span}}, _} =
+              error} = Program.elaborate(src)
+
+    assert {outer_span.start_line, outer_span.start_column} == {5, 5}
+    assert {shadow_span.start_line, shadow_span.start_column} == {6, 37}
+
+    {diagnostic, registry} = Errors.to_diagnostic(error, "default_shadow.cure", src)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- NESTED PATTERN SHADOWS `REST` [E090] -------------------- default_shadow.cure
+
+             This fallback pattern binds every constructor not handled above as `rest`. A
+             binder inside the fallback branch uses the same name, so reconstructing an
+             omitted constructor could capture the inner value.
+
+             at default_shadow.cure:6:37
+             5 |     rest ->
+               |     ---- this outer pattern binds `rest`
+             6 |       let g : (Color) -> Color = fn(rest) -> rest
+               |                                     ^^^^ rename this inner binder so it does not shadow `rest`
+
+             Hint: Give the nested binder a different name and update its branch body
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 5, "character" => 36},
+             "end" => %{"line" => 5, "character" => 40}
+           }
+
+    assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+             %{
+               "start" => %{"line" => 4, "character" => 4},
+               "end" => %{"line" => 4, "character" => 8}
+             }
+           ]
+
+    assert lsp["data"]["payload"] == %{
+             "checking" => "f",
+             "kind" => "unsupported_pattern",
+             "name" => "rest",
+             "reason" => "shadowed_default"
+           }
+
+    fixed = String.replace(src, "fn(rest) -> rest", "fn(other) -> other")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "default_shadow_fixed.cure")
+  end
+
   test "dependent catch-all reconstructs each constructor at its refined index" do
     # `x -> x`: the seqg branch refines `d := DCau`, and the reconstructed `x`
     # (= seqg(…) : G(DCau)) must match the branch-refined goal G(DCau).

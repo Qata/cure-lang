@@ -7058,6 +7058,17 @@ defmodule Cure.Elab.Elaborator do
             default != nil ->
               {:halt, {:error, {:duplicate_default_pattern, vname}}}
 
+            vname != "_" and binds_any?(body, [vname]) ->
+              {:halt,
+               {:error,
+                {:unsupported_pattern,
+                 %{
+                   reason: :shadowed_default,
+                   name: vname,
+                   span: pattern_binder_span(pattern, vname),
+                   shadow_span: first_binding_span(body, vname)
+                 }}}}
+
             true ->
               {:cont, {:ok, {acc, {vname, single_body(body)}}}}
           end
@@ -7211,11 +7222,6 @@ defmodule Cure.Elab.Elaborator do
           result_type_term,
           carried
         )
-
-      binds_any?(body_expr, [vname]) ->
-        # The catch-all's name is rebound inside its own body; a naive surface
-        # substitution would capture. Reject rather than miscompile.
-        {:error, {:unsupported_pattern, :shadowed_default}}
 
       true ->
         body2 = subst_surface_var(body_expr, vname, syn_pattern)
