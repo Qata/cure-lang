@@ -22,6 +22,45 @@ defmodule Cure.Diagnostic.Adapter.Macro do
   @spec from_error(term(), keyword()) :: Diagnostic.t()
   def from_error(error, opts \\ [])
 
+  def from_error({:splice_outside_quote, tag, meta}, opts) when is_list(meta) do
+    form = if tag == :splice_group, do: "$(e ...)", else: "$(e)"
+
+    Diagnostic.new(
+      code: "E108",
+      key: :splice_outside_quote,
+      severity: :error,
+      title: "Splice outside quote",
+      body: Doc.paragraph("The `#{form}` splice has no surrounding quote to receive generated syntax."),
+      primary: label(Keyword.get(opts, :span), :primary, "place this splice inside a quote"),
+      payload: %{form: tag, stage: :elaboration}
+    )
+  end
+
+  def from_error({:splice_outside_quote, %{form: tag} = details}, opts)
+      when tag in [:splice, :splice_group] do
+    form = if tag == :splice_group, do: "$(expressions ...)", else: "$(expression)"
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E108",
+      key: :splice_outside_quote,
+      severity: :error,
+      title: "Splice has no enclosing quote",
+      body:
+        Doc.paragraph(
+          "`#{form}` inserts syntax into a surrounding `quote`, but this splice is in ordinary expression code. There is no quoted syntax tree here to receive its value."
+        ),
+      primary: label(span, :primary, "this splice is outside every `quote`"),
+      suggestions: [
+        %Suggestion{
+          message: "Move this splice inside `quote ...`, or remove `$()` to evaluate an ordinary expression",
+          applicability: :manual
+        }
+      ],
+      payload: %{form: tag, stage: Map.get(details, :stage, :elaboration)}
+    )
+  end
+
   def from_error({:unknown_syntax_family_field, details}, opts)
       when is_map(details) do
     span = Map.get(details, :span) || Keyword.get(opts, :span)
