@@ -204,7 +204,11 @@ defmodule Cure.Diagnostic.RegistryTest do
   end
 
   test "totality and pattern coverage have exhaustive static-analysis ownership" do
-    for {code, producer} <- [{"E013", :totality_checker}, {"E118", :elaboration}] do
+    for {code, producer} <- [
+          {"E013", :totality_checker},
+          {"E118", :elaboration},
+          {"E119", :elaboration}
+        ] do
       entry = Registry.fetch!(code)
       assert entry.converter == Cure.Diagnostic.Adapter.StaticAnalysis
 

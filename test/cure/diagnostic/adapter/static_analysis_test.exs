@@ -142,4 +142,36 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysisTest do
       assert direct.suggestions != []
     end
   end
+
+  test "pattern structure owns nonlinear, catch-all, binary, and map failures" do
+    source = "x x\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:structure, source, "structure.cure")
+    {:ok, first} = SourceRegistry.span(registry, :structure, 0, 1)
+    {:ok, second} = SourceRegistry.span(registry, :structure, 2, 3)
+
+    context = %{
+      span: second,
+      branch_patterns: [
+        %{kind: :variable, span: first, variable_spans: %{"x" => [first, second]}},
+        %{kind: :variable, span: second}
+      ]
+    }
+
+    errors = [
+      {:source_context, {:nonlinear_pattern, "x"}, context},
+      {:source_context, {:duplicate_default_pattern, "x"}, context},
+      {:source_context, {:impossible_default_pattern, "x"}, context},
+      {:source_context, {:unreachable_after_default_pattern, %{name: "x", span: second, default_span: first}}, context},
+      {:source_context, {:binary_match_needs_default}, context},
+      {:source_context, {:map_match_needs_default}, context}
+    ]
+
+    for error <- errors do
+      direct = StaticAnalysis.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E119"
+      assert direct.primary.span
+      assert direct.suggestions != []
+    end
+  end
 end

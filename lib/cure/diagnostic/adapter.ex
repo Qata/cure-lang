@@ -1603,21 +1603,19 @@ defmodule Cure.Diagnostic.Adapter do
     operator_failure(kind, operator, context, opts)
   end
 
-  def from_error({:source_context, {kind, detail}, context}, opts)
+  def from_error({:source_context, {kind, _detail}, context} = error, opts)
       when kind in [
              :nonlinear_pattern,
              :duplicate_default_pattern,
              :impossible_default_pattern,
              :unreachable_after_default_pattern
            ] and
-             is_map(context) do
-    pattern_structure_failure(kind, detail, context, opts)
-  end
+             is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:source_context, {kind}, context}, opts)
-      when kind in [:binary_match_needs_default, :map_match_needs_default] and is_map(context) do
-    pattern_structure_failure(kind, nil, context, opts)
-  end
+  def from_error({:source_context, {kind}, context} = error, opts)
+      when kind in [:binary_match_needs_default, :map_match_needs_default] and is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
 
   def from_error({:source_context, {kind, detail}, context}, opts)
       when kind in [
@@ -1873,17 +1871,17 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:hole_in_inference_position, name}, opts),
     do: inferred_hole_failure(name, %{}, opts)
 
-  def from_error({kind, detail}, opts)
+  def from_error({kind, _detail} = error, opts)
       when kind in [
              :nonlinear_pattern,
              :duplicate_default_pattern,
              :impossible_default_pattern,
              :unreachable_after_default_pattern
            ],
-      do: pattern_structure_failure(kind, detail, %{}, opts)
+      do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({kind}, opts) when kind in [:binary_match_needs_default, :map_match_needs_default],
-    do: pattern_structure_failure(kind, nil, %{}, opts)
+  def from_error({kind} = error, opts) when kind in [:binary_match_needs_default, :map_match_needs_default],
+    do: StaticAnalysis.from_error(error, opts)
 
   def from_error({:ctor_requires_checking_mode, family}, opts),
     do: kernel_type_failure(:ctor_requires_checking_mode, Keyword.put(opts, :family, family))
@@ -6043,24 +6041,6 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  defp pattern_structure_failure(kind, detail, context, opts) do
-    {title, body, primary, secondary, hint} = pattern_structure_content(kind, detail, context, opts)
-
-    name = if is_map(detail), do: Map.get(detail, :name), else: detail
-
-    Diagnostic.new(
-      code: "E119",
-      key: :pattern_structure,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(body),
-      primary: primary || primary_label(opts, "fix this pattern"),
-      secondary: secondary,
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{kind: kind, name: name, checking: Map.get(context, :checking)}
-    )
-  end
-
   defp primitive_declaration_failure(kind, details, context, opts) do
     name = Map.get(details, :name) || Map.get(context, :primitive)
     tag = Map.get(details, :tag) || Map.get(context, :builtin_tag)
@@ -6231,128 +6211,6 @@ defmodule Cure.Diagnostic.Adapter do
       suggestions: [%Suggestion{message: hint, applicability: :manual}],
       payload: %{kind: kind, operator: operator, operand_types: types}
     )
-  end
-
-  defp pattern_structure_content(:nonlinear_pattern, name, context, opts) do
-    spelling = name_to_string(name)
-
-    spans =
-      context
-      |> Map.get(:branch_patterns, [])
-      |> Enum.flat_map(&(Map.get(&1, :variable_spans, %{}) |> Map.get(spelling, [])))
-
-    primary_span = List.last(spans)
-
-    secondary =
-      case pickup_label(List.first(spans), :secondary, "`#{spelling}` is first bound here") do
-        nil -> []
-        label -> [label]
-      end
-
-    {
-      "Pattern binds `#{spelling}` more than once",
-      "Each name may bind only one field in a pattern. Repeating `#{spelling}` would imply an equality check that the pattern has not proved.",
-      pickup_label(
-        primary_span || Keyword.get(opts, :span),
-        :primary,
-        "this repeats the earlier `#{spelling}` binding"
-      ),
-      secondary,
-      "Use a fresh name here, then compare the two values explicitly if they must be equal"
-    }
-  end
-
-  defp pattern_structure_content(:duplicate_default_pattern, _name, context, opts) do
-    defaults = context |> Map.get(:branch_patterns, []) |> Enum.filter(&(Map.get(&1, :kind) == :variable))
-    first = List.first(defaults)
-    duplicate = List.last(defaults)
-
-    secondary =
-      case pickup_label(
-             branch_pattern_span(first),
-             :secondary,
-             "this earlier pattern already matches every remaining value"
-           ) do
-        nil -> []
-        label -> [label]
-      end
-
-    {
-      "Pattern match has more than one catch-all",
-      "A variable or `_` pattern matches every value not handled above it, so a later catch-all can never be reached.",
-      pickup_label(
-        branch_pattern_span(duplicate) || Keyword.get(opts, :span),
-        :primary,
-        "this catch-all is unreachable"
-      ),
-      secondary,
-      "Keep one final catch-all branch and remove or narrow the others"
-    }
-  end
-
-  defp pattern_structure_content(:impossible_default_pattern, _name, context, opts) do
-    default = context |> Map.get(:branch_patterns, []) |> Enum.find(&(Map.get(&1, :kind) == :variable))
-
-    {
-      "Catch-all branch cannot be impossible",
-      "A variable or `_` pattern accepts every remaining value, so it cannot justify an `impossible` branch.",
-      pickup_label(
-        branch_pattern_span(default) || Keyword.get(opts, :span),
-        :primary,
-        "this pattern is always reachable"
-      ),
-      [],
-      "Use constructor patterns whose indices prove impossibility, or provide a result for this catch-all"
-    }
-  end
-
-  defp pattern_structure_content(:unreachable_after_default_pattern, details, _context, opts) do
-    name = details |> Map.get(:name) |> name_to_string()
-
-    secondary =
-      case pickup_label(
-             Map.get(details, :default_span),
-             :secondary,
-             "this catch-all already accepts every remaining value as `#{name}`"
-           ) do
-        nil -> []
-        label -> [label]
-      end
-
-    {
-      "Branch appears after a catch-all",
-      "No value can reach this branch because the preceding catch-all pattern already accepts every value not handled above it.",
-      pickup_label(
-        Map.get(details, :span) || Keyword.get(opts, :span),
-        :primary,
-        "this branch can never be reached"
-      ),
-      secondary,
-      "Move the catch-all to the end of the match, or narrow it to a constructor pattern"
-    }
-  end
-
-  defp pattern_structure_content(kind, _detail, context, opts)
-       when kind in [:binary_match_needs_default, :map_match_needs_default] do
-    subject = if kind == :binary_match_needs_default, do: "binary", else: "map"
-    insertion = missing_branch_insertion_span(context)
-
-    body =
-      case kind do
-        :binary_match_needs_default ->
-          "Binary patterns only cover the byte and segment shapes written in their branches; other binary values can still arrive."
-
-        :map_match_needs_default ->
-          "Map patterns only constrain the entries written in their branches; maps with other key sets can still arrive."
-      end
-
-    {
-      "#{String.capitalize(subject)} match needs a catch-all",
-      body,
-      pickup_label(insertion || Keyword.get(opts, :span), :primary, "add a catch-all branch here"),
-      [],
-      "Add `_ -> ...` to handle every remaining #{subject} value"
-    }
   end
 
   defp branch_pattern_span(%{pattern_span: %Span{} = span}), do: span

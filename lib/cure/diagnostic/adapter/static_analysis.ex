@@ -68,7 +68,148 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysis do
       when is_map(context),
       do: coverage_failure(:duplicate_branch, branch, context, opts)
 
+  def from_error({:source_context, {kind, detail}, context}, opts)
+      when kind in [
+             :nonlinear_pattern,
+             :duplicate_default_pattern,
+             :impossible_default_pattern,
+             :unreachable_after_default_pattern
+           ] and is_map(context),
+      do: pattern_structure_failure(kind, detail, context, opts)
+
+  def from_error({:source_context, {kind}, context}, opts)
+      when kind in [:binary_match_needs_default, :map_match_needs_default] and is_map(context),
+      do: pattern_structure_failure(kind, nil, context, opts)
+
+  def from_error({kind, detail}, opts)
+      when kind in [
+             :nonlinear_pattern,
+             :duplicate_default_pattern,
+             :impossible_default_pattern,
+             :unreachable_after_default_pattern
+           ],
+      do: pattern_structure_failure(kind, detail, %{}, opts)
+
+  def from_error({kind}, opts) when kind in [:binary_match_needs_default, :map_match_needs_default],
+    do: pattern_structure_failure(kind, nil, %{}, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp pattern_structure_failure(kind, detail, context, opts) do
+    {title, body, primary, secondary, hint} = pattern_structure_copy(kind, detail, context, opts)
+    name = if is_map(detail), do: Map.get(detail, :name), else: detail
+
+    Diagnostic.new(
+      code: "E119",
+      key: :pattern_structure,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: primary || primary(opts, "fix this pattern"),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{kind: kind, name: name, checking: Map.get(context, :checking)}
+    )
+  end
+
+  defp pattern_structure_copy(:nonlinear_pattern, name, context, opts) do
+    spelling = name_to_string(name)
+
+    spans =
+      context
+      |> Map.get(:branch_patterns, [])
+      |> Enum.flat_map(&(Map.get(&1, :variable_spans, %{}) |> Map.get(spelling, [])))
+
+    secondary =
+      case label(List.first(spans), :secondary, "`#{spelling}` is first bound here") do
+        nil -> []
+        first -> [first]
+      end
+
+    {
+      "Pattern binds `#{spelling}` more than once",
+      "Each name may bind only one field in a pattern. Repeating `#{spelling}` would imply an equality check that the pattern has not proved.",
+      label(List.last(spans) || Keyword.get(opts, :span), :primary, "this repeats the earlier `#{spelling}` binding"),
+      secondary,
+      "Use a fresh name here, then compare the two values explicitly if they must be equal"
+    }
+  end
+
+  defp pattern_structure_copy(:duplicate_default_pattern, _name, context, opts) do
+    defaults = Enum.filter(Map.get(context, :branch_patterns, []), &(Map.get(&1, :kind) == :variable))
+    first = List.first(defaults)
+    duplicate = List.last(defaults)
+
+    secondary =
+      case label(branch_span(first), :secondary, "this earlier pattern already matches every remaining value") do
+        nil -> []
+        first_label -> [first_label]
+      end
+
+    {
+      "Pattern match has more than one catch-all",
+      "A variable or `_` pattern matches every value not handled above it, so a later catch-all can never be reached.",
+      label(branch_span(duplicate) || Keyword.get(opts, :span), :primary, "this catch-all is unreachable"),
+      secondary,
+      "Keep one final catch-all branch and remove or narrow the others"
+    }
+  end
+
+  defp pattern_structure_copy(:impossible_default_pattern, _name, context, opts) do
+    default = Enum.find(Map.get(context, :branch_patterns, []), &(Map.get(&1, :kind) == :variable))
+
+    {
+      "Catch-all branch cannot be impossible",
+      "A variable or `_` pattern accepts every remaining value, so it cannot justify an `impossible` branch.",
+      label(branch_span(default) || Keyword.get(opts, :span), :primary, "this pattern is always reachable"),
+      [],
+      "Use constructor patterns whose indices prove impossibility, or provide a result for this catch-all"
+    }
+  end
+
+  defp pattern_structure_copy(:unreachable_after_default_pattern, details, _context, opts) do
+    name = details |> Map.get(:name) |> name_to_string()
+
+    secondary =
+      case label(
+             Map.get(details, :default_span),
+             :secondary,
+             "this catch-all already accepts every remaining value as `#{name}`"
+           ) do
+        nil -> []
+        default -> [default]
+      end
+
+    {
+      "Branch appears after a catch-all",
+      "No value can reach this branch because the preceding catch-all pattern already accepts every value not handled above it.",
+      label(Map.get(details, :span) || Keyword.get(opts, :span), :primary, "this branch can never be reached"),
+      secondary,
+      "Move the catch-all to the end of the match, or narrow it to a constructor pattern"
+    }
+  end
+
+  defp pattern_structure_copy(kind, _detail, context, opts)
+       when kind in [:binary_match_needs_default, :map_match_needs_default] do
+    subject = if kind == :binary_match_needs_default, do: "binary", else: "map"
+
+    body =
+      case kind do
+        :binary_match_needs_default ->
+          "Binary patterns only cover the byte and segment shapes written in their branches; other binary values can still arrive."
+
+        :map_match_needs_default ->
+          "Map patterns only constrain the entries written in their branches; maps with other key sets can still arrive."
+      end
+
+    {
+      "#{String.capitalize(subject)} match needs a catch-all",
+      body,
+      label(insertion_span(context) || Keyword.get(opts, :span), :primary, "add a catch-all branch here"),
+      [],
+      "Add `_ -> ...` to handle every remaining #{subject} value"
+    }
+  end
 
   defp coverage_failure(kind, branch, context, opts) do
     branch_name = surface_name(branch)
