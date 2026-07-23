@@ -1527,32 +1527,8 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:extern_untyped_head, _, _} = error, opts), do: Declaration.from_error(error, opts)
   def from_error({:extern_has_body, _, _} = error, opts), do: Declaration.from_error(error, opts)
 
-  def from_error({:proof_shape_mismatch, message, name}, opts) when is_binary(message) do
-    Diagnostic.new(
-      code: "E026",
-      key: :proof_shape_mismatch,
-      severity: :error,
-      title: "Proof shape mismatch",
-      message: message,
-      primary: primary_label(opts, "return a propositional equality from this proof binding"),
-      payload: %{name: name}
-    )
-  end
-
-  def from_error({:ambiguous_proof_search, goal, candidates}, opts) when is_list(candidates) do
-    Diagnostic.new(
-      code: "E026",
-      key: :proof_shape_mismatch,
-      severity: :error,
-      title: "Proof search is ambiguous",
-      body:
-        Doc.paragraph(
-          "More than one proof can solve the current obligation, so the compiler cannot choose a deterministic witness."
-        ),
-      primary: primary_label(opts, "make the proof obligation unambiguous"),
-      payload: %{kind: :ambiguous_proof_search, goal: goal, candidates: candidates}
-    )
-  end
+  def from_error({:proof_shape_mismatch, _, _} = error, opts), do: ProofAdapter.from_error(error, opts)
+  def from_error({:ambiguous_proof_search, _, _} = error, opts), do: ProofAdapter.from_error(error, opts)
 
   def from_error({:totality_required, _name} = error, opts),
     do: StaticAnalysis.from_error(error, opts)

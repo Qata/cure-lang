@@ -18,6 +18,33 @@ defmodule Cure.Diagnostic.Adapter.Proof do
   }
 
   @spec from_error(term(), keyword()) :: Diagnostic.t()
+  def from_error({:proof_shape_mismatch, message, name}, opts) when is_binary(message) do
+    Diagnostic.new(
+      code: "E026",
+      key: :proof_shape_mismatch,
+      severity: :error,
+      title: "Proof shape mismatch",
+      message: message,
+      primary: primary(opts, "return a propositional equality from this proof binding"),
+      payload: %{name: name}
+    )
+  end
+
+  def from_error({:ambiguous_proof_search, goal, candidates}, opts) when is_list(candidates) do
+    Diagnostic.new(
+      code: "E026",
+      key: :proof_shape_mismatch,
+      severity: :error,
+      title: "Proof search is ambiguous",
+      body:
+        Doc.paragraph(
+          "More than one proof can solve the current obligation, so the compiler cannot choose a deterministic witness."
+        ),
+      primary: primary(opts, "make the proof obligation unambiguous"),
+      payload: %{kind: :ambiguous_proof_search, goal: goal, candidates: candidates}
+    )
+  end
+
   def from_error({:proof_chain_syntax, %ProofChainSyntaxProblem{} = problem}, opts) do
     {title, message, label} =
       case problem.kind do
