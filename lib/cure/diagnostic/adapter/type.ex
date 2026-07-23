@@ -203,7 +203,72 @@ defmodule Cure.Diagnostic.Adapter.Type do
       when is_map(context),
       do: indexed_with_proof(family, context, opts)
 
+  def from_error(
+        {:source_context, {:cannot_infer_dependent_match, _inferred_type}, context},
+        opts
+      )
+      when is_map(context),
+      do: dependent_match_inference(context, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp dependent_match_inference(context, opts) do
+    branch = Enum.find(Map.get(context, :branch_patterns, []), &match?(%{span: %Span{}}, &1))
+    match_span = Map.get(context, :opener_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+    branch_name = branch && Map.get(branch, :name)
+
+    branch_message =
+      if branch_name do
+        "the `#{branch_name}` branch returns a type tied to values introduced by its pattern"
+      else
+        "this branch returns a type tied to values introduced by its pattern"
+      end
+
+    {primary, secondary} =
+      case branch do
+        %{span: %Span{} = branch_span} ->
+          related =
+            if match?(%Span{}, match_span) and match_span != branch_span do
+              [%Label{span: match_span, style: :secondary, message: "this match has no expected result type"}]
+            else
+              []
+            end
+
+          {%Label{span: branch_span, style: :primary, message: branch_message}, related}
+
+        _ ->
+          {primary(Keyword.put(opts, :span, match_span), "this match needs an expected result type"), []}
+      end
+
+    checking = Map.get(context, :checking)
+    owner = if checking, do: " `#{name(checking)}`", else: ""
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Dependent match result needs an annotation",
+      body:
+        Doc.paragraph(
+          "Cure inferred a branch result whose type depends on values introduced by that branch's constructor pattern. Those values do not exist outside the branch, so Cure cannot choose one result type for#{owner} without an annotation."
+        ),
+      primary: primary,
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Add a result annotation to `#{name(checking || :the_enclosing_declaration)}` that states the indexed result shared by every branch",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :cannot_infer_dependent_match,
+        checking: checking,
+        expression_category: Map.get(context, :expression_category, :pattern_match),
+        branch: branch_name
+      }
+    )
+  end
 
   defp indexed_with_proof(family, context, opts) do
     family = family |> name() |> String.split("#") |> List.last()

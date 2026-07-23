@@ -1633,9 +1633,12 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: bounded_literal_failure(value, bound, context, opts)
 
-  def from_error({:source_context, {:cannot_infer_dependent_match, _inferred_type}, context}, opts)
+  def from_error(
+        {:source_context, {:cannot_infer_dependent_match, _inferred_type}, context} = error,
+        opts
+      )
       when is_map(context),
-      do: dependent_match_inference_failure(context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:source_context, {:result_type_not_family, family}, context}, opts)
       when is_map(context),
@@ -4690,64 +4693,6 @@ defmodule Cure.Diagnostic.Adapter do
       |> Enum.join(" and ")
 
     "End this constructor signature with `#{family}` applied to its #{positions}"
-  end
-
-  defp dependent_match_inference_failure(context, opts) do
-    branches = Map.get(context, :branch_patterns, [])
-    branch = Enum.find(branches, &match?(%{span: %Span{}}, &1))
-    match_span = Map.get(context, :opener_span) || Map.get(context, :span) || Keyword.get(opts, :span)
-    branch_name = branch && Map.get(branch, :name)
-
-    branch_message =
-      if branch_name do
-        "the `#{branch_name}` branch returns a type tied to values introduced by its pattern"
-      else
-        "this branch returns a type tied to values introduced by its pattern"
-      end
-
-    {primary, secondary} =
-      case branch do
-        %{span: %Span{} = branch_span} ->
-          {
-            pickup_label(branch_span, :primary, branch_message),
-            if(match_span && match_span != branch_span,
-              do: [pickup_label(match_span, :secondary, "this match has no expected result type")],
-              else: []
-            )
-          }
-
-        _ ->
-          {pickup_label(match_span, :primary, "this match needs an expected result type"), []}
-      end
-
-    checking = Map.get(context, :checking)
-    owner = if checking, do: " `#{name_to_string(checking)}`", else: ""
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Dependent match result needs an annotation",
-      body:
-        Doc.paragraph(
-          "Cure inferred a branch result whose type depends on values introduced by that branch's constructor pattern. Those values do not exist outside the branch, so Cure cannot choose one result type for#{owner} without an annotation."
-        ),
-      primary: primary,
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message:
-            "Add a result annotation to `#{name_to_string(checking || :the_enclosing_declaration)}` that states the indexed result shared by every branch",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :cannot_infer_dependent_match,
-        checking: checking,
-        expression_category: Map.get(context, :expression_category, :pattern_match),
-        branch: branch_name
-      }
-    )
   end
 
   defp with_sibling_dependency_failure(details, context, opts) do

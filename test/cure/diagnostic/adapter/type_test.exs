@@ -390,4 +390,31 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert rendered =~ "this branch would need an indexed value equation"
     assert rendered =~ "Hint: Remove `proof pf`"
   end
+
+  test "dependent match inference points to the responsible branch and enclosing match" do
+    source = "match value\nCons(x) -> x\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:dependent_match, source, "dependent.cure")
+    {:ok, match_span} = SourceRegistry.span(registry, :dependent_match, 0, 5)
+    {:ok, branch_span} = SourceRegistry.span(registry, :dependent_match, 12, 24)
+
+    error =
+      {:source_context, {:cannot_infer_dependent_match, {:data, :Result, [], []}},
+       %{
+         opener_span: match_span,
+         checking: :tail,
+         branch_patterns: [%{name: "Cons", span: branch_span}]
+       }}
+
+    direct = TypeAdapter.from_error(error)
+    assert Adapter.from_error(error) == direct
+    assert direct.primary.span == branch_span
+    assert hd(direct.secondary).span == match_span
+    refute inspect(direct.payload) =~ "{:data"
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "DEPENDENT MATCH RESULT NEEDS AN ANNOTATION [E093]"
+    assert rendered =~ "the `Cons` branch returns a type tied"
+    assert rendered =~ "this match has no expected result type"
+    assert rendered =~ "Hint: Add a result annotation to `tail`"
+  end
 end
