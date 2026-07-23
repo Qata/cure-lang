@@ -149,6 +149,22 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
     end
   end
 
+  test "check validation producers are owned by the macro family" do
+    errors = [
+      {:invalid_check_name, :Checks},
+      :invalid_check_property,
+      :duplicate_check_property
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.key == :macro_check_validation
+      assert direct.suggestions != []
+    end
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 

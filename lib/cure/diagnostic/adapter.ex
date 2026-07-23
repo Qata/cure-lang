@@ -1635,7 +1635,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: MacroAdapter.from_error({:invalid_unit_literal, value, suffix}, opts)
 
   def from_error({:invalid_check_name, name}, opts),
-    do: macro_check_failure(:invalid_check_name, %{name: name}, opts)
+    do: MacroAdapter.from_error({:invalid_check_name, name}, opts)
 
   def from_error({:invalid_protocol_name, name}, opts),
     do: macro_protocol_failure(:invalid_protocol_name, %{name: name}, opts)
@@ -1849,7 +1849,7 @@ defmodule Cure.Diagnostic.Adapter do
       do: macro_syntax_decode_failure(kind, %{}, opts)
 
   def from_error(kind, opts) when kind in [:invalid_check_property, :duplicate_check_property],
-    do: macro_check_failure(kind, %{}, opts)
+    do: MacroAdapter.from_error(kind, opts)
 
   def from_error(:invalid_raw_tokens, opts), do: macro_raw_failure(:invalid_raw_tokens, %{}, opts)
 
@@ -4722,21 +4722,6 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp macro_validation_failure(kind, details, opts), do: macro_validation_failure(kind, details, opts, %{})
 
-  defp macro_check_failure(kind, details, opts) do
-    {title, message, label, hint} = macro_check_content(kind, details)
-
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_check_validation,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
   defp macro_protocol_failure(kind, details, opts) do
     {title, message, label, hint} = macro_protocol_content(kind, details)
 
@@ -5396,33 +5381,6 @@ defmodule Cure.Diagnostic.Adapter do
       {"Protocol choice cannot be projected",
        "Every branch decided by `#{name_to_string(role)}` must begin with that role sending a message, so the other endpoint can observe the choice.",
        "make the decider announce each branch", "Start every branch with a message sent by `#{name_to_string(role)}`"}
-
-  defp macro_check_content(:invalid_check_name, %{name: name}) do
-    {
-      "Check plan name is invalid",
-      "A generated check plan needs an atom or text name, but this plan uses `#{name_to_string(name)}`.",
-      "replace this check plan name",
-      "Use a stable name such as `FrameProperties`"
-    }
-  end
-
-  defp macro_check_content(:invalid_check_property, _details) do
-    {
-      "Check property is malformed",
-      "Every check property needs a name, a supported check kind, and the expression to test.",
-      "rewrite this check property",
-      "Provide `name`, `kind`, and `expression`; use `round_trip`, `total`, `fault_rejection`, `exhaustive`, or `termination`"
-    }
-  end
-
-  defp macro_check_content(:duplicate_check_property, _details) do
-    {
-      "Check property name is repeated",
-      "Two properties in this check plan have the same name, so their generated results cannot be distinguished.",
-      "rename or remove this property",
-      "Give every property in the check plan a unique name"
-    }
-  end
 
   defp macro_validation_failure(kind, details, opts, context) do
     span = Map.get(context, :span) || Keyword.get(opts, :span)

@@ -220,6 +220,12 @@ defmodule Cure.Diagnostic.Adapter.Macro do
   def from_error({:invalid_unit_literal, value, suffix}, opts),
     do: unit_failure(:invalid_unit_literal, %{value: value, suffix: suffix}, opts)
 
+  def from_error({:invalid_check_name, name}, opts),
+    do: check_failure(:invalid_check_name, %{name: name}, opts)
+
+  def from_error(kind, opts) when kind in [:invalid_check_property, :duplicate_check_property],
+    do: check_failure(kind, %{}, opts)
+
   def from_error({:macro_expansion_cycle, frames}, opts)
       when is_list(frames),
       do:
@@ -469,6 +475,41 @@ defmodule Cure.Diagnostic.Adapter.Macro do
     {"Unit literal is malformed",
      "A unit literal needs a numeric value and a text suffix, but this one uses value `#{name_to_string(value)}` and suffix `#{name_to_string(suffix)}`.",
      "rewrite this unit literal", "Use a number followed by a registered text suffix"}
+  end
+
+  @doc false
+  def check_failure(kind, details, opts) do
+    {title, message, label_text, hint} = check_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_check_validation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: label(Keyword.get(opts, :span), :primary, label_text),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp check_content(:invalid_check_name, %{name: name}) do
+    {"Check plan name is invalid",
+     "A generated check plan needs an atom or text name, but this plan uses `#{name_to_string(name)}`.",
+     "replace this check plan name", "Use a stable name such as `FrameProperties`"}
+  end
+
+  defp check_content(:invalid_check_property, _details) do
+    {"Check property is malformed",
+     "Every check property needs a name, a supported check kind, and the expression to test.",
+     "rewrite this check property",
+     "Provide `name`, `kind`, and `expression`; use `round_trip`, `total`, `fault_rejection`, `exhaustive`, or `termination`"}
+  end
+
+  defp check_content(:duplicate_check_property, _details) do
+    {"Check property name is repeated",
+     "Two properties in this check plan have the same name, so their generated results cannot be distinguished.",
+     "rename or remove this property", "Give every property in the check plan a unique name"}
   end
 
   defp packet_content(:invalid_packet_name, %{detail: name}) do
