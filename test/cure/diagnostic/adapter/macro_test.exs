@@ -88,6 +88,23 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
     end
   end
 
+  test "driver validation producers are owned by the macro family" do
+    errors = [
+      {:invalid_driver_base, -1},
+      :invalid_driver_register,
+      :duplicate_driver_register,
+      :overlapping_driver_register
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.key == :macro_driver_validation
+      assert direct.suggestions != []
+    end
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 

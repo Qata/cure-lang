@@ -595,11 +595,11 @@ defmodule Cure.Diagnostic.Adapter do
       do: MacroAdapter.from_error(kind, opts)
 
   def from_error({:invalid_driver_base, base}, opts),
-    do: macro_driver_failure(:invalid_driver_base, %{base: base}, opts)
+    do: MacroAdapter.from_error({:invalid_driver_base, base}, opts)
 
   def from_error(kind, opts)
       when kind in [:invalid_driver_register, :duplicate_driver_register, :overlapping_driver_register],
-      do: macro_driver_failure(kind, %{}, opts)
+      do: MacroAdapter.from_error(kind, opts)
 
   def from_error({kind, detail}, opts)
       when kind in [
@@ -4722,21 +4722,6 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp macro_validation_failure(kind, details, opts), do: macro_validation_failure(kind, details, opts, %{})
 
-  defp macro_driver_failure(kind, details, opts) do
-    {title, message, label, hint} = macro_driver_content(kind, details)
-
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_driver_validation,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
   defp macro_board_failure(kind, details, opts) do
     {title, message, label, hint} = macro_board_content(kind, details)
 
@@ -5628,42 +5613,6 @@ defmodule Cure.Diagnostic.Adapter do
       "The application or library partition starts at or beyond the declared flash size.",
       "move this partition inside flash",
       "Choose `app_offset` and `libs_offset` values smaller than `size`"
-    }
-  end
-
-  defp macro_driver_content(:invalid_driver_base, %{base: base}) do
-    {
-      "Driver base address is invalid",
-      "A driver base address must be a non-negative integer, but this definition uses `#{name_to_string(base)}`.",
-      "replace this base address",
-      "Use the non-negative byte address where this device's register block begins"
-    }
-  end
-
-  defp macro_driver_content(:invalid_driver_register, _details) do
-    {
-      "Driver register is malformed",
-      "Every register needs a name, a non-negative byte offset, an 8-, 16-, or 32-bit width, and `read`, `write`, or `read_write` access.",
-      "rewrite this register declaration",
-      "Provide `name`, `offset`, `width`, and `access` for every register"
-    }
-  end
-
-  defp macro_driver_content(:duplicate_driver_register, _details) do
-    {
-      "Driver register name is repeated",
-      "Two registers have the same name, so generated accessors would collide.",
-      "rename or remove this repeated register",
-      "Give every register a unique name"
-    }
-  end
-
-  defp macro_driver_content(:overlapping_driver_register, _details) do
-    {
-      "Driver register ranges overlap",
-      "Two registers occupy at least one of the same bytes in the device register map.",
-      "move or resize one of these registers",
-      "Choose offsets and widths whose byte ranges do not overlap"
     }
   end
 

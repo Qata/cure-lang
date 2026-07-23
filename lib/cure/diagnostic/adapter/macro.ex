@@ -180,6 +180,13 @@ defmodule Cure.Diagnostic.Adapter.Macro do
       when kind in [:invalid_packet_field, :invalid_packet_field_name, :duplicate_packet_field],
       do: packet_failure(kind, %{}, opts)
 
+  def from_error({:invalid_driver_base, base}, opts),
+    do: driver_failure(:invalid_driver_base, %{base: base}, opts)
+
+  def from_error(kind, opts)
+      when kind in [:invalid_driver_register, :duplicate_driver_register, :overlapping_driver_register],
+      do: driver_failure(kind, %{}, opts)
+
   def from_error({:macro_expansion_cycle, frames}, opts)
       when is_list(frames),
       do:
@@ -250,6 +257,45 @@ defmodule Cure.Diagnostic.Adapter.Macro do
       suggestions: [%Suggestion{message: hint, applicability: :manual}],
       payload: Map.put(details, :kind, kind)
     )
+  end
+
+  @doc false
+  def driver_failure(kind, details, opts) do
+    {title, message, label_text, hint} = driver_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_driver_validation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: label(Keyword.get(opts, :span), :primary, label_text),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp driver_content(:invalid_driver_base, %{base: base}) do
+    {"Driver base address is invalid",
+     "A driver base address must be a non-negative integer, but this definition uses `#{name_to_string(base)}`.",
+     "replace this base address", "Use the non-negative byte address where this device's register block begins"}
+  end
+
+  defp driver_content(:invalid_driver_register, _details) do
+    {"Driver register is malformed",
+     "Every register needs a name, a non-negative byte offset, an 8-, 16-, or 32-bit width, and `read`, `write`, or `read_write` access.",
+     "rewrite this register declaration", "Provide `name`, `offset`, `width`, and `access` for every register"}
+  end
+
+  defp driver_content(:duplicate_driver_register, _details) do
+    {"Driver register name is repeated", "Two registers have the same name, so generated accessors would collide.",
+     "rename or remove this repeated register", "Give every register a unique name"}
+  end
+
+  defp driver_content(:overlapping_driver_register, _details) do
+    {"Driver register ranges overlap",
+     "Two registers occupy at least one of the same bytes in the device register map.",
+     "move or resize one of these registers", "Choose offsets and widths whose byte ranges do not overlap"}
   end
 
   defp packet_content(:invalid_packet_name, %{detail: name}) do
