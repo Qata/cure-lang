@@ -222,6 +222,19 @@ defmodule Cure.Diagnostic.Adapter.Type do
   def from_error({:source_context, {:named_implicit_unforced, name}, context}, opts) when is_map(context),
     do: named_implicit_unforced_failure(name, context, opts)
 
+  def from_error({:source_context, {:unsolved_metavariables, name}, context}, opts) when is_map(context) do
+    cond do
+      Map.get(context, :constructor_result_mismatch) ->
+        checked_constructor_result_failure(name, context, opts)
+
+      Map.get(context, :expectation_origin) == :constructor_argument ->
+        nested_constructor_implicit_failure(name, context, opts)
+
+      true ->
+        unsolved_metavariable_failure(name, context, opts)
+    end
+  end
+
   def from_error({:effect_arity, name, expected, actual}, opts),
     do:
       contextual_failure(
@@ -995,6 +1008,157 @@ defmodule Cure.Diagnostic.Adapter.Type do
       }
     )
   end
+
+  defp unsolved_metavariable_failure(name, context, opts) do
+    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case {Map.get(context, :expectation_span), primary_span} do
+        {%Span{} = span, %Span{} = primary} when span != primary ->
+          [%Label{span: span, style: :secondary, message: "this result annotation still leaves them unknown"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E011",
+      key: :missing_implicit_argument,
+      severity: :error,
+      title: "Missing implicit argument",
+      body:
+        Doc.stack([
+          Doc.paragraph("Cure could not infer every implicit argument for `#{name}` at this call site."),
+          Doc.paragraph(
+            "The call leaves hidden type or index values unconstrained. Provide arguments that determine them, or use the result where its dependent type is known."
+          )
+        ]),
+      primary: label_at(primary_span, :primary, "these hidden arguments cannot be inferred"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Provide arguments or a result type that determines the hidden values",
+          applicability: :manual
+        }
+      ],
+      payload: Map.put(context, :name, name)
+    )
+  end
+
+  defp checked_constructor_result_failure(unsolved_name, context, opts) do
+    constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
+    expected = constructor_result_surface_type(Map.get(context, :constructor_expected_type))
+    actual = constructor_result_surface_type(Map.get(context, :constructor_actual_type))
+    primary_span = Map.get(context, :application_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      [
+        related_label(
+          Map.get(context, :expectation_span),
+          primary_span,
+          "the surrounding annotation requires `#{expected}`"
+        )
+      ] ++
+        Enum.map(
+          Map.get(context, :argument_spans, []),
+          &related_label(
+            &1,
+            primary_span,
+            "this argument did not provide enough information to recover from the incompatible result"
+          )
+        )
+
+    Diagnostic.new(
+      code: "E011",
+      key: :missing_implicit_argument,
+      severity: :error,
+      title: "`#{constructor}` cannot produce the expected indexed type",
+      body:
+        Doc.stack([
+          Doc.paragraph("This constructor produces `#{actual}`, but this position requires `#{expected}`."),
+          Doc.paragraph(
+            "Cure also could not infer the hidden arguments of `#{surface_declaration_name(unsolved_name)}` while checking the constructor fields. Supplying those arguments cannot make incompatible result indices agree."
+          )
+        ]),
+      primary: label_at(primary_span, :primary, "this `#{constructor}` result cannot satisfy `#{expected}`"),
+      secondary: Enum.reject(secondary, &is_nil/1),
+      suggestions: [
+        %Suggestion{
+          message: "Use a constructor whose result matches `#{expected}`, or change the surrounding result type",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :constructor_result_mismatch,
+        semantic_reason: :unsolved_metavariables,
+        unsolved_name: surface_declaration_name(unsolved_name),
+        constructor: constructor,
+        expected: expected,
+        actual: actual,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp nested_constructor_implicit_failure(name, context, opts) do
+    constructor = surface_declaration_name(name)
+    owner = context |> Map.get(:checking, :constructor) |> surface_declaration_name()
+    argument_index = Map.get(context, :argument_index, 0)
+    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(context, :expectation_span) do
+        %Span{} = span when span != primary_span ->
+          [related_label(span, primary_span, "the surrounding result still does not determine these indices")]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E011",
+      key: :missing_implicit_argument,
+      severity: :error,
+      title: "Cannot infer `#{constructor}` inside `#{owner}`",
+      body:
+        Doc.paragraph(
+          "Argument #{argument_index + 1} of `#{owner}` uses `#{constructor}`, but its hidden type or index values are still unknown. The surrounding result and the other constructor fields do not determine them."
+        ),
+      primary: label_at(primary_span, :primary, "this nested constructor needs an expected indexed type"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Use `#{constructor}` where its expected field type is known, or change the sibling arguments or result annotation so its indices are determined",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :nested_constructor_implicit,
+        name: name,
+        constructor: constructor,
+        owner: Map.get(context, :checking),
+        argument_index: argument_index,
+        expectation_origin: :constructor_argument
+      }
+    )
+  end
+
+  defp constructor_result_surface_type({:data, family, parameters, indices}) do
+    arguments = Enum.map(parameters ++ indices, &constructor_result_surface_type/1)
+    name = surface_declaration_name(family)
+    if arguments == [], do: name, else: "#{name}(#{Enum.join(arguments, ", ")})"
+  end
+
+  defp constructor_result_surface_type({:ctor, constructor, arguments}) do
+    arguments = Enum.map(arguments, &constructor_result_surface_type/1)
+    name = surface_declaration_name(constructor)
+    if arguments == [], do: name, else: "#{name}(#{Enum.join(arguments, ", ")})"
+  end
+
+  defp constructor_result_surface_type({:global, name}), do: surface_declaration_name(name)
+  defp constructor_result_surface_type({:meta, _id}), do: "?"
+  defp constructor_result_surface_type(other), do: surface_type(other)
 
   defp surface_declaration_name(name) do
     name(name)
