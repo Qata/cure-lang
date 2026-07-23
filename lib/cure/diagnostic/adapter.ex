@@ -1029,13 +1029,13 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:source_context, :branch_type, context}, opts) when is_map(context) do
-    branch_type_failure(context, opts)
-  end
+  def from_error({:source_context, :branch_type, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {:branch_type, details}, context}, opts) when is_map(context) do
-    branch_type_failure(Map.put(context, :branch_details, details), opts)
-  end
+  def from_error({:source_context, {:branch_type, _details}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:source_context, {:reachable_impossible, _branch}, context} = error, opts)
       when is_map(context),
@@ -2030,7 +2030,7 @@ defmodule Cure.Diagnostic.Adapter do
   # Some trusted checking paths can return the bare verdict after their
   # declaration wrapper has been stripped. Keep that verdict contextual rather
   # than falling through to the unhelpful generic "Elaboration failed" title.
-  def from_error(:branch_type, opts), do: branch_type_failure(%{}, opts)
+  def from_error(:branch_type, opts), do: TypeAdapter.from_error(:branch_type, opts)
 
   def from_error({kind, detail}, opts)
       when not is_map(detail) and
@@ -6810,164 +6810,6 @@ defmodule Cure.Diagnostic.Adapter do
       payload: %{kind: kind}
     )
   end
-
-  defp branch_type_failure(context, opts) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
-    branches = Keyword.get(opts, :branch_patterns, Map.get(context, :branch_patterns, []))
-    branch_names = Enum.map(branches, &branch_name/1)
-    checking = Map.get(context, :checking)
-    subject = if checking, do: " in `#{checking}`", else: ""
-    details = Map.get(context, :branch_details, %{})
-    branch_details = Map.get(details, :branches, [])
-
-    selected_detail =
-      case Enum.find(branch_details, &match?({:error, _}, Map.get(&1, :status))) do
-        nil -> List.first(branch_details, details)
-        detail -> detail
-      end
-
-    failing =
-      Map.get(selected_detail, :constructor) ||
-        case singleton_type_branches(branch_details) do
-          [{constructor, _type}] -> constructor
-          _ -> nil
-        end
-
-    actual = Map.get(selected_detail, :actual)
-    expected = Map.get(selected_detail, :expected)
-    singleton_branches = singleton_type_branches(branch_details)
-
-    detail =
-      case {singleton_branches, failing, actual, expected} do
-        {[{constructor, type}], _, _, _} ->
-          "Possible outlier: only the `#{name_to_string(constructor)}` branch has type `#{type}`; check it against the other branches and the declared result."
-
-        {_, constructor, actual, expected}
-        when not is_nil(constructor) and not is_nil(actual) and not is_nil(expected) ->
-          "Possible outlier: the `#{name_to_string(constructor)}` branch has type `#{surface_type(actual)}`, but the declared result requires `#{surface_type(expected)}`."
-
-        _ ->
-          case branch_names do
-            [first, second | rest] ->
-              names = Enum.map_join([first, second | rest], ", ", &"`#{&1}`")
-
-              "The branches #{names} of this match are checked against the declared result, but at least one branch does not produce that result."
-
-            _ ->
-              "Every branch of this match is checked against the declared result type."
-          end
-      end
-
-    branch_labels =
-      Enum.map(branches, fn branch ->
-        span = branch_span(branch)
-        name = branch_name(branch)
-
-        message =
-          if same_branch?(name, failing),
-            do: "possible outlier: this branch has the incompatible type",
-            else: "compare this branch with the declared result"
-
-        %{span: span, name: name, message: message}
-      end)
-      |> Enum.reject(&is_nil(&1.span))
-      |> Enum.sort_by(fn label -> if String.starts_with?(label.message || "", "possible outlier"), do: 0, else: 1 end)
-
-    {primary, secondary} =
-      case branch_labels do
-        [] ->
-          {primary_label(opts, "make these branches return the same type"), []}
-
-        labels ->
-          {outliers, comparisons} = Enum.split_with(labels, &same_branch?(&1.name, failing))
-          [chosen | rest] = if outliers == [], do: labels, else: outliers ++ comparisons
-
-          primary = %Label{span: chosen.span, style: :primary, message: chosen.message}
-
-          secondary =
-            Enum.map(rest, fn label ->
-              %Label{span: label.span, style: :secondary, message: label.message}
-            end)
-
-          {primary, secondary}
-      end
-
-    dependent? = Map.get(context, :expectation_origin) == :dependent_branch
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title:
-        if(dependent?,
-          do: "Dependent branch has the wrong result#{subject}",
-          else: "Pattern branches disagree#{subject}"
-        ),
-      body:
-        Doc.stack([
-          Doc.paragraph(detail),
-          Doc.paragraph(
-            if dependent?,
-              do:
-                "This constructor refines indices in the branch context. Check the authored branch against the resulting specialized proposition.",
-              else: "Check each branch expression against the result type written after the function name."
-          )
-        ]),
-      primary: primary,
-      secondary: secondary,
-      payload: %{
-        kind: :branch_type,
-        branches: branch_names,
-        failing_branch: failing,
-        actual_surface: if(actual, do: surface_type(actual)),
-        expected_surface: if(expected, do: surface_type(expected)),
-        branch_types: branch_type_payload(branch_details),
-        checking: checking,
-        expression_category: Map.get(context, :expression_category),
-        expectation_origin: Map.get(context, :expectation_origin)
-      }
-    )
-  end
-
-  defp branch_name(%{name: name}), do: to_string(name)
-  defp branch_name(name), do: to_string(name)
-
-  defp same_branch?(_name, nil), do: false
-
-  defp same_branch?(name, failing) do
-    name = to_string(name)
-    failing = to_string(failing)
-    failing == name or String.ends_with?(failing, "#" <> name) or String.ends_with?(failing, "." <> name)
-  end
-
-  defp singleton_type_branches(details) do
-    groups =
-      details
-      |> Enum.filter(&(not is_nil(Map.get(&1, :actual))))
-      |> Enum.group_by(&surface_type(&1.actual))
-
-    if map_size(groups) > 1 and Enum.any?(groups, fn {_type, entries} -> length(entries) > 1 end) do
-      groups
-      |> Enum.filter(fn {_type, entries} -> length(entries) == 1 end)
-      |> Enum.map(fn {type, [entry]} -> {entry.constructor, type} end)
-    else
-      []
-    end
-  end
-
-  defp branch_type_payload(details) do
-    Enum.map(details, fn detail ->
-      %{
-        branch: detail.constructor,
-        status: detail.status,
-        actual: if(detail.actual, do: surface_type(detail.actual)),
-        expected: if(detail.expected, do: surface_type(detail.expected))
-      }
-    end)
-  end
-
-  defp branch_span(%{span: %Cure.Diagnostic.Span{} = span}), do: span
-  defp branch_span(_branch), do: nil
 
   defp no_instance_failure(interface, head, context, opts) do
     interface = name_to_string(interface)

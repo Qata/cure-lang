@@ -138,7 +138,169 @@ defmodule Cure.Diagnostic.Adapter.Type do
   def from_error({:lambda_expected_pi, expected}, opts),
     do: from_error({:lambda_expected_pi, %{expected: expected, parameter_index: 0}}, opts)
 
+  def from_error(:branch_type, opts), do: branch_failure(%{}, opts)
+
+  def from_error({:source_context, :branch_type, context}, opts) when is_map(context),
+    do: branch_failure(context, opts)
+
+  def from_error({:source_context, {:branch_type, details}, context}, opts) when is_map(context),
+    do: branch_failure(Map.put(context, :branch_details, details), opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp branch_failure(context, opts) do
+    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+    branches = Keyword.get(opts, :branch_patterns, Map.get(context, :branch_patterns, []))
+    branch_names = Enum.map(branches, &branch_name/1)
+    checking = Map.get(context, :checking)
+    subject = if checking, do: " in `#{checking}`", else: ""
+    details = Map.get(context, :branch_details, %{})
+    branch_details = Map.get(details, :branches, [])
+
+    selected =
+      case Enum.find(branch_details, &match?({:error, _}, Map.get(&1, :status))) do
+        nil -> List.first(branch_details, details)
+        detail -> detail
+      end
+
+    singleton_branches = singleton_type_branches(branch_details)
+
+    failing =
+      Map.get(selected, :constructor) ||
+        case singleton_branches do
+          [{constructor, _type}] -> constructor
+          _ -> nil
+        end
+
+    actual = Map.get(selected, :actual)
+    expected = Map.get(selected, :expected)
+
+    detail =
+      branch_detail(singleton_branches, failing, actual, expected, branch_names)
+
+    labels =
+      branches
+      |> Enum.map(fn branch ->
+        branch_name = branch_name(branch)
+
+        message =
+          if same_branch?(branch_name, failing),
+            do: "possible outlier: this branch has the incompatible type",
+            else: "compare this branch with the declared result"
+
+        %{span: branch_span(branch), name: branch_name, message: message}
+      end)
+      |> Enum.reject(&is_nil(&1.span))
+      |> Enum.sort_by(fn item -> if String.starts_with?(item.message, "possible outlier"), do: 0, else: 1 end)
+
+    {primary, secondary} = branch_labels(labels, failing, opts)
+    dependent? = Map.get(context, :expectation_origin) == :dependent_branch
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title:
+        if(dependent?,
+          do: "Dependent branch has the wrong result#{subject}",
+          else: "Pattern branches disagree#{subject}"
+        ),
+      body:
+        Doc.stack([
+          Doc.paragraph(detail),
+          Doc.paragraph(
+            if dependent?,
+              do:
+                "This constructor refines indices in the branch context. Check the authored branch against the resulting specialized proposition.",
+              else: "Check each branch expression against the result type written after the function name."
+          )
+        ]),
+      primary: primary,
+      secondary: secondary,
+      payload: %{
+        kind: :branch_type,
+        branches: branch_names,
+        failing_branch: failing,
+        actual_surface: if(actual, do: surface_type(actual)),
+        expected_surface: if(expected, do: surface_type(expected)),
+        branch_types: branch_type_payload(branch_details),
+        checking: checking,
+        expression_category: Map.get(context, :expression_category),
+        expectation_origin: Map.get(context, :expectation_origin)
+      }
+    )
+  end
+
+  defp branch_detail([{constructor, type}], _failing, _actual, _expected, _names),
+    do:
+      "Possible outlier: only the `#{name(constructor)}` branch has type `#{type}`; check it against the other branches and the declared result."
+
+  defp branch_detail(_singletons, constructor, actual, expected, _names)
+       when not is_nil(constructor) and not is_nil(actual) and not is_nil(expected),
+       do:
+         "Possible outlier: the `#{name(constructor)}` branch has type `#{surface_type(actual)}`, but the declared result requires `#{surface_type(expected)}`."
+
+  defp branch_detail(_singletons, _failing, _actual, _expected, [first, second | rest]) do
+    names = Enum.map_join([first, second | rest], ", ", &"`#{&1}`")
+
+    "The branches #{names} of this match are checked against the declared result, but at least one branch does not produce that result."
+  end
+
+  defp branch_detail(_singletons, _failing, _actual, _expected, _names),
+    do: "Every branch of this match is checked against the declared result type."
+
+  defp branch_labels([], _failing, opts),
+    do: {primary(opts, "make these branches return the same type"), []}
+
+  defp branch_labels(labels, failing, _opts) do
+    {outliers, comparisons} = Enum.split_with(labels, &same_branch?(&1.name, failing))
+    [chosen | rest] = if outliers == [], do: labels, else: outliers ++ comparisons
+
+    primary = %Label{span: chosen.span, style: :primary, message: chosen.message}
+
+    secondary =
+      Enum.map(rest, &%Label{span: &1.span, style: :secondary, message: &1.message})
+
+    {primary, secondary}
+  end
+
+  defp singleton_type_branches(details) do
+    groups =
+      details
+      |> Enum.filter(&(not is_nil(Map.get(&1, :actual))))
+      |> Enum.group_by(&surface_type(&1.actual))
+
+    if map_size(groups) > 1 and Enum.any?(groups, fn {_type, entries} -> length(entries) > 1 end) do
+      for {type, [entry]} <- groups, do: {entry.constructor, type}
+    else
+      []
+    end
+  end
+
+  defp branch_type_payload(details) do
+    Enum.map(details, fn detail ->
+      %{
+        branch: detail.constructor,
+        status: detail.status,
+        actual: if(detail.actual, do: surface_type(detail.actual)),
+        expected: if(detail.expected, do: surface_type(detail.expected))
+      }
+    end)
+  end
+
+  defp branch_name(%{name: name}), do: to_string(name)
+  defp branch_name(name), do: to_string(name)
+
+  defp same_branch?(_name, nil), do: false
+
+  defp same_branch?(branch, failing) do
+    branch = to_string(branch)
+    failing = to_string(failing)
+    failing == branch or String.ends_with?(failing, "#" <> branch) or String.ends_with?(failing, "." <> branch)
+  end
+
+  defp branch_span(%{span: %Span{} = span}), do: span
+  defp branch_span(_branch), do: nil
 
   @doc false
   @spec contextual_failure(atom(), map(), keyword(), {String.t(), String.t(), String.t()}) :: Diagnostic.t()

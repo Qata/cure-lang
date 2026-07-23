@@ -123,4 +123,44 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert rendered =~ "this parameter needs a function input type"
     assert rendered =~ "Hint: Pass this lambda to a function-valued parameter"
   end
+
+  test "branch failures identify a singleton type outlier through the type family" do
+    source = "A -> one\nB -> two\nC -> odd\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:branches, source, "branches.cure")
+    {:ok, a_span} = SourceRegistry.span(registry, :branches, 0, 8)
+    {:ok, b_span} = SourceRegistry.span(registry, :branches, 9, 17)
+    {:ok, c_span} = SourceRegistry.span(registry, :branches, 18, 26)
+    common = {:data, :Common, [], []}
+    outlier = {:data, :Outlier, [], []}
+
+    error =
+      {:source_context,
+       {:branch_type,
+        %{
+          branches: [
+            %{constructor: :A, actual: common, expected: common, status: :ok},
+            %{constructor: :B, actual: common, expected: common, status: :ok},
+            %{constructor: :C, actual: outlier, expected: common, status: {:error, :branch_type}}
+          ]
+        }},
+       %{
+         checking: :choose,
+         branch_patterns: [
+           %{name: "A", span: a_span},
+           %{name: "B", span: b_span},
+           %{name: "C", span: c_span}
+         ]
+       }}
+
+    direct = TypeAdapter.from_error(error)
+    assert Adapter.from_error(error) == direct
+    assert direct.primary.span == c_span
+    assert Enum.map(direct.secondary, & &1.span) == [a_span, b_span]
+    assert direct.payload.failing_branch == :C
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "only the `C` branch has type `Outlier`"
+    assert rendered =~ "possible outlier: this branch has the incompatible type"
+    assert rendered =~ "compare this branch with the declared result"
+  end
 end
