@@ -27,6 +27,7 @@ defmodule Cure.Diagnostic.Adapter do
   alias Cure.Diagnostic.Adapter.Name, as: NameAdapter
   alias Cure.Diagnostic.Adapter.Operational
   alias Cure.Diagnostic.Adapter.Proof, as: ProofAdapter
+  alias Cure.Diagnostic.Adapter.Runtime
   alias Cure.Diagnostic.Adapter.StaticAnalysis
   alias Cure.Diagnostic.Adapter.Syntax, as: SyntaxAdapter
   alias Cure.Diagnostic.Adapter.Type, as: TypeAdapter
@@ -147,44 +148,11 @@ defmodule Cure.Diagnostic.Adapter do
     do: TypeAdapter.from_error(error, opts)
 
   def from_error({:unsupported_async, message, meta}, opts)
-      when is_binary(message) and is_list(meta) do
-    Diagnostic.new(
-      code: "E107",
-      key: :unsupported_async,
-      severity: :error,
-      title: "Unsupported asynchronous primitive",
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, "use a supported asynchronous boundary"),
-      payload: %{primitive: :unknown, stage: :runtime}
-    )
-  end
+      when is_binary(message) and is_list(meta),
+      do: Runtime.from_error({:unsupported_async, message, meta}, opts)
 
-  def from_error({:unsupported_async, %{primitive: primitive} = details}, opts) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
-
-    Diagnostic.new(
-      code: "E107",
-      key: :unsupported_async,
-      severity: :error,
-      title: "`#{name_to_string(primitive)}` is unavailable in dependent code",
-      body:
-        Doc.paragraph(
-          "The dependent runtime cannot lower `#{name_to_string(primitive)}` while preserving Cure's checked process and message types. This is a runtime capability boundary, not a type error in the spawned expression."
-        ),
-      primary: pickup_label(span, :primary, "this asynchronous operation has no dependent-runtime lowering"),
-      suggestions: [
-        %Suggestion{
-          message: "Use an actor, FSM, or supervisor declaration for managed concurrency",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        primitive: primitive,
-        stage: Map.get(details, :stage, :dependent_runtime),
-        capability: :managed_concurrency
-      }
-    )
-  end
+  def from_error({:unsupported_async, %{primitive: _primitive} = details}, opts),
+    do: Runtime.from_error({:unsupported_async, details}, opts)
 
   def from_error({:splice_outside_quote, tag, meta}, opts) when is_list(meta),
     do: MacroAdapter.from_error({:splice_outside_quote, tag, meta}, opts)
