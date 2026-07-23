@@ -248,6 +248,27 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  defp attach_declaration_source_context(
+         {:error, {:source_context, {:result_type_not_family, _family}, context} = reason},
+         {:indexed_type, meta, _constructors}
+       )
+       when is_list(meta) and is_map(context) do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+
+    {:error,
+     {:source_context, elem(reason, 1),
+      Map.merge(
+        %{
+          family_declaration_span: info && info.whole,
+          family_name_span: info && info.name,
+          family: Keyword.get(meta, :name),
+          expectation_origin: :constructor_result,
+          expression_category: :constructor_signature
+        },
+        context
+      )}}
+  end
+
   defp attach_declaration_source_context(result, _decl), do: result
 
   defp primitive_failure_span(kind, info)
@@ -2376,7 +2397,16 @@ defmodule Cure.Elab.Declarations do
     param_scope = param_tele |> Enum.map(fn {n, _t} -> Atom.to_string(n) end) |> Enum.reverse()
 
     with :ok <- ensure_linear_named_doms(dom_exprs),
-         {:ok, applied_exprs} <- family_index_args(result_expr, fam) do
+         {:ok, applied_exprs} <-
+           family_index_args(result_expr, fam)
+           |> attach_constructor_result_context(
+             cmeta,
+             result_expr,
+             fam,
+             cname,
+             length(param_tele),
+             length(index_tele)
+           ) do
       # Implicit index variables are inferred from every family application in
       # the signature (domains + the result), positionally typed by the family's
       # index telescope. Ordered by first appearance → the leading telescope.
@@ -2446,6 +2476,50 @@ defmodule Cure.Elab.Declarations do
       end
     end
   end
+
+  defp attach_constructor_result_context(
+         {:error, {:result_type_not_family, _family} = reason},
+         constructor_meta,
+         result_expr,
+         family,
+         constructor,
+         parameter_count,
+         index_count
+       ) do
+    constructor_info = Cure.MetaAST.Metadata.source_info(constructor_meta)
+
+    {:error,
+     {:source_context, reason,
+      %{
+        span: surface_ast_span(result_expr),
+        result_span: surface_ast_span(result_expr),
+        constructor_span: constructor_info && constructor_info.whole,
+        constructor_name_span: constructor_info && constructor_info.name,
+        signature_span: constructor_info && constructor_info.annotation,
+        expected_family: family,
+        observed_family: constructor_result_head(result_expr),
+        constructor: constructor,
+        parameter_count: parameter_count,
+        index_count: index_count
+      }}}
+  end
+
+  defp attach_constructor_result_context(result, _meta, _expr, _family, _constructor, _params, _indices),
+    do: result
+
+  defp constructor_result_head({:function_call, meta, _arguments}), do: Keyword.get(meta, :name)
+  defp constructor_result_head({:variable, _meta, name}), do: name
+  defp constructor_result_head({tag, _meta, _children}) when is_atom(tag), do: tag
+  defp constructor_result_head(_other), do: :unknown
+
+  defp surface_ast_span({_tag, meta, _children}) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: span} -> span
+      _ -> nil
+    end
+  end
+
+  defp surface_ast_span(_other), do: nil
 
   defp split_last(list), do: {Enum.slice(list, 0..-2//1), List.last(list)}
 

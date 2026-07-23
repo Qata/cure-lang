@@ -1638,6 +1638,10 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: dependent_match_inference_failure(context, opts)
 
+  def from_error({:source_context, {:result_type_not_family, family}, context}, opts)
+      when is_map(context),
+      do: constructor_result_family_failure(family, context, opts)
+
   def from_error({:source_context, {:applied_non_function, details}, context}, opts)
       when is_map(details) and is_map(context),
       do: non_callable_application(details, context, opts)
@@ -4434,6 +4438,77 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp match_inference_labels(_reason, _details, _primary_span), do: []
+
+  defp constructor_result_family_failure(family, context, opts) do
+    expected = surface_declaration_name(Map.get(context, :expected_family, family))
+    observed = surface_declaration_name(Map.get(context, :observed_family, :unknown))
+    constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
+    parameter_count = Map.get(context, :parameter_count, 0)
+    index_count = Map.get(context, :index_count, 0)
+    primary_span = Map.get(context, :result_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      [
+        sibling_dependency_label(
+          Map.get(context, :constructor_name_span),
+          primary_span,
+          "this constructor belongs to `#{expected}`"
+        ),
+        sibling_dependency_label(
+          Map.get(context, :family_name_span),
+          primary_span,
+          "`#{expected}` is the family being declared"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "`#{constructor}` returns `#{observed}` instead of `#{expected}`",
+      body:
+        Doc.paragraph(
+          "Every constructor must produce a value of the type family that declares it. `#{constructor}` is declared under `#{expected}`, but the final type in its signature is `#{observed}`."
+        ),
+      primary:
+        pickup_label(
+          primary_span,
+          :primary,
+          "this result names `#{observed}`, not constructor family `#{expected}`"
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: constructor_result_hint(expected, parameter_count, index_count),
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :result_type_not_family,
+        family: expected,
+        observed_family: observed,
+        constructor: constructor,
+        parameter_count: parameter_count,
+        index_count: index_count
+      }
+    )
+  end
+
+  defp constructor_result_hint(family, 0, 0),
+    do: "End this constructor signature with `#{family}`"
+
+  defp constructor_result_hint(family, parameter_count, index_count) do
+    positions =
+      [
+        if(parameter_count > 0, do: "#{parameter_count} #{plural(parameter_count, "parameter")}"),
+        if(index_count > 0, do: "#{index_count} #{plural(index_count, "index")}")
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" and ")
+
+    "End this constructor signature with `#{family}` applied to its #{positions}"
+  end
 
   defp dependent_match_inference_failure(context, opts) do
     branches = Map.get(context, :branch_patterns, [])
