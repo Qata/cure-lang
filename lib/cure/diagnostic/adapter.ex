@@ -24,6 +24,7 @@ defmodule Cure.Diagnostic.Adapter do
   alias Cure.Diagnostic.Adapter.Codegen
   alias Cure.Diagnostic.Adapter.Arity
   alias Cure.Diagnostic.Adapter.Declaration
+  alias Cure.Diagnostic.Adapter.Hole
   alias Cure.Diagnostic.Adapter.Kernel, as: KernelAdapter
   alias Cure.Diagnostic.Adapter.Macro, as: MacroAdapter
   alias Cure.Diagnostic.Adapter.Name, as: NameAdapter
@@ -693,7 +694,7 @@ defmodule Cure.Diagnostic.Adapter do
         opts
       )
       when is_list(meta) and is_map(context) do
-    inferred_hole_failure(Keyword.get(meta, :name), context, opts)
+    Hole.inferred_failure(Keyword.get(meta, :name), context, opts)
   end
 
   def from_error({:source_context, {kind, _operator}, context} = error, opts)
@@ -955,7 +956,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: KernelAdapter.from_error(error, opts)
 
   def from_error({:hole_in_inference_position, name}, opts),
-    do: inferred_hole_failure(name, %{}, opts)
+    do: Hole.inferred_failure(name, %{}, opts)
 
   def from_error({kind, _detail} = error, opts)
       when kind in [
@@ -1495,48 +1496,10 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unknown_name, details} = error, opts) when is_map(details),
     do: NameAdapter.from_error(error, opts)
 
-  def from_error({:unfilled_hole, details}, opts) when is_map(details) do
-    opts = Keyword.put_new(opts, :span, Map.get(details, :span))
-    primary = primary_label(opts, "replace this hole with an expression")
+  def from_error({:unfilled_hole, details}, opts) when is_map(details),
+    do: Hole.from_error({:unfilled_hole, details}, opts)
 
-    secondary =
-      case {Map.get(details, :annotation_span), primary} do
-        {%Span{} = span, %Label{span: primary_span}} when span != primary_span ->
-          [%Label{span: span, style: :secondary, message: "this function's result type is declared here"}]
-
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: "E014",
-      key: :unfilled_hole,
-      severity: :error,
-      title: "Unfilled hole",
-      body: Doc.paragraph("The definition `#{name_to_string(details.definition)}` still contains an unfinished hole."),
-      primary: primary,
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Replace the hole with an expression that satisfies its surrounding type",
-          applicability: :manual
-        }
-      ],
-      payload: details
-    )
-  end
-
-  def from_error({:unfilled_hole, name}, opts) do
-    Diagnostic.new(
-      code: "E014",
-      key: :unfilled_hole,
-      severity: :error,
-      title: "Unfilled hole",
-      body: Doc.paragraph("The compiler reached the unfinished hole `?#{name}`."),
-      primary: primary_label(opts, "replace this hole with an expression"),
-      payload: %{name: name}
-    )
-  end
+  def from_error({:unfilled_hole, _name} = error, opts), do: Hole.from_error(error, opts)
 
   def from_error({:arity_mismatch, _, _} = error, opts), do: Arity.from_error(error, opts)
 
@@ -2650,37 +2613,6 @@ defmodule Cure.Diagnostic.Adapter do
 
   def operator_conflict_labels([], opts, primary_message, _secondary_message),
     do: {primary_label(opts, primary_message), []}
-
-  defp inferred_hole_failure(name, context, opts) do
-    opts =
-      case Map.get(context, :span) do
-        %Span{} = span -> Keyword.put_new(opts, :span, span)
-        _ -> opts
-      end
-
-    Diagnostic.new(
-      code: "E014",
-      key: :unfilled_hole,
-      severity: :error,
-      title: "Hole needs a type annotation",
-      body:
-        Doc.paragraph(
-          "Cure cannot infer what this hole should contain because the surrounding definition has no declared result type."
-        ),
-      primary: primary_label(opts, "this hole has no expected type"),
-      suggestions: [
-        %Suggestion{
-          message: "Declare the result type after `->`, then replace the hole with an expression of that type",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :inference_position,
-        name: name,
-        checking: Map.get(context, :checking, Keyword.get(opts, :checking))
-      }
-    )
-  end
 
   defp primitive_declaration_failure(kind, details, context, opts) do
     name = Map.get(details, :name) || Map.get(context, :primitive)
