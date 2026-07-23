@@ -259,4 +259,30 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
              """
              |> String.trim_trailing()
   end
+
+  test "match inference labels every pattern that fails to identify a constructor" do
+    source = "match value\n  _ -> value\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:match, source, "match.cure")
+    {:ok, whole} = SourceRegistry.span(registry, :match, 0, 25)
+    {:ok, pattern} = SourceRegistry.span(registry, :match, 14, 15)
+
+    error =
+      {:cannot_infer_match_type,
+       %{
+         reason: :no_constructor_arm,
+         span: whole,
+         branch_spans: [pattern],
+         expression_category: :pattern_match
+       }}
+
+    direct = TypeAdapter.from_error(error)
+    assert Adapter.from_error(error) == direct
+    assert direct.primary.span == whole
+    assert hd(direct.secondary).span == pattern
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "MATCH RESULT NEEDS AN ANNOTATION [E093]"
+    assert rendered =~ "this pattern does not identify a constructor"
+    assert rendered =~ "Hint: Add a result annotation"
+  end
 end
