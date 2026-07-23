@@ -185,6 +185,29 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
     end
   end
 
+  test "parser and raw-input validation producers are owned by the macro family" do
+    errors = [
+      {:invalid_parse_name, :Grammar},
+      {:left_recursive_parse_production, [:expr]},
+      :invalid_parse_productions,
+      :invalid_parse_production,
+      :duplicate_parse_production,
+      {:missing_raw_delimiter, "END"},
+      {:invalid_raw_delimiter, :bad},
+      :invalid_raw_tokens
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.suggestions != []
+    end
+
+    assert MacroAdapter.from_error(:invalid_parse_productions).key == :macro_parse_validation
+    assert MacroAdapter.from_error(:invalid_raw_tokens).key == :macro_raw_validation
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 

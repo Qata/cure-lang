@@ -1651,16 +1651,16 @@ defmodule Cure.Diagnostic.Adapter do
     do: MacroAdapter.from_error({:unknown_protocol_role, sender, receiver}, opts)
 
   def from_error({:invalid_parse_name, name}, opts),
-    do: macro_parse_failure(:invalid_parse_name, %{name: name}, opts)
+    do: MacroAdapter.from_error({:invalid_parse_name, name}, opts)
 
   def from_error({:left_recursive_parse_production, names}, opts),
-    do: macro_parse_failure(:left_recursive_parse_production, %{names: names}, opts)
+    do: MacroAdapter.from_error({:left_recursive_parse_production, names}, opts)
 
   def from_error({:missing_raw_delimiter, delimiter}, opts),
-    do: macro_raw_failure(:missing_raw_delimiter, %{delimiter: delimiter}, opts)
+    do: MacroAdapter.from_error({:missing_raw_delimiter, delimiter}, opts)
 
   def from_error({:invalid_raw_delimiter, delimiter}, opts),
-    do: macro_raw_failure(:invalid_raw_delimiter, %{delimiter: delimiter}, opts)
+    do: MacroAdapter.from_error({:invalid_raw_delimiter, delimiter}, opts)
 
   def from_error({kind, path}, opts)
       when kind in [
@@ -1851,7 +1851,7 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error(kind, opts) when kind in [:invalid_check_property, :duplicate_check_property],
     do: MacroAdapter.from_error(kind, opts)
 
-  def from_error(:invalid_raw_tokens, opts), do: macro_raw_failure(:invalid_raw_tokens, %{}, opts)
+  def from_error(:invalid_raw_tokens, opts), do: MacroAdapter.from_error(:invalid_raw_tokens, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -1887,7 +1887,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error(kind, opts)
       when kind in [:invalid_parse_productions, :invalid_parse_production, :duplicate_parse_production],
-      do: macro_parse_failure(kind, %{}, opts)
+      do: MacroAdapter.from_error(kind, opts)
 
   def from_error(kind, opts)
       when kind in [:invalid_reducer_arms, :invalid_reducer_arm, :duplicate_reducer_constructor],
@@ -4722,42 +4722,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp macro_validation_failure(kind, details, opts), do: macro_validation_failure(kind, details, opts, %{})
 
-  defp macro_parse_failure(kind, details, opts) do
-    {title, message, label, hint} = macro_parse_content(kind, details)
-
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_parse_validation,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
   defp macro_reducer_failure(kind, details, opts) do
     {title, message, label, hint} = macro_reducer_content(kind, details)
 
     Diagnostic.new(
       code: "E092",
       key: :macro_reducer_validation,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
-  defp macro_raw_failure(kind, details, opts) do
-    {title, message, label, hint} = macro_raw_content(kind, details)
-
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_raw_validation,
       severity: :error,
       title: title,
       body: Doc.paragraph(message),
@@ -5096,23 +5066,6 @@ defmodule Cure.Diagnostic.Adapter do
        "More than one generated declaration produces `#{name_to_string(name)}`, so the compiler cannot choose one module body.",
        "rename one lifted module", "Give every lifted module a unique qualified name"}
 
-  defp macro_raw_content(:missing_raw_delimiter, %{delimiter: delimiter}),
-    do:
-      {"Raw macro input is not terminated",
-       "This raw macro capture reaches the end of its input without the `#{name_to_string(delimiter)}` delimiter.",
-       "close this raw macro input", "Add the `#{name_to_string(delimiter)}` delimiter after the raw input"}
-
-  defp macro_raw_content(:invalid_raw_delimiter, %{delimiter: delimiter}),
-    do:
-      {"Raw macro delimiter is invalid",
-       "A raw macro delimiter must be text, but this capture uses `#{name_to_string(delimiter)}`.",
-       "replace this raw delimiter", "Use a textual token or structural delimiter name"}
-
-  defp macro_raw_content(:invalid_raw_tokens, _details),
-    do:
-      {"Raw macro token stream is malformed", "Raw macro capture expected a list of lexer tokens.",
-       "replace this raw token stream", "Pass the lexer tokens belonging to the raw macro input"}
-
   defp macro_module_failure(kind, details, opts) do
     {title, message, label, hint} = macro_module_content(kind, details)
 
@@ -5240,38 +5193,6 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp constructor_phrase([_one], rendered), do: "constructor #{rendered}"
   defp constructor_phrase(_many, rendered), do: "constructors #{rendered}"
-
-  defp macro_parse_content(:invalid_parse_name, %{name: name}),
-    do:
-      {"Parser grammar name is invalid",
-       "A generated parser grammar needs an atom or text name, but this grammar uses `#{name_to_string(name)}`.",
-       "replace this grammar name", "Use a stable grammar name such as `Command`"}
-
-  defp macro_parse_content(:invalid_parse_productions, _details),
-    do:
-      {"Parser productions are malformed", "A parser grammar's productions must be provided as an ordered list.",
-       "rewrite this production list", "Provide a list of named parser productions"}
-
-  defp macro_parse_content(:invalid_parse_production, _details),
-    do:
-      {"Parser production is malformed",
-       "Every parser production needs an atom or text name and a non-empty body of token or production names.",
-       "rewrite this parser production", "Provide `name` and a non-empty `body` list"}
-
-  defp macro_parse_content(:duplicate_parse_production, _details),
-    do:
-      {"Parser production name is repeated",
-       "Two productions in this grammar have the same name, so references to that production would be ambiguous.",
-       "rename or remove this production", "Give every production in the grammar a unique name"}
-
-  defp macro_parse_content(:left_recursive_parse_production, %{names: names}) do
-    rendered = Enum.map_join(names, ", ", &"`#{name_to_string(&1)}`")
-    {verb, reflexive} = if length(names) == 1, do: {"begins", "itself"}, else: {"begin", "themselves"}
-
-    {"Parser production is left-recursive",
-     "#{rendered} #{verb} by invoking #{reflexive}, so recursive descent would make no progress before recurring.",
-     "remove this leading self-reference", "Rewrite the production so it consumes a token before recurring"}
-  end
 
   defp macro_validation_failure(kind, details, opts, context) do
     span = Map.get(context, :span) || Keyword.get(opts, :span)
