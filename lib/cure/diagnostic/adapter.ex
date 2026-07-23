@@ -1675,6 +1675,27 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: indexed_with_proof_failure(family, context, opts)
 
+  def from_error(
+        {:source_context, {:with_sibling_dependency_unsupported, reason}, context},
+        opts
+      )
+      when reason in [:sibling_references_sibling, :kept_references_sibling] and
+             is_map(context) do
+    if Map.has_key?(context, :dependent) do
+      with_sibling_dependency_failure(
+        %{
+          reason: reason,
+          dependent: Map.get(context, :dependent),
+          dependency: Map.get(context, :dependency)
+        },
+        context,
+        opts
+      )
+    else
+      contextual_type_failure(:with_sibling_dependency_unsupported, %{detail: reason}, opts)
+    end
+  end
+
   def from_error({:source_context, {:rewrite_no_match, _left, _right}, context}, opts)
       when is_map(context),
       do: rewrite_failure(:rewrite_no_match, context, opts)
@@ -4379,6 +4400,90 @@ defmodule Cure.Diagnostic.Adapter do
       }
     )
   end
+
+  defp with_sibling_dependency_failure(details, context, opts) do
+    dependent = name_to_string(Map.get(details, :dependent))
+    dependency = name_to_string(Map.get(details, :dependency))
+    reason = Map.get(details, :reason)
+    dependent_site = parameter_site(context, dependent)
+    dependency_site = parameter_site(context, dependency)
+    expression_span = Map.get(context, :span) || Keyword.get(opts, :span)
+    scrutinee_span = Map.get(context, :scrutinee_span)
+
+    {body, primary_message, dependency_message, hint} =
+      case reason do
+        :sibling_references_sibling ->
+          {
+            "`#{dependent}` must be refined when this `with` chooses a constructor, but its type also depends on `#{dependency}`, which must be refined by the same match. Cure cannot currently generalize one refined sibling over another without changing their dependency order.",
+            "the type of `#{dependent}` depends on another value refined by this `with`",
+            "`#{dependency}` must also be refined by this match",
+            "Nest a second match after refining `#{dependency}`, or change `#{dependent}` so its type does not depend on `#{dependency}`"
+          }
+
+        :kept_references_sibling ->
+          {
+            "`#{dependent}` is not itself refined by this `with`, but its type depends on `#{dependency}`, which is. Keeping `#{dependent}` while changing the type of `#{dependency}` would leave the context ill-formed.",
+            "this parameter would keep a type tied to a refined sibling",
+            "`#{dependency}` changes type across these branches",
+            "Move `#{dependent}` inside the refined branch, or change its type so it does not depend on `#{dependency}`"
+          }
+      end
+
+    primary_span = parameter_site_span(dependent_site) || expression_span
+
+    secondary =
+      [
+        sibling_dependency_label(
+          parameter_site_span(dependency_site),
+          primary_span,
+          dependency_message
+        ),
+        sibling_dependency_label(
+          scrutinee_span,
+          primary_span,
+          "this is the value whose constructor would refine those sibling types"
+        ),
+        sibling_dependency_label(
+          expression_span,
+          primary_span,
+          "this `with` requires the unsupported dependent refinement"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "With cannot refine dependent siblings in this order",
+      body: Doc.paragraph(body),
+      primary: pickup_label(primary_span, :primary, primary_message),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind: :with_sibling_dependency_unsupported,
+        reason: reason,
+        checking: Map.get(context, :checking),
+        dependent: dependent,
+        dependency: dependency
+      }
+    )
+  end
+
+  defp parameter_site(context, name) do
+    context
+    |> Map.get(:parameter_sites, [])
+    |> Enum.find(&(name_to_string(Map.get(&1, :name)) == name))
+  end
+
+  defp parameter_site_span(%{type_span: %Span{} = span}), do: span
+  defp parameter_site_span(%{span: %Span{} = span}), do: span
+  defp parameter_site_span(_site), do: nil
+
+  defp sibling_dependency_label(%Span{} = span, primary_span, message) when span != primary_span,
+    do: pickup_label(span, :secondary, message)
+
+  defp sibling_dependency_label(_span, _primary_span, _message), do: nil
 
   defp non_callable_application(details, context, opts) do
     index = Map.get(details, :argument_index, 0)

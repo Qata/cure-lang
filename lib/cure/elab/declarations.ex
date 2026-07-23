@@ -1029,6 +1029,10 @@ defmodule Cure.Elab.Declarations do
       proof_keyword_span: if(source_info, do: Map.get(source_info.fields, :proof_keyword)),
       proof_name_span: if(source_info, do: Map.get(source_info.fields, :proof_name)),
       proof_name: Keyword.get(meta, :proof),
+      parameter_sites:
+        env
+        |> Env.owned_name(checking)
+        |> Cure.Elab.SourceMetadata.parameter_sites(),
       expectation_span: expectation_span,
       expression_category: expression_category(expression),
       expectation_origin: expectation_origin,
@@ -2131,8 +2135,23 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp register_parameter_spans(env, name, params) do
-    :ok = Cure.Elab.SourceMetadata.put_parameter_spans(Env.owned_name(env, name), param_label_span_vector(params) || [])
+    owned_name = Env.owned_name(env, name)
+    :ok = Cure.Elab.SourceMetadata.put_parameter_spans(owned_name, param_label_span_vector(params) || [])
+    :ok = Cure.Elab.SourceMetadata.put_parameter_sites(owned_name, parameter_site_vector(params))
     env
+  end
+
+  defp parameter_site_vector(params) do
+    Enum.map(params, fn {:param, meta, name} ->
+      info = Cure.MetaAST.Metadata.source_info(meta)
+
+      %{
+        name: param_name_string(name),
+        span: info && info.whole,
+        name_span: info && info.name,
+        type_span: info && info.annotation
+      }
+    end)
   end
 
   defp register_declaration_span(env, name, meta) do

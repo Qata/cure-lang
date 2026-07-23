@@ -4828,24 +4828,46 @@ defmodule Cure.Elab.Elaborator do
 
     gen_set = gen |> Enum.map(& &1.index) |> MapSet.new()
 
-    cond do
-      Enum.any?(gen, fn %{type_term: t, index: idx} ->
-        not MapSet.disjoint?(free_indices(t, 0), MapSet.delete(gen_set, idx))
-      end) ->
-        {:error, {:with_sibling_dependency_unsupported, :sibling_references_sibling}}
-
-      Enum.any?(0..(depth - 1)//1, fn i ->
-        not MapSet.member?(gen_set, i) and
-            not MapSet.disjoint?(
-              free_indices(resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env), 0),
-              gen_set
-            )
-      end) ->
-        {:error, {:with_sibling_dependency_unsupported, :kept_references_sibling}}
-
-      true ->
+    case sibling_dependency(gen, gen_set, names, ctx, env, depth) do
+      nil ->
         {:ok, gen}
+
+      %{reason: reason} = details ->
+        {:error, {:source_context, {:with_sibling_dependency_unsupported, reason}, Map.delete(details, :reason)}}
     end
+  end
+
+  defp sibling_dependency(gen, gen_set, names, ctx, env, depth) do
+    generated_dependency =
+      Enum.find_value(gen, fn %{type_term: type, index: index, name: dependent} ->
+        dependencies = MapSet.intersection(free_indices(type, 0), MapSet.delete(gen_set, index))
+
+        case Enum.find(gen, &MapSet.member?(dependencies, &1.index)) do
+          nil -> nil
+          dependency -> %{reason: :sibling_references_sibling, dependent: dependent, dependency: dependency.name}
+        end
+      end)
+
+    generated_dependency ||
+      Enum.find_value(0..(depth - 1)//1, fn index ->
+        dependencies =
+          ctx
+          |> Context.lookup(index)
+          |> Quote.reify(depth)
+          |> resplit_data(env)
+          |> free_indices(0)
+          |> MapSet.intersection(gen_set)
+
+        if not MapSet.member?(gen_set, index) and MapSet.size(dependencies) > 0 do
+          dependency = Enum.find(gen, &MapSet.member?(dependencies, &1.index))
+
+          %{
+            reason: :kept_references_sibling,
+            dependent: Enum.at(names, index),
+            dependency: dependency && dependency.name
+          }
+        end
+      end)
   end
 
   # Emit one Core branch per surface arm. Reuses partition_arms (same validation
