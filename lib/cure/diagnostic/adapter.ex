@@ -23,6 +23,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   alias Cure.Diagnostic.Adapter.Codegen
   alias Cure.Diagnostic.Adapter.Operational
+  alias Cure.Diagnostic.Adapter.Type, as: TypeAdapter
   alias Cure.Diagnostic.Suggest
   alias Cure.MetaAST.Metadata
 
@@ -2987,42 +2988,7 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   def from_error(%TypeProblem{} = problem, opts) do
-    actual_surface = surface_type(problem.actual)
-    expected_surface = surface_type(problem.expected)
-    primary_span = problem.span || Keyword.get(opts, :span)
-
-    primary =
-      if primary_span do
-        %Label{span: primary_span, style: :primary, message: type_problem_label(problem.origin)}
-      end
-
-    secondary = expectation_labels(problem.origin, primary_span, problem.related)
-
-    payload =
-      %{
-        expected_surface: expected_surface,
-        actual_surface: actual_surface,
-        origin: Map.from_struct(problem.origin),
-        expression_category: problem.expression
-      }
-      |> maybe_put_type_debug(problem.expected, problem.actual, problem.debug, opts)
-
-    Diagnostic.new(
-      code: "E093",
-      key: problem.kind,
-      severity: :error,
-      title: type_problem_title(problem.origin),
-      body:
-        Doc.stack([
-          Doc.paragraph(type_problem_context(problem.origin)),
-          type_comparison_doc(problem.expected, problem.actual)
-        ]),
-      primary: primary,
-      secondary: secondary,
-      notes: Keyword.get(opts, :notes, []),
-      provenance: Keyword.get(opts, :provenance, []),
-      payload: payload
-    )
+    TypeAdapter.from_error(problem, opts)
   end
 
   def from_error(%SyntaxProblem{} = problem, opts) do
@@ -3077,7 +3043,7 @@ defmodule Cure.Diagnostic.Adapter do
       key: :conversion_failure,
       severity: :error,
       title: "Type mismatch",
-      body: type_comparison_doc(expected, actual),
+      body: TypeAdapter.comparison_doc(expected, actual),
       primary: primary_label(opts, "this expression has the wrong type"),
       notes: Keyword.get(opts, :notes, []),
       provenance: Keyword.get(opts, :provenance, []),
@@ -6082,7 +6048,7 @@ defmodule Cure.Diagnostic.Adapter do
           Doc.paragraph(
             "`#{method}` in this `#{interface}` implementation has a different signature from the method declared by the interface. Every parameter and the result must agree after substituting the implementation type."
           ),
-          type_comparison_doc(details.expected || expected_surface, details.actual || actual_surface)
+          TypeAdapter.comparison_doc(details.expected || expected_surface, details.actual || actual_surface)
         ]),
       primary: pickup_label(primary_span, :primary, "this implementation provides the incompatible signature"),
       suggestions: [
@@ -11280,34 +11246,6 @@ defmodule Cure.Diagnostic.Adapter do
   defp namespace_title(:interface), do: "interface"
   defp namespace_title(other), do: to_string(other)
 
-  defp type_problem_title(%ExpectationOrigin{kind: :annotation}), do: "Annotation does not match"
-  defp type_problem_title(%ExpectationOrigin{kind: :local_fact}), do: "Local fact does not match"
-  defp type_problem_title(%ExpectationOrigin{kind: :call_result}), do: "Call result has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :branch}), do: "Branches have different types"
-  defp type_problem_title(%ExpectationOrigin{kind: :dependent_branch}), do: "Dependent branch has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :condition}), do: "Condition is not boolean"
-  defp type_problem_title(%ExpectationOrigin{kind: :call_argument}), do: "Argument has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :application}), do: "Application has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :overload}), do: "No matching overload"
-  defp type_problem_title(%ExpectationOrigin{kind: :element}), do: "Collection element has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :collection}), do: "Collection elements have different types"
-  defp type_problem_title(%ExpectationOrigin{kind: :record}), do: "Record has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :record_field}), do: "Record field has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :record_update}), do: "Record update has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :pattern}), do: "Pattern has the wrong type"
-
-  defp type_problem_title(%ExpectationOrigin{kind: :constructor_argument}),
-    do: "Constructor argument has the wrong type"
-
-  defp type_problem_title(%ExpectationOrigin{kind: :implicit}), do: "Implicit argument has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :effects}), do: "Effect is not allowed here"
-  defp type_problem_title(%ExpectationOrigin{kind: :ffi}), do: "FFI boundary has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :actor}), do: "Actor message has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :fsm}), do: "FSM transition has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :supervisor}), do: "Supervisor value has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :operator_operand}), do: "Operator cannot use this value"
-  defp type_problem_title(_origin), do: "Type mismatch"
-
   defp syntax_problem_code(:unterminated_lambda), do: "E035"
   defp syntax_problem_code(:unrecognized_pattern), do: "E090"
   defp syntax_problem_code(_kind), do: "E094"
@@ -15478,204 +15416,6 @@ defmodule Cure.Diagnostic.Adapter do
       context: %{line: line, column: column}
     }
   end
-
-  defp type_problem_context(%ExpectationOrigin{kind: :annotation}),
-    do: "This expression does not match the type written in its annotation."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :local_fact, owner: owner}),
-    do: "The evidence for local fact `#{name_to_string(owner)}` does not match its stated type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :call_result, owner: owner}),
-    do: "The result of `#{name_to_string(owner || "this call")}` does not match the surrounding expectation."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :branch}),
-    do: "Every branch of this expression must produce the same type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :dependent_branch}),
-    do: "The constructor specializes this branch's indices, and its body must produce that refined result type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :condition}),
-    do: "A condition must produce `Bool` before either branch can run."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :call_argument, index: index, owner: owner}),
-    do: "Argument #{display_index(index)} of `#{name_to_string(owner || "this function")}` has an incompatible type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :application, owner: owner}),
-    do: "This application of `#{name_to_string(owner || "this function")}` has an incompatible type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :overload, owner: owner}),
-    do: "The overloaded call `#{name_to_string(owner || "this function")}` has no compatible type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :operator_operand, owner: owner}),
-    do: "The `#{name_to_string(owner || "operator")}` operator cannot use this operand type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :element, index: index}),
-    do: "Element #{display_index(index)} of this collection has an incompatible type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :collection}),
-    do: "All elements of this collection must agree on one type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :record, owner: owner}),
-    do: "This value does not match the declared shape of record `#{name_to_string(owner || "this record")}`."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :record_field, owner: owner}),
-    do: "Field `#{name_to_string(owner || "this field")}` does not match the record's declared field type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :record_update, owner: owner}),
-    do: "This record update does not preserve the declared record shape of `#{name_to_string(owner || "this record")}`."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :pattern}),
-    do: "This pattern must match the type of the value it is checking."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :constructor_argument, index: index, owner: owner}),
-    do:
-      "Argument #{display_index(index)} of constructor `#{name_to_string(owner || "this constructor")}` has an incompatible type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :implicit, owner: owner}),
-    do: "The implicit argument required by `#{name_to_string(owner || "this call")}` has the wrong type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :effects}),
-    do: "This expression performs an effect that is not allowed in its context."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :ffi, owner: owner}),
-    do: "The FFI boundary `#{name_to_string(owner || "this declaration")}` does not match its Cure type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :actor, owner: owner}),
-    do: "Actor `#{name_to_string(owner || "this actor")}` received a value with the wrong message type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :fsm, owner: owner}),
-    do: "FSM transition `#{name_to_string(owner || "this transition")}` does not produce the required state type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :supervisor, owner: owner}),
-    do:
-      "Supervisor `#{name_to_string(owner || "this supervisor")}` does not match the required child specification type."
-
-  defp type_problem_context(_origin), do: "This expression has a different type than its context requires."
-
-  # The labels take the same width, keeping the first type character in both
-  # rows aligned for quick visual comparison. Core terms retain enough shape to
-  # colour only the divergent descendants; strings and unrelated roots stay
-  # uncoloured because a textual resemblance is not semantic evidence.
-  defp type_comparison_doc(expected, actual) do
-    {expected_doc, actual_doc} = type_difference_docs(printable_core(expected), printable_core(actual), false)
-
-    Doc.concat([
-      Doc.concat(["Expected: ", expected_doc]),
-      Doc.text("\n"),
-      Doc.concat(["Found:    ", actual_doc])
-    ])
-  end
-
-  defp type_difference_docs(expected, actual, _within_common?) when expected == actual do
-    {plain_type_doc(expected), plain_type_doc(actual)}
-  end
-
-  defp type_difference_docs(
-         {:data, name, expected_params, expected_indices},
-         {:data, name, actual_params, actual_indices},
-         _within_common?
-       )
-       when length(expected_params) == length(actual_params) and length(expected_indices) == length(actual_indices) do
-    type_application_docs(
-      Cure.Elab.Name.base(name),
-      expected_params ++ expected_indices,
-      actual_params ++ actual_indices
-    )
-  end
-
-  defp type_difference_docs({:ctor, name, expected_args}, {:ctor, name, actual_args}, _within_common?)
-       when length(expected_args) == length(actual_args) do
-    type_application_docs(Cure.Elab.Name.base(name), expected_args, actual_args)
-  end
-
-  defp type_difference_docs({:app, expected_fun, expected_arg}, {:app, actual_fun, actual_arg}, _within_common?) do
-    {expected_fun_doc, actual_fun_doc} = type_difference_docs(expected_fun, actual_fun, true)
-    {expected_arg_doc, actual_arg_doc} = type_difference_docs(expected_arg, actual_arg, true)
-
-    {
-      Doc.concat([expected_fun_doc, Doc.text(" "), expected_arg_doc]),
-      Doc.concat([actual_fun_doc, Doc.text(" "), actual_arg_doc])
-    }
-  end
-
-  defp type_difference_docs(expected, actual, true) do
-    {
-      Doc.emphasis(:expected, plain_type_doc(expected)),
-      Doc.emphasis(:observed, plain_type_doc(actual))
-    }
-  end
-
-  defp type_difference_docs(expected, actual, false) do
-    {plain_type_doc(expected), plain_type_doc(actual)}
-  end
-
-  defp type_application_docs(head, expected_args, actual_args) do
-    {expected_args, actual_args} =
-      expected_args
-      |> Enum.zip(actual_args)
-      |> Enum.map(&type_difference_docs(elem(&1, 0), elem(&1, 1), true))
-      |> Enum.unzip()
-
-    {
-      type_application_doc(head, expected_args),
-      type_application_doc(head, actual_args)
-    }
-  end
-
-  defp type_application_doc(head, []), do: Doc.text(head)
-
-  defp type_application_doc(head, args) do
-    args_doc = args |> Enum.intersperse(Doc.text(", ")) |> Doc.concat()
-    Doc.concat([Doc.text(head), Doc.text("("), args_doc, Doc.text(")")])
-  end
-
-  # Some diagnostic entry points already provide a user-facing type string.
-  # Do not pass those through Core's printer, which would render them as quoted
-  # Elixir strings rather than as the type the user wrote.
-  defp plain_type_doc(type) when is_binary(type), do: Doc.text(type)
-  defp plain_type_doc(type), do: Doc.text(print_core(type))
-
-  defp type_problem_label(%ExpectationOrigin{kind: :condition}), do: "this condition has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :local_fact}), do: "this evidence has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :call_result}), do: "this call result has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :branch}), do: "this branch disagrees with another branch"
-
-  defp type_problem_label(%ExpectationOrigin{kind: :dependent_branch}),
-    do: "this branch does not satisfy its refined result"
-
-  defp type_problem_label(%ExpectationOrigin{kind: :call_argument}), do: "this argument has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :application}), do: "this application has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :overload}), do: "this overloaded call has no matching type"
-  defp type_problem_label(%ExpectationOrigin{kind: :element}), do: "this collection element has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :collection}), do: "this collection element has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :record}), do: "this record has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :record_field}), do: "this record field has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :record_update}), do: "this record update has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :pattern}), do: "this pattern has the wrong type"
-
-  defp type_problem_label(%ExpectationOrigin{kind: :constructor_argument}),
-    do: "this constructor argument has the wrong type"
-
-  defp type_problem_label(%ExpectationOrigin{kind: :implicit}), do: "this implicit argument has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :effects}), do: "this expression has an invalid effect"
-  defp type_problem_label(%ExpectationOrigin{kind: :ffi}), do: "this FFI boundary has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :actor}), do: "this actor message has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :fsm}), do: "this FSM transition has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :supervisor}), do: "this supervisor value has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :operator_operand}), do: "this operator operand has the wrong type"
-  defp type_problem_label(_origin), do: "this expression has the wrong type"
-
-  defp expectation_labels(%ExpectationOrigin{span: %Span{} = span}, primary_span, _related)
-       when span != primary_span,
-       do: [%Label{span: span, style: :secondary, message: "the expectation comes from here"}]
-
-  defp expectation_labels(_origin, primary_span, %Span{} = related) when related != primary_span,
-    do: [%Label{span: related, style: :secondary, message: "the compared expression is here"}]
-
-  defp expectation_labels(_origin, _primary_span, _related), do: []
-
-  defp display_index(nil), do: ""
-  defp display_index(index), do: index + 1
 
   defp surface_type(type) when is_binary(type), do: type
   defp surface_type(type), do: print_core(type)
