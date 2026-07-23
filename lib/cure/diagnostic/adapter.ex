@@ -22,6 +22,7 @@ defmodule Cure.Diagnostic.Adapter do
   }
 
   alias Cure.Diagnostic.Adapter.Codegen
+  alias Cure.Diagnostic.Adapter.Name, as: NameAdapter
   alias Cure.Diagnostic.Adapter.Operational
   alias Cure.Diagnostic.Adapter.Type, as: TypeAdapter
   alias Cure.Diagnostic.Suggest
@@ -3999,10 +4000,10 @@ defmodule Cure.Diagnostic.Adapter do
       end)
 
     ranking_opts = Keyword.put(opts, :span, name_span)
-    candidate_details = rank_candidates(candidates, spelling, :record, ranking_opts)
+    candidate_details = NameAdapter.rank_candidates(candidates, spelling, :record, ranking_opts)
 
     suggestions =
-      case candidate_suggestions(candidate_details, spelling, ranking_opts) do
+      case NameAdapter.candidate_suggestions(candidate_details, spelling, ranking_opts) do
         [] ->
           [
             %Suggestion{
@@ -4358,7 +4359,7 @@ defmodule Cure.Diagnostic.Adapter do
       |> Keyword.put(:owner, record)
       |> Keyword.put(:record, record)
 
-    candidate_details = rank_candidates(candidates, field, :member, ranking_opts)
+    candidate_details = NameAdapter.rank_candidates(candidates, field, :member, ranking_opts)
 
     secondary =
       case receiver_span do
@@ -4380,7 +4381,7 @@ defmodule Cure.Diagnostic.Adapter do
           do: %Label{span: field_span, style: :primary, message: "`#{record_name}` has no field named `#{field}`"}
         ),
       secondary: secondary,
-      suggestions: candidate_suggestions(candidate_details, field, ranking_opts),
+      suggestions: NameAdapter.candidate_suggestions(candidate_details, field, ranking_opts),
       payload: %{
         namespace: :member,
         name: field,
@@ -10317,69 +10318,8 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   @spec unknown_name(atom(), term(), keyword()) :: Diagnostic.t()
-  def unknown_name(namespace, name, opts \\ []) do
-    spelling = name_to_string(name)
-    candidate_details = rank_candidates(Keyword.get(opts, :candidates, []), spelling, namespace, opts)
-    candidates = Enum.map(candidate_details, & &1.name)
-    available_candidates = Keyword.get(opts, :available_candidates, [])
-    available_names = available_candidates |> Enum.map(&suggestion_name/1) |> Enum.uniq()
-
-    body =
-      case available_names do
-        [] ->
-          Doc.paragraph(
-            "`#{Keyword.get(opts, :display_name, spelling)}` is not available in this #{namespace} namespace."
-          )
-
-        names ->
-          Doc.stack([
-            Doc.paragraph(
-              "`#{Keyword.get(opts, :display_name, spelling)}` is not available in this #{namespace} namespace."
-            ),
-            Doc.paragraph("The matched type provides #{Enum.map_join(names, ", ", &"`#{&1}`")}.")
-          ])
-      end
-
-    suggestions =
-      case {candidate_suggestions(candidate_details, spelling, opts), available_names} do
-        {[], [_ | _] = names} ->
-          [
-            %Suggestion{
-              message: "Use one of the matched type's constructors: #{Enum.map_join(names, ", ", &"`#{&1}`")}",
-              applicability: :manual
-            }
-          ]
-
-        {ranked, _names} ->
-          ranked
-      end
-
-    Diagnostic.new(
-      code: @unknown_name_code,
-      key: :unknown_name,
-      severity: :error,
-      title: "Unknown #{namespace_title(namespace)}",
-      body: body,
-      primary: primary_label(opts, "`#{spelling}` was not found"),
-      notes: Keyword.get(opts, :notes, []),
-      suggestions: suggestions,
-      provenance: Keyword.get(opts, :provenance, []),
-      payload: %{
-        namespace: namespace,
-        name: spelling,
-        candidates: candidates,
-        candidate_details: candidate_details,
-        available_candidates: available_candidates,
-        owner: Keyword.get(opts, :owner),
-        record: Keyword.get(opts, :record),
-        checking: Keyword.get(opts, :checking),
-        arity: Keyword.get(opts, :arity),
-        expected_namespace: Keyword.get(opts, :expected_namespace),
-        imported_from: Keyword.get(opts, :imported_from),
-        kernel_context: Keyword.get(opts, :kernel_context)
-      }
-    )
-  end
+  def unknown_name(namespace, name, opts \\ []),
+    do: NameAdapter.unknown_name(namespace, name, opts)
 
   defp primary_label(opts, default_message) do
     case Keyword.get(opts, :span) do
@@ -11091,54 +11031,6 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp insertion_before(_span), do: nil
 
-  defp candidate_suggestions([], _spelling, _opts), do: []
-
-  defp candidate_suggestions(candidates, spelling, opts) do
-    names = Enum.map(candidates, &suggestion_name/1)
-
-    qualification_hint =
-      if Enum.any?(candidates, &requires_qualification?/1), do: " Qualify it or import its module.", else: ""
-
-    {applicability, edits} = unique_name_repair(candidates, spelling, opts)
-
-    [
-      %Suggestion{
-        message: "Did you mean #{Enum.map_join(names, ", ", &"`#{&1}`")}?#{qualification_hint}",
-        applicability: applicability,
-        edits: edits
-      }
-    ]
-  end
-
-  defp unique_name_repair(
-         [%{name: replacement, imported: imported, requires_import: requires_import}],
-         spelling,
-         opts
-       ) do
-    case Keyword.get(opts, :span) do
-      %Span{} = span when imported != false and requires_import != true and replacement != spelling ->
-        {:machine_applicable, [%TextEdit{span: span, replacement: replacement}]}
-
-      _ ->
-        {:maybe_incorrect, []}
-    end
-  end
-
-  defp unique_name_repair(_candidates, _spelling, _opts), do: {:maybe_incorrect, []}
-
-  defp requires_qualification?(%{imported: false}), do: true
-  defp requires_qualification?(%{requires_import: true}), do: true
-  defp requires_qualification?(_candidate), do: false
-
-  defp rank_candidates(candidates, spelling, namespace, opts) do
-    Suggest.rank(candidates, spelling, namespace, opts)
-  end
-
-  defp suggestion_name(%{name: name, owner: owner, imported: false}) when not is_nil(owner),
-    do: "#{name_to_string(owner)}.#{name}"
-
-  defp suggestion_name(%{name: name}), do: name
-
   defp record_field_candidates(nil, _declared, _record), do: []
 
   defp record_field_candidates(field, declared, record) do
@@ -11229,14 +11121,6 @@ defmodule Cure.Diagnostic.Adapter do
     fields
     |> Enum.map_join(", ", &"`#{name_to_string(&1)}`")
   end
-
-  defp namespace_title(:value), do: "value"
-  defp namespace_title(:constructor), do: "constructor"
-  defp namespace_title(:type), do: "type"
-  defp namespace_title(:module), do: "module"
-  defp namespace_title(:member), do: "module member"
-  defp namespace_title(:interface), do: "interface"
-  defp namespace_title(other), do: to_string(other)
 
   defp syntax_problem_code(:unterminated_lambda), do: "E035"
   defp syntax_problem_code(:unrecognized_pattern), do: "E090"
