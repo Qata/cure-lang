@@ -587,10 +587,10 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:source_context, {:unknown_record, name, candidates}, context}, opts)
       when is_map(context) and is_list(candidates),
-      do: unknown_record_failure(name, candidates, context, opts)
+      do: NameAdapter.from_error({:source_context, {:unknown_record, name, candidates}, context}, opts)
 
   def from_error({:source_context, {:unknown_record, name}, context}, opts) when is_map(context),
-    do: unknown_record_failure(name, Map.get(context, :available_records, []), context, opts)
+    do: NameAdapter.from_error({:source_context, {:unknown_record, name}, context}, opts)
 
   def from_error({:source_context, {:unknown_field, _record, _field}, context} = error, opts)
       when is_map(context),
@@ -2867,67 +2867,6 @@ defmodule Cure.Diagnostic.Adapter do
     do: TypeAdapter.from_error(error, opts)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
-
-  defp unknown_record_failure(name, available_records, context, opts) do
-    spelling = name_to_string(name)
-    name_span = Map.get(context, :record_name_span) || Map.get(context, :span)
-
-    candidates =
-      Enum.map(available_records, fn candidate ->
-        %{
-          id: {:record, candidate},
-          name: surface_declaration_name(candidate),
-          namespace: :record,
-          owner: record_owner(candidate),
-          imported: true,
-          visibility: :public,
-          origin: :record_declaration
-        }
-      end)
-
-    ranking_opts = Keyword.put(opts, :span, name_span)
-    candidate_details = NameAdapter.rank_candidates(candidates, spelling, :record, ranking_opts)
-
-    suggestions =
-      case NameAdapter.candidate_suggestions(candidate_details, spelling, ranking_opts) do
-        [] ->
-          [
-            %Suggestion{
-              message: "Declare `rec #{spelling}` or import the module that defines it",
-              applicability: :manual
-            }
-          ]
-
-        ranked ->
-          ranked
-      end
-
-    Diagnostic.new(
-      code: "E021",
-      key: :unknown_record,
-      severity: :error,
-      title: "Cannot find record `#{spelling}`",
-      body: Doc.paragraph("No record named `#{spelling}` is available in this module or its imports."),
-      primary:
-        if(name_span,
-          do: %Label{span: name_span, style: :primary, message: "this record name is not in scope"}
-        ),
-      suggestions: suggestions,
-      payload: %{
-        record: name,
-        candidates: Enum.map(candidate_details, & &1.name),
-        candidate_details: candidate_details,
-        checking: Map.get(context, :checking)
-      }
-    )
-  end
-
-  defp record_owner(name) do
-    case name_to_string(name) |> String.split("#", parts: 2) do
-      [owner, _name] -> owner
-      [_name] -> nil
-    end
-  end
 
   defp checked_constructor_result_failure(unsolved_name, context, opts) do
     constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))

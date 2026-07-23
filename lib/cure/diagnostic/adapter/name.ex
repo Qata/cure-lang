@@ -87,6 +87,13 @@ defmodule Cure.Diagnostic.Adapter.Name do
     unknown_name(:member, name_to_string(field), opts)
   end
 
+  def from_error({:source_context, {:unknown_record, name, candidates}, context}, opts)
+      when is_map(context) and is_list(candidates),
+      do: unknown_record_failure(name, candidates, context, opts)
+
+  def from_error({:source_context, {:unknown_record, name}, context}, opts) when is_map(context),
+    do: unknown_record_failure(name, Map.get(context, :available_records, []), context, opts)
+
   def from_error({:source_context, {kind, name}, context}, opts)
       when kind in [:unknown_ctor, :unknown_pattern_constructor, :unknown_family] and
              is_map(context) do
@@ -1519,6 +1526,64 @@ defmodule Cure.Diagnostic.Adapter.Name do
         checking: Map.get(context, :checking)
       }
     )
+  end
+
+  defp unknown_record_failure(name, available_records, context, opts) do
+    spelling = name_to_string(name)
+    name_span = Map.get(context, :record_name_span) || Map.get(context, :span)
+
+    candidates =
+      Enum.map(available_records, fn candidate ->
+        %{
+          id: {:record, candidate},
+          name: surface_name(candidate),
+          namespace: :record,
+          owner: record_owner(candidate),
+          imported: true,
+          visibility: :public,
+          origin: :record_declaration
+        }
+      end)
+
+    ranking_opts = Keyword.put(opts, :span, name_span)
+    candidate_details = rank_candidates(candidates, spelling, :record, ranking_opts)
+
+    suggestions =
+      case candidate_suggestions(candidate_details, spelling, ranking_opts) do
+        [] ->
+          [
+            %Suggestion{
+              message: "Declare `rec #{spelling}` or import the module that defines it",
+              applicability: :manual
+            }
+          ]
+
+        ranked ->
+          ranked
+      end
+
+    Diagnostic.new(
+      code: "E021",
+      key: :unknown_record,
+      severity: :error,
+      title: "Cannot find record `#{spelling}`",
+      body: Doc.paragraph("No record named `#{spelling}` is available in this module or its imports."),
+      primary: pickup_label(name_span, :primary, "this record name is not in scope"),
+      suggestions: suggestions,
+      payload: %{
+        record: name,
+        candidates: Enum.map(candidate_details, & &1.name),
+        candidate_details: candidate_details,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp record_owner(name) do
+    case name_to_string(name) |> String.split("#", parts: 2) do
+      [owner, _name] -> owner
+      [_name] -> nil
+    end
   end
 
   @doc false
