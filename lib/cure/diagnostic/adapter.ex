@@ -1679,9 +1679,9 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: pattern_only_syntax(:named_implicit_pattern, context, opts)
 
-  def from_error({:source_context, kind, context}, opts)
+  def from_error({:source_context, kind, context} = error, opts)
       when kind in [:rewrite_requires_expected_type, :rewrite_proof_not_equality] and is_map(context),
-      do: rewrite_failure(kind, context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:source_context, :with_mixed_rematch_arms, context} = error, opts)
       when is_map(context),
@@ -1710,13 +1710,13 @@ defmodule Cure.Diagnostic.Adapter do
              is_map(context),
       do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {:rewrite_no_match, _left, _right}, context}, opts)
+  def from_error({:source_context, {:rewrite_no_match, _left, _right}, context} = error, opts)
       when is_map(context),
-      do: rewrite_failure(:rewrite_no_match, context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {:rewrite_no_match, _left, _right, _goal}, context}, opts)
+  def from_error({:source_context, {:rewrite_no_match, _left, _right, _goal}, context} = error, opts)
       when is_map(context),
-      do: rewrite_failure(:rewrite_no_match, context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:source_context, {:cannot_derive, interface}, context}, opts)
       when is_map(context),
@@ -2174,9 +2174,14 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error(kind, opts)
       when kind in [
-             :applied_non_function,
              :rewrite_requires_expected_type,
-             :rewrite_proof_not_equality,
+             :rewrite_proof_not_equality
+           ],
+      do: TypeAdapter.from_error(kind, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :applied_non_function,
              :match_scrutinee_not_data,
              :with_mixed_rematch_arms,
              :with_scrutinee_not_data,
@@ -3767,12 +3772,14 @@ defmodule Cure.Diagnostic.Adapter do
            ],
       do: contextual_type_failure(kind, %{detail: detail}, opts)
 
-  def from_error({kind, first, second}, opts)
-      when kind in [:rewrite_no_match, :non_uniform_parameter],
-      do: contextual_type_failure(kind, %{first: first, second: second}, opts)
+  def from_error({:rewrite_no_match, _first, _second} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:rewrite_no_match, first, second, goal}, opts),
-    do: contextual_type_failure(:rewrite_no_match, %{first: first, second: second, goal: goal}, opts)
+  def from_error({:non_uniform_parameter, first, second}, opts),
+    do: contextual_type_failure(:non_uniform_parameter, %{first: first, second: second}, opts)
+
+  def from_error({:rewrite_no_match, _first, _second, _goal} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:bounded_lit_out_of_range, _value, _bound} = error, opts),
     do: TypeAdapter.from_error(error, opts)
@@ -4134,79 +4141,6 @@ defmodule Cure.Diagnostic.Adapter do
         checking: Map.get(context, :checking)
       }
     )
-  end
-
-  defp rewrite_failure(kind, context, opts) do
-    rewrite_span = Map.get(context, :span) || Keyword.get(opts, :span)
-    proof_span = Map.get(context, :proof_span)
-    body_span = Map.get(context, :body_span)
-
-    {title, body, primary_span, primary_message, secondary, hint} =
-      case kind do
-        :rewrite_requires_expected_type ->
-          {
-            "Rewrite result needs an annotation",
-            "A rewrite changes the type expected by its body, so Cure must know the surrounding result type before it can construct the equality motive. This rewrite appears where that type is still being inferred.",
-            rewrite_span,
-            "this rewrite has no expected result type",
-            rewrite_context_labels(
-              [
-                {proof_span, "this proof determines what the body rewrites"},
-                {body_span, "this body must be checked against the rewritten result"}
-              ],
-              rewrite_span
-            ),
-            "Add a result annotation to the enclosing declaration, or place this rewrite where an expected type is already known"
-          }
-
-        :rewrite_proof_not_equality ->
-          {
-            "Rewrite proof is not an equality",
-            "The expression after `rewrite` must prove an `Equivalent(T, left, right)` proposition. This expression has another type, so it provides no endpoints that Cure can substitute in the body.",
-            proof_span || rewrite_span,
-            "this expression does not prove an equality",
-            rewrite_context_labels(
-              [{body_span, "this body would be checked after applying the equality"}],
-              proof_span
-            ),
-            "Pass an `Equivalent` proof after `rewrite`, or remove `rewrite` if no equality is available"
-          }
-
-        :rewrite_no_match ->
-          {
-            "Rewrite does not change the goal",
-            "The supplied equality is valid, but its left endpoint does not occur in the type required by this body. Applying it would leave the goal unchanged.",
-            proof_span || rewrite_span,
-            "this equality has no matching occurrence in the goal",
-            rewrite_context_labels(
-              [{body_span, "this body is checked against the unchanged goal"}],
-              proof_span
-            ),
-            "Use an equality whose left endpoint occurs in the expected result, or remove this rewrite"
-          }
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(body),
-      primary: pickup_label(primary_span, :primary, primary_message),
-      secondary: secondary,
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{
-        kind: kind,
-        expression_category: Map.get(context, :expression_category, :rewrite_expr),
-        checking: Map.get(context, :checking)
-      }
-    )
-  end
-
-  defp rewrite_context_labels(labels, primary_span) do
-    labels
-    |> Enum.filter(fn {span, _message} -> match?(%Span{}, span) and span != primary_span end)
-    |> Enum.map(fn {span, message} -> pickup_label(span, :secondary, message) end)
   end
 
   defp argument_count(1), do: "1 argument"

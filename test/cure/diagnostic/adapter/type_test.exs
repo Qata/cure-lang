@@ -826,4 +826,47 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     bare = {:extern_returns_union, :raw, {:union, []}}
     assert Adapter.from_error(bare) == TypeAdapter.from_error(bare)
   end
+
+  test "rewrite failures retain proof, body, and expected-type roles" do
+    source = "rewrite proof in body\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:rewrite, source, "rewrite.cure")
+    {:ok, expression} = SourceRegistry.span(registry, :rewrite, 0, 21)
+    {:ok, proof} = SourceRegistry.span(registry, :rewrite, 8, 13)
+    {:ok, body} = SourceRegistry.span(registry, :rewrite, 17, 21)
+
+    errors = [
+      {:source_context, :rewrite_requires_expected_type,
+       %{span: expression, proof_span: proof, body_span: body, checking: :run}},
+      {:source_context, :rewrite_proof_not_equality,
+       %{span: expression, proof_span: proof, body_span: body, checking: :run}},
+      {:source_context, {:rewrite_no_match, :left, :right, :goal},
+       %{span: expression, proof_span: proof, body_span: body, checking: :run}}
+    ]
+
+    for error <- errors do
+      direct = TypeAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E093"
+      assert direct.primary
+      assert direct.secondary != []
+      assert direct.suggestions != []
+    end
+
+    proof_error = TypeAdapter.from_error(Enum.at(errors, 1))
+    assert proof_error.primary.span == proof
+    assert hd(proof_error.secondary).span == body
+
+    rendered = Renderer.plain(proof_error, registry, width: 80)
+    assert rendered =~ "REWRITE PROOF IS NOT AN EQUALITY"
+    assert rendered =~ "Hint: Pass an `Equivalent` proof after `rewrite`"
+
+    for error <- [
+          :rewrite_requires_expected_type,
+          :rewrite_proof_not_equality,
+          {:rewrite_no_match, :left, :right},
+          {:rewrite_no_match, :left, :right, :goal}
+        ] do
+      assert Adapter.from_error(error) == TypeAdapter.from_error(error)
+    end
+  end
 end

@@ -524,6 +524,50 @@ defmodule Cure.Diagnostic.Adapter.Type do
         opts
       )
 
+  def from_error({:source_context, kind, context}, opts)
+      when kind in [
+             :rewrite_requires_expected_type,
+             :rewrite_proof_not_equality
+           ] and is_map(context),
+      do: rewrite_failure(kind, context, opts)
+
+  def from_error(
+        {:source_context, {:rewrite_no_match, _left, _right}, context},
+        opts
+      )
+      when is_map(context),
+      do: rewrite_failure(:rewrite_no_match, context, opts)
+
+  def from_error(
+        {:source_context, {:rewrite_no_match, _left, _right, _goal}, context},
+        opts
+      )
+      when is_map(context),
+      do: rewrite_failure(:rewrite_no_match, context, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :rewrite_requires_expected_type,
+             :rewrite_proof_not_equality
+           ],
+      do: generic_rewrite_failure(kind, %{}, opts)
+
+  def from_error({:rewrite_no_match, left, right}, opts),
+    do:
+      generic_rewrite_failure(
+        :rewrite_no_match,
+        %{first: left, second: right},
+        opts
+      )
+
+  def from_error({:rewrite_no_match, left, right, goal}, opts),
+    do:
+      generic_rewrite_failure(
+        :rewrite_no_match,
+        %{first: left, second: right, goal: goal},
+        opts
+      )
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
   defp typed_pattern_annotation(context, opts) do
@@ -1710,6 +1754,112 @@ defmodule Cure.Diagnostic.Adapter.Type do
   defp runtime_shape_name(:boolean), do: "boolean"
   defp runtime_shape_name(:list), do: "list"
   defp runtime_shape_name(shape), do: name(shape)
+
+  defp rewrite_failure(kind, context, opts) do
+    rewrite_span = Map.get(context, :span) || Keyword.get(opts, :span)
+    proof_span = Map.get(context, :proof_span)
+    body_span = Map.get(context, :body_span)
+
+    {title, body, primary_span, primary_message, secondary, hint} =
+      case kind do
+        :rewrite_requires_expected_type ->
+          {
+            "Rewrite result needs an annotation",
+            "A rewrite changes the type expected by its body, so Cure must know the surrounding result type before it can construct the equality motive. This rewrite appears where that type is still being inferred.",
+            rewrite_span,
+            "this rewrite has no expected result type",
+            rewrite_context_labels(
+              [
+                {proof_span, "this proof determines what the body rewrites"},
+                {body_span, "this body must be checked against the rewritten result"}
+              ],
+              rewrite_span
+            ),
+            "Add a result annotation to the enclosing declaration, or place this rewrite where an expected type is already known"
+          }
+
+        :rewrite_proof_not_equality ->
+          {
+            "Rewrite proof is not an equality",
+            "The expression after `rewrite` must prove an `Equivalent(T, left, right)` proposition. This expression has another type, so it provides no endpoints that Cure can substitute in the body.",
+            proof_span || rewrite_span,
+            "this expression does not prove an equality",
+            rewrite_context_labels(
+              [
+                {body_span, "this body would be checked after applying the equality"}
+              ],
+              proof_span
+            ),
+            "Pass an `Equivalent` proof after `rewrite`, or remove `rewrite` if no equality is available"
+          }
+
+        :rewrite_no_match ->
+          {
+            "Rewrite does not change the goal",
+            "The supplied equality is valid, but its left endpoint does not occur in the type required by this body. Applying it would leave the goal unchanged.",
+            proof_span || rewrite_span,
+            "this equality has no matching occurrence in the goal",
+            rewrite_context_labels(
+              [
+                {body_span, "this body is checked against the unchanged goal"}
+              ],
+              proof_span
+            ),
+            "Use an equality whose left endpoint occurs in the expected result, or remove this rewrite"
+          }
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: label_at(primary_span, :primary, primary_message),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind: kind,
+        expression_category: Map.get(context, :expression_category, :rewrite_expr),
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp rewrite_context_labels(labels, primary_span) do
+    labels
+    |> Enum.map(fn {span, message} ->
+      related_label(span, primary_span, message)
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp generic_rewrite_failure(kind, details, opts) do
+    {title, body, message} =
+      case kind do
+        :rewrite_requires_expected_type ->
+          {"Rewrite needs an expected type", "Cure cannot infer the type required by this rewrite.",
+           "add an annotation that determines the rewrite target"}
+
+        :rewrite_proof_not_equality ->
+          {"Rewrite proof is not equality", "The proof supplied to rewrite does not establish an equality.",
+           "provide an equality proof"}
+
+        :rewrite_no_match ->
+          {"Rewrite does not match", "The rewrite proof does not match the type being rewritten.",
+           "use a proof whose endpoints match the target"}
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: primary(opts, message),
+      payload: Map.put(details, :kind, kind)
+    )
+  end
 
   defp bounded_literal_failure(value, bound, context, opts) do
     literal_span = Map.get(context, :span) || Keyword.get(opts, :span)
