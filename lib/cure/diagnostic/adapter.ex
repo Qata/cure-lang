@@ -876,6 +876,13 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:parse_error, [reason | _]}, opts), do: from_error(reason, opts)
 
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :shadowed_sub_union, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: shadowed_sub_union_pattern_failure(details, context, opts)
+
   def from_error({:source_context, {:unsupported_pattern, shape}, context}, opts) when is_map(context) do
     from_error(
       %SyntaxProblem{
@@ -6867,6 +6874,58 @@ defmodule Cure.Diagnostic.Adapter do
         reason: :non_exhaustive,
         checking: Map.get(context, :checking),
         guard_count: length(guard_labels)
+      }
+    )
+  end
+
+  defp shadowed_sub_union_pattern_failure(details, context, opts) do
+    name = name_to_string(details.name)
+    outer_span = Map.get(details, :span)
+    shadow_span = Map.get(details, :shadow_span)
+    type_span = Map.get(details, :type_span)
+    primary_span = shadow_span || outer_span || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      [
+        case outer_span do
+          %Span{} = span when span != primary_span ->
+            pickup_label(span, :secondary, "this outer pattern binds `#{name}`")
+
+          _ ->
+            nil
+        end,
+        case type_span do
+          %Span{} = span when span != primary_span and span != outer_span ->
+            pickup_label(span, :secondary, "this branch keeps the remaining union members")
+
+          _ ->
+            nil
+        end
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E090",
+      key: :unrecognized_pattern,
+      severity: :error,
+      title: "Nested pattern shadows `#{name}`",
+      body:
+        Doc.paragraph(
+          "The outer `#{name}` represents a narrowed union value. This nested pattern binds another value with the same name, so rewriting uses of the outer value could capture the inner one."
+        ),
+      primary: pickup_label(primary_span, :primary, "rename this inner binder so it does not shadow `#{name}`"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Give the nested binder a different name and update its branch body",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :unsupported_pattern,
+        reason: :shadowed_sub_union,
+        name: name,
+        checking: Map.get(context, :checking)
       }
     )
   end

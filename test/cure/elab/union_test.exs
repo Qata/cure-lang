@@ -12,7 +12,9 @@ defmodule Cure.Elab.UnionTest do
   """
   use ExUnit.Case, async: true
 
+  alias Cure.Compiler.Errors
   alias Cure.Core.{Env, Inductive}
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.{Program, Union}
 
   defp unwrap_lams({:lam, _g, _dom, body}), do: unwrap_lams(body)
@@ -543,7 +545,65 @@ defmodule Cure.Elab.UnionTest do
       # `:shadowed_tuple`, `:shadowed_catchall`, …) is refused here too, with an
       # honest, correctly-labelled diagnostic instead of a confusing downstream
       # type error.
-      assert {:error, {:source_context, {:unsupported_pattern, :shadowed_sub_union}, _}} = Program.elaborate(src)
+      assert {:error,
+              {:source_context,
+               {:unsupported_pattern, %{reason: :shadowed_sub_union, name: "rest", shadow_span: shadow_span}}, _} =
+                error} =
+               Program.elaborate(src)
+
+      assert shadow_span.start_line == 7
+      assert shadow_span.start_column == 11
+
+      {diagnostic, registry} = Errors.to_diagnostic(error, "shadowed_union.cure", src)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- NESTED PATTERN SHADOWS `REST` [E090] -------------------- shadowed_union.cure
+
+               The outer `rest` represents a narrowed union value. This nested pattern binds
+               another value with the same name, so rewriting uses of the outer value could
+               capture the inner one.
+
+               at shadowed_union.cure:7:11
+               5 |       rest: Bool | Atom ->
+                 |       ----  ----------- this outer pattern binds `rest`; this branch keeps the remaining union members
+               6 |         match rest
+               7 |           rest: Bool -> not rest
+                 |           ^^^^ rename this inner binder so it does not shadow `rest`
+
+               Hint: Give the nested binder a different name and update its branch body
+               """)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+
+      assert lsp["range"] == %{
+               "start" => %{"line" => 6, "character" => 10},
+               "end" => %{"line" => 6, "character" => 14}
+             }
+
+      assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+               %{
+                 "start" => %{"line" => 4, "character" => 6},
+                 "end" => %{"line" => 4, "character" => 10}
+               },
+               %{
+                 "start" => %{"line" => 4, "character" => 12},
+                 "end" => %{"line" => 4, "character" => 23}
+               }
+             ]
+
+      assert lsp["data"]["payload"] == %{
+               "checking" => "describe",
+               "kind" => "unsupported_pattern",
+               "name" => "rest",
+               "reason" => "shadowed_sub_union"
+             }
+
+      fixed =
+        src
+        |> String.replace("rest: Bool -> not rest", "value: Bool -> not value")
+
+      assert {:ok, _environment} = Program.elaborate(fixed, file: "shadowed_union_fixed.cure")
     end
 
     test "a lambda parameter rebinding the sub-union arm's name is refused, not silently corrupted" do
@@ -563,7 +623,13 @@ defmodule Cure.Elab.UnionTest do
       # rewritten to reference the OUTER Bool|Atom union value instead of the
       # lambda's own Bool parameter. Refused outright, for the same reason as
       # the nested-match case above.
-      assert {:error, {:source_context, {:unsupported_pattern, :shadowed_sub_union}, _}} = Program.elaborate(src)
+      assert {:error,
+              {:source_context,
+               {:unsupported_pattern, %{reason: :shadowed_sub_union, name: "rest", shadow_span: shadow_span}}, _}} =
+               Program.elaborate(src)
+
+      assert shadow_span.start_line == 6
+      assert shadow_span.start_column == 37
     end
   end
 

@@ -701,7 +701,33 @@ defmodule Cure.Elab.Elaborator do
     }
   end
 
+  defp surface_expression_span({:union_type, _meta, children}) when is_list(children) do
+    spans = children |> Enum.map(&surface_expression_span/1) |> Enum.reject(&is_nil/1)
+
+    case spans do
+      [%Cure.Diagnostic.Span{} = first | _] ->
+        last = List.last(spans)
+
+        %Cure.Diagnostic.Span{
+          first
+          | end_byte: last.end_byte,
+            end_line: last.end_line,
+            end_column: last.end_column
+        }
+
+      [] ->
+        nil
+    end
+  end
+
   defp surface_expression_span({_kind, meta, _children}) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: span} -> span
+      _ -> nil
+    end
+  end
+
+  defp surface_expression_span({_kind, meta, _left, _right}) when is_list(meta) do
     case Cure.MetaAST.Metadata.source_info(meta) do
       %Cure.MetaAST.SourceInfo{whole: span} -> span
       _ -> nil
@@ -4375,7 +4401,17 @@ defmodule Cure.Elab.Elaborator do
         {:ok, {:match_arm, Keyword.put(meta, :pattern, pattern), rebound}}
 
       sub_union? and binds_any?(body, [name]) ->
-        {:error, {:unsupported_pattern, :shadowed_sub_union}}
+        pattern_info = Cure.MetaAST.Metadata.source_info(pm)
+
+        {:error,
+         {:unsupported_pattern,
+          %{
+            reason: :shadowed_sub_union,
+            name: name,
+            span: pattern_info && (pattern_info.name || pattern_info.whole),
+            type_span: (pattern_info && pattern_info.annotation) || surface_expression_span(type_ast),
+            shadow_span: first_binding_span(body, name)
+          }}}
 
       sub_union? ->
         fresh = "__u" <> Integer.to_string(:erlang.phash2({name, m.key}))
