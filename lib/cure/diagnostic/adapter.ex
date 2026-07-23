@@ -985,6 +985,13 @@ defmodule Cure.Diagnostic.Adapter do
     coverage_problem(:duplicate_branch, branch, context, opts)
   end
 
+  def from_error(
+        {:source_context, {:forced_pattern_mismatch, actual, expected}, %{forced_pattern_span: _} = context},
+        opts
+      ) do
+    forced_pattern_mismatch_failure(actual, expected, context, opts)
+  end
+
   def from_error({:source_context, {:forced_pattern_mismatch, actual, expected}, context}, opts)
       when is_map(context) do
     pattern_problem(:forced_pattern_mismatch, %{actual: actual, expected: expected}, context, opts)
@@ -4815,6 +4822,62 @@ defmodule Cure.Diagnostic.Adapter do
         kind: :positional_forced_pattern,
         constructor: constructor,
         argument_index: argument_index,
+        expectation_origin: :pattern
+      }
+    )
+  end
+
+  defp forced_pattern_mismatch_failure(actual, expected, context, opts) do
+    constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
+    implicit_name = name_to_string(Map.get(context, :implicit_name, "index"))
+    actual_surface = Map.get(context, :written_surface) || constructor_result_surface_type(actual)
+    expected_surface = Map.get(context, :expected_surface) || constructor_result_surface_type(expected)
+    primary_span = Map.get(context, :forced_pattern_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      [
+        sibling_dependency_label(
+          Map.get(context, :named_implicit_span),
+          primary_span,
+          "this check targets the hidden `#{implicit_name}` field"
+        ),
+        sibling_dependency_label(
+          Map.get(context, :constructor_name_span),
+          primary_span,
+          "`#{constructor}` fixes the value of `#{implicit_name}` from the matched index"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Forced `#{implicit_name}` does not match `#{constructor}`",
+      body:
+        Doc.paragraph(
+          "The dot expression denotes `#{actual_surface}`, but matching `#{constructor}` fixes `#{implicit_name}` as `#{expected_surface}`. A forced pattern checks an index already determined by the scrutinee; it cannot choose a different value."
+        ),
+      primary:
+        pickup_label(
+          primary_span,
+          :primary,
+          "this forced value disagrees with the index fixed here"
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Change the dot expression to the value fixed by `#{constructor}`, or bind `#{implicit_name}` without a dot when it is not forced",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :forced_pattern_mismatch,
+        constructor: constructor,
+        implicit_name: implicit_name,
+        actual: actual_surface,
+        expected: expected_surface,
         expectation_origin: :pattern
       }
     )
@@ -15215,9 +15278,15 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp printable_core(term) when is_tuple(term) do
-    case term |> elem(0) |> Atom.to_string() do
-      "v" <> _ -> Cure.Core.Quote.reify(term, 0)
-      _ -> term
+    case elem(term, 0) do
+      :var ->
+        term
+
+      tag ->
+        case Atom.to_string(tag) do
+          "v" <> _ -> Cure.Core.Quote.reify(term, 0)
+          _ -> term
+        end
     end
   end
 

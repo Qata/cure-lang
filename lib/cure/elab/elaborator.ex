@@ -7135,7 +7135,9 @@ defmodule Cure.Elab.Elaborator do
 
         tele_names =
           Enum.reduce(bindings, branch_scope(telescope, quantities, plicities, pattern_vars), fn {name,
-                                                                                                  {:variable, _, vname}},
+                                                                                                  {:variable, _, vname},
+                                                                                                  _named_meta,
+                                                                                                  _constructor_meta},
                                                                                                  acc ->
             p = Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end)
             List.replace_at(acc, arity - 1 - p, to_string(vname))
@@ -7209,7 +7211,7 @@ defmodule Cure.Elab.Elaborator do
   # the index instead.
   defp check_named_implicits(checks, subst, arity, telescope, branch_ctx, branch_names, env) do
     checks
-    |> Enum.reduce_while(:ok, fn {name, inner}, :ok ->
+    |> Enum.reduce_while(:ok, fn {name, inner, named_meta, constructor_meta}, :ok ->
       case named_implicit_forced_value(name, subst, arity, telescope) do
         {:ok, d} ->
           expr = forced_inner_expr(inner)
@@ -7225,7 +7227,17 @@ defmodule Cure.Elab.Elaborator do
                  ) do
                 {:cont, :ok}
               else
-                {:halt, {:error, {:forced_pattern_mismatch, t_term, d}}}
+                {:halt,
+                 {:error,
+                  forced_pattern_mismatch_error(
+                    name,
+                    inner,
+                    named_meta,
+                    constructor_meta,
+                    t_term,
+                    d,
+                    branch_names
+                  )}}
               end
 
             {:error, _} = err ->
@@ -7261,6 +7273,59 @@ defmodule Cure.Elab.Elaborator do
   # elaborate the underlying expression. A non-dot inner is elaborated as-is.
   defp forced_inner_expr({:forced_pattern, _m, [inner]}), do: inner
   defp forced_inner_expr(other), do: other
+
+  defp forced_pattern_mismatch_error(
+         name,
+         inner,
+         named_meta,
+         constructor_meta,
+         written,
+         expected,
+         branch_names
+       ) do
+    forced_info =
+      case inner do
+        {:forced_pattern, meta, _children} -> Cure.MetaAST.Metadata.source_info(meta)
+        _ -> nil
+      end
+
+    named_info = Cure.MetaAST.Metadata.source_info(named_meta)
+    constructor_info = Cure.MetaAST.Metadata.source_info(constructor_meta)
+    span = (forced_info && forced_info.whole) || (named_info && named_info.whole)
+
+    {:source_context, {:forced_pattern_mismatch, written, expected},
+     %{
+       line: span && span.start_line,
+       column: span && span.start_column,
+       length: span && max(1, span.end_column - span.start_column),
+       span: span,
+       forced_pattern_span: forced_info && forced_info.whole,
+       forced_value_span: forced_info && (forced_info.body || List.first(forced_info.operands)),
+       named_implicit_span: named_info && named_info.whole,
+       named_implicit_name_span: named_info && named_info.name,
+       constructor_span: constructor_info && constructor_info.whole,
+       constructor_name_span: constructor_info && (constructor_info.callee || constructor_info.name),
+       constructor: Keyword.get(constructor_meta, :name),
+       implicit_name: name,
+       written: written,
+       expected: expected,
+       written_surface: forced_term_surface(written, branch_names),
+       expected_surface: forced_term_surface(expected, branch_names),
+       expectation_origin: :pattern,
+       expression_category: :forced_pattern
+     }}
+  end
+
+  defp forced_term_surface({:var, index}, names),
+    do: Enum.at(names, index) || "?"
+
+  defp forced_term_surface({:ctor, constructor, arguments}, names) do
+    name = constructor |> Cure.Elab.Name.base() |> to_string()
+    arguments = Enum.map(arguments, &forced_term_surface(&1, names))
+    if arguments == [], do: name, else: "#{name}(#{Enum.join(arguments, ", ")})"
+  end
+
+  defp forced_term_surface(_term, _names), do: nil
 
   @doc """
   Public soundness-probe shim for the forced-annotation check of ONE named
@@ -9110,8 +9175,12 @@ defmodule Cure.Elab.Elaborator do
   # The named-implicit annotations of a constructor pattern, as `{name, inner}`
   # pairs (empty for a pattern without any). Used by `elaborate_matched_branch`
   # to run the forced-index convertibility check.
-  defp constructor_named_implicits({:function_call, _meta, args}),
-    do: for({:named_implicit_pat, m, [inner]} <- args, do: {Keyword.get(m, :name), inner})
+  defp constructor_named_implicits({:function_call, constructor_meta, args}),
+    do:
+      for(
+        {:named_implicit_pat, m, [inner]} <- args,
+        do: {Keyword.get(m, :name), inner, m, constructor_meta}
+      )
 
   defp constructor_named_implicits(_), do: []
 
@@ -9123,7 +9192,7 @@ defmodule Cure.Elab.Elaborator do
   defp split_named_implicits(pattern, subst, arity, telescope, quantities) do
     pattern
     |> constructor_named_implicits()
-    |> Enum.split_with(fn {name, inner} ->
+    |> Enum.split_with(fn {name, inner, _named_meta, _constructor_meta} ->
       position = Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end)
 
       match?({:variable, _, _}, inner) and position != nil and
