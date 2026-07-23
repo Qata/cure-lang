@@ -279,6 +279,27 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
     assert MacroAdapter.syntax_path_phrase(path) == "`attribute span[0].child[1]`"
   end
 
+  test "module validation producers are owned by the macro family" do
+    errors = [
+      {:closed_category_extension, [:Expression]},
+      {:ambiguous_macro_extension, [:left, :right]},
+      {:module_rule_not_fully_consumed, :tail},
+      {:not_a_module_rule, :bad},
+      :invalid_module_rule_set,
+      :invalid_module_rule_bindings,
+      :invalid_macro_extension_rules,
+      :invalid_macro_extension_rule
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.key == :macro_module_validation
+      assert direct.suggestions != []
+    end
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 

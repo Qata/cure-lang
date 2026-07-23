@@ -314,6 +314,26 @@ defmodule Cure.Diagnostic.Adapter.Macro do
            ],
       do: syntax_decode_failure(kind, %{}, opts)
 
+  def from_error({:closed_category_extension, categories}, opts),
+    do: module_failure(:closed_category_extension, %{categories: categories}, opts)
+
+  def from_error({:ambiguous_macro_extension, keywords}, opts),
+    do: module_failure(:ambiguous_macro_extension, %{keywords: keywords}, opts)
+
+  def from_error({kind, _detail}, opts) when kind in [:module_rule_not_fully_consumed, :not_a_module_rule],
+    do: module_failure(kind, %{}, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :module_rule_not_fully_consumed,
+             :not_a_module_rule,
+             :invalid_module_rule_set,
+             :invalid_module_rule_bindings,
+             :invalid_macro_extension_rules,
+             :invalid_macro_extension_rule
+           ],
+      do: module_failure(kind, %{}, opts)
+
   def from_error({kind, _detail}, opts)
       when kind in [
              :invalid_syntax_attr,
@@ -939,6 +959,67 @@ defmodule Cure.Diagnostic.Adapter.Macro do
       other -> inspect(other)
     end)
   end
+
+  @doc false
+  def module_failure(kind, details, opts) do
+    {title, message, label_text, hint} = module_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_module_validation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: label(Keyword.get(opts, :span), :primary, label_text),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp module_content(:module_rule_not_fully_consumed, _details),
+    do:
+      {"Macro rule does not consume its use site",
+       "This macro rule leaves part of the use site unmatched, so the expansion would be ambiguous.",
+       "make this rule consume the complete use site", "Extend the rule or add a rule for the remaining syntax"}
+
+  defp module_content(:not_a_module_rule, _details),
+    do:
+      {"Macro rule is not a module rule", "This declaration is being used where a structured module rule is required.",
+       "replace this declaration with a module rule", "Use a valid module rule with its declared syntax family"}
+
+  defp module_content(:invalid_module_rule_set, _details),
+    do:
+      {"Module rule set is malformed", "A module macro needs a list of well-formed module rules.",
+       "rewrite this module rule set", "Provide a list of structured module rules"}
+
+  defp module_content(:invalid_module_rule_bindings, _details),
+    do:
+      {"Module rule bindings are malformed",
+       "Every module rule binding must name a declared capture and provide a valid syntax value.",
+       "rewrite these module bindings", "Bind only declared captures to structured syntax"}
+
+  defp module_content(:invalid_macro_extension_rules, _details),
+    do:
+      {"Macro extension rules are malformed", "A macro extension must provide a valid rule set for its target family.",
+       "rewrite these extension rules", "Use structured rules that match the extended syntax family"}
+
+  defp module_content(:invalid_macro_extension_rule, _details),
+    do:
+      {"Macro extension rule is malformed",
+       "This extension rule does not have the fields required to expand its target family.",
+       "rewrite this extension rule", "Provide a valid target family, pattern, and expansion"}
+
+  defp module_content(:closed_category_extension, %{categories: categories}),
+    do:
+      {"Closed macro category cannot be extended",
+       "The macro attempts to extend a closed category: #{Enum.map_join(categories, ", ", &name_to_string/1)}.",
+       "remove this extension", "Use an open syntax family or add the case to its original declaration"}
+
+  defp module_content(:ambiguous_macro_extension, %{keywords: keywords}),
+    do:
+      {"Macro extension is ambiguous",
+       "These extension keywords match more than one family: #{Enum.map_join(keywords, ", ", &name_to_string/1)}.",
+       "make the extension unambiguous", "Choose keywords owned by exactly one syntax family"}
 
   @doc false
   def syntax_decode_failure(kind, details, opts),
