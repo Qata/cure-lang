@@ -5764,11 +5764,24 @@ defmodule Cure.Elab.Elaborator do
         {:ok, clean, subs} ->
           b = single_body(body)
 
-          if binds_any?(b, Enum.map(subs, &elem(&1, 0))) do
-            {:halt, {:error, {:unsupported_pattern, :shadowed_tuple_arg}}}
-          else
-            b2 = Enum.reduce(subs, b, fn {n, r}, acc_b -> subst_surface_var(acc_b, n, r) end)
-            {:cont, {:ok, acc ++ [{:match_arm, Keyword.put(meta, :pattern, clean), b2}]}}
+          case Enum.find(subs, fn {name, _projection} -> binds_any?(b, [name]) end) do
+            {name, _projection} ->
+              pattern = Keyword.fetch!(meta, :pattern)
+
+              {:halt,
+               {:error,
+                {:unsupported_pattern,
+                 %{
+                   reason: :shadowed_tuple_arg,
+                   name: name,
+                   span: pattern_binder_span(pattern, name),
+                   type_span: tuple_pattern_span_for_name(pattern, name),
+                   shadow_span: first_binding_span(body, name)
+                 }}}}
+
+            nil ->
+              b2 = Enum.reduce(subs, b, fn {n, r}, acc_b -> subst_surface_var(acc_b, n, r) end)
+              {:cont, {:ok, acc ++ [{:match_arm, Keyword.put(meta, :pattern, clean), b2}]}}
           end
 
         {:error, _} = err ->
@@ -5776,6 +5789,18 @@ defmodule Cure.Elab.Elaborator do
       end
     end)
   end
+
+  defp tuple_pattern_span_for_name({:tuple, _meta, children} = tuple, name) do
+    if name in pattern_binders(children), do: surface_expression_span(tuple), else: nil
+  end
+
+  defp tuple_pattern_span_for_name({_tag, _meta, children}, name) when is_list(children),
+    do: Enum.find_value(children, &tuple_pattern_span_for_name(&1, name))
+
+  defp tuple_pattern_span_for_name(list, name) when is_list(list),
+    do: Enum.find_value(list, &tuple_pattern_span_for_name(&1, name))
+
+  defp tuple_pattern_span_for_name(_other, _name), do: nil
 
   defp strip_tuple_args_in_ctor({:function_call, m, args}) do
     args

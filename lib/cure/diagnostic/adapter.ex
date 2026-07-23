@@ -911,6 +911,13 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: shadowed_sub_union_pattern_failure(details, context, opts)
 
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :shadowed_tuple_arg, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: shadowed_sub_union_pattern_failure(details, context, opts)
+
   def from_error({:source_context, {:unsupported_pattern, shape}, context}, opts) when is_map(context) do
     from_error(
       %SyntaxProblem{
@@ -6916,6 +6923,12 @@ defmodule Cure.Diagnostic.Adapter do
 
     {body, type_message} =
       case reason do
+        :shadowed_tuple_arg ->
+          {
+            "This tuple pattern inside a constructor binds `#{name}` to one of the field's positions. A binder inside the branch uses the same name, so substituting the projection could capture the inner value.",
+            "this constructor field is destructured as a tuple"
+          }
+
         :shadowed_tuple ->
           {
             "This tuple pattern binds `#{name}` to one of the tuple's positions. A binder inside the branch uses the same name, so substituting the projection could capture the inner value.",

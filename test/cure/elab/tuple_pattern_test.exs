@@ -146,6 +146,70 @@ defmodule Cure.Elab.TuplePatternTest do
     assert apply(mod, :f, [:B]) == :Z
   end
 
+  test "a branch binder shadowing a constructor's tuple element gets exact source roles" do
+    src =
+      @nat <>
+        "  type T = A(Sigma(a: Nat, Nat)) | B\n" <>
+        "  fn f(t: T) -> Nat = match t\n" <>
+        "    A(%[x, y]) ->\n      let g : (Nat) -> Nat = fn(x) -> x\n      g(y)\n    B() -> Z()\nend\n"
+
+    assert {:error,
+            {:source_context,
+             {:unsupported_pattern, %{reason: :shadowed_tuple_arg, name: "x", shadow_span: shadow_span}}, _} = error} =
+             Program.elaborate(src)
+
+    assert shadow_span.start_line == 6
+    assert shadow_span.start_column == 33
+
+    {diagnostic, registry} = Errors.to_diagnostic(error, "tuple_arg_shadow.cure", src)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- NESTED PATTERN SHADOWS `X` [E090] --------------------- tuple_arg_shadow.cure
+
+             This tuple pattern inside a constructor binds `x` to one of the field's
+             positions. A binder inside the branch uses the same name, so substituting the
+             projection could capture the inner value.
+
+             at tuple_arg_shadow.cure:6:33
+             5 |     A(%[x, y]) ->
+               |       ------- this constructor field is destructured as a tuple
+               |         - this outer pattern binds `x`
+             6 |       let g : (Nat) -> Nat = fn(x) -> x
+               |                                 ^ rename this inner binder so it does not shadow `x`
+
+             Hint: Give the nested binder a different name and update its branch body
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 5, "character" => 32},
+             "end" => %{"line" => 5, "character" => 33}
+           }
+
+    assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+             %{
+               "start" => %{"line" => 4, "character" => 8},
+               "end" => %{"line" => 4, "character" => 9}
+             },
+             %{
+               "start" => %{"line" => 4, "character" => 6},
+               "end" => %{"line" => 4, "character" => 13}
+             }
+           ]
+
+    assert lsp["data"]["payload"] == %{
+             "checking" => "f",
+             "kind" => "unsupported_pattern",
+             "name" => "x",
+             "reason" => "shadowed_tuple_arg"
+           }
+
+    fixed = String.replace(src, "fn(x) -> x", "fn(value) -> value")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "tuple_arg_shadow_fixed.cure")
+  end
+
   test "a plain constructor match is unaffected by the tuple path" do
     src = @nat <> "  fn f(n: Nat) -> Nat = match n\n    S(m) -> m\n    Z() -> Z()\nend\n"
 
