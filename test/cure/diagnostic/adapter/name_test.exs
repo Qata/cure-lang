@@ -110,6 +110,14 @@ defmodule Cure.Diagnostic.Adapter.NameTest do
     assert duplicate.code == "E087"
     assert duplicate.payload.paths == ["a.cure", "b.cure"]
 
+    operator = NameAdapter.from_error({:precedence_cycle, [:Additive, :Multiplicative]})
+    assert operator == Adapter.from_error({:precedence_cycle, [:Additive, :Multiplicative]})
+    assert operator.code == "E106"
+
+    sibling = NameAdapter.from_error({:sibling_module_collision, :run, [:Left, :Right]})
+    assert sibling == Adapter.from_error({:sibling_module_collision, :run, [:Left, :Right]})
+    assert sibling.code == "E105"
+
     assert_raise Cure.Diagnostic.UnhandledError, fn ->
       NameAdapter.from_error({:ordinary_type_failure, :not_a_name_error})
     end

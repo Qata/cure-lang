@@ -141,6 +141,24 @@ defmodule Cure.Diagnostic.Adapter.Name do
   def from_error({:duplicate_module_identity, name, paths}, opts) when is_list(paths),
     do: duplicate_module(name, paths, opts)
 
+  def from_error({:sibling_module_collision, name, owners}, opts) when is_list(owners),
+    do: sibling_module_collision(name, owners, %{}, opts)
+
+  def from_error({:sibling_module_collision, %{name: name} = details}, opts),
+    do: sibling_module_collision(name, Map.get(details, :owners, []), details, opts)
+
+  def from_error({:precedence_cycle, %{groups: groups} = details}, opts) when is_list(groups),
+    do: operator_conflict(:precedence_cycle, details, opts)
+
+  def from_error({:precedence_cycle, groups}, opts) when is_list(groups),
+    do: operator_conflict(:precedence_cycle, %{groups: groups}, opts)
+
+  def from_error({:conflicting_operator_fixity, details}, opts) when is_map(details),
+    do: operator_conflict(:conflicting_operator_fixity, details, opts)
+
+  def from_error({:conflicting_precedence_group, details}, opts) when is_map(details),
+    do: operator_conflict(:conflicting_precedence_group, details, opts)
+
   def from_error(
         {:source_context, {:unsupported_guard, %{reason: :shadowed} = details}, context},
         opts
@@ -203,6 +221,86 @@ defmodule Cure.Diagnostic.Adapter.Name do
       payload: %{module: module, paths: paths}
     )
   end
+
+  @doc false
+  def sibling_module_collision(name, owners, details, opts) do
+    name = name_to_string(name)
+    spans = Map.get(details, :spans, [])
+    detail = " across modules #{Enum.map_join(owners, ", ", &name_to_string/1)}"
+    {primary, secondary} = declaration_labels(spans, opts, "this name is already declared in another sibling module")
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Name repeated across sibling modules",
+      body:
+        Doc.paragraph(
+          "The name `#{name}` is declared#{detail}. Sibling modules in one source file currently share an elaboration namespace, so one declaration would overwrite the other. Rename one declaration or move the modules into separate source files."
+        ),
+      primary: primary,
+      secondary: secondary,
+      suggestions: [],
+      payload: Map.merge(details, %{kind: :sibling_module_collision, name: name, owners: owners})
+    )
+  end
+
+  defp declaration_labels([first, second | rest], _opts, primary_message) do
+    {
+      %Label{span: second, style: :primary, message: primary_message},
+      [%Label{span: first, style: :secondary, message: "the name was first declared here"}] ++
+        Enum.map(rest, &%Label{span: &1, style: :secondary, message: "another duplicate is here"})
+    }
+  end
+
+  defp declaration_labels(_, opts, primary_message),
+    do: {primary(opts, primary_message), []}
+
+  defp operator_conflict(kind, details, opts) do
+    {title, body, primary_message, secondary_message} =
+      case kind do
+        :precedence_cycle ->
+          {"Cyclic operator precedence",
+           "The precedence groups #{Enum.map_join(details.groups, ", ", &"`#{name_to_string(&1)}`")} form a cycle, so the compiler cannot decide which operators bind tighter. Remove or reverse one `higher_than`/`lower_than` relation to break the cycle.",
+           "this precedence group participates in the cycle", "this precedence group also participates in the cycle"}
+
+        :conflicting_operator_fixity ->
+          {"Conflicting operator fixity",
+           "The #{details.fixity} operator `#{details.operator}` is assigned to both `#{name_to_string(details.existing_group)}` and `#{name_to_string(details.new_group)}`. Keep one precedence group for this operator, or choose a different operator spelling.",
+           "this declaration assigns `#{details.operator}` to `#{name_to_string(details.new_group)}`",
+           "the conflicting assignment is here"}
+
+        :conflicting_precedence_group ->
+          {"Conflicting precedence group",
+           "The precedence group `#{name_to_string(details.name)}` is declared with incompatible associativity or ordering rules. Give the declarations identical bodies, or rename one group.",
+           "this declaration conflicts with the earlier group", "the incompatible group declaration is here"}
+      end
+
+    {primary, secondary} = operator_labels(Map.get(details, :spans, []), opts, primary_message, secondary_message)
+
+    Diagnostic.new(
+      code: "E106",
+      key: :operator_declaration_conflict,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: primary,
+      secondary: secondary,
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp operator_labels([first, second | rest], _opts, primary_message, secondary_message) do
+    {%Label{span: second, style: :primary, message: primary_message},
+     [%Label{span: first, style: :secondary, message: secondary_message}] ++
+       Enum.map(rest, &%Label{span: &1, style: :secondary, message: secondary_message})}
+  end
+
+  defp operator_labels([span], _opts, primary_message, _secondary_message),
+    do: {%Label{span: span, style: :primary, message: primary_message}, []}
+
+  defp operator_labels([], opts, primary_message, _secondary_message),
+    do: {primary(opts, primary_message), []}
 
   @doc false
   def ambiguous_member(method, interfaces, opts \\ []),

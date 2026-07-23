@@ -253,29 +253,15 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:sibling_module_collision, name, owners}, opts) do
-    declaration_conflict(:sibling_module_collision, %{name: name, owners: owners}, opts)
-  end
+  def from_error({:sibling_module_collision, _name, _owners} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:sibling_module_collision, %{name: _name} = details}, opts) do
-    declaration_conflict(:sibling_module_collision, details, opts)
-  end
+  def from_error({:sibling_module_collision, %{name: _name}} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:precedence_cycle, %{groups: groups} = details}, opts) when is_list(groups) do
-    operator_conflict(:precedence_cycle, details, opts)
-  end
-
-  def from_error({:precedence_cycle, groups}, opts) when is_list(groups) do
-    operator_conflict(:precedence_cycle, %{groups: groups}, opts)
-  end
-
-  def from_error({:conflicting_operator_fixity, details}, opts) when is_map(details) do
-    operator_conflict(:conflicting_operator_fixity, details, opts)
-  end
-
-  def from_error({:conflicting_precedence_group, details}, opts) when is_map(details) do
-    operator_conflict(:conflicting_precedence_group, details, opts)
-  end
+  def from_error({:precedence_cycle, _groups} = error, opts), do: NameAdapter.from_error(error, opts)
+  def from_error({:conflicting_operator_fixity, _details} = error, opts), do: NameAdapter.from_error(error, opts)
+  def from_error({:conflicting_precedence_group, _details} = error, opts), do: NameAdapter.from_error(error, opts)
 
   def from_error({:unsupported_operand_type, _operator} = error, opts),
     do: TypeAdapter.from_error(error, opts)
@@ -4224,7 +4210,8 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  defp operator_conflict(kind, details, opts) do
+  @doc false
+  def operator_conflict(kind, details, opts) do
     {title, body, primary_message, secondary_message} =
       case kind do
         :precedence_cycle ->
@@ -4259,7 +4246,8 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  defp operator_conflict_labels([first, second | rest], _opts, primary_message, secondary_message) do
+  @doc false
+  def operator_conflict_labels([first, second | rest], _opts, primary_message, secondary_message) do
     primary = %Label{span: second, style: :primary, message: primary_message}
 
     secondary =
@@ -4269,10 +4257,10 @@ defmodule Cure.Diagnostic.Adapter do
     {primary, secondary}
   end
 
-  defp operator_conflict_labels([span], _opts, primary_message, _secondary_message),
+  def operator_conflict_labels([span], _opts, primary_message, _secondary_message),
     do: {%Label{span: span, style: :primary, message: primary_message}, []}
 
-  defp operator_conflict_labels([], opts, primary_message, _secondary_message),
+  def operator_conflict_labels([], opts, primary_message, _secondary_message),
     do: {primary_label(opts, primary_message), []}
 
   defp inferred_hole_failure(name, context, opts) do
