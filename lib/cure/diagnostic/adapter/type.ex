@@ -213,6 +213,16 @@ defmodule Cure.Diagnostic.Adapter.Type do
   def from_error({:lambda_expected_pi, expected}, opts),
     do: from_error({:lambda_expected_pi, %{expected: expected, parameter_index: 0}}, opts)
 
+  def from_error({:effect_arity, name, expected, actual}, opts),
+    do:
+      contextual_failure(
+        :effect_arity,
+        %{name: name, expected: expected, actual: actual},
+        opts,
+        {"Effect operation arity mismatch", "This effect operation was given the wrong number of arguments.",
+         "provide the arguments required by the effect operation"}
+      )
+
   def from_error(:branch_type, opts), do: branch_failure(%{}, opts)
 
   def from_error({:source_context, :branch_type, context}, opts) when is_map(context),

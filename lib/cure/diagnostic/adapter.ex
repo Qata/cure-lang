@@ -2049,7 +2049,7 @@ defmodule Cure.Diagnostic.Adapter do
       do: contextual_type_failure(kind, %{detail: detail}, opts)
 
   def from_error({:effect_arity, name, expected, actual}, opts),
-    do: contextual_type_failure(:effect_arity, %{name: name, expected: expected, actual: actual}, opts)
+    do: TypeAdapter.from_error({:effect_arity, name, expected, actual}, opts)
 
   def from_error({kind, details} = error, opts)
       when kind in [

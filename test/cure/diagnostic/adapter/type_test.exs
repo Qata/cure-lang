@@ -56,6 +56,16 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert Renderer.json(debug) =~ "cannot_unify"
   end
 
+  test "effect arity failures are owned by the type family" do
+    error = {:effect_arity, :send, 2, 1}
+    direct = TypeAdapter.from_error(error)
+
+    assert Adapter.from_error(error) == direct
+    assert direct.code == "E093"
+    assert direct.key == :type_mismatch
+    assert hd(direct.suggestions).message =~ "arguments required"
+  end
+
   test "legacy contextual failures expose their retained repair as a source-tagged hint" do
     source = "value\n"
     registry = SourceRegistry.new() |> SourceRegistry.register(:legacy_type, source, "type_context.cure")
