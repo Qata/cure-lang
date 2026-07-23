@@ -231,86 +231,11 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:proof_chain_mismatch, %ProofChainMismatchProblem{} = problem}, opts),
     do: ProofAdapter.from_error({:proof_chain_mismatch, problem}, opts)
 
-  def from_error({:rewrite_failed, %RewriteProblem{} = problem}, opts) do
-    {title, message, label} =
-      case problem.kind do
-        :no_occurrence ->
-          {"Rewrite has no matching occurrence",
-           "The selected side of this equality does not occur in the current proof goal.",
-           "nothing in this goal matches the rewrite"}
+  def from_error({:rewrite_failed, %RewriteProblem{} = problem}, opts),
+    do: ProofAdapter.from_error({:rewrite_failed, problem}, opts)
 
-        :ambiguous_occurrence ->
-          {"Rewrite matches more than once",
-           "This equality matches multiple places. Select one of the numbered occurrences with `at n`.",
-           "choose which occurrence to rewrite"}
-
-        :invalid_occurrence ->
-          {"Rewrite occurrence does not exist",
-           "The requested occurrence number is outside the candidates in the current goal.",
-           "this occurrence number is not available"}
-
-        :bad_target ->
-          {"Rewrite target is not a local hypothesis",
-           "The name after `in` must identify a local proof hypothesis in this justification.",
-           "this rewrite target is unavailable"}
-
-        :reverse_only ->
-          {"Rewrite only matches in the opposite direction",
-           "The other side of this equality occurs in the goal. Add or remove `backwards` to use that direction.",
-           "this direction has no match"}
-
-        _ ->
-          {"Rewrite theorem is not an equality",
-           "The expression after `using` must prove Cure's `Equivalent` proposition.",
-           "this expression is not equality evidence"}
-      end
-
-    Diagnostic.new(
-      code: "E111",
-      key: :rewrite_failed,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      secondary: rewrite_labels(problem, Keyword.get(opts, :span)),
-      suggestions: rewrite_suggestions(problem),
-      payload: problem
-    )
-  end
-
-  def from_error({:simplification_failed, %SimplificationProblem{} = problem}, opts) do
-    {title, message, label} =
-      case problem.kind do
-        :inadmissible_rule ->
-          {"Simplification rule is not admissible", "This rule cannot be given a deterministic decreasing orientation.",
-           "this rule cannot be admitted"}
-
-        :proof_mismatch ->
-          {"Simplified proof does not match", "The supplied proof and current goal simplify to different propositions.",
-           "the simplified propositions still differ"}
-
-        :resource_guard ->
-          {"Simplification stopped safely",
-           "The simplifier reached its explicit resource limit without claiming that the goal is false.",
-           "simplification stopped at its resource limit"}
-
-        _ ->
-          {"Simplification left a residual goal",
-           "The approved rules made no further progress, and the remaining proposition is not definitionally reflexive.",
-           "this goal was not fully simplified"}
-      end
-
-    Diagnostic.new(
-      code: "E112",
-      key: :simplification_failed,
-      severity: :error,
-      title: title,
-      body: simplification_body(message, problem, opts),
-      primary: primary_label(opts, label),
-      secondary: simplification_labels(problem, Keyword.get(opts, :span)),
-      payload: problem
-    )
-  end
+  def from_error({:simplification_failed, %SimplificationProblem{} = problem}, opts),
+    do: ProofAdapter.from_error({:simplification_failed, problem}, opts)
 
   def from_error({:induction_failed, %InductionProblem{} = problem}, opts) do
     {title, message, label} =
@@ -4550,26 +4475,6 @@ defmodule Cure.Diagnostic.Adapter do
     end
   end
 
-  defp rewrite_labels(problem, primary) do
-    [
-      {problem.command, "rewrite command"},
-      {problem.theorem, "equality supplied here"},
-      {problem.goal, "current proof goal"}
-    ]
-    |> Enum.flat_map(fn
-      {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
-      _ -> []
-    end)
-  end
-
-  defp simplification_labels(problem, primary) do
-    [{problem.command, "simplify command"}, {problem.rule, "rule supplied here"}]
-    |> Enum.flat_map(fn
-      {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
-      _ -> []
-    end)
-  end
-
   defp induction_primary(problem, opts, message) do
     span =
       problem.pattern_range || problem.case_range || problem.subject_range || problem.construct ||
@@ -4637,76 +4542,6 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp induction_suggestions(_problem), do: []
-
-  defp simplification_body(message, problem, opts) do
-    goals =
-      if problem.before_surface && problem.after_surface do
-        "\n\nBefore: #{problem.before_surface}\nAfter: #{problem.after_surface}"
-      else
-        ""
-      end
-
-    supplied =
-      if problem.kind == :proof_mismatch and problem.simplified_supplied_surface do
-        "\nSupplied proof simplifies to: #{problem.simplified_supplied_surface}"
-      else
-        ""
-      end
-
-    if Keyword.get(opts, :trace) == :expanded and (problem.trace_ids || []) != [] do
-      ids = Enum.map_join(problem.trace_ids, ", ", &to_string/1)
-      Doc.paragraph(message <> goals <> supplied <> "\n\nSimplification trace: " <> ids)
-    else
-      Doc.paragraph(message <> goals <> supplied)
-    end
-  end
-
-  defp rewrite_suggestions(%RewriteProblem{kind: :ambiguous_occurrence, command: %Span{} = command} = problem) do
-    insertion = %Span{
-      command
-      | start_byte: command.end_byte,
-        start_line: command.end_line,
-        start_column: command.end_column
-    }
-
-    Enum.map(problem.occurrences || [], fn occurrence ->
-      %Suggestion{
-        message: "Rewrite occurrence #{occurrence.number}",
-        applicability: :machine_applicable,
-        edits: [%TextEdit{span: insertion, replacement: " at #{occurrence.number}"}]
-      }
-    end)
-  end
-
-  defp rewrite_suggestions(%RewriteProblem{
-         kind: :reverse_only,
-         direction: direction,
-         direction_range: %Span{} = direction_range
-       }) do
-    {span, replacement} =
-      case direction do
-        :forward ->
-          {%Span{
-             direction_range
-             | start_byte: direction_range.end_byte,
-               start_line: direction_range.end_line,
-               start_column: direction_range.end_column
-           }, " backwards"}
-
-        :backwards ->
-          {direction_range, ""}
-      end
-
-    [
-      %Suggestion{
-        message: "Use the opposite rewrite direction",
-        applicability: :machine_applicable,
-        edits: [%TextEdit{span: span, replacement: replacement}]
-      }
-    ]
-  end
-
-  defp rewrite_suggestions(_problem), do: []
 
   defp defining_equation_labels(problem, primary) do
     ([{problem.function_definition, "function is defined here"}] ++
