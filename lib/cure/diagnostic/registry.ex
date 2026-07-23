@@ -1859,6 +1859,9 @@ defmodule Cure.Diagnostic.Registry do
   defp producer_converter("E103", :kernel),
     do: {Cure.Diagnostic.Adapter.Kernel, :from_error}
 
+  defp producer_converter("E093", :kernel),
+    do: {Cure.Diagnostic.Adapter.Type, :from_error}
+
   defp producer_converter(_code, :operational),
     do: {Cure.Diagnostic.Adapter.Operational, :from_error}
 

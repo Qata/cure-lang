@@ -77,4 +77,29 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
              """
              |> String.trim_trailing()
   end
+
+  test "raw kernel conversion failures normalize through the type family" do
+    raw = {:conversion_failure, {:data, :Bool, [], []}, {:data, :Int, [], []}}
+    assert TypeAdapter.from_error(raw) == Adapter.from_error(raw)
+
+    contextual =
+      {:source_context, raw,
+       %{
+         expectation_origin: :call_argument,
+         checking: :consume,
+         argument_index: 0,
+         expression_category: :call
+       }}
+
+    direct = TypeAdapter.from_error(contextual)
+    assert Adapter.from_error(contextual) == direct
+    assert direct.code == "E093"
+    assert direct.title == "Argument has the wrong type"
+    assert direct.payload.origin.owner == :consume
+    assert direct.payload.origin.index == 0
+
+    assert_raise Cure.Diagnostic.UnhandledError, fn ->
+      TypeAdapter.from_error({:unknown_global, :missing})
+    end
+  end
 end

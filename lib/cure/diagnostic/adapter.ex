@@ -2935,29 +2935,8 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:conversion_failure, actual, expected}, opts) do
-    actual_surface = print_core(actual)
-    expected_surface = print_core(expected)
-
-    payload =
-      %{
-        expected_surface: expected_surface,
-        actual_surface: actual_surface
-      }
-      |> maybe_put_type_debug(expected, actual, %{}, opts)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :conversion_failure,
-      severity: :error,
-      title: "Type mismatch",
-      body: TypeAdapter.comparison_doc(expected, actual),
-      primary: primary_label(opts, "this expression has the wrong type"),
-      notes: Keyword.get(opts, :notes, []),
-      provenance: Keyword.get(opts, :provenance, []),
-      payload: payload
-    )
-  end
+  def from_error({:conversion_failure, _actual, _expected} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:expected, expected, :got, actual, line, column, %Span{} = span}, opts) do
     from_error(
@@ -5492,18 +5471,6 @@ defmodule Cure.Diagnostic.Adapter do
       },
       opts
     )
-  end
-
-  defp maybe_put_type_debug(payload, expected, actual, details, opts) do
-    if Keyword.get(opts, :debug, false) do
-      Map.put(payload, :debug, %{
-        expected_core: inspect(expected),
-        actual_core: inspect(actual),
-        details: details
-      })
-    else
-      payload
-    end
   end
 
   defp macro_expansion_failure(kind, message, frames, opts) do

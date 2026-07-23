@@ -179,6 +179,12 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert entry.producer_converters == %{kernel: {Cure.Diagnostic.Adapter.Kernel, :from_error}}
   end
 
+  test "kernel conversion failures use the contextual type converter" do
+    entry = Registry.fetch!("E093")
+    assert entry.producer_converters.kernel == {Cure.Diagnostic.Adapter.Type, :from_error}
+    assert entry.producer_converters.elaboration == {Cure.Diagnostic.Adapter, :from_error}
+  end
+
   test "producer catalog validation requires every code and producer branch independently" do
     entry = Registry.fetch!("E094")
     assert entry.producers |> Enum.sort() == [:lexer, :parser]

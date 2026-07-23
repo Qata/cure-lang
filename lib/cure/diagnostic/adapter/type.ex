@@ -9,8 +9,10 @@ defmodule Cure.Diagnostic.Adapter.Type do
   alias Cure.Diagnostic
   alias Cure.Diagnostic.{Doc, ExpectationOrigin, Label, Span, Suggestion, TypeProblem}
 
-  @spec from_error(TypeProblem.t(), keyword()) :: Diagnostic.t()
-  def from_error(%TypeProblem{} = problem, opts \\ []) do
+  @spec from_error(term(), keyword()) :: Diagnostic.t()
+  def from_error(error, opts \\ [])
+
+  def from_error(%TypeProblem{} = problem, opts) do
     actual_surface = surface_type(problem.actual)
     expected_surface = surface_type(problem.expected)
     primary_span = problem.span || Keyword.get(opts, :span)
@@ -42,6 +44,60 @@ defmodule Cure.Diagnostic.Adapter.Type do
       payload: payload
     )
   end
+
+  def from_error({:conversion_failure, actual, expected}, opts) do
+    payload =
+      %{
+        expected_surface: surface_type(expected),
+        actual_surface: surface_type(actual)
+      }
+      |> maybe_put_debug(expected, actual, %{}, opts)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :conversion_failure,
+      severity: :error,
+      title: "Type mismatch",
+      body: comparison_doc(expected, actual),
+      primary: primary(opts, "this expression has the wrong type"),
+      notes: Keyword.get(opts, :notes, []),
+      provenance: Keyword.get(opts, :provenance, []),
+      payload: payload
+    )
+  end
+
+  def from_error(
+        {:source_context, {:conversion_failure, actual, expected} = reason, context},
+        opts
+      )
+      when is_map(context) do
+    case Map.get(context, :expectation_origin) do
+      nil ->
+        raise Cure.Diagnostic.UnhandledError,
+          error: {:source_context, reason, context}
+
+      origin ->
+        from_error(
+          %TypeProblem{
+            kind: :conversion_failure,
+            actual: actual,
+            expected: expected,
+            origin: %ExpectationOrigin{
+              kind: origin,
+              span: Map.get(context, :expectation_span),
+              owner: Map.get(context, :checking),
+              index: Map.get(context, :argument_index)
+            },
+            expression: Map.get(context, :expression_category, :expression),
+            span: Keyword.get(opts, :span, Map.get(context, :span)),
+            debug: %{cause: reason, checking: Map.get(context, :checking)}
+          },
+          opts
+        )
+    end
+  end
+
+  def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
   @doc false
   @spec contextual_failure(atom(), map(), keyword(), {String.t(), String.t(), String.t()}) :: Diagnostic.t()
