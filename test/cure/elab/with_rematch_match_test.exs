@@ -24,6 +24,12 @@ defmodule Cure.Elab.WithRematchMatchTest do
     assert Keyword.get(meta, :name) == "Z"
   end
 
+  test "lowercase GADT constructors are valid restated patterns" do
+    assert {:ok, subst} = Elaborator.match_parent_lhs([v("s")], [ctor("szero", [])])
+    assert %{"s" => {:function_call, meta, []}} = subst
+    assert Keyword.get(meta, :name) == "szero"
+  end
+
   test "variable against a variable is an alias" do
     assert {:ok, subst} = Elaborator.match_parent_lhs([v("n")], [v("m")])
     assert %{"n" => {:variable, _, "m"}} = subst

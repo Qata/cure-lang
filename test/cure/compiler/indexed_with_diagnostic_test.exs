@@ -93,11 +93,11 @@ defmodule Cure.Compiler.IndexedWithDiagnosticTest do
     mod RematchedIndexedProof
       type Nat = Z | S(Nat)
       type SNat indices (n: Nat)
-        ZeroS : SNat(Z)
-        SuccS : SNat(n) -> SNat(S(n))
+        szero : SNat(Z)
+        ssuc : SNat(n) -> SNat(S(n))
       fn f(n: Nat, s: SNat(n)) -> Nat = with s
-        n, ZeroS() | ZeroS() -> Z()
-        n, SuccS(k) | SuccS(k) -> S(Z())
+        n, szero() | szero() -> Z()
+        n, ssuc(k) | ssuc(k) -> S(Z())
     end
     """
 

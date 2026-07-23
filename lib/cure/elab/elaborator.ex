@@ -8876,17 +8876,13 @@ defmodule Cure.Elab.Elaborator do
   # arithmetic, …) is a non-constructor expression — the deferred forced case.
   defp valid_restated_pattern?({:variable, _, _}), do: true
 
-  defp valid_restated_pattern?({:function_call, meta, args}) do
-    constructor_name?(Keyword.get(meta, :name)) and Enum.all?(args, &valid_restated_pattern?/1)
-  end
+  # A call-shaped node in pattern position is a constructor candidate regardless
+  # of capitalization. Indexed GADT constructors are commonly lowercase
+  # (`szero`, `ssuc`); branch elaboration validates their identity later.
+  defp valid_restated_pattern?({:function_call, _meta, args}),
+    do: Enum.all?(args, &valid_restated_pattern?/1)
 
   defp valid_restated_pattern?(_), do: false
-
-  # Cure constructors are capitalised; ordinary identifiers/operators are not.
-  defp constructor_name?(name) when is_binary(name) and name != "",
-    do: String.first(name) =~ ~r/[A-Z]/
-
-  defp constructor_name?(_), do: false
 
   # Structural equality of surface patterns, ignoring meta.
   defp strip_pattern_meta({:variable, _, n}), do: {:variable, n}
