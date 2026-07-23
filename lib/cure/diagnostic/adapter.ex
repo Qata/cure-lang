@@ -904,6 +904,13 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: shadowed_sub_union_pattern_failure(details, context, opts)
 
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :shadowed_tuple, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: shadowed_sub_union_pattern_failure(details, context, opts)
+
   def from_error({:source_context, {:unsupported_pattern, shape}, context}, opts) when is_map(context) do
     from_error(
       %SyntaxProblem{
@@ -6909,6 +6916,12 @@ defmodule Cure.Diagnostic.Adapter do
 
     {body, type_message} =
       case reason do
+        :shadowed_tuple ->
+          {
+            "This tuple pattern binds `#{name}` to one of the tuple's positions. A binder inside the branch uses the same name, so substituting the projection could capture the inner value.",
+            "this tuple pattern is projected before its branch is checked"
+          }
+
         :shadowed_nested ->
           {
             "This nested constructor pattern binds `#{name}`. A binder inside its branch uses the same name, so lowering the nested pattern could capture the inner value.",

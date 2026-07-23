@@ -5917,11 +5917,21 @@ defmodule Cure.Elab.Elaborator do
              {:ok, subs} <- tuple_subs(elems, scrut) do
           b = single_body(body)
 
-          if binds_any?(b, Enum.map(subs, &elem(&1, 0))) do
-            {:error, {:unsupported_pattern, :shadowed_tuple}}
-          else
-            b2 = Enum.reduce(subs, b, fn {n, r}, acc -> subst_surface_var(acc, n, r) end)
-            elaborate_expr_checked(b2, expected, names, ctx, env)
+          case Enum.find(subs, fn {name, _projection} -> binds_any?(b, [name]) end) do
+            {name, _projection} ->
+              {:error,
+               {:unsupported_pattern,
+                %{
+                  reason: :shadowed_tuple,
+                  name: name,
+                  span: pattern_binder_span(pattern, name),
+                  type_span: surface_expression_span(pattern),
+                  shadow_span: first_binding_span(body, name)
+                }}}
+
+            nil ->
+              b2 = Enum.reduce(subs, b, fn {n, r}, acc -> subst_surface_var(acc, n, r) end)
+              elaborate_expr_checked(b2, expected, names, ctx, env)
           end
         end
 

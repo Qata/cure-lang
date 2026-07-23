@@ -10,7 +10,9 @@ defmodule Cure.Elab.TuplePatternTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cure.Elab.{Program, Emit}
+  alias Cure.Compiler.Errors
+  alias Cure.Diagnostic.Renderer
+  alias Cure.Elab.{Emit, Program}
 
   @nat "mod M\n  type Nat = Z | S(Nat)\n"
 
@@ -38,6 +40,69 @@ defmodule Cure.Elab.TuplePatternTest do
     src = @nat <> "  fn f(p: Sigma(a: Nat, Nat)) -> Nat = match p\n    %[_, y] -> y\nend\n"
 
     assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "a branch binder shadowing a tuple element gets exact source roles" do
+    src =
+      @nat <>
+        "  fn f(p: Sigma(a: Nat, Nat)) -> Nat = match p\n" <>
+        "    %[x, y] ->\n      let g : (Nat) -> Nat = fn(x) -> x\n      g(y)\nend\n"
+
+    assert {:error,
+            {:source_context, {:unsupported_pattern, %{reason: :shadowed_tuple, name: "x", shadow_span: shadow_span}},
+             _} = error} =
+             Program.elaborate(src)
+
+    assert shadow_span.start_line == 5
+    assert shadow_span.start_column == 33
+
+    {diagnostic, registry} = Errors.to_diagnostic(error, "tuple_shadow.cure", src)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- NESTED PATTERN SHADOWS `X` [E090] ------------------------- tuple_shadow.cure
+
+             This tuple pattern binds `x` to one of the tuple's positions. A binder inside
+             the branch uses the same name, so substituting the projection could capture the
+             inner value.
+
+             at tuple_shadow.cure:5:33
+             4 |     %[x, y] ->
+               |     ------- this tuple pattern is projected before its branch is checked
+               |       - this outer pattern binds `x`
+             5 |       let g : (Nat) -> Nat = fn(x) -> x
+               |                                 ^ rename this inner binder so it does not shadow `x`
+
+             Hint: Give the nested binder a different name and update its branch body
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 4, "character" => 32},
+             "end" => %{"line" => 4, "character" => 33}
+           }
+
+    assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+             %{
+               "start" => %{"line" => 3, "character" => 6},
+               "end" => %{"line" => 3, "character" => 7}
+             },
+             %{
+               "start" => %{"line" => 3, "character" => 4},
+               "end" => %{"line" => 3, "character" => 11}
+             }
+           ]
+
+    assert lsp["data"]["payload"] == %{
+             "checking" => "f",
+             "kind" => "unsupported_pattern",
+             "name" => "x",
+             "reason" => "shadowed_tuple"
+           }
+
+    fixed = String.replace(src, "fn(x) -> x", "fn(value) -> value")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "tuple_shadow_fixed.cure")
   end
 
   test "a lone catch-all arm works on a pair scrutinee (any scrutinee type)" do
