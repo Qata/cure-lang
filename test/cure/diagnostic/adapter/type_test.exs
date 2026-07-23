@@ -190,4 +190,42 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert rendered =~ "the right operand has type `Bool`"
     assert rendered =~ "Hint: Change the operand types"
   end
+
+  test "instance and overload resolution failures are owned by the type family" do
+    source = "call(value)\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:resolution, source, "resolution.cure")
+    {:ok, span} = SourceRegistry.span(registry, :resolution, 0, 11)
+
+    errors = [
+      {:source_context, {:no_instance, :Equatable, {:rigid, 0}},
+       %{span: span, checking: :same, expectation_origin: :implicit}},
+      {:no_matching_overload,
+       %{
+         name: :map,
+         arguments: [:Int],
+         candidates: [%{id: "List.map", owner: "List", parameters: [:List]}]
+       }},
+      {:ambiguous_overload, :map, ["List", "Sequence"]}
+    ]
+
+    for error <- errors do
+      direct = TypeAdapter.from_error(error, span: span)
+      assert Adapter.from_error(error, span: span) == direct
+      assert direct.code == "E093"
+      assert direct.primary.span == span
+      assert direct.suggestions != []
+    end
+
+    instance = errors |> hd() |> TypeAdapter.from_error(span: span)
+    assert instance.payload.head_kind == :type_variable
+    assert Renderer.plain(instance, registry, width: 80) =~ "Add a `where Equatable(...)` constraint"
+
+    mismatch = errors |> Enum.at(1) |> TypeAdapter.from_error(span: span)
+    assert Renderer.plain(mismatch, registry, width: 80) =~ "`List.map(List)`"
+
+    ambiguity = errors |> Enum.at(2) |> TypeAdapter.from_error(span: span)
+
+    assert Renderer.plain(ambiguity, registry, width: 80) =~
+             "Hint: Choose `List.map(...)` or `Sequence.map(...)`"
+  end
 end

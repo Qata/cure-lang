@@ -154,7 +154,193 @@ defmodule Cure.Diagnostic.Adapter.Type do
       when kind in [:unsupported_operand_type, :no_operator_meaning] and is_map(context),
       do: operator_failure(kind, operator, context, opts)
 
+  def from_error({:no_instance, interface, head}, opts),
+    do: instance_failure(interface, head, %{}, opts)
+
+  def from_error({:source_context, {:no_instance, interface, head}, context}, opts)
+      when is_map(context),
+      do: instance_failure(interface, head, context, Keyword.put_new(opts, :span, Map.get(context, :span)))
+
+  def from_error({:no_matching_overload, name, arguments}, opts),
+    do: overload_mismatch(%{name: name, arguments: arguments, candidates: []}, opts)
+
+  def from_error({:no_matching_overload, %{name: _name} = details}, opts),
+    do: overload_mismatch(details, opts)
+
+  def from_error({:ambiguous_overload, name, owners}, opts),
+    do: overload_ambiguity(name, owners, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp instance_failure(interface, head, context, opts) do
+    interface = name(interface)
+    head = instance_head(head)
+
+    {body, label, hint} =
+      case head.kind do
+        :type_variable ->
+          {
+            "This expression uses `#{interface}` operations on a type variable, but the surrounding function does not require `#{interface}` for that type.",
+            "this operation requires `#{interface}` for its type variable",
+            "Add a `where #{interface}(...)` constraint using this parameter's type variable"
+          }
+
+        :concrete ->
+          {
+            "No implementation of `#{interface}` is available for `#{head.surface}`. Cure needs one here to choose the behavior of this operation.",
+            "this operation requires `#{interface}` for `#{head.surface}`",
+            "Add or import `implementation #{interface} for #{head.surface}`"
+          }
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "No `#{interface}` implementation found",
+      body: Doc.paragraph(body),
+      primary: primary(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind: :no_instance,
+        interface: interface,
+        head_kind: head.kind,
+        head_surface: head.surface,
+        head_id: head.id,
+        expectation_origin: Map.get(context, :expectation_origin, :implicit),
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp instance_head({:rigid, index}) when is_integer(index),
+    do: %{kind: :type_variable, surface: "a type variable", id: "rigid:#{index}"}
+
+  defp instance_head(head) when is_atom(head) or is_binary(head) do
+    canonical = name(head)
+    surface = Cure.Elab.Name.base(head) || canonical
+    %{kind: :concrete, surface: name(surface), id: canonical}
+  end
+
+  defp instance_head(head) do
+    surface = surface_type(head)
+    %{kind: :concrete, surface: surface, id: surface}
+  end
+
+  defp overload_mismatch(details, opts) do
+    overload_name = name(details.name)
+
+    arguments =
+      details
+      |> Map.get(:arguments, [])
+      |> Enum.map(fn
+        nil -> "unknown"
+        type -> overload_type(type)
+      end)
+
+    candidates =
+      details
+      |> Map.get(:candidates, [])
+      |> Enum.map(fn candidate ->
+        owner = Map.get(candidate, :owner)
+        prefix = if owner, do: "#{name(owner)}.", else: ""
+        parameters = Enum.map_join(Map.get(candidate, :parameters, []), ", ", &overload_type/1)
+
+        %{
+          id: name(Map.get(candidate, :id, overload_name)),
+          owner: if(owner, do: name(owner)),
+          signature: "#{prefix}#{overload_name}(#{parameters})"
+        }
+      end)
+      |> Enum.sort_by(& &1.signature)
+
+    argument_text = if arguments == [], do: "unknown argument types", else: Enum.join(arguments, ", ")
+
+    candidates_doc =
+      case candidates do
+        [] ->
+          Doc.paragraph("No declared overload accepts these argument types.")
+
+        available ->
+          Doc.stack([
+            Doc.paragraph("These overloads are available:"),
+            Doc.bullet_list(Enum.map(available, &"`#{&1.signature}`"))
+          ])
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "No overload of `#{overload_name}` matches",
+      body:
+        Doc.stack([
+          Doc.paragraph("This call supplies argument types `#{argument_text}`."),
+          candidates_doc
+        ]),
+      primary: primary(opts, "these arguments do not match any `#{overload_name}` overload"),
+      suggestions: [
+        %Suggestion{
+          message: "Change the arguments to match one of the listed signatures",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :no_matching_overload,
+        name: overload_name,
+        arguments: arguments,
+        candidates: candidates
+      }
+    )
+  end
+
+  defp overload_ambiguity(overload_name, owners, opts) do
+    overload_name = name(overload_name)
+    owners = owners |> List.wrap() |> Enum.map(&name/1) |> Enum.uniq() |> Enum.sort()
+    candidates = Enum.map(owners, &qualified_candidate(&1, overload_name))
+
+    {candidate_text, verb} =
+      case candidates do
+        [one] -> {"`#{one}`", "accepts"}
+        [one, two] -> {"Both `#{one}` and `#{two}`", "accept"}
+        many -> {"All of " <> Enum.map_join(many, ", ", &"`#{&1}`"), "accept"}
+      end
+
+    hint =
+      case candidates do
+        [one] -> "Qualify the call as `#{one}(...)`"
+        [one, two] -> "Choose `#{one}(...)` or `#{two}(...)`"
+        many -> "Qualify the call with one of: " <> Enum.map_join(many, ", ", &"`#{&1}(...)`")
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Call to `#{overload_name}` is ambiguous",
+      body:
+        Doc.paragraph(
+          "#{candidate_text} #{verb} the arguments at this call site. Cure cannot choose one without changing the program's meaning."
+        ),
+      primary: primary(opts, "qualify this call with the module you intend"),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind: :ambiguous_overload,
+        name: overload_name,
+        owners: owners,
+        qualified_candidates: candidates
+      }
+    )
+  end
+
+  defp overload_type(type) when is_atom(type) or is_binary(type),
+    do: name(Cure.Elab.Name.base(type) || type)
+
+  defp overload_type(type), do: surface_type(type)
+
+  defp qualified_candidate(owner, overload_name) do
+    if String.contains?(owner, ".#{overload_name}"), do: owner, else: "#{owner}.#{overload_name}"
+  end
 
   defp operator_failure(kind, operator, context, opts) do
     spelling = name(operator)

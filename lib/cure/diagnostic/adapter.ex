@@ -991,10 +991,9 @@ defmodule Cure.Diagnostic.Adapter do
     end
   end
 
-  def from_error({:source_context, {:no_instance, interface, head}, context}, opts)
-      when is_map(context) do
-    no_instance_failure(interface, head, context, Keyword.put_new(opts, :span, Map.get(context, :span)))
-  end
+  def from_error({:source_context, {:no_instance, _interface, _head}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:source_context, {:ambiguous_method, method, interfaces}, context}, opts)
       when is_map(context),
@@ -2237,17 +2236,17 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:occurs_check, id, _term}, opts),
     do: kernel_type_failure(:occurs_check, Keyword.put(opts, :variable, id))
 
-  def from_error({:no_instance, interface, head}, opts),
-    do: no_instance_failure(interface, head, %{}, opts)
+  def from_error({:no_instance, _interface, _head} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:ambiguous_instance_for_expected_type, interface, expected}, opts),
     do: contextual_type_failure(:ambiguous_instance, %{interface: interface, expected: expected}, opts)
 
-  def from_error({:no_matching_overload, name, arguments}, opts),
-    do: no_matching_overload_failure(%{name: name, arguments: arguments, candidates: []}, opts)
+  def from_error({:no_matching_overload, _name, _arguments} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:no_matching_overload, %{name: _name} = details}, opts),
-    do: no_matching_overload_failure(details, opts)
+  def from_error({:no_matching_overload, %{name: _name}} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:label_mismatch, key, declared, written}, opts),
     do:
@@ -2257,8 +2256,8 @@ defmodule Cure.Diagnostic.Adapter do
         opts
       )
 
-  def from_error({:ambiguous_overload, name, owners}, opts),
-    do: ambiguous_overload_failure(name, owners, opts)
+  def from_error({:ambiguous_overload, _name, _owners} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:ambiguous_method, method, interfaces}, opts),
     do: ambiguous_member(method, interfaces, opts)
@@ -6021,6 +6020,16 @@ defmodule Cure.Diagnostic.Adapter do
   defp primitive_tag_spelling(tag) when is_atom(tag), do: ":#{tag}"
   defp primitive_tag_spelling(tag), do: name_to_string(tag)
 
+  defp overload_type_surface(type) when is_atom(type) or is_binary(type),
+    do: name_to_string(Cure.Elab.Name.base(type) || type)
+
+  defp overload_type_surface(type), do: surface_type(type)
+
+  defp overload_declaration_signature(name, member) do
+    parameters = Enum.map_join(Map.get(member, :parameters, []), ", ", &overload_type_surface/1)
+    "#{name}(#{parameters})"
+  end
+
   defp branch_pattern_span(%{pattern_span: %Span{} = span}), do: span
   defp branch_pattern_span(%{span: %Span{} = span}), do: span
   defp branch_pattern_span(_pattern), do: nil
@@ -6748,185 +6757,6 @@ defmodule Cure.Diagnostic.Adapter do
       primary: primary_label(opts, label),
       payload: %{kind: kind}
     )
-  end
-
-  defp no_instance_failure(interface, head, context, opts) do
-    interface = name_to_string(interface)
-    head_details = instance_head_details(head)
-
-    {body, label, hint} =
-      case head_details.kind do
-        :type_variable ->
-          {
-            "This expression uses `#{interface}` operations on a type variable, but the surrounding function does not require `#{interface}` for that type.",
-            "this operation requires `#{interface}` for its type variable",
-            "Add a `where #{interface}(...)` constraint using this parameter's type variable"
-          }
-
-        :concrete ->
-          {
-            "No implementation of `#{interface}` is available for `#{head_details.surface}`. Cure needs one here to choose the behavior of this operation.",
-            "this operation requires `#{interface}` for `#{head_details.surface}`",
-            "Add or import `implementation #{interface} for #{head_details.surface}`"
-          }
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "No `#{interface}` implementation found",
-      body: Doc.paragraph(body),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{
-        kind: :no_instance,
-        interface: interface,
-        head_kind: head_details.kind,
-        head_surface: head_details.surface,
-        head_id: head_details.id,
-        expectation_origin: Map.get(context, :expectation_origin, :implicit),
-        checking: Map.get(context, :checking)
-      }
-    )
-  end
-
-  defp instance_head_details({:rigid, index}) when is_integer(index),
-    do: %{kind: :type_variable, surface: "a type variable", id: "rigid:#{index}"}
-
-  defp instance_head_details(head) when is_atom(head) or is_binary(head) do
-    canonical = name_to_string(head)
-    surface = Cure.Elab.Name.base(head) || canonical
-    %{kind: :concrete, surface: name_to_string(surface), id: canonical}
-  end
-
-  defp instance_head_details(head) do
-    surface = surface_type(head)
-    %{kind: :concrete, surface: surface, id: surface}
-  end
-
-  defp no_matching_overload_failure(details, opts) do
-    name = name_to_string(details.name)
-
-    arguments =
-      details
-      |> Map.get(:arguments, [])
-      |> Enum.map(fn
-        nil -> "unknown"
-        type -> overload_type_surface(type)
-      end)
-
-    candidates =
-      details
-      |> Map.get(:candidates, [])
-      |> Enum.map(fn candidate ->
-        owner = Map.get(candidate, :owner)
-        prefix = if owner, do: "#{name_to_string(owner)}.", else: ""
-        parameters = Enum.map_join(Map.get(candidate, :parameters, []), ", ", &overload_type_surface/1)
-
-        %{
-          id: name_to_string(Map.get(candidate, :id, name)),
-          owner: if(owner, do: name_to_string(owner)),
-          signature: "#{prefix}#{name}(#{parameters})"
-        }
-      end)
-      |> Enum.sort_by(& &1.signature)
-
-    argument_text = if arguments == [], do: "unknown argument types", else: Enum.join(arguments, ", ")
-
-    candidate_doc =
-      case candidates do
-        [] ->
-          Doc.paragraph("No declared overload accepts these argument types.")
-
-        candidates ->
-          Doc.stack([
-            Doc.paragraph("These overloads are available:"),
-            Doc.bullet_list(Enum.map(candidates, &"`#{&1.signature}`"))
-          ])
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "No overload of `#{name}` matches",
-      body:
-        Doc.stack([
-          Doc.paragraph("This call supplies argument types `#{argument_text}`."),
-          candidate_doc
-        ]),
-      primary: primary_label(opts, "these arguments do not match any `#{name}` overload"),
-      suggestions: [
-        %Suggestion{
-          message: "Change the arguments to match one of the listed signatures",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :no_matching_overload,
-        name: name,
-        arguments: arguments,
-        candidates: candidates
-      }
-    )
-  end
-
-  defp overload_type_surface(type) when is_atom(type) or is_binary(type),
-    do: name_to_string(Cure.Elab.Name.base(type) || type)
-
-  defp overload_type_surface(type), do: surface_type(type)
-
-  defp overload_declaration_signature(name, member) do
-    parameters = Enum.map_join(Map.get(member, :parameters, []), ", ", &overload_type_surface/1)
-    "#{name}(#{parameters})"
-  end
-
-  defp ambiguous_overload_failure(name, owners, opts) do
-    name = name_to_string(name)
-    owners = owners |> List.wrap() |> Enum.map(&name_to_string/1) |> Enum.uniq() |> Enum.sort()
-    candidates = Enum.map(owners, &qualified_overload_candidate(&1, name))
-
-    {candidate_text, verb} =
-      case candidates do
-        [one] -> {"`#{one}`", "accepts"}
-        [one, two] -> {"Both `#{one}` and `#{two}`", "accept"}
-        many -> {"All of " <> Enum.map_join(many, ", ", &"`#{&1}`"), "accept"}
-      end
-
-    hint =
-      case candidates do
-        [one] -> "Qualify the call as `#{one}(...)`"
-        [one, two] -> "Choose `#{one}(...)` or `#{two}(...)`"
-        many -> "Qualify the call with one of: " <> Enum.map_join(many, ", ", &"`#{&1}(...)`")
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Call to `#{name}` is ambiguous",
-      body:
-        Doc.paragraph(
-          "#{candidate_text} #{verb} the arguments at this call site. Cure cannot choose one without changing the program's meaning."
-        ),
-      primary: primary_label(opts, "qualify this call with the module you intend"),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{
-        kind: :ambiguous_overload,
-        name: name,
-        owners: owners,
-        qualified_candidates: candidates
-      }
-    )
-  end
-
-  defp qualified_overload_candidate(owner, name) do
-    if String.contains?(owner, ".#{name}") do
-      owner
-    else
-      "#{owner}.#{name}"
-    end
   end
 
   defp mixed_with_arm_failure(context, opts) do
