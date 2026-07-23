@@ -184,7 +184,159 @@ defmodule Cure.Diagnostic.Adapter.Type do
   def from_error({:cannot_infer_match_type, _legacy_expression}, opts),
     do: match_inference(:unknown, %{}, opts)
 
+  def from_error({:source_context, :with_scrutinee_not_data, context}, opts)
+      when is_map(context),
+      do: non_data_with(context, opts)
+
+  def from_error({:source_context, :match_scrutinee_not_data, context}, opts)
+      when is_map(context),
+      do: non_data_match(context, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp non_data_with(context, opts) do
+    actual_type = context |> Map.get(:actual_type) |> surface_type()
+    scrutinee_span = Map.get(context, :scrutinee_span) || Map.get(context, :span)
+    form = Map.get(context, :with_form, :ordinary)
+
+    branch_labels =
+      context
+      |> Map.get(:with_arms, [])
+      |> Enum.flat_map(fn
+        %{span: %Span{} = span} ->
+          [%Label{span: span, style: :secondary, message: non_data_with_branch_label(form)}]
+
+        _ ->
+          []
+      end)
+
+    opener_label =
+      case Map.get(context, :opener_span) do
+        %Span{} = span when span != scrutinee_span ->
+          [%Label{span: span, style: :secondary, message: "this `with` tries to refine the value by constructors"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "With requires a data value",
+      body:
+        Doc.stack([
+          Doc.paragraph(
+            "This `with` scrutinee has type `#{actual_type}`, which does not provide data constructors to refine."
+          ),
+          Doc.paragraph(non_data_with_explanation(form))
+        ]),
+      primary: %Label{
+        span: scrutinee_span || Keyword.get(opts, :span),
+        style: :primary,
+        message: "`#{actual_type}` cannot be split into constructor branches"
+      },
+      secondary: opener_label ++ branch_labels,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Use `pickup` for conditions on primitive values, or remove `with` when no constructor refinement is needed",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :with_scrutinee_not_data,
+        checking: Map.get(context, :checking),
+        actual_type: actual_type,
+        with_form: form,
+        branch_count: length(branch_labels)
+      }
+    )
+  end
+
+  defp non_data_match(context, opts) do
+    actual_type = context |> Map.get(:actual_type) |> surface_type()
+    scrutinee_span = Map.get(context, :scrutinee_span) || Map.get(context, :span)
+
+    constructor_patterns =
+      context
+      |> Map.get(:branch_patterns, [])
+      |> Enum.filter(&(Map.get(&1, :kind) == :constructor and match?(%Span{}, Map.get(&1, :pattern_span))))
+
+    pattern_labels =
+      Enum.map(constructor_patterns, fn pattern ->
+        %Label{
+          span: pattern.pattern_span,
+          style: :secondary,
+          message: "`#{Map.get(pattern, :name, "this pattern")}` expects a data constructor"
+        }
+      end)
+
+    {primary, remaining_patterns} =
+      case pattern_labels do
+        [%Label{} = first | rest] ->
+          {%Label{first | style: :primary, message: "this constructor pattern cannot match `#{actual_type}`"}, rest}
+
+        [] ->
+          {%Label{
+             span: scrutinee_span || Keyword.get(opts, :span),
+             style: :primary,
+             message: "`#{actual_type}` does not provide data constructors"
+           }, []}
+      end
+
+    scrutinee_label =
+      if match?(%Span{}, scrutinee_span) and scrutinee_span != primary.span do
+        [%Label{span: scrutinee_span, style: :secondary, message: "this expression has type `#{actual_type}`"}]
+      else
+        []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Constructor patterns cannot match #{actual_type}",
+      body:
+        Doc.stack([
+          Doc.paragraph(
+            "The value being matched has type `#{actual_type}`, but these branches try to deconstruct it with data constructors."
+          ),
+          Doc.paragraph(
+            "Constructor patterns work only when the scrutinee belongs to the same constructor-defined data type."
+          )
+        ]),
+      primary: primary,
+      secondary: scrutinee_label ++ remaining_patterns,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Use a variable or wildcard for the whole `#{actual_type}` value, a supported literal pattern for a primitive, or match constructor-defined data",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :match_scrutinee_not_data,
+        checking: Map.get(context, :checking),
+        actual_type: actual_type,
+        constructor_patterns: Enum.map(constructor_patterns, &Map.get(&1, :name))
+      }
+    )
+  end
+
+  defp non_data_with_explanation(:rematch),
+    do:
+      "A rematch branch can restate the parent patterns only when the value after `with` belongs to a constructor-defined data type."
+
+  defp non_data_with_explanation(_ordinary),
+    do:
+      "A `with` block refines its surrounding goal through the constructors of the value after `with`; it is not a general conditional."
+
+  defp non_data_with_branch_label(:rematch),
+    do: "this rematch branch needs a constructor-defined `with` value"
+
+  defp non_data_with_branch_label(_ordinary),
+    do: "this branch cannot refine a value without constructors"
 
   defp match_inference(reason, details, opts) do
     {title, body, primary_message, hint} =

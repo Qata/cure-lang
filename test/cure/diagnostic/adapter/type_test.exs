@@ -285,4 +285,50 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert rendered =~ "this pattern does not identify a constructor"
     assert rendered =~ "Hint: Add a result annotation"
   end
+
+  test "non-data match and with failures retain scrutinee and branch regions" do
+    source = "with value\n  C -> body\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:non_data, source, "non_data.cure")
+    {:ok, opener} = SourceRegistry.span(registry, :non_data, 0, 4)
+    {:ok, scrutinee} = SourceRegistry.span(registry, :non_data, 5, 10)
+    {:ok, branch} = SourceRegistry.span(registry, :non_data, 13, 22)
+    {:ok, pattern} = SourceRegistry.span(registry, :non_data, 13, 14)
+
+    errors = [
+      {:source_context, :with_scrutinee_not_data,
+       %{
+         actual_type: {:float_type},
+         opener_span: opener,
+         scrutinee_span: scrutinee,
+         with_arms: [%{span: branch}],
+         with_form: :ordinary
+       }},
+      {:source_context, :match_scrutinee_not_data,
+       %{
+         actual_type: {:float_type},
+         scrutinee_span: scrutinee,
+         branch_patterns: [%{kind: :constructor, name: "C", pattern_span: pattern}]
+       }}
+    ]
+
+    for error <- errors do
+      direct = TypeAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E093"
+      assert direct.suggestions != []
+    end
+
+    with_diagnostic = errors |> hd() |> TypeAdapter.from_error()
+    assert with_diagnostic.primary.span == scrutinee
+    assert Enum.map(with_diagnostic.secondary, & &1.span) == [opener, branch]
+
+    match_diagnostic = errors |> Enum.at(1) |> TypeAdapter.from_error()
+    assert match_diagnostic.primary.span == pattern
+    assert hd(match_diagnostic.secondary).span == scrutinee
+
+    rendered = Renderer.plain(match_diagnostic, registry, width: 80)
+    assert rendered =~ "CONSTRUCTOR PATTERNS CANNOT MATCH FLOAT [E093]"
+    assert rendered =~ "this expression has type `Float`"
+    assert rendered =~ "Hint: Use a variable or wildcard"
+  end
 end
