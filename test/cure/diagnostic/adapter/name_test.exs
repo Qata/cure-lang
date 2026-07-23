@@ -109,4 +109,19 @@ defmodule Cure.Diagnostic.Adapter.NameTest do
       NameAdapter.from_error({:ordinary_type_failure, :not_a_name_error})
     end
   end
+
+  test "shadowing producers retain their source labels through the name family" do
+    context = %{span: nil, checking: :run}
+
+    guard_error =
+      {:source_context, {:unsupported_guard, %{reason: :shadowed, name: "x", site: :body}}, context}
+
+    union_error =
+      {:source_context, {:unsupported_pattern, %{reason: :shadowed_tuple, name: "x"}}, context}
+
+    for error <- [guard_error, union_error] do
+      assert NameAdapter.from_error(error) == Adapter.from_error(error)
+      assert NameAdapter.from_error(error).code == "E090"
+    end
+  end
 end

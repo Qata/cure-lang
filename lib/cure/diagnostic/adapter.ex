@@ -32,6 +32,8 @@ defmodule Cure.Diagnostic.Adapter do
   alias Cure.Diagnostic.Suggest
   alias Cure.MetaAST.Metadata
 
+  @compile {:nowarn_unused_function, [shadowed_guard_binding_failure: 3, shadowed_sub_union_pattern_failure: 3]}
+
   @spec from_error(term(), keyword()) :: Diagnostic.t()
   def from_error(error, opts \\ [])
 
@@ -842,49 +844,49 @@ defmodule Cure.Diagnostic.Adapter do
         opts
       )
       when is_map(context),
-      do: shadowed_sub_union_pattern_failure(details, context, opts)
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
 
   def from_error(
         {:source_context, {:unsupported_pattern, %{reason: :shadowed_literal_member, name: _name} = details}, context},
         opts
       )
       when is_map(context),
-      do: shadowed_sub_union_pattern_failure(details, context, opts)
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
 
   def from_error(
         {:source_context, {:unsupported_pattern, %{reason: :shadowed_as, name: _name} = details}, context},
         opts
       )
       when is_map(context),
-      do: shadowed_sub_union_pattern_failure(details, context, opts)
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
 
   def from_error(
         {:source_context, {:unsupported_pattern, %{reason: :shadowed_nested, name: _name} = details}, context},
         opts
       )
       when is_map(context),
-      do: shadowed_sub_union_pattern_failure(details, context, opts)
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
 
   def from_error(
         {:source_context, {:unsupported_pattern, %{reason: :shadowed_tuple, name: _name} = details}, context},
         opts
       )
       when is_map(context),
-      do: shadowed_sub_union_pattern_failure(details, context, opts)
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
 
   def from_error(
         {:source_context, {:unsupported_pattern, %{reason: :shadowed_tuple_arg, name: _name} = details}, context},
         opts
       )
       when is_map(context),
-      do: shadowed_sub_union_pattern_failure(details, context, opts)
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
 
   def from_error(
         {:source_context, {:unsupported_pattern, %{reason: reason, name: _name} = details}, context},
         opts
       )
       when reason in [:shadowed_catchall, :shadowed_literal_catchall, :shadowed_default] and is_map(context),
-      do: shadowed_sub_union_pattern_failure(details, context, opts)
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
 
   def from_error(
         {:source_context, {:unsupported_pattern, %{reason: :named_default_nonvariable, name: _name} = details},
@@ -929,7 +931,7 @@ defmodule Cure.Diagnostic.Adapter do
         opts
       )
       when is_map(context),
-      do: shadowed_guard_binding_failure(details, context, opts)
+      do: NameAdapter.shadowed_guard_binding_failure(details, context, opts)
 
   def from_error(
         {:source_context, {:unsupported_guard, %{reason: :refutable_pattern}}, context} = error,
@@ -4435,7 +4437,8 @@ defmodule Cure.Diagnostic.Adapter do
     "#{name}(#{parameters})"
   end
 
-  defp shadowed_guard_binding_failure(details, context, opts) do
+  @doc false
+  def shadowed_guard_binding_failure(details, context, opts) do
     name = name_to_string(details.name)
     site = Map.get(details, :site)
     outer_span = Map.get(details, :span)
@@ -4507,7 +4510,8 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  defp shadowed_sub_union_pattern_failure(details, context, opts) do
+  @doc false
+  def shadowed_sub_union_pattern_failure(details, context, opts) do
     name = name_to_string(details.name)
     reason = Map.get(details, :reason)
     outer_span = Map.get(details, :span)
