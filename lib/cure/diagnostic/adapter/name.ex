@@ -94,6 +94,14 @@ defmodule Cure.Diagnostic.Adapter.Name do
   def from_error({:source_context, {:unknown_record, name}, context}, opts) when is_map(context),
     do: unknown_record_failure(name, Map.get(context, :available_records, []), context, opts)
 
+  def from_error({:source_context, {:record_field_mismatch, name}, context}, opts)
+      when is_map(context) and not is_map(name),
+      do: record_field_mismatch_failure(name, %{}, context, opts)
+
+  def from_error({:source_context, {:record_field_mismatch, details}, context}, opts)
+      when is_map(details) and is_map(context),
+      do: record_field_mismatch_failure(Map.get(details, :record), details, context, opts)
+
   def from_error({:source_context, {kind, name}, context}, opts)
       when kind in [:unknown_ctor, :unknown_pattern_constructor, :unknown_family] and
              is_map(context) do
@@ -1585,6 +1593,161 @@ defmodule Cure.Diagnostic.Adapter.Name do
       [_name] -> nil
     end
   end
+
+  defp record_field_mismatch_failure(name, details, context, opts) do
+    unknown = Map.get(details, :unknown, [])
+    missing = Map.get(details, :missing, [])
+    declared = Map.get(details, :declared, [])
+    record = name || Map.get(details, :record)
+    field_spans = Map.get(context, :field_spans, %{})
+    offending = List.first(unknown)
+    field_span = Map.get(field_spans, offending) || Map.get(field_spans, name_to_string(offending))
+    record_name_span = Map.get(context, :record_name_span)
+    closer_span = Map.get(context, :closer_span)
+    primary_span = if(offending, do: field_span, else: closer_span || Map.get(context, :span))
+
+    opts =
+      if primary_span,
+        do: Keyword.put(opts, :span, primary_span),
+        else: Keyword.put_new(opts, :span, Map.get(context, :span))
+
+    candidates = record_field_candidates(offending, declared, record)
+    unique_candidate = unique_record_field_candidate(offending, candidates)
+
+    body =
+      cond do
+        offending && unique_candidate ->
+          Doc.paragraph(
+            "`#{name_to_string(offending)}` is not a field of `#{name_to_string(record)}`. Did you mean `#{unique_candidate.name}`?"
+          )
+
+        offending ->
+          Doc.paragraph(
+            "`#{name_to_string(offending)}` is not a field of `#{name_to_string(record)}`. Available fields are #{field_list(declared)}."
+          )
+
+        missing != [] ->
+          Doc.paragraph("This `#{name_to_string(record)}` value is missing #{field_list(missing)}.")
+
+        true ->
+          Doc.paragraph("The supplied fields do not match `#{name_to_string(record)}`.")
+      end
+
+    suggestions =
+      if offending,
+        do: record_field_suggestions(offending, candidates, field_span),
+        else: missing_record_field_suggestions(missing)
+
+    operation = Map.get(context, :expectation_origin)
+
+    secondary =
+      [
+        record_operation_label(record_name_span, primary_span, record, operation),
+        record_update_base_label(Map.get(context, :base_span), primary_span, operation)
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E022",
+      key: :record_field_mismatch,
+      severity: :error,
+      title: if(offending, do: "Unknown record field", else: "Missing record field"),
+      body: body,
+      primary:
+        pickup_label(
+          Keyword.get(opts, :span),
+          :primary,
+          if(offending,
+            do: "this field is not declared by the record",
+            else: "add #{missing_field_label(missing)} before this closing brace"
+          )
+        ),
+      secondary: secondary,
+      suggestions: suggestions,
+      payload: %{
+        record: record,
+        declared: declared,
+        provided: Map.get(details, :provided, []),
+        unknown: unknown,
+        missing: missing,
+        candidates: candidates,
+        checking: Map.get(context, :checking),
+        operation: operation
+      }
+    )
+  end
+
+  defp record_field_candidates(nil, _declared, _record), do: []
+
+  defp record_field_candidates(field, declared, record) do
+    declared
+    |> Enum.map(fn field_name ->
+      %{
+        id: {record, field_name},
+        name: name_to_string(field_name),
+        namespace: :field,
+        owner: record,
+        visibility: :public,
+        imported: true,
+        origin: :record_shape
+      }
+    end)
+    |> Suggest.rank(name_to_string(field), :field)
+  end
+
+  defp record_field_suggestions(field, [%{name: candidate} = first | rest], %Span{} = span) do
+    unique? =
+      Enum.all?(rest, fn other ->
+        Suggest.distance(name_to_string(field), first.name) < Suggest.distance(name_to_string(field), other.name)
+      end)
+
+    if unique?,
+      do: [
+        %Suggestion{
+          message: "Replace it with `#{candidate}`",
+          applicability: :machine_applicable,
+          edits: [%TextEdit{span: span, replacement: candidate}]
+        }
+      ],
+      else: []
+  end
+
+  defp record_field_suggestions(_field, _candidates, _span), do: []
+
+  defp unique_record_field_candidate(field, [%{name: candidate} = first | rest]) when not is_nil(field) do
+    distance = Suggest.distance(name_to_string(field), candidate)
+    if Enum.all?(rest, &(distance < Suggest.distance(name_to_string(field), &1.name))), do: first
+  end
+
+  defp unique_record_field_candidate(_field, _candidates), do: nil
+
+  defp record_operation_label(%Span{} = span, primary_span, record, operation) when span != primary_span do
+    action =
+      if(operation == :record_update,
+        do: "this is a `#{surface_name(record)}` update",
+        else: "this constructs `#{surface_name(record)}`"
+      )
+
+    %Label{span: span, style: :secondary, message: action}
+  end
+
+  defp record_operation_label(_span, _primary_span, _record, _operation), do: nil
+
+  defp record_update_base_label(%Span{} = span, primary_span, :record_update) when span != primary_span,
+    do: %Label{span: span, style: :secondary, message: "unchanged fields come from this value"}
+
+  defp record_update_base_label(_span, _primary_span, _operation), do: nil
+
+  defp missing_record_field_suggestions([]), do: []
+
+  defp missing_record_field_suggestions(fields) do
+    [%Suggestion{message: "Add #{missing_field_label(fields)} before the closing `}`", applicability: :manual}]
+  end
+
+  defp missing_field_label([field]), do: "the missing field `#{name_to_string(field)}`"
+  defp missing_field_label(fields), do: "the missing fields " <> Enum.map_join(fields, ", ", &"`#{name_to_string(&1)}`")
+  defp field_list([field]), do: "`#{name_to_string(field)}`"
+  defp field_list(fields), do: Enum.map_join(fields, ", ", &"`#{name_to_string(&1)}`")
 
   @doc false
   def foreign_constructor(constructor, context, opts) do
