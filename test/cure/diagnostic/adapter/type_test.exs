@@ -618,4 +618,41 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
       assert Adapter.from_error(error) == TypeAdapter.from_error(error)
     end
   end
+
+  test "guard failures retain the pattern, condition, and repair site" do
+    source = "0 when true -> value\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:guard, source, "guard.cure")
+    {:ok, pattern} = SourceRegistry.span(registry, :guard, 0, 1)
+    {:ok, condition} = SourceRegistry.span(registry, :guard, 7, 11)
+    {:ok, branch} = SourceRegistry.span(registry, :guard, 0, 20)
+
+    refutable =
+      {:source_context, {:unsupported_guard, %{reason: :refutable_pattern, shape: :literal, span: pattern}},
+       %{checking: :run, branch_patterns: [%{pattern_span: pattern, guard_span: condition}]}}
+
+    non_exhaustive =
+      {:source_context, {:unsupported_guard, :non_exhaustive},
+       %{checking: :run, branch_patterns: [%{span: branch, guard_span: condition}]}}
+
+    complex =
+      {:source_context, {:unsupported_guard, %{reason: :complex_scrutinee, span: pattern}},
+       %{checking: :run, scrutinee_span: pattern}}
+
+    for error <- [refutable, non_exhaustive, complex] do
+      direct = TypeAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E093"
+      assert direct.primary
+      assert direct.suggestions != []
+    end
+
+    refutable_rendered = Renderer.plain(TypeAdapter.from_error(refutable), registry, width: 80)
+    assert refutable_rendered =~ "LITERAL PATTERN CANNOT CARRY THIS GUARD"
+    assert refutable_rendered =~ "Hint: Match this pattern first"
+
+    gap = TypeAdapter.from_error(non_exhaustive)
+    assert gap.primary.span.start_byte == branch.end_byte
+    assert gap.primary.span.start_byte == gap.primary.span.end_byte
+    assert hd(gap.secondary).span == condition
+  end
 end

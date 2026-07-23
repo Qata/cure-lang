@@ -918,9 +918,9 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:source_context, {:unsupported_guard, :non_exhaustive}, context}, opts)
+  def from_error({:source_context, {:unsupported_guard, :non_exhaustive}, context} = error, opts)
       when is_map(context),
-      do: non_exhaustive_guard_failure(context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error(
         {:source_context, {:unsupported_guard, %{reason: :shadowed, name: _name} = details}, context},
@@ -930,18 +930,18 @@ defmodule Cure.Diagnostic.Adapter do
       do: shadowed_guard_binding_failure(details, context, opts)
 
   def from_error(
-        {:source_context, {:unsupported_guard, %{reason: :refutable_pattern} = details}, context},
+        {:source_context, {:unsupported_guard, %{reason: :refutable_pattern}}, context} = error,
         opts
       )
       when is_map(context),
-      do: refutable_guard_pattern_failure(details, context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error(
-        {:source_context, {:unsupported_guard, %{reason: :complex_scrutinee} = details}, context},
+        {:source_context, {:unsupported_guard, %{reason: :complex_scrutinee}}, context} = error,
         opts
       )
       when is_map(context),
-      do: complex_guard_scrutinee_failure(details, context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:source_context, {:unsolved_metavariables, name}, context}, opts) when is_map(context) do
     cond do
@@ -5182,20 +5182,6 @@ defmodule Cure.Diagnostic.Adapter do
     "#{name}(#{parameters})"
   end
 
-  defp branch_pattern_span(%{pattern_span: %Span{} = span}), do: span
-  defp branch_pattern_span(%{span: %Span{} = span}), do: span
-  defp branch_pattern_span(_pattern), do: nil
-
-  defp missing_branch_insertion_span(context) do
-    case context |> Map.get(:branch_patterns, []) |> List.last() do
-      %{span: %Span{} = span} ->
-        %{span | start_byte: span.end_byte, start_line: span.end_line, start_column: span.end_column}
-
-      _ ->
-        nil
-    end
-  end
-
   defp pattern_problem(kind, details, context, opts) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
 
@@ -5229,53 +5215,6 @@ defmodule Cure.Diagnostic.Adapter do
       body: Doc.paragraph(body),
       primary: primary_label(opts, label),
       payload: Map.merge(%{kind: kind, checking: Map.get(context, :checking)}, details)
-    )
-  end
-
-  defp non_exhaustive_guard_failure(context, opts) do
-    branches = Map.get(context, :branch_patterns, [])
-
-    guard_labels =
-      branches
-      |> Enum.flat_map(fn
-        %{guard_span: %Span{} = span} ->
-          [pickup_label(span, :secondary, "this condition does not cover every remaining value")]
-
-        _ ->
-          []
-      end)
-
-    insertion = missing_branch_insertion_span(context)
-
-    primary =
-      case insertion do
-        %Span{} = span -> pickup_label(span, :primary, "add an unguarded fallback branch here")
-        _ -> pickup_label(Map.get(context, :span) || Keyword.get(opts, :span), :primary, "this match needs a fallback")
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Guarded branches leave a gap",
-      body:
-        Doc.paragraph(
-          "Cure cannot prove that these guard conditions cover every value accepted by their patterns. If every condition is false, this match has no result."
-        ),
-      primary: primary,
-      secondary: guard_labels,
-      suggestions: [
-        %Suggestion{
-          message: "Add an unguarded `_ -> ...` branch, or make the final guards exact complements",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :unsupported_guard,
-        reason: :non_exhaustive,
-        checking: Map.get(context, :checking),
-        guard_count: length(guard_labels)
-      }
     )
   end
 
@@ -5346,89 +5285,6 @@ defmodule Cure.Diagnostic.Adapter do
         reason: :shadowed,
         name: name,
         site: site,
-        checking: Map.get(context, :checking)
-      }
-    )
-  end
-
-  defp refutable_guard_pattern_failure(details, context, opts) do
-    shape = Map.get(details, :shape, :pattern)
-    shape_name = guard_pattern_shape_name(shape)
-    pattern_span = Map.get(details, :span)
-
-    guard_span =
-      context
-      |> Map.get(:branch_patterns, [])
-      |> Enum.find_value(fn branch ->
-        if branch_pattern_span(branch) == pattern_span, do: Map.get(branch, :guard_span), else: nil
-      end)
-
-    secondary =
-      case pickup_label(guard_span, :secondary, "this condition is attached to the refutable pattern") do
-        nil -> []
-        label -> [label]
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "#{String.capitalize(shape_name)} pattern cannot carry this guard",
-      body:
-        Doc.paragraph(
-          "This #{shape_name} pattern can fail before its `when` condition is considered. The current guard chain only accepts variable, wildcard, or irrefutable tuple patterns."
-        ),
-      primary:
-        pickup_label(
-          pattern_span || Map.get(context, :span) || Keyword.get(opts, :span),
-          :primary,
-          "this refutable pattern cannot enter the guard chain"
-        ),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Match this pattern first, then test the condition inside its branch and keep an explicit fallback",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :unsupported_guard,
-        reason: :refutable_pattern,
-        shape: shape,
-        checking: Map.get(context, :checking)
-      }
-    )
-  end
-
-  defp guard_pattern_shape_name(:literal), do: "literal"
-  defp guard_pattern_shape_name(:tuple), do: "tuple"
-  defp guard_pattern_shape_name(:function_call), do: "constructor"
-  defp guard_pattern_shape_name(shape), do: shape |> name_to_string() |> String.replace("_", " ")
-
-  defp complex_guard_scrutinee_failure(details, context, opts) do
-    span =
-      Map.get(details, :span) || Map.get(context, :scrutinee_span) || Map.get(context, :span) ||
-        Keyword.get(opts, :span)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Guarded match needs a stable scrutinee",
-      body:
-        Doc.paragraph(
-          "Guard conditions may inspect the matched value more than once. Bind this expression once before matching so its value is stable and any effects are not repeated."
-        ),
-      primary: pickup_label(span, :primary, "bind this expression before the guarded match"),
-      suggestions: [
-        %Suggestion{
-          message: "Introduce a `let` binding for this expression, then match the new name",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :unsupported_guard,
-        reason: :complex_scrutinee,
         checking: Map.get(context, :checking)
       }
     )
