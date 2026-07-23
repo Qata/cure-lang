@@ -1079,26 +1079,30 @@ defmodule Cure.Elab.Declarations do
 
   defp declaration_expectation_context({:function_call, meta, _args}, reason, context, env)
        when is_list(meta) do
-    {origin, owner} =
-      if ffi_call_failure?(reason, meta, env) do
-        {:ffi, Keyword.get(meta, :name, context.checking)}
-      else
-        if implicit_failure?(reason) do
-          {:implicit, Keyword.get(meta, :name, context.checking)}
+    if projection_failure?(reason) do
+      context
+    else
+      {origin, owner} =
+        if ffi_call_failure?(reason, meta, env) do
+          {:ffi, Keyword.get(meta, :name, context.checking)}
         else
-          if Keyword.has_key?(meta, :callee) do
-            {:application, declaration_application_owner(meta)}
+          if implicit_failure?(reason) do
+            {:implicit, Keyword.get(meta, :name, context.checking)}
           else
-            {:call_result, Keyword.get(meta, :name, context.checking)}
+            if Keyword.has_key?(meta, :callee) do
+              {:application, declaration_application_owner(meta)}
+            else
+              {:call_result, Keyword.get(meta, :name, context.checking)}
+            end
           end
         end
-      end
 
-    Map.merge(context, %{
-      checking: owner,
-      expectation_origin: origin,
-      expression_category: :function_call
-    })
+      Map.merge(context, %{
+        checking: owner,
+        expectation_origin: origin,
+        expression_category: :function_call
+      })
+    end
   end
 
   defp declaration_expectation_context({:binary_op, meta, _args}, reason, context, _env)
@@ -1115,6 +1119,9 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp declaration_expectation_context(_expression, _reason, context, _env), do: context
+
+  defp projection_failure?({:source_context, _reason, %{expectation_origin: :projection}}), do: true
+  defp projection_failure?(_reason), do: false
 
   defp ffi_call_failure?({:source_context, reason, _context}, meta, env),
     do: ffi_call_failure?(reason, meta, env)

@@ -785,8 +785,10 @@ defmodule Cure.Elab.Elaborator do
       # `positional_projection`). `i` must be a static positive integer literal —
       # the bounds check is only meaningful for a statically-known index.
       Keyword.get(meta, :name) == "element" and element_projection?(args) ->
-        [t_arg, {:literal, _, i}] = args
+        [t_arg, {:literal, _, i} = index_arg] = args
+
         positional_projection(i, t_arg, names, ctx, env)
+        |> attach_element_projection_context(meta, t_arg, index_arg)
 
       # Record construction `Point{x: .., y: ..}` desugars to the positional
       # constructor `Point(.., ..)` (fields ordered by the record's telescope).
@@ -1302,6 +1304,24 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp attach_projection_context(result, _meta, _inner, _field), do: result
+
+  defp attach_element_projection_context({:error, reason}, meta, receiver, index) do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+
+    {:error,
+     {:source_context, reason,
+      %{
+        span: info && info.whole,
+        receiver_span: surface_expression_span(receiver),
+        index_span: surface_expression_span(index),
+        callee_span: info && info.callee,
+        expression_category: :function_call,
+        expectation_origin: :projection,
+        projection_syntax: :element
+      }}}
+  end
+
+  defp attach_element_projection_context(result, _meta, _receiver, _index), do: result
 
   defp projection_context(meta, inner, field) do
     source_info = Cure.MetaAST.Metadata.source_info(meta)

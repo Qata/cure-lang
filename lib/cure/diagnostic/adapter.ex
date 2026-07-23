@@ -1635,6 +1635,13 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(details) and is_map(context),
       do: non_callable_application(details, context, opts)
 
+  def from_error(
+        {:source_context, {:telescope_index_out_of_bounds, index, arity}, context},
+        opts
+      )
+      when is_integer(index) and is_integer(arity) and is_map(context),
+      do: telescope_index_failure(index, arity, context, opts)
+
   def from_error({:source_context, {:unknown_erasure_class, name, class}, context}, opts)
       when is_map(context),
       do: erasure_failure(:unknown_erasure_class, %{name: name, class: class}, context, opts)
@@ -4484,6 +4491,65 @@ defmodule Cure.Diagnostic.Adapter do
     do: pickup_label(span, :secondary, message)
 
   defp sibling_dependency_label(_span, _primary_span, _message), do: nil
+
+  defp telescope_index_failure(index, arity, context, opts) do
+    syntax = Map.get(context, :projection_syntax, :dot)
+
+    primary_span =
+      Map.get(context, :index_span) || Map.get(context, :field_span) || Map.get(context, :span) ||
+        Keyword.get(opts, :span)
+
+    receiver_span = Map.get(context, :receiver_span)
+    expression_span = Map.get(context, :span)
+    position_word = if arity == 1, do: "position", else: "positions"
+
+    body =
+      "This tuple has #{arity} #{position_word}, numbered from 1 through #{arity}, but this projection asks for position #{index}. Tuple projection is checked at compile time, so an out-of-range position can never produce a value."
+
+    primary_message =
+      case syntax do
+        :element -> "index #{index} is outside this #{arity}-element tuple"
+        _ -> "position .#{index} does not exist on this #{arity}-element tuple"
+      end
+
+    secondary =
+      [
+        sibling_dependency_label(
+          receiver_span,
+          primary_span,
+          "this expression has a tuple type with #{arity} #{position_word}"
+        ),
+        sibling_dependency_label(
+          expression_span,
+          primary_span,
+          "this complete projection cannot succeed"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Tuple position #{index} is out of range",
+      body: Doc.paragraph(body),
+      primary: pickup_label(primary_span, :primary, primary_message),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Use a tuple position from 1 through #{arity}",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :telescope_index_out_of_bounds,
+        index: index,
+        arity: arity,
+        syntax: syntax,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
 
   defp non_callable_application(details, context, opts) do
     index = Map.get(details, :argument_index, 0)
