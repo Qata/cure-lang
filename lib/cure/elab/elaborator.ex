@@ -2071,7 +2071,18 @@ defmodule Cure.Elab.Elaborator do
                   {:error, {:unknown_field, rec, field, Enum.map(fields, &elem(&1, 0))}}
 
                 mentions_prior_field?(ftype) ->
-                  {:error, {:dependent_record_projection, rec, field}}
+                  dependencies = dependent_record_field_names(fields, idx)
+                  field_sites = Cure.Elab.SourceMetadata.record_field_sites(rec)
+
+                  {:error,
+                   {:source_context, {:dependent_record_projection, rec, field},
+                    %{
+                      record: rec,
+                      projected_field: field,
+                      dependent_fields: dependencies,
+                      projected_field_declaration: Map.get(field_sites, field),
+                      dependent_field_declarations: Map.take(field_sites, dependencies)
+                    }}}
 
                 true ->
                   binders = for i <- 0..(length(fields) - 1), do: {:variable, [scope: :local], "$proj#{i}"}
@@ -2098,6 +2109,7 @@ defmodule Cure.Elab.Elaborator do
   # binder crossed, so its distance from the current frame stays constant, while a
   # genuine context/parameter reference stays far below the threshold.
   defp mentions_prior_field?(term), do: mentions_prior_field?(term, 0)
+
   defp mentions_prior_field?({:var, k}, depth), do: k - depth >= @proj_field_sentinel
 
   defp mentions_prior_field?({:lam, _g, d, b}, depth),
@@ -2111,6 +2123,19 @@ defmodule Cure.Elab.Elaborator do
 
   defp mentions_prior_field?(list, depth) when is_list(list), do: Enum.any?(list, &mentions_prior_field?(&1, depth))
   defp mentions_prior_field?(_other, _depth), do: false
+
+  defp dependent_record_field_names(fields, index) do
+    previous = fields |> Enum.take(index) |> Enum.map(&elem(&1, 0)) |> Enum.reverse()
+    {_name, type} = Enum.at(fields, index)
+
+    type
+    |> free_indices(0)
+    |> Enum.filter(&(&1 < index))
+    |> Enum.sort()
+    |> Enum.map(&Enum.at(previous, &1))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&Atom.to_string/1)
+  end
 
   defp attach_unary_operand_context({:error, reason}, operand, operator),
     do: {:error, attach_operator_operand_context(reason, operand, 0, operator)}

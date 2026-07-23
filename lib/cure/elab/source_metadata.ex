@@ -8,6 +8,7 @@ defmodule Cure.Elab.SourceMetadata do
 
   @parameter_key {__MODULE__, :parameter_spans}
   @parameter_site_key {__MODULE__, :parameter_sites}
+  @record_field_key {__MODULE__, :record_field_sites}
   @declaration_key {__MODULE__, :declaration_spans}
   @equation_key {__MODULE__, :equations}
   @interface_method_key {__MODULE__, :interface_method_spans}
@@ -18,6 +19,7 @@ defmodule Cure.Elab.SourceMetadata do
       [
         @parameter_key,
         @parameter_site_key,
+        @record_field_key,
         @declaration_key,
         @equation_key,
         @interface_method_key,
@@ -43,6 +45,14 @@ defmodule Cure.Elab.SourceMetadata do
 
   def parameter_sites(name) when is_atom(name),
     do: Process.get(@parameter_site_key, %{}) |> Map.get(name, [])
+
+  def put_record_field_sites(name, sites) when is_atom(name) and is_map(sites) do
+    Process.put(@record_field_key, Map.put(Process.get(@record_field_key, %{}), name, sites))
+    :ok
+  end
+
+  def record_field_sites(name) when is_atom(name),
+    do: Process.get(@record_field_key, %{}) |> Map.get(name, %{})
 
   def put_declaration_span(name, span) when is_atom(name) do
     Process.put(@declaration_key, Map.put(Process.get(@declaration_key, %{}), name, span))

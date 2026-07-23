@@ -106,10 +106,12 @@ defmodule Cure.Elab.Declarations do
 
               with {:ok, [ctor]} <- elaborate_gadt_ctors([sig], name, [], [], working_env) do
                 declare_at_min_level(env, name, [attach_field_defaults(ctor, variants)], 0)
+                |> register_record_field_sites(env, name, variants)
               end
 
             type_params ->
               declare_parameterized_struct(name, type_params, variants, env)
+              |> register_record_field_sites(env, name, variants)
           end
         end
 
@@ -1580,6 +1582,30 @@ defmodule Cure.Elab.Declarations do
         acc
     end)
   end
+
+  defp register_record_field_sites({:ok, declared}, owner_env, name, fields) do
+    sites =
+      Map.new(fields, fn {:param, meta, field_name} ->
+        info = Cure.MetaAST.Metadata.source_info(meta)
+
+        {field_name,
+         %{
+           span: info && info.whole,
+           name_span: info && info.name,
+           type_span: info && info.annotation
+         }}
+      end)
+
+    :ok =
+      Cure.Elab.SourceMetadata.put_record_field_sites(
+        Env.owned_name(owner_env, name),
+        sites
+      )
+
+    {:ok, declared}
+  end
+
+  defp register_record_field_sites(error, _owner_env, _name, _fields), do: error
 
   # A positional enum variant, seen as a GADT constructor signature that returns
   # the family applied to its own parameters. `Nil` → `Nil : List(a)`;

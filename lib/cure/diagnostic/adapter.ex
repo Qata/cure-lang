@@ -1056,6 +1056,13 @@ defmodule Cure.Diagnostic.Adapter do
     projection_receiver_failure(record, context, opts)
   end
 
+  def from_error(
+        {:source_context, {:dependent_record_projection, record, field}, context},
+        opts
+      )
+      when is_map(context),
+      do: dependent_record_projection_failure(record, field, context, opts)
+
   def from_error({:unknown_field, record, field}, opts) do
     unknown_name(:member, "#{name_to_string(record)}.#{name_to_string(field)}", Keyword.put(opts, :owner, record))
   end
@@ -4165,6 +4172,84 @@ defmodule Cure.Diagnostic.Adapter do
       [owner, _name] -> owner
       [_name] -> nil
     end
+  end
+
+  defp dependent_record_projection_failure(record, field, context, opts) do
+    record_name = surface_declaration_name(record)
+    field = name_to_string(field)
+    dependencies = Map.get(context, :dependent_fields, [])
+    dependency_list = Enum.map_join(dependencies, ", ", &"`#{&1}`")
+    primary_span = Map.get(context, :field_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+    receiver_span = Map.get(context, :receiver_span)
+    projected_site = Map.get(context, :projected_field_declaration, %{})
+    dependent_sites = Map.get(context, :dependent_field_declarations, %{})
+
+    dependency_phrase =
+      case dependencies do
+        [dependency] -> "the earlier field `#{dependency}`"
+        [] -> "an earlier field"
+        _ -> "the earlier fields #{dependency_list}"
+      end
+
+    secondary =
+      [
+        sibling_dependency_label(
+          receiver_span,
+          primary_span,
+          "this value has dependent record type `#{record_name}`"
+        ),
+        sibling_dependency_label(
+          parameter_site_span(projected_site),
+          primary_span,
+          "`#{field}` is declared with a type that depends on #{dependency_phrase}"
+        )
+      ] ++
+        Enum.flat_map(dependencies, fn dependency ->
+          case dependent_sites |> Map.get(dependency) |> parameter_site_span() do
+            %Span{} = span ->
+              [
+                sibling_dependency_label(
+                  span,
+                  primary_span,
+                  "`#{dependency}` supplies part of `#{field}`'s type"
+                )
+              ]
+
+            _ ->
+              []
+          end
+        end)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "`#{field}` cannot be projected without its dependency",
+      body:
+        Doc.paragraph(
+          "The type of `#{record_name}.#{field}` depends on #{dependency_phrase}. Projecting only `#{field}` would discard the value needed to state its result type. Destructure the record so the dependent fields remain in scope together."
+        ),
+      primary:
+        pickup_label(
+          primary_span,
+          :primary,
+          "this projection separates `#{field}` from #{dependency_phrase}"
+        ),
+      secondary: Enum.reject(secondary, &is_nil/1),
+      suggestions: [
+        %Suggestion{
+          message: "Pattern-match `#{record_name}` and bind #{Enum.join(dependencies ++ [field], ", ")} together",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :dependent_record_projection,
+        record: record_name,
+        field: field,
+        dependencies: dependencies,
+        checking: Map.get(context, :checking)
+      }
+    )
   end
 
   defp record_field_unknown_failure(record, field, available_fields, context, opts) do
