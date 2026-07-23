@@ -386,19 +386,8 @@ defmodule Cure.Compiler.Errors do
   defp operational_error?(_), do: false
 
   defp error_location({:lift_module_error, %{source_provenance: %{line: line, col: col}}}), do: {line, col}
-  defp error_location({:unresolved_import, _name, _arity, _imports, line}) when is_integer(line), do: {line, 1}
-  defp error_location({:import_cycle, [%{line: line} | _]}) when is_integer(line), do: {line, 1}
-  defp error_location({:duplicate_module, _name, _paths}), do: {1, 1}
-  defp error_location({:ambiguous_name, _name, _modules}), do: {1, 1}
   defp error_location({:lex_error, reason}), do: lex_error_location(reason)
   defp error_location({_, _, meta}) when is_list(meta), do: {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, 0)}
-
-  defp error_location(error) when is_tuple(error) and tuple_size(error) >= 4 do
-    case error |> Tuple.to_list() |> Enum.reverse() do
-      [col, line | _] when is_integer(line) and is_integer(col) -> {line, col}
-      _ -> {0, 0}
-    end
-  end
 
   defp error_location({:computed_macro_error, meta, _reason}) when is_list(meta) do
     {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, Keyword.get(meta, :column, 0))}

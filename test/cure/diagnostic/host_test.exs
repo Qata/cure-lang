@@ -765,6 +765,19 @@ defmodule Cure.Diagnostic.HostTest do
     refute pattern =~ "INTERNAL COMPILER ERROR"
   end
 
+  test "locationless name and module errors do not blame the start of an unrelated source" do
+    source = "mod Unrelated\n  fn complete() -> Int = 1\nend\n"
+
+    for reason <- [
+          {:ambiguous_name, :shared, ["Left", "Right"]},
+          {:duplicate_module, "Repeated", ["one.cure", "two.cure"]}
+        ] do
+      {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, "unrelated.cure", source)
+      assert diagnostic.primary == nil
+      refute Cure.Diagnostic.Renderer.plain(diagnostic, registry) =~ "1 | mod Unrelated"
+    end
+  end
+
   test "bare branch verdicts do not fall back to generic elaboration failure" do
     rendered = Host.render(:branch_type, "branches.cure")
 
