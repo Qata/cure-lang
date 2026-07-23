@@ -3731,7 +3731,11 @@ defmodule Cure.Compiler.Parser do
           whole: whole,
           operator: rewrite_token.span,
           body: ast_source_span(proof),
-          operands: [ast_source_span(proof)]
+          operands: [ast_source_span(proof)],
+          fields: %{
+            rewrite_keyword: rewrite_token.span,
+            direction: direction_span
+          }
         })
       else
         _ -> meta

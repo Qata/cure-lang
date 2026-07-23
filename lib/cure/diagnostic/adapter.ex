@@ -10893,28 +10893,23 @@ defmodule Cure.Diagnostic.Adapter do
     end)
   end
 
-  defp rewrite_suggestions(%RewriteProblem{kind: :reverse_only, command: %Span{} = command, direction: direction}) do
+  defp rewrite_suggestions(%RewriteProblem{
+         kind: :reverse_only,
+         direction: direction,
+         direction_range: %Span{} = direction_range
+       }) do
     {span, replacement} =
       case direction do
         :forward ->
           {%Span{
-             command
-             | start_byte: command.start_byte + 7,
-               end_byte: command.start_byte + 7,
-               start_column: command.start_column + 7,
-               end_line: command.start_line,
-               end_column: command.start_column + 7
+             direction_range
+             | start_byte: direction_range.end_byte,
+               start_line: direction_range.end_line,
+               start_column: direction_range.end_column
            }, " backwards"}
 
         :backwards ->
-          {%Span{
-             command
-             | start_byte: command.start_byte + 7,
-               end_byte: command.start_byte + 17,
-               start_column: command.start_column + 7,
-               end_line: command.start_line,
-               end_column: command.start_column + 17
-           }, ""}
+          {direction_range, ""}
       end
 
     [

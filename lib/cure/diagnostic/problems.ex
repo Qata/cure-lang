@@ -155,7 +155,18 @@ end
 defmodule Cure.Diagnostic.RewriteProblem do
   @moduledoc "Structured failure for a directed proof rewrite command."
   @enforce_keys [:kind]
-  defstruct [:kind, :command, :theorem, :goal, :occurrences, :target, :direction, :searched, :cause]
+  defstruct [
+    :kind,
+    :command,
+    :theorem,
+    :goal,
+    :occurrences,
+    :target,
+    :direction,
+    :direction_range,
+    :searched,
+    :cause
+  ]
 
   @type t :: %__MODULE__{
           kind: atom(),
@@ -165,6 +176,7 @@ defmodule Cure.Diagnostic.RewriteProblem do
           occurrences: [term()],
           target: term(),
           direction: :forward | :backwards,
+          direction_range: Cure.Diagnostic.Span.t() | nil,
           searched: term(),
           cause: term()
         }

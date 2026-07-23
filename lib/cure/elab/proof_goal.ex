@@ -621,7 +621,8 @@ defmodule Cure.Elab.ProofGoal do
             goal: surface_span(goal.source),
             occurrences: [],
             target: Keyword.get(meta, :target, :goal),
-            direction: Keyword.get(meta, :direction, :forward)
+            direction: Keyword.get(meta, :direction, :forward),
+            direction_range: source_field_span(meta, :direction)
           ],
           fields
         )
@@ -646,6 +647,13 @@ defmodule Cure.Elab.ProofGoal do
 
   defp surface_span({_tag, meta, _children}) when is_list(meta), do: surface_span(meta)
   defp surface_span(_other), do: nil
+
+  defp source_field_span(meta, field) when is_list(meta) do
+    case Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{fields: fields} when is_map(fields) -> Map.get(fields, field)
+      _ -> nil
+    end
+  end
 
   defp expression_kind({kind, _meta, _children}) when is_atom(kind), do: kind
   defp expression_kind(_other), do: :expression
