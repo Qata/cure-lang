@@ -956,6 +956,27 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: non_exhaustive_guard_failure(context, opts)
 
+  def from_error(
+        {:source_context, {:unsupported_guard, %{reason: :shadowed, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: shadowed_guard_binding_failure(details, context, opts)
+
+  def from_error(
+        {:source_context, {:unsupported_guard, %{reason: :refutable_pattern} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: refutable_guard_pattern_failure(details, context, opts)
+
+  def from_error(
+        {:source_context, {:unsupported_guard, %{reason: :complex_scrutinee} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: complex_guard_scrutinee_failure(details, context, opts)
+
   def from_error({:source_context, {:unsolved_metavariables, name}, context}, opts) when is_map(context) do
     cond do
       Map.get(context, :constructor_result_mismatch) ->
@@ -7021,6 +7042,161 @@ defmodule Cure.Diagnostic.Adapter do
         reason: :non_exhaustive,
         checking: Map.get(context, :checking),
         guard_count: length(guard_labels)
+      }
+    )
+  end
+
+  defp shadowed_guard_binding_failure(details, context, opts) do
+    name = name_to_string(details.name)
+    site = Map.get(details, :site)
+    outer_span = Map.get(details, :span)
+    shadow_span = Map.get(details, :shadow_span)
+    pattern_span = Map.get(details, :pattern_span)
+    primary_span = shadow_span || outer_span || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      [
+        case outer_span do
+          %Span{} = span when span != primary_span ->
+            pickup_label(span, :secondary, "this guard pattern binds `#{name}`")
+
+          _ ->
+            nil
+        end,
+        case pattern_span do
+          %Span{} = span when span != primary_span and span != outer_span ->
+            pickup_label(span, :secondary, "this is the guarded pattern")
+
+          _ ->
+            nil
+        end
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    {title, body} =
+      case site do
+        :body ->
+          {
+            "Fallback branch shadows `#{name}`",
+            "This fallback branch substitutes the matched value for `#{name}`, but a binder inside the branch uses the same name. That substitution could capture the inner value."
+          }
+
+        :constructor_branch ->
+          {
+            "Guarded constructor branch shadows `#{name}`",
+            "This guarded constructor branch renames its pattern field `#{name}` during lowering, but a binder inside the branch uses the same name. That renaming could capture the inner value."
+          }
+
+        _ ->
+          {
+            "Guard branch shadows `#{name}`",
+            "This guard branch substitutes the matched value for `#{name}`, but a binder inside the branch uses the same name. That substitution could capture the inner value."
+          }
+      end
+
+    Diagnostic.new(
+      code: "E090",
+      key: :unrecognized_pattern,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: pickup_label(primary_span, :primary, "rename this inner binder so it does not shadow `#{name}`"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Give the nested binder a different name and update its branch expression",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :unsupported_guard,
+        reason: :shadowed,
+        name: name,
+        site: site,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp refutable_guard_pattern_failure(details, context, opts) do
+    shape = Map.get(details, :shape, :pattern)
+    shape_name = guard_pattern_shape_name(shape)
+    pattern_span = Map.get(details, :span)
+
+    guard_span =
+      context
+      |> Map.get(:branch_patterns, [])
+      |> Enum.find_value(fn branch ->
+        if branch_pattern_span(branch) == pattern_span, do: Map.get(branch, :guard_span), else: nil
+      end)
+
+    secondary =
+      case pickup_label(guard_span, :secondary, "this condition is attached to the refutable pattern") do
+        nil -> []
+        label -> [label]
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "#{String.capitalize(shape_name)} pattern cannot carry this guard",
+      body:
+        Doc.paragraph(
+          "This #{shape_name} pattern can fail before its `when` condition is considered. The current guard chain only accepts variable, wildcard, or irrefutable tuple patterns."
+        ),
+      primary:
+        pickup_label(
+          pattern_span || Map.get(context, :span) || Keyword.get(opts, :span),
+          :primary,
+          "this refutable pattern cannot enter the guard chain"
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Match this pattern first, then test the condition inside its branch and keep an explicit fallback",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :unsupported_guard,
+        reason: :refutable_pattern,
+        shape: shape,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp guard_pattern_shape_name(:literal), do: "literal"
+  defp guard_pattern_shape_name(:tuple), do: "tuple"
+  defp guard_pattern_shape_name(:function_call), do: "constructor"
+  defp guard_pattern_shape_name(shape), do: shape |> name_to_string() |> String.replace("_", " ")
+
+  defp complex_guard_scrutinee_failure(details, context, opts) do
+    span =
+      Map.get(details, :span) || Map.get(context, :scrutinee_span) || Map.get(context, :span) ||
+        Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Guarded match needs a stable scrutinee",
+      body:
+        Doc.paragraph(
+          "Guard conditions may inspect the matched value more than once. Bind this expression once before matching so its value is stable and any effects are not repeated."
+        ),
+      primary: pickup_label(span, :primary, "bind this expression before the guarded match"),
+      suggestions: [
+        %Suggestion{
+          message: "Introduce a `let` binding for this expression, then match the new name",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :unsupported_guard,
+        reason: :complex_scrutinee,
+        checking: Map.get(context, :checking)
       }
     )
   end

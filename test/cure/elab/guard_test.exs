@@ -11,6 +11,8 @@ defmodule Cure.Elab.GuardTest do
   """
   use ExUnit.Case, async: true
 
+  alias Cure.Compiler.Errors
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.{Program, Emit}
 
   @nat "mod M\n  type Nat = Z | S(Nat)\n"
@@ -90,5 +92,194 @@ defmodule Cure.Elab.GuardTest do
         "    x when x == 1 -> S(Z())\nend\n"
 
     assert {:error, _} = Program.elaborate(src)
+  end
+
+  test "a fallback binder shadowed inside its branch labels both bindings" do
+    src =
+      @nat <>
+        "  fn f(n: Int) -> Nat = match n\n" <>
+        "    x when x == 0 -> Z()\n" <>
+        "    x ->\n" <>
+        "      let g : (Int) -> Nat = fn(x) -> Z()\n" <>
+        "      g(x)\n" <>
+        "end\n"
+
+    assert {:error,
+            {:source_context,
+             {:unsupported_guard,
+              %{reason: :shadowed, name: "x", site: :body, span: outer_span, shadow_span: shadow_span}}, _} =
+              error} = Program.elaborate(src)
+
+    assert {outer_span.start_line, outer_span.start_column} == {5, 5}
+    assert {shadow_span.start_line, shadow_span.start_column} == {6, 33}
+
+    {diagnostic, registry} = Errors.to_diagnostic(error, "guard_shadow.cure", src)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- FALLBACK BRANCH SHADOWS `X` [E090] ------------------------ guard_shadow.cure
+
+             This fallback branch substitutes the matched value for `x`, but a binder inside
+             the branch uses the same name. That substitution could capture the inner value.
+
+             at guard_shadow.cure:6:33
+             5 |     x ->
+               |     - this guard pattern binds `x`
+             6 |       let g : (Int) -> Nat = fn(x) -> Z()
+               |                                 ^ rename this inner binder so it does not shadow `x`
+
+             Hint: Give the nested binder a different name and update its branch expression
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 5, "character" => 32},
+             "end" => %{"line" => 5, "character" => 33}
+           }
+
+    assert [related] = lsp["relatedInformation"]
+
+    assert related["location"]["range"] == %{
+             "start" => %{"line" => 4, "character" => 4},
+             "end" => %{"line" => 4, "character" => 5}
+           }
+
+    assert lsp["data"]["payload"] == %{
+             "checking" => "f",
+             "kind" => "unsupported_guard",
+             "name" => "x",
+             "reason" => "shadowed",
+             "site" => "body"
+           }
+
+    fixed = String.replace(src, "fn(x) -> Z()", "fn(value) -> Z()")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "guard_shadow_fixed.cure")
+  end
+
+  test "a refutable literal guard points at the pattern and condition" do
+    src =
+      @nat <>
+        "  fn f(n: Int) -> Nat = match n\n" <>
+        "    0 when true -> Z()\n" <>
+        "    _ -> S(Z())\n" <>
+        "end\n"
+
+    assert {:error,
+            {:source_context, {:unsupported_guard, %{reason: :refutable_pattern, shape: :literal, span: pattern_span}},
+             _} = error} =
+             Program.elaborate(src)
+
+    assert {pattern_span.start_line, pattern_span.start_column} == {4, 5}
+
+    {diagnostic, registry} = Errors.to_diagnostic(error, "literal_guard.cure", src)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- LITERAL PATTERN CANNOT CARRY THIS GUARD [E093] ----------- literal_guard.cure
+
+             This literal pattern can fail before its `when` condition is considered. The
+             current guard chain only accepts variable, wildcard, or irrefutable tuple
+             patterns.
+
+             at literal_guard.cure:4:5
+             4 |     0 when true -> Z()
+               |     ^      ---- this refutable pattern cannot enter the guard chain; this condition is attached to the refutable pattern
+
+             Hint: Match this pattern first, then test the condition inside its branch and keep an explicit fallback
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 3, "character" => 4},
+             "end" => %{"line" => 3, "character" => 5}
+           }
+
+    assert [related] = lsp["relatedInformation"]
+
+    assert related["location"]["range"] == %{
+             "start" => %{"line" => 3, "character" => 11},
+             "end" => %{"line" => 3, "character" => 15}
+           }
+
+    assert lsp["data"]["payload"] == %{
+             "checking" => "f",
+             "kind" => "unsupported_guard",
+             "reason" => "refutable_pattern",
+             "shape" => "literal"
+           }
+
+    fixed = String.replace(src, "    0 when true -> Z()\n", "    0 -> Z()\n")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "literal_guard_fixed.cure")
+  end
+
+  test "a guarded non-variable scrutinee with a named fallback is evaluated once" do
+    src =
+      @nat <>
+        "  fn f(n: Nat) -> Nat = match S(n)\n" <>
+        "    S(x) when true -> x\n" <>
+        "    other -> other\n" <>
+        "end\n"
+
+    {:ok, environment} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(environment, module: :"Cure.GuardStableScrutinee", functions: [:f])
+
+    assert apply(mod, :f, [:Z]) == :Z
+    assert apply(mod, :f, [{:S, :Z}]) == {:S, :Z}
+  end
+
+  test "guard lowering preserves the duplicate catch-all diagnostic" do
+    src =
+      @nat <>
+        "  fn f(n: Nat) -> Nat = match n\n" <>
+        "    S(x) when true -> x\n" <>
+        "    a -> a\n" <>
+        "    b -> b\n" <>
+        "end\n"
+
+    assert {:error, {:source_context, {:duplicate_default_pattern, "b"}, _} = error} =
+             Program.elaborate(src)
+
+    {diagnostic, registry} = Errors.to_diagnostic(error, "guard_defaults.cure", src)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- PATTERN MATCH HAS MORE THAN ONE CATCH-ALL [E119] -------- guard_defaults.cure
+
+             A variable or `_` pattern matches every value not handled above it, so a later
+             catch-all can never be reached.
+
+             at guard_defaults.cure:6:5
+             5 |     a -> a
+               |     - this earlier pattern already matches every remaining value
+             6 |     b -> b
+               |     ^ this catch-all is unreachable
+
+             Hint: Keep one final catch-all branch and remove or narrow the others
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 5, "character" => 4},
+             "end" => %{"line" => 5, "character" => 5}
+           }
+
+    assert [related] = lsp["relatedInformation"]
+
+    assert related["location"]["range"] == %{
+             "start" => %{"line" => 4, "character" => 4},
+             "end" => %{"line" => 4, "character" => 5}
+           }
+
+    assert lsp["data"]["payload"] == %{
+             "checking" => "f",
+             "kind" => "duplicate_default_pattern",
+             "name" => "b"
+           }
+
+    fixed = String.replace(src, "    b -> b\n", "")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "guard_defaults_fixed.cure")
   end
 end

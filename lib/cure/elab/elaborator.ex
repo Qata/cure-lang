@@ -4122,7 +4122,7 @@ defmodule Cure.Elab.Elaborator do
   defp hoist_named_default?(scrut_expr, arms) do
     not match?({:variable, _m, _n}, scrut_expr) and
       Enum.any?(arms, &named_default_arm?/1) and
-      Enum.any?(arms, &arm_has_nested?/1)
+      Enum.any?(arms, &(arm_has_nested?(&1) or guarded_arm?(&1)))
   end
 
   defp named_default_arm?({:match_arm, meta, _body}) do
@@ -6509,39 +6509,39 @@ defmodule Cure.Elab.Elaborator do
   defp bind_catchall_body(_scrut, {:variable, _m, "_"}, body, expected, names, ctx, env),
     do: elaborate_expr_checked(body, expected, names, ctx, env)
 
-  defp bind_catchall_body(scrut_expr, {:variable, _m, name}, body, expected, names, ctx, env) do
+  defp bind_catchall_body(scrut_expr, {:variable, _m, name} = pattern, body, expected, names, ctx, env) do
     cond do
-      not match?({:variable, _sm, _sn}, scrut_expr) -> {:error, {:unsupported_guard, :complex_scrutinee}}
-      binds_any?(body, [name]) -> {:error, {:unsupported_guard, :shadowed}}
+      not match?({:variable, _sm, _sn}, scrut_expr) -> complex_guard_scrutinee_error(scrut_expr)
+      binds_any?(body, [name]) -> shadowed_guard_error(pattern, name, body, :body)
       true -> elaborate_expr_checked(subst_surface_var(body, name, scrut_expr), expected, names, ctx, env)
     end
   end
 
-  defp bind_catchall_body(scrut_expr, {:tuple, _m, pats}, body, expected, names, ctx, env) do
-    with {:ok, body_expr} <- tuple_guard_bind(scrut_expr, pats, body) do
+  defp bind_catchall_body(scrut_expr, {:tuple, _m, pats} = pattern, body, expected, names, ctx, env) do
+    with {:ok, body_expr} <- tuple_guard_bind(scrut_expr, pats, body, pattern) do
       elaborate_expr_checked(body_expr, expected, names, ctx, env)
     end
   end
 
-  defp bind_catchall_body(_scrut, _pat, _body, _expected, _names, _ctx, _env),
-    do: {:error, {:unsupported_guard, :non_catchall_pattern}}
+  defp bind_catchall_body(_scrut, pattern, _body, _expected, _names, _ctx, _env),
+    do: guarded_pattern_shape_error(pattern)
 
   # Substitute the pattern variable with the (variable) scrutinee in a guard or
   # body expression, guarding against complex scrutinees and shadow-capture.
   defp guard_bind(_scrut, {:variable, _m, "_"}, expr), do: {:ok, expr}
 
-  defp guard_bind(scrut_expr, {:variable, _m, name}, expr) do
+  defp guard_bind(scrut_expr, {:variable, _m, name} = pattern, expr) do
     cond do
-      not match?({:variable, _sm, _sn}, scrut_expr) -> {:error, {:unsupported_guard, :complex_scrutinee}}
-      binds_any?(expr, [name]) -> {:error, {:unsupported_guard, :shadowed}}
+      not match?({:variable, _sm, _sn}, scrut_expr) -> complex_guard_scrutinee_error(scrut_expr)
+      binds_any?(expr, [name]) -> shadowed_guard_error(pattern, name, expr, :guard_or_body)
       true -> {:ok, subst_surface_var(expr, name, scrut_expr)}
     end
   end
 
-  defp guard_bind(scrut_expr, {:tuple, _m, pats}, expr),
-    do: tuple_guard_bind(scrut_expr, pats, expr)
+  defp guard_bind(scrut_expr, {:tuple, _m, pats} = pattern, expr),
+    do: tuple_guard_bind(scrut_expr, pats, expr, pattern)
 
-  defp guard_bind(_scrut, _pat, _expr), do: {:error, {:unsupported_guard, :non_catchall_pattern}}
+  defp guard_bind(_scrut, pattern, _expr), do: guarded_pattern_shape_error(pattern)
 
   # Multi-parameter function clauses desugar to a match over a flat tuple of
   # formal arguments. Such a tuple pattern is irrefutable when every leaf is a
@@ -6549,25 +6549,59 @@ defmodule Cure.Elab.Elaborator do
   # elaborating the guard/body. This is the guarded counterpart of
   # `try_tuple_match/6`; constructor/literal leaves remain deliberately outside
   # the catch-all guard chain and are rejected by `tuple_subs/2`.
-  defp tuple_guard_bind(scrut_expr, pats, expr) do
+  defp tuple_guard_bind(scrut_expr, pats, expr, pattern) do
     if match?({:variable, _sm, _sn}, scrut_expr) do
       with {:ok, subs} <- tuple_subs(pats, scrut_expr) do
         bound_names = Enum.map(subs, &elem(&1, 0))
 
-        if binds_any?(expr, bound_names) do
-          {:error, {:unsupported_guard, :shadowed}}
-        else
-          {:ok,
-           Enum.reduce(subs, expr, fn {name, replacement}, acc ->
-             subst_surface_var(acc, name, replacement)
-           end)}
+        case Enum.find(bound_names, &binds_any?(expr, [&1])) do
+          nil ->
+            {:ok,
+             Enum.reduce(subs, expr, fn {name, replacement}, acc ->
+               subst_surface_var(acc, name, replacement)
+             end)}
+
+          name ->
+            shadowed_guard_error(pattern, name, expr, :guard_or_body)
         end
       else
-        {:error, _} -> {:error, {:unsupported_guard, :non_catchall_pattern}}
+        {:error, _reason} -> guarded_pattern_shape_error(pattern)
       end
     else
-      {:error, {:unsupported_guard, :complex_scrutinee}}
+      complex_guard_scrutinee_error(scrut_expr)
     end
+  end
+
+  defp shadowed_guard_error(pattern, name, expression, site) do
+    {:error,
+     {:unsupported_guard,
+      %{
+        reason: :shadowed,
+        name: name,
+        site: site,
+        span: pattern_binder_span(pattern, name),
+        pattern_span: surface_expression_span(pattern),
+        shadow_span: first_binding_span(expression, name)
+      }}}
+  end
+
+  defp guarded_pattern_shape_error(pattern) do
+    {:error,
+     {:unsupported_guard,
+      %{
+        reason: :refutable_pattern,
+        shape: pattern_shape(pattern),
+        span: surface_expression_span(pattern)
+      }}}
+  end
+
+  defp complex_guard_scrutinee_error(scrutinee) do
+    {:error,
+     {:unsupported_guard,
+      %{
+        reason: :complex_scrutinee,
+        span: surface_expression_span(scrutinee)
+      }}}
   end
 
   # Literal patterns on a PRIMITIVE scrutinee (Int/Bool/Float) desugar to a chain
@@ -6911,15 +6945,24 @@ defmodule Cure.Elab.Elaborator do
   defp default_closer([], _scrut), do: {:ok, :none}
 
   defp default_closer([{:match_arm, dmeta, dbody0}], scrut_expr) do
-    {:variable, _m, dvname} = Keyword.fetch!(dmeta, :pattern)
+    {:variable, _m, dvname} = pattern = Keyword.fetch!(dmeta, :pattern)
+    body = single_body(dbody0)
 
-    case resolve_default_body(dvname, single_body(dbody0), scrut_expr) do
-      {:ok, db} -> {:ok, {:some, db}}
-      {:error, reason} -> {:error, {:unsupported_guard, reason}}
+    if dvname != "_" and binds_any?(body, [dvname]) do
+      shadowed_guard_error(pattern, dvname, body, :body)
+    else
+      case resolve_default_body(dvname, body, scrut_expr) do
+        {:ok, db} -> {:ok, {:some, db}}
+        {:error, :nonvariable_scrutinee} -> complex_guard_scrutinee_error(scrut_expr)
+      end
     end
   end
 
-  defp default_closer(_multi, _scrut), do: {:error, {:unsupported_guard, :multiple_defaults}}
+  defp default_closer(defaults, _scrut) do
+    {:match_arm, meta, _body} = List.last(defaults)
+    {:variable, _variable_meta, name} = Keyword.fetch!(meta, :pattern)
+    {:error, {:duplicate_default_pattern, name}}
+  end
 
   # Fold one constructor group's rows (each `C(v…) [when g] -> body`, all single
   # level and sharing arity k) into a single `C(w₁..w_k) -> <if-chain>`.
@@ -6982,9 +7025,20 @@ defmodule Cure.Elab.Elaborator do
     guard = Keyword.get(meta, :guard)
     exprs = [single_body(body) | if(guard, do: [guard], else: [])]
 
-    if Enum.any?(exprs, fn e -> binds_any?(e, oldnames) end),
-      do: {:error, {:unsupported_guard, :shadowed}},
-      else: {:ok, subs}
+    shadowed =
+      Enum.find_value(oldnames, fn name ->
+        Enum.find_value(exprs, fn expression ->
+          if binds_any?(expression, [name]), do: {name, expression}, else: nil
+        end)
+      end)
+
+    case shadowed do
+      {name, expression} ->
+        shadowed_guard_error(Keyword.fetch!(meta, :pattern), name, expression, :constructor_branch)
+
+      nil ->
+        {:ok, subs}
+    end
   end
 
   defp rename_all(expr, subs) do
