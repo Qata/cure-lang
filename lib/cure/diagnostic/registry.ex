@@ -112,7 +112,7 @@ defmodule Cure.Diagnostic.Registry do
     lexer: Cure.Compiler.Lexer,
     macro_expansion: Cure.Elab.MacroExpand,
     name_resolution: Cure.Elab.Resolution,
-    operational: Cure.Diagnostic.Operational,
+    operational: Cure.Diagnostic.Adapter.Operational,
     parser: Cure.Compiler.Parser,
     pattern_checker: Cure.Elab.Elaborator,
     proof_checker: Cure.Elab.ProofSearch,
@@ -1830,7 +1830,7 @@ defmodule Cure.Diagnostic.Registry do
     |> String.to_atom()
   end
 
-  defp converter(code) when code in @operational, do: Cure.Diagnostic.Operational
+  defp converter(code) when code in @operational, do: Cure.Diagnostic.Adapter.Operational
   defp converter(code) when code in @structured, do: Cure.Diagnostic.Adapter
   defp converter(_code), do: Cure.Compiler.Errors
 
@@ -1851,7 +1851,7 @@ defmodule Cure.Diagnostic.Registry do
     do: {Cure.Diagnostic.Adapter, :from_error}
 
   defp producer_converter(_code, :operational),
-    do: {Cure.Diagnostic.Operational, :from_error}
+    do: {Cure.Diagnostic.Adapter.Operational, :from_error}
 
   defp producer_converter(code, _producer) when code in @structured,
     do: {Cure.Diagnostic.Adapter, :from_error}

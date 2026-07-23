@@ -21,9 +21,9 @@ defmodule Cure.Diagnostic.Adapter do
     TypeProblem
   }
 
-  alias Cure.Diagnostic.Operational
-  alias Cure.Diagnostic.Suggest
   alias Cure.Diagnostic.Adapter.Codegen
+  alias Cure.Diagnostic.Adapter.Operational
+  alias Cure.Diagnostic.Suggest
   alias Cure.MetaAST.Metadata
 
   @unknown_name_code "E091"

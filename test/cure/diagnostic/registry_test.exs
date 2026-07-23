@@ -38,7 +38,7 @@ defmodule Cure.Diagnostic.RegistryTest do
   test "registry records the operational producer for documentation warnings" do
     assert {:ok, entry} = Registry.fetch("E008")
     assert entry.producers == [:operational]
-    assert entry.converter == Cure.Diagnostic.Operational
+    assert entry.converter == Cure.Diagnostic.Adapter.Operational
   end
 
   test "optimistic legacy ownership is retired or narrowed to source-backed producers" do
@@ -158,7 +158,7 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert entry.producer_converters == %{
              beam_writer: {Cure.Diagnostic.Adapter.Codegen, :from_error},
              macro_expansion: {Cure.Diagnostic.Adapter, :from_error},
-             operational: {Cure.Diagnostic.Operational, :from_error}
+             operational: {Cure.Diagnostic.Adapter.Operational, :from_error}
            }
   end
 
