@@ -1567,21 +1567,16 @@ defmodule Cure.Diagnostic.Adapter do
     do: KernelAdapter.from_error(error, opts)
 
   def from_error({:cyclic_typealiases, aliases}, opts),
-    do: declaration_conflict(:cyclic_typealiases, %{aliases: aliases}, opts)
+    do: NameAdapter.from_error({:cyclic_typealiases, aliases}, opts)
 
   def from_error({:module_identity_missing, path}, _opts),
     do: Cure.Diagnostic.Operational.file_read(path, :module_identity_missing)
 
   def from_error({:module_identity_mismatch, requested, declared, path}, opts),
-    do: declaration_conflict(:module_identity_mismatch, %{requested: requested, declared: declared, path: path}, opts)
+    do: NameAdapter.from_error({:module_identity_mismatch, requested, declared, path}, opts)
 
   def from_error({:module_path_identity_mismatch, path, declared, requested}, opts),
-    do:
-      declaration_conflict(
-        :module_path_identity_mismatch,
-        %{path: path, declared: declared, requested: requested},
-        opts
-      )
+    do: NameAdapter.from_error({:module_path_identity_mismatch, path, declared, requested}, opts)
 
   def from_error({:char_literal_needs_bounded, value}, opts),
     do: contextual_type_failure(:char_literal_needs_bounded, %{value: value}, opts)
@@ -1929,7 +1924,7 @@ defmodule Cure.Diagnostic.Adapter do
       do: contextual_type_failure(kind, %{}, opts)
 
   def from_error(:shadowed, opts),
-    do: declaration_conflict(:shadowed, %{}, opts)
+    do: NameAdapter.from_error(:shadowed, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -3644,125 +3639,6 @@ defmodule Cure.Diagnostic.Adapter do
       opts
     )
   end
-
-  defp declaration_conflict(kind, details, opts) do
-    name = name_to_string(Map.get(details, :name, :declaration))
-
-    detail =
-      case kind do
-        :overlapping_overload ->
-          " with arity #{Map.get(details, :arity)}"
-
-        :sibling_module_collision ->
-          " across modules #{Enum.map_join(Map.get(details, :owners, []), ", ", &name_to_string/1)}"
-
-        :overlapping_instance ->
-          " for interface `#{name_to_string(Map.get(details, :interface))}` and head `#{surface_type(Map.get(details, :head))}`"
-
-        :overlapping_named_instance ->
-          " for named interface instance `#{name_to_string(Map.get(details, :name))}`"
-
-        _ ->
-          ""
-      end
-
-    spans = Map.get(details, :spans, [])
-    {primary, secondary} = conflict_labels(spans, opts, kind, details)
-
-    Diagnostic.new(
-      code: "E105",
-      key: :declaration_conflict,
-      severity: :error,
-      title: declaration_conflict_title(kind),
-      body: Doc.paragraph(declaration_conflict_message(kind, name, conflict_message_detail(kind, details, detail))),
-      primary: primary,
-      secondary: secondary,
-      suggestions: declaration_conflict_suggestions(kind, details),
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
-  defp conflict_labels([first, second | rest], _opts, kind, details) do
-    primary = %Label{span: second, style: :primary, message: duplicate_primary_label(kind, details)}
-
-    first_message =
-      if Map.get(details, :operation),
-        do: "this field was first supplied here",
-        else: "the name was first declared here"
-
-    secondary =
-      [%Label{span: first, style: :secondary, message: first_message}] ++
-        Enum.map(rest, &%Label{span: &1, style: :secondary, message: "another duplicate is here"})
-
-    {primary, secondary}
-  end
-
-  defp conflict_labels(_spans, opts, kind, details),
-    do: {primary_label(opts, duplicate_primary_label(kind, details)), []}
-
-  defp declaration_conflict_title(:duplicate_parameter), do: "Duplicate parameter"
-  defp declaration_conflict_title(:duplicate_field), do: "Duplicate field"
-  defp declaration_conflict_title(:duplicate_index), do: "Duplicate index"
-  defp declaration_conflict_title(:duplicate_type), do: "Duplicate type declaration"
-  defp declaration_conflict_title(:duplicate_constructor), do: "Duplicate constructor"
-  defp declaration_conflict_title(:sibling_module_collision), do: "Name repeated across sibling modules"
-  defp declaration_conflict_title(_kind), do: "Declaration conflict"
-
-  defp conflict_message_detail(:duplicate_field, %{operation: operation} = details, _detail)
-       when operation in [:construction, :update],
-       do: details
-
-  defp conflict_message_detail(_kind, _details, detail), do: detail
-
-  defp declaration_conflict_message(:duplicate_parameter, name, _detail),
-    do:
-      "The parameter `#{name}` is declared more than once. Rename or remove one occurrence so every parameter has a unique name."
-
-  defp declaration_conflict_message(:duplicate_field, name, %{operation: operation, record: record}) do
-    action = if(operation == :update, do: "updating", else: "constructing")
-
-    "The field `#{name}` is supplied more than once while #{action} `#{surface_declaration_name(record)}`. A record value can provide each field only once."
-  end
-
-  defp declaration_conflict_message(:duplicate_field, name, _detail),
-    do:
-      "The field `#{name}` is declared more than once. Rename or remove one occurrence so every record field has a unique name."
-
-  defp declaration_conflict_message(:duplicate_type, name, _detail),
-    do:
-      "The type `#{name}` is declared more than once in this module. Rename or remove one declaration so the type has a unique identity."
-
-  defp declaration_conflict_message(:duplicate_constructor, name, _detail),
-    do:
-      "The constructor `#{name}` is declared more than once in this module. Rename or remove one declaration so pattern matching stays unambiguous."
-
-  defp declaration_conflict_message(:sibling_module_collision, name, detail),
-    do:
-      "The name `#{name}` is declared#{detail}. Sibling modules in one source file currently share an elaboration namespace, so one declaration would overwrite the other. Rename one declaration or move the modules into separate source files."
-
-  defp declaration_conflict_message(_kind, name, detail),
-    do: "The declaration `#{name}` conflicts with another visible declaration#{detail}."
-
-  defp duplicate_primary_label(:duplicate_field, %{operation: operation}) when operation in [:construction, :update],
-    do: "this field is supplied again"
-
-  defp duplicate_primary_label(:duplicate_parameter, _details), do: "this parameter repeats an earlier name"
-  defp duplicate_primary_label(:duplicate_field, _details), do: "this field repeats an earlier name"
-  defp duplicate_primary_label(:duplicate_index, _details), do: "this index repeats an earlier name"
-  defp duplicate_primary_label(:duplicate_type, _details), do: "this type repeats an earlier declaration"
-  defp duplicate_primary_label(:duplicate_constructor, _details), do: "this constructor repeats an earlier declaration"
-
-  defp duplicate_primary_label(:sibling_module_collision, _details),
-    do: "this name is already declared in another sibling module"
-
-  defp duplicate_primary_label(_kind, _details), do: "rename this declaration or make its identity unique"
-
-  defp declaration_conflict_suggestions(:duplicate_field, %{operation: operation, name: name})
-       when operation in [:construction, :update] do
-    [%Suggestion{message: "Remove one `#{name}` field", applicability: :manual}]
-  end
-
-  defp declaration_conflict_suggestions(_kind, _details), do: []
 
   @doc false
   def operator_conflict(kind, details, opts) do

@@ -173,4 +173,20 @@ defmodule Cure.Diagnostic.Adapter.NameTest do
       assert NameAdapter.from_error(error).code == "E090"
     end
   end
+
+  test "module identity and alias-cycle conflicts are owned by the name family" do
+    errors = [
+      {:cyclic_typealiases, [:A, :B, :A]},
+      {:module_identity_mismatch, "App.Root", "App.Other", "lib/root.cure"},
+      {:module_path_identity_mismatch, "lib/root.cure", "App.Other", "App.Root"},
+      :shadowed
+    ]
+
+    for error <- errors do
+      direct = NameAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E105"
+      assert direct.key == :declaration_conflict
+    end
+  end
 end
