@@ -165,6 +165,26 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
     end
   end
 
+  test "protocol validation producers are owned by the macro family" do
+    errors = [
+      {:invalid_protocol_name, :Proto},
+      {:protocol_role_count, 3},
+      {:self_protocol_step, :client},
+      {:unknown_choice_decider, :observer},
+      {:invalid_protocol_branches, :client},
+      {:unprojectable_choice, :server},
+      {:unknown_protocol_role, :client, :observer}
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.key == :macro_protocol_validation
+      assert direct.suggestions != []
+    end
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 
