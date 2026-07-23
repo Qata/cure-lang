@@ -332,6 +332,33 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
     assert direct.payload == details
   end
 
+  test "macro schema and fuzz producers are owned by the macro family" do
+    errors = [
+      {:invalid_macro_diagnostics, :bad},
+      {:invalid_macro_diagnostic, :bad},
+      {:invalid_macro_segment, :segment},
+      {:unsupported_surface_filler, :value},
+      {:missing_hole_filler, :name},
+      {:invalid_repeated_hole_filler, :name},
+      :not_a_nat,
+      :invalid_macro_fuzz_rule,
+      :invalid_macro_fuzz_bindings
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.key in [:macro_diagnostic_schema, :macro_fuzz_input]
+      assert direct.suggestions != []
+    end
+
+    assert MacroAdapter.from_error({:missing_hole_filler, :payload}).payload == %{
+             kind: :missing_hole_filler,
+             hole: "payload"
+           }
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 

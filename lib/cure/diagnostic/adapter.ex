@@ -1696,7 +1696,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: MacroAdapter.from_error({:invalid_syntax_attrs, core}, opts)
 
   def from_error({kind, _detail}, opts) when kind in [:invalid_macro_diagnostics, :invalid_macro_diagnostic],
-    do: macro_diagnostic_schema_failure(kind, opts)
+    do: MacroAdapter.from_error({kind, :detail}, opts)
 
   def from_error({kind, detail}, opts)
       when kind in [
@@ -1705,7 +1705,7 @@ defmodule Cure.Diagnostic.Adapter do
              :missing_hole_filler,
              :invalid_repeated_hole_filler
            ],
-      do: macro_fuzz_input_failure(kind, %{detail: detail}, opts)
+      do: MacroAdapter.from_error({kind, detail}, opts)
 
   def from_error({kind, detail}, opts)
       when kind in [
@@ -1832,11 +1832,11 @@ defmodule Cure.Diagnostic.Adapter do
     do: from_error({:computed_macro_error, [], kind}, opts)
 
   def from_error(kind, opts) when kind in [:invalid_macro_diagnostics, :invalid_macro_diagnostic],
-    do: macro_diagnostic_schema_failure(kind, opts)
+    do: MacroAdapter.from_error(kind, opts)
 
   def from_error(kind, opts)
       when kind in [:not_a_nat, :invalid_macro_fuzz_rule, :invalid_macro_fuzz_bindings],
-      do: macro_fuzz_input_failure(kind, %{}, opts)
+      do: MacroAdapter.from_error(kind, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -4700,97 +4700,6 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp macro_validation_failure(kind, details, opts), do: macro_validation_failure(kind, details, opts, %{})
-
-  defp macro_diagnostic_schema_failure(kind, opts) do
-    {title, message, label, hint} = macro_diagnostic_schema_content(kind)
-
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_diagnostic_schema,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{kind: kind}
-    )
-  end
-
-  defp macro_fuzz_input_failure(kind, details, opts) do
-    {title, message, label, hint} = macro_fuzz_input_content(kind, details)
-
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_fuzz_input,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: macro_fuzz_payload(kind, details)
-    )
-  end
-
-  defp macro_fuzz_input_content(:invalid_macro_fuzz_rule, _details),
-    do:
-      {"Macro proof rule is malformed",
-       "Proof-input assembly needs a parsed macro rule with a textual keyword and segment list.",
-       "rewrite this macro rule", "Provide a parsed syntax or computed rule"}
-
-  defp macro_fuzz_input_content(:invalid_macro_fuzz_bindings, _details),
-    do:
-      {"Macro proof bindings are malformed",
-       "Generated hole bindings must map each textual hole name to its sampled value.",
-       "rewrite these generated bindings", "Provide a map from hole names to generated values"}
-
-  defp macro_fuzz_input_content(:invalid_macro_segment, _details),
-    do:
-      {"Macro rule contains an unsupported segment",
-       "Proof-input assembly encountered a rule segment that is not a literal, hole, repetition, optional group, raw hole, or declaration body.",
-       "replace this macro segment", "Use one of the supported macro rule segment forms"}
-
-  defp macro_fuzz_input_content(:missing_hole_filler, %{detail: name}),
-    do:
-      {"Generated macro input is missing a hole",
-       "The proof input has no generated value for the `#{name_to_string(name)}` hole required by this rule.",
-       "supply this generated hole", "Add a generated value for `#{name_to_string(name)}`"}
-
-  defp macro_fuzz_input_content(:invalid_repeated_hole_filler, %{detail: name}),
-    do:
-      {"Repeated macro hole needs a list",
-       "The `#{name_to_string(name)}` hole is repeated by the rule, but its generated filler is not a list of values.",
-       "replace this repeated-hole filler", "Provide a list of generated values for `#{name_to_string(name)}`"}
-
-  defp macro_fuzz_input_content(:unsupported_surface_filler, _details),
-    do:
-      {"Generated hole has no surface spelling",
-       "The proof generator produced a Core value that cannot be written as authored Cure macro input.",
-       "use a surface-encodable generator",
-       "Generate a literal, nullary constructor, raw text, natural, boolean, or supported type value"}
-
-  defp macro_fuzz_input_content(:not_a_nat, _details),
-    do:
-      {"Generated natural number is malformed",
-       "A sampled natural must be built only from `Z` and unary `S` constructors.",
-       "replace this natural-number sample", "Generate `Z` or `S(previous_nat)`"}
-
-  defp macro_fuzz_payload(kind, %{detail: detail})
-       when kind in [:missing_hole_filler, :invalid_repeated_hole_filler],
-       do: %{kind: kind, hole: name_to_string(detail)}
-
-  defp macro_fuzz_payload(kind, _details), do: %{kind: kind}
-
-  defp macro_diagnostic_schema_content(:invalid_macro_diagnostics),
-    do:
-      {"Macro rejection list is malformed",
-       "A rejected macro result must contain one author diagnostic or a proper list of author diagnostics.",
-       "rebuild this macro rejection", "Return `Rejected([Failure(name, arguments), ...])`"}
-
-  defp macro_diagnostic_schema_content(:invalid_macro_diagnostic),
-    do:
-      {"Macro author diagnostic is malformed",
-       "A macro author diagnostic must be a reflected `Failure` value with an atom name and syntax arguments.",
-       "rebuild this author diagnostic", "Return `Failure(name, arguments)` inside `Rejected`"}
 
   defp lift_module_failure(kind, details, opts) do
     {title, message, label, hint} = lift_module_content(kind, details)
