@@ -4531,7 +4531,7 @@ defmodule Cure.Elab.Elaborator do
       parent_patterns = Keyword.fetch!(arm_meta, :parent_patterns)
 
       with {:ok, {cname0, _vars}} <- constructor_pattern(with_pattern),
-           {:ok, _subst} <- match_parent_lhs(original_params, parent_patterns) do
+           {:ok, _subst} <- match_parent_lhs_at_arm(original_params, parent_patterns, arm_meta) do
         cname = resolve_ctor_key(env, cname0)
         with_pattern = rekey_pattern_name(with_pattern, cname)
 
@@ -4553,6 +4553,120 @@ defmodule Cure.Elab.Elaborator do
       end
     end)
   end
+
+  defp match_parent_lhs_at_arm(originals, restated, arm_meta) do
+    case match_parent_lhs(originals, restated) do
+      {:ok, _subst} = ok ->
+        ok
+
+      {:error, reason} ->
+        info = Cure.MetaAST.Metadata.source_info(arm_meta)
+        original_spans = Enum.map(originals, &surface_expression_span/1)
+        restated_spans = Enum.map(restated, &surface_expression_span/1)
+
+        context = %{
+          span: rematch_lhs_failure_span(reason, originals, restated, info),
+          rematch_arm_span: info && info.whole,
+          rematch_separator_span: info && Map.get(info.fields, :rematch_separator),
+          with_pattern_span: info && info.pattern,
+          original_pattern_spans: original_spans,
+          restated_pattern_spans: restated_spans,
+          original_patterns_span: rematch_spans_through(original_spans),
+          restated_patterns_span: rematch_spans_through(restated_spans),
+          original_pattern_count: length(originals),
+          restated_pattern_count: length(restated)
+        }
+
+        {:error, {:source_context, reason, context}}
+    end
+  end
+
+  defp rematch_lhs_failure_span({:with_rematch_non_constructor_pattern, _}, _originals, restated, info) do
+    restated
+    |> Enum.find_value(&first_invalid_restated_pattern/1)
+    |> surface_expression_span()
+    |> rematch_span_or(info && info.whole)
+  end
+
+  defp rematch_lhs_failure_span({:with_rematch_ctor_mismatch, _, _}, originals, restated, info) do
+    case first_rematch_difference(originals, restated) do
+      {_original, authored} -> surface_expression_span(authored) || (info && info.whole)
+      nil -> info && info.whole
+    end
+  end
+
+  defp rematch_lhs_failure_span({:with_rematch_inconsistent_binding, name}, originals, restated, info) do
+    originals
+    |> Enum.zip(restated)
+    |> Enum.find_value(fn {original, authored} ->
+      if pattern_binds_name?(original, name), do: surface_expression_span(authored)
+    end)
+    |> rematch_span_or(info && info.whole)
+  end
+
+  defp rematch_lhs_failure_span(_reason, _originals, restated, info) do
+    restated
+    |> Enum.map(&surface_expression_span/1)
+    |> rematch_spans_through()
+    |> rematch_span_or(info && info.whole)
+  end
+
+  defp rematch_span_or(nil, fallback), do: fallback
+  defp rematch_span_or(span, _fallback), do: span
+
+  defp rematch_spans_through(spans) do
+    spans = Enum.reject(spans, &is_nil/1)
+
+    case {List.first(spans), List.last(spans)} do
+      {nil, nil} ->
+        nil
+
+      {first, last} ->
+        case Cure.Compiler.Parser.Range.through(first, last) do
+          {:ok, span} -> span
+          _ -> last || first
+        end
+    end
+  end
+
+  defp first_invalid_restated_pattern({:variable, _, _}), do: nil
+
+  defp first_invalid_restated_pattern({:function_call, _meta, args}),
+    do: Enum.find_value(args, &first_invalid_restated_pattern/1)
+
+  defp first_invalid_restated_pattern(pattern), do: pattern
+
+  defp first_rematch_difference(originals, restated) when is_list(originals) and is_list(restated) do
+    originals
+    |> Enum.zip(restated)
+    |> Enum.find_value(fn {original, authored} -> first_rematch_difference(original, authored) end)
+  end
+
+  defp first_rematch_difference(
+         {:function_call, original_meta, original_args} = original,
+         {
+           :function_call,
+           authored_meta,
+           authored_args
+         } = authored
+       ) do
+    if Keyword.get(original_meta, :name) != Keyword.get(authored_meta, :name) or
+         length(original_args) != length(authored_args) do
+      {original, authored}
+    else
+      first_rematch_difference(original_args, authored_args)
+    end
+  end
+
+  defp first_rematch_difference(_original, _authored), do: nil
+
+  defp pattern_binds_name?({:variable, _, name}, name), do: true
+  defp pattern_binds_name?({:param, _, name}, name), do: true
+
+  defp pattern_binds_name?({:function_call, _meta, args}, name),
+    do: Enum.any?(args, &pattern_binds_name?(&1, name))
+
+  defp pattern_binds_name?(_pattern, _name), do: false
 
   # One Core branch per declared constructor (coverage), mirroring
   # `elaborate_branches`: an omitted/impossible constructor is discharged with

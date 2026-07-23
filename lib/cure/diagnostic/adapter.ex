@@ -997,18 +997,38 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:source_context, {kind, first, second}, context}, opts)
       when kind in [:with_rematch_ctor_mismatch] and is_map(context) do
-    pattern_problem(kind, %{actual: first, expected: second}, context, opts)
+    if rematch_context_enriched?(context) do
+      rematch_pattern_failure(kind, %{original: first, restated: second}, context, opts)
+    else
+      pattern_problem(kind, %{actual: first, expected: second}, context, opts)
+    end
   end
 
   def from_error({:source_context, {kind, details}, context}, opts)
       when kind in [
              :with_rematch_ctor_mismatch,
              :with_rematch_non_constructor_pattern,
-             :with_rematch_inconsistent_binding
+             :with_rematch_inconsistent_binding,
+             :with_rematch_unsupported_parent_pattern
            ] and
              is_map(context) do
-    pattern_problem(kind, %{details: details}, context, opts)
+    if rematch_context_enriched?(context) do
+      rematch_pattern_failure(kind, %{details: details}, context, opts)
+    else
+      if kind == :with_rematch_unsupported_parent_pattern do
+        contextual_type_failure(kind, %{detail: details}, opts)
+      else
+        pattern_problem(kind, %{details: details}, context, opts)
+      end
+    end
   end
+
+  def from_error(
+        {:source_context, {:with_rematch_arity_mismatch, expected, actual}, context},
+        opts
+      )
+      when is_map(context),
+      do: rematch_pattern_failure(:with_rematch_arity_mismatch, %{expected: expected, actual: actual}, context, opts)
 
   def from_error({:source_context, {:unknown_record, name, candidates}, context}, opts)
       when is_map(context) and is_list(candidates),
@@ -6024,6 +6044,141 @@ defmodule Cure.Diagnostic.Adapter do
       payload: Map.merge(%{kind: kind, checking: Map.get(context, :checking)}, details)
     )
   end
+
+  defp rematch_pattern_failure(kind, details, context, opts) do
+    primary_span = Map.get(context, :span) || Map.get(context, :rematch_arm_span) || Keyword.get(opts, :span)
+    original_spans = Map.get(context, :original_pattern_spans, [])
+    restated_spans = Map.get(context, :restated_pattern_spans, [])
+
+    paired_original =
+      restated_spans
+      |> Enum.find_index(&(&1 == primary_span))
+      |> then(fn
+        nil -> Map.get(context, :original_patterns_span)
+        index -> Enum.at(original_spans, index)
+      end)
+
+    {title, body, primary_message, hint} =
+      rematch_pattern_content(kind, details, context)
+
+    secondary =
+      [
+        rematch_label(paired_original, primary_span, "this is the corresponding original function pattern"),
+        rematch_label(
+          Map.get(context, :rematch_separator_span),
+          primary_span,
+          "patterns before this `|` restate the function's left-hand side"
+        ),
+        rematch_label(
+          Map.get(context, :with_pattern_span),
+          primary_span,
+          "this pattern matches the value after `with`"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: body,
+      primary: %Label{span: primary_span, style: :primary, message: primary_message},
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload:
+        Map.merge(
+          %{
+            kind: kind,
+            checking: Map.get(context, :checking),
+            original_pattern_count: Map.get(context, :original_pattern_count),
+            restated_pattern_count: Map.get(context, :restated_pattern_count)
+          },
+          details
+        )
+    )
+  end
+
+  defp rematch_context_enriched?(context),
+    do: match?(%Span{}, Map.get(context, :span)) and is_list(Map.get(context, :restated_pattern_spans))
+
+  defp rematch_pattern_content(:with_rematch_non_constructor_pattern, details, _context) do
+    shape = Map.get(details, :details)
+
+    {
+      "Rematch pattern must describe a shape",
+      Doc.stack([
+        Doc.paragraph(
+          "The left side of a `with` rematch restates the function's parameter patterns. It cannot evaluate an expression such as this `#{shape}` node."
+        ),
+        Doc.paragraph("Use variables and constructor patterns here; perform calculations in a guard or branch body.")
+      ]),
+      "this expression computes a value instead of matching a shape",
+      "Replace this expression with a variable or constructor pattern, then move the calculation into the branch body"
+    }
+  end
+
+  defp rematch_pattern_content(:with_rematch_ctor_mismatch, details, _context) do
+    original = details |> Map.get(:original) |> name_to_string()
+    restated = details |> Map.get(:restated) |> name_to_string()
+
+    {
+      "Rematch changes an existing constructor",
+      Doc.paragraph(
+        "The original function pattern uses `#{original}`, but this branch restates that same position with `#{restated}`. A rematch may refine variables, but it cannot replace an already-written constructor."
+      ),
+      "this restates `#{original}` as incompatible constructor `#{restated}`",
+      "Keep `#{original}` at this position, or move this case into a separate function clause"
+    }
+  end
+
+  defp rematch_pattern_content(:with_rematch_inconsistent_binding, details, _context) do
+    name = details |> Map.get(:details) |> name_to_string()
+
+    {
+      "Rematch gives `#{name}` two different shapes",
+      Doc.paragraph(
+        "The original left-hand side binds `#{name}` more than once, but this rematch gives those occurrences different patterns. Every occurrence must describe the same value."
+      ),
+      "this occurrence disagrees with another restatement of `#{name}`",
+      "Use the same variable or constructor pattern for every occurrence of `#{name}`"
+    }
+  end
+
+  defp rematch_pattern_content(:with_rematch_arity_mismatch, details, context) do
+    expected = Map.get(details, :expected, Map.get(context, :original_pattern_count))
+    actual = Map.get(details, :actual, Map.get(context, :restated_pattern_count))
+
+    {
+      "Rematch has the wrong number of parent patterns",
+      Doc.paragraph(
+        "This function has #{expected} parent #{plural(expected, "pattern")}, but the branch restates #{actual}. The patterns before `|` must correspond position-for-position with the function's left-hand side."
+      ),
+      "these parent patterns do not match the function's arity",
+      "Write exactly #{expected} #{plural(expected, "parent pattern")} before `|`"
+    }
+  end
+
+  defp rematch_pattern_content(:with_rematch_unsupported_parent_pattern, details, _context) do
+    shape = Map.get(details, :details)
+
+    {
+      "Original function pattern cannot be rematched",
+      Doc.paragraph(
+        "This function parameter uses a `#{shape}` pattern that the LHS-rematch algorithm cannot structurally refine."
+      ),
+      "this original pattern cannot participate in a `with` rematch",
+      "Bind this parameter to a name first, then refine that name in the `with` branches"
+    }
+  end
+
+  defp rematch_label(%Span{} = span, primary_span, message) when span != primary_span,
+    do: %Label{span: span, style: :secondary, message: message}
+
+  defp rematch_label(_span, _primary_span, _message), do: nil
+
+  defp plural(1, singular), do: singular
+  defp plural(_count, singular), do: singular <> "s"
 
   defp kernel_type_failure(kind, opts) do
     {title, message, label} =
