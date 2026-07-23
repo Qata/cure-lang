@@ -4041,8 +4041,8 @@ defmodule Cure.Elab.Elaborator do
     # Wave-2 List sugar in pattern position: rewrite each arm's `[]`/`[h|t]`
     # `:pattern` meta to Nil/Cons ctor-call form BEFORE any downstream pass, so
     # rekey/refine/constructor_pattern all see the uniform function_call shape and
-    # no `:list` node survives. One-deep only; a nested list pattern desugars to a
-    # nested ctor pattern that `constructor_pattern/1` rejects (:nested_constructor_arg).
+    # no `:list` node survives. Nested list patterns continue through the general
+    # constructor-pattern matrix.
     arms0 = arms0 |> desugar_list_patterns() |> desugar_typed_constructor_args()
     {scrut_expr, arms0} = desugar_tuple_scrutinee(scrut_expr, arms0)
 
@@ -5756,6 +5756,15 @@ defmodule Cure.Elab.Elaborator do
   # rewritten; a top-level tuple pattern is left for `try_tuple_match`, and a tuple
   # nested inside a *nested* constructor falls through to that path's clean error.
   defp desugar_tuple_args(arms) do
+    arms
+    |> desugar_refutable_tuple_arg_groups()
+    |> case do
+      {:ok, grouped} -> desugar_irrefutable_tuple_args(grouped)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp desugar_irrefutable_tuple_args(arms) do
     Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, meta, body} = arm, {:ok, acc} ->
       case strip_tuple_args_in_ctor(Keyword.fetch!(meta, :pattern)) do
         {:ok, _clean, []} ->
@@ -5784,10 +5793,183 @@ defmodule Cure.Elab.Elaborator do
               {:cont, {:ok, acc ++ [{:match_arm, Keyword.put(meta, :pattern, clean), b2}]}}
           end
 
-        {:error, _} = err ->
-          {:halt, err}
+        {:error, :refutable_tuple_element} ->
+          # A refutable tuple combined with another nested constructor column is
+          # left intact for the general pattern matrix, which expands tuple
+          # columns into projection scrutinees.
+          {:cont, {:ok, acc ++ [arm]}}
+
+        {:error, _reason} = error ->
+          {:halt, error}
       end
     end)
+  end
+
+  defp desugar_refutable_tuple_arg_groups(arms) do
+    order =
+      arms
+      |> Enum.map(fn arm ->
+        case arm_pattern(arm) do
+          {:function_call, meta, _arguments} -> {:constructor, Keyword.fetch!(meta, :name)}
+          pattern -> {:other, pattern}
+        end
+      end)
+      |> Enum.uniq()
+
+    grouped =
+      Enum.group_by(arms, fn arm ->
+        case arm_pattern(arm) do
+          {:function_call, meta, _arguments} -> {:constructor, Keyword.fetch!(meta, :name)}
+          pattern -> {:other, pattern}
+        end
+      end)
+
+    Enum.reduce_while(order, {:ok, []}, fn key, {:ok, accumulated} ->
+      group = Map.fetch!(grouped, key)
+
+      case desugar_refutable_tuple_arg_group(group) do
+        {:ok, rewritten} -> {:cont, {:ok, accumulated ++ rewritten}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp desugar_refutable_tuple_arg_group([{:match_arm, meta, _body} | _rest] = arms) do
+    case Keyword.fetch!(meta, :pattern) do
+      {:function_call, function_meta, arguments} ->
+        case refutable_tuple_argument_index(arms) do
+          nil ->
+            {:ok, arms}
+
+          tuple_index ->
+            if refutable_tuple_group_supported?(arms, tuple_index) do
+              lower_refutable_tuple_argument_group(arms, function_meta, arguments, tuple_index)
+            else
+              {:ok, arms}
+            end
+        end
+
+      _other ->
+        {:ok, arms}
+    end
+  end
+
+  defp refutable_tuple_argument_index(arms) do
+    Enum.find_value(arms, fn arm ->
+      case arm_pattern(arm) do
+        {:function_call, _meta, arguments} ->
+          Enum.find_index(arguments, fn
+            {:tuple, _tuple_meta, elements} ->
+              match?(
+                {:error, :refutable_tuple_element},
+                tuple_subs(elements, {:variable, [], "$p"})
+              )
+
+            _other ->
+              false
+          end)
+
+        _other ->
+          nil
+      end
+    end)
+  end
+
+  defp refutable_tuple_group_supported?(arms, tuple_index) do
+    Enum.all?(arms, fn arm ->
+      case arm_pattern(arm) do
+        {:function_call, _meta, arguments} ->
+          match?({:tuple, _tuple_meta, _elements}, Enum.at(arguments, tuple_index)) and
+            arguments
+            |> List.delete_at(tuple_index)
+            |> Enum.all?(fn
+              {:variable, _meta, _name} -> true
+              {:named_implicit_pat, _meta, _children} -> true
+              _other -> false
+            end)
+
+        _other ->
+          false
+      end
+    end)
+  end
+
+  defp lower_refutable_tuple_argument_group(arms, function_meta, arguments, tuple_index) do
+    tag = fresh_tag()
+
+    fresh_arguments =
+      arguments
+      |> Enum.with_index()
+      |> Enum.map(fn
+        {{:named_implicit_pat, _meta, _children} = pattern, _index} -> pattern
+        {_argument, index} -> {:variable, [], "$tuple_arg_" <> tag <> Integer.to_string(index)}
+      end)
+
+    inner_arms =
+      Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, meta, body}, {:ok, accumulated} ->
+        {:function_call, _call_meta, row_arguments} = Keyword.fetch!(meta, :pattern)
+
+        substitutions =
+          row_arguments
+          |> Enum.with_index()
+          |> Enum.flat_map(fn
+            {{:variable, _variable_meta, "_"}, _index} ->
+              []
+
+            {{:variable, _variable_meta, name}, index} when index != tuple_index ->
+              [{name, Enum.at(fresh_arguments, index)}]
+
+            _other ->
+              []
+          end)
+
+        expressions = [single_body(body) | List.wrap(Keyword.get(meta, :guard))]
+
+        case Enum.find(substitutions, fn {name, _replacement} ->
+               Enum.any?(expressions, &binds_any?(&1, [name]))
+             end) do
+          {name, _replacement} ->
+            pattern = Keyword.fetch!(meta, :pattern)
+
+            {:halt,
+             {:error,
+              {:unsupported_pattern,
+               %{
+                 reason: :shadowed_nested,
+                 name: name,
+                 span: pattern_binder_span(pattern, name),
+                 type_span: surface_expression_span(pattern),
+                 shadow_span: first_binding_span(expressions, name)
+               }}}}
+
+          nil ->
+            rewrite = fn expression ->
+              Enum.reduce(substitutions, expression, fn {name, replacement}, rewritten ->
+                subst_surface_var(rewritten, name, replacement)
+              end)
+            end
+
+            inner_meta =
+              meta
+              |> Keyword.put(:pattern, Enum.at(row_arguments, tuple_index))
+              |> then(fn inner_meta ->
+                case Keyword.fetch(inner_meta, :guard) do
+                  {:ok, guard} -> Keyword.put(inner_meta, :guard, rewrite.(guard))
+                  :error -> inner_meta
+                end
+              end)
+
+            inner_arm = {:match_arm, inner_meta, [rewrite.(single_body(body))]}
+            {:cont, {:ok, accumulated ++ [inner_arm]}}
+        end
+      end)
+
+    with {:ok, inner_arms} <- inner_arms do
+      tuple_scrutinee = Enum.at(fresh_arguments, tuple_index)
+      inner_match = {:pattern_match, [], [tuple_scrutinee | inner_arms]}
+      outer_pattern = {:function_call, function_meta, fresh_arguments}
+      {:ok, [{:match_arm, [pattern: outer_pattern], [inner_match]}]}
+    end
   end
 
   defp tuple_pattern_span_for_name({:tuple, _meta, children} = tuple, name) do
@@ -5889,17 +6071,27 @@ defmodule Cure.Elab.Elaborator do
   defp split_first_tuple_column([e0 | erest], rows) do
     col0 = Enum.map(rows, fn {[p0 | _], _} -> p0 end)
 
-    heads =
-      Enum.map(col0, fn
-        {:function_call, fm, _} -> {:ok, Keyword.fetch!(fm, :name)}
-        _ -> :error
+    constructor_heads =
+      Enum.flat_map(col0, fn
+        {:function_call, fm, _} -> [Keyword.fetch!(fm, :name)]
+        _ -> []
       end)
 
     cond do
-      not Enum.all?(heads, &match?({:ok, _}, &1)) ->
+      not Enum.all?(col0, fn
+        {:function_call, _meta, _arguments} -> true
+        {:variable, _meta, _name} -> true
+        _ -> false
+      end) ->
         :not_applicable
 
-      not distinct?(Enum.map(heads, fn {:ok, h} -> h end)) ->
+      not distinct?(constructor_heads) ->
+        :not_applicable
+
+      Enum.count(col0, &match?({:variable, _meta, _name}, &1)) > 1 ->
+        :not_applicable
+
+      Enum.any?(Enum.drop(col0, -1), &match?({:variable, _meta, _name}, &1)) ->
         :not_applicable
 
       true ->
@@ -5938,25 +6130,30 @@ defmodule Cure.Elab.Elaborator do
     case Keyword.fetch!(meta, :pattern) do
       {:tuple, _tm, elems} = pattern when is_list(elems) ->
         with {:ok, tuple_arity} <- tuple_pattern_arity(scrut, names, ctx, env),
-             :ok <- validate_tuple_pattern_arity(pattern, tuple_arity, length(elems)),
-             {:ok, subs} <- tuple_subs(elems, scrut) do
-          b = single_body(body)
+             :ok <- validate_tuple_pattern_arity(pattern, tuple_arity, length(elems)) do
+          case tuple_subs(elems, scrut) do
+            {:ok, subs} ->
+              b = single_body(body)
 
-          case Enum.find(subs, fn {name, _projection} -> binds_any?(b, [name]) end) do
-            {name, _projection} ->
-              {:error,
-               {:unsupported_pattern,
-                %{
-                  reason: :shadowed_tuple,
-                  name: name,
-                  span: pattern_binder_span(pattern, name),
-                  type_span: surface_expression_span(pattern),
-                  shadow_span: first_binding_span(body, name)
-                }}}
+              case Enum.find(subs, fn {name, _projection} -> binds_any?(b, [name]) end) do
+                {name, _projection} ->
+                  {:error,
+                   {:unsupported_pattern,
+                    %{
+                      reason: :shadowed_tuple,
+                      name: name,
+                      span: pattern_binder_span(pattern, name),
+                      type_span: surface_expression_span(pattern),
+                      shadow_span: first_binding_span(body, name)
+                    }}}
 
-            nil ->
-              b2 = Enum.reduce(subs, b, fn {n, r}, acc -> subst_surface_var(acc, n, r) end)
-              elaborate_expr_checked(b2, expected, names, ctx, env)
+                nil ->
+                  b2 = Enum.reduce(subs, b, fn {n, r}, acc -> subst_surface_var(acc, n, r) end)
+                  elaborate_expr_checked(b2, expected, names, ctx, env)
+              end
+
+            {:error, :refutable_tuple_element} ->
+              lower_refutable_tuple_match(scrut, [{:match_arm, meta, body}], tuple_arity, expected, names, ctx, env)
           end
         end
 
@@ -5965,7 +6162,122 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  defp try_tuple_match({:variable, _sm, _sn} = scrut, arms, expected, names, ctx, env)
+       when length(arms) >= 2 do
+    patterns = Enum.map(arms, fn {:match_arm, meta, _body} -> Keyword.fetch!(meta, :pattern) end)
+
+    if Enum.all?(patterns, &match?({:tuple, _meta, _elements}, &1)) do
+      with {:ok, tuple_arity} <- tuple_pattern_arity(scrut, names, ctx, env),
+           :ok <- validate_tuple_pattern_arities(patterns, tuple_arity) do
+        lower_refutable_tuple_match(scrut, arms, tuple_arity, expected, names, ctx, env)
+      end
+    else
+      :not_applicable
+    end
+  end
+
   defp try_tuple_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
+
+  defp validate_tuple_pattern_arities(patterns, tuple_arity) do
+    Enum.reduce_while(patterns, :ok, fn {:tuple, _meta, elements} = pattern, :ok ->
+      case validate_tuple_pattern_arity(pattern, tuple_arity, length(elements)) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp lower_refutable_tuple_match(scrut, arms, tuple_arity, expected, names, ctx, env) do
+    projections = for index <- 1..tuple_arity, do: tuple_proj(scrut, Integer.to_string(index))
+    position = tuple_refutable_position(arms, tuple_arity)
+    reordered_projections = move_tuple_position_first(projections, position)
+
+    reordered_arms =
+      Enum.map(arms, fn {:match_arm, meta, body} ->
+        {:tuple, tuple_meta, elements} = Keyword.fetch!(meta, :pattern)
+        pattern = {:tuple, tuple_meta, move_tuple_position_first(elements, position)}
+        {:match_arm, Keyword.put(meta, :pattern, pattern), body}
+      end)
+
+    synthetic_scrutinee = {:tuple, [], reordered_projections}
+    {lowered_scrutinee, lowered_arms} = desugar_tuple_scrutinee(synthetic_scrutinee, reordered_arms)
+
+    if lowered_scrutinee == synthetic_scrutinee do
+      {:error,
+       {:unsupported_pattern,
+        %{
+          reason: :tuple_pattern_matrix,
+          span: arms |> hd() |> arm_pattern() |> surface_expression_span()
+        }}}
+    else
+      lowered_scrutinee
+      |> elaborate_match(lowered_arms, expected, names, ctx, env)
+      |> contextualize_tuple_pattern_result(arms, tuple_arity, position)
+    end
+  end
+
+  defp tuple_refutable_position(arms, tuple_arity) do
+    Enum.find(1..tuple_arity, 1, fn position ->
+      Enum.any?(arms, fn arm ->
+        element = arm |> arm_pattern() |> elem(2) |> Enum.at(position - 1)
+        not match?({:variable, _meta, _name}, element)
+      end)
+    end)
+  end
+
+  defp move_tuple_position_first(elements, 1), do: elements
+
+  defp move_tuple_position_first(elements, position) do
+    {selected, rest} = List.pop_at(elements, position - 1)
+    [selected | rest]
+  end
+
+  defp contextualize_tuple_pattern_result(
+         {:error, {:source_context, {:missing_branch, _branch} = reason, context}},
+         arms,
+         tuple_arity,
+         position
+       ) do
+    details = tuple_pattern_error_context(arms, tuple_arity, position)
+
+    {:error,
+     {:source_context, reason,
+      context
+      |> Map.merge(details)}}
+  end
+
+  defp contextualize_tuple_pattern_result({:error, {:missing_branch, branch}}, arms, tuple_arity, position),
+    do:
+      {:error,
+       {:tuple_missing_branch, Map.put(tuple_pattern_error_context(arms, tuple_arity, position), :branch, branch)}}
+
+  defp contextualize_tuple_pattern_result(result, _arms, _tuple_arity, _position), do: result
+
+  defp tuple_pattern_error_context(arms, tuple_arity, position) do
+    element_spans =
+      Enum.flat_map(arms, fn arm ->
+        case arm |> arm_pattern() |> elem(2) |> Enum.at(position - 1) |> surface_expression_span() do
+          %Cure.Diagnostic.Span{} = span -> [span]
+          _ -> []
+        end
+      end)
+
+    insertion_span =
+      case arms |> List.last() |> elem(2) |> single_body() |> surface_expression_span() do
+        %Cure.Diagnostic.Span{} = span ->
+          %{span | start_byte: span.end_byte, start_line: span.end_line, start_column: span.end_column}
+
+        _ ->
+          nil
+      end
+
+    %{
+      tuple_pattern_position: position,
+      tuple_pattern_arity: tuple_arity,
+      tuple_pattern_element_spans: element_spans,
+      tuple_pattern_insertion_span: insertion_span
+    }
+  end
 
   defp tuple_pattern_arity(scrut, names, ctx, env) do
     with {:ok, _term, type_value} <- elaborate_expr_typed(scrut, names, ctx, env),
@@ -6524,7 +6836,7 @@ defmodule Cure.Elab.Elaborator do
   defp tuple_elem_sub({:variable, _m, "_"}, _proj), do: {:ok, []}
   defp tuple_elem_sub({:variable, _m, name}, proj), do: {:ok, [{name, proj}]}
   defp tuple_elem_sub({:tuple, _m, [_, _ | _] = sub_elems}, proj), do: tuple_subs(sub_elems, proj)
-  defp tuple_elem_sub(_other, _proj), do: {:error, {:unsupported_pattern, :nested_tuple_element}}
+  defp tuple_elem_sub(_other, _proj), do: {:error, :refutable_tuple_element}
 
   # --- nested-pattern desugaring (parity #3) ---------------------------------
   #
@@ -6928,7 +7240,8 @@ defmodule Cure.Elab.Elaborator do
   defp pattern_vars_deep({:function_call, _m, args}), do: Enum.flat_map(args, &pattern_vars_deep/1)
   defp pattern_vars_deep(_), do: []
 
-  # Pattern-matrix compilation. `scruts` are fresh scrutinee variable NAMES; each
+  # Pattern-matrix compilation. `scruts` are fresh scrutinee variable names or
+  # projection expressions; each
   # row is `{[pattern…], guard, body}` (guard is `nil` or a surface expr) with one
   # pattern per remaining scrutinee. Emits a tree of single-scrutinee
   # `{:pattern_match}` nodes; every emitted match is single-level, so it re-uses
@@ -6942,19 +7255,78 @@ defmodule Cure.Elab.Elaborator do
   defp compile_matrix([v | vs], rows) do
     col = Enum.map(rows, fn {[p | _ps], _g, _b} -> p end)
 
-    if Enum.all?(col, &match?({:variable, _m, _n}, &1)) do
-      # All-variable column: bind each row's variable to `v`, drop the column.
-      rows2 =
-        Enum.map(rows, fn {[{:variable, _m, x} | ps], g, body} ->
-          repl = {:variable, [], v}
-          {ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}
-        end)
+    case tuple_matrix_arity(col) do
+      arity when is_integer(arity) ->
+        expand_tuple_matrix_column(v, vs, rows, arity)
 
-      compile_matrix(vs, rows2)
-    else
-      compile_matrix_split(v, vs, rows, col)
+      nil ->
+        if Enum.all?(col, &match?({:variable, _m, _n}, &1)) do
+          # All-variable column: bind each row's variable to `v`, drop the column.
+          replacement = matrix_scrutinee(v)
+
+          rows2 =
+            Enum.map(rows, fn {[{:variable, _m, x} | ps], g, body} ->
+              {ps, subst_guard(g, x, replacement), subst_surface_var(body, x, replacement)}
+            end)
+
+          compile_matrix(vs, rows2)
+        else
+          compile_matrix_split(v, vs, rows, col)
+        end
     end
   end
+
+  defp tuple_matrix_arity(column) do
+    arities =
+      Enum.flat_map(column, fn
+        {:tuple, _meta, elements} -> [length(elements)]
+        _other -> []
+      end)
+      |> Enum.uniq()
+
+    cond do
+      arities == [] ->
+        nil
+
+      length(arities) != 1 ->
+        nil
+
+      Enum.all?(column, fn
+        {:tuple, _meta, _elements} -> true
+        {:variable, _meta, _name} -> true
+        _other -> false
+      end) ->
+        hd(arities)
+
+      true ->
+        nil
+    end
+  end
+
+  defp expand_tuple_matrix_column(v, vs, rows, arity) do
+    scrutinee = matrix_scrutinee(v)
+
+    projections =
+      for index <- 1..arity do
+        tuple_proj(scrutinee, Integer.to_string(index))
+      end
+
+    expanded_rows =
+      Enum.map(rows, fn
+        {[{:tuple, _meta, elements} | patterns], guard, body} ->
+          {elements ++ patterns, guard, body}
+
+        {[{:variable, _meta, name} | patterns], guard, body} ->
+          wildcards = for _index <- 1..arity, do: {:variable, [], "_"}
+
+          {wildcards ++ patterns, subst_guard(guard, name, scrutinee), subst_surface_var(body, name, scrutinee)}
+      end)
+
+    compile_matrix(projections ++ vs, expanded_rows)
+  end
+
+  defp matrix_scrutinee(name) when is_binary(name), do: {:variable, [], name}
+  defp matrix_scrutinee(expression), do: expression
 
   # Fold the rows reaching a matrix leaf into an `if`-chain. An unguarded row is
   # an unconditional match: it terminates the chain (identical to the previous
@@ -6985,24 +7357,26 @@ defmodule Cure.Elab.Elaborator do
       |> Enum.uniq()
 
     has_var = Enum.any?(col, &match?({:variable, _m, _n}, &1))
+    seed = if is_binary(v), do: v, else: "$matrix_" <> fresh_tag()
+    scrutinee = matrix_scrutinee(v)
 
-    with {:ok, ctor_arms} <- split_ctor_arms(ctors, v, vs, rows) do
+    with {:ok, ctor_arms} <- split_ctor_arms(ctors, seed, scrutinee, vs, rows) do
       arms =
         if has_var do
-          {:ok, default_inner} = split_default(v, vs, rows)
-          ctor_arms ++ [{:match_arm, [pattern: {:variable, [], v <> "_d"}], default_inner}]
+          {:ok, default_inner} = split_default(scrutinee, vs, rows)
+          ctor_arms ++ [{:match_arm, [pattern: {:variable, [], seed <> "_d"}], default_inner}]
         else
           ctor_arms
         end
 
-      {:ok, {:pattern_match, [], [{:variable, [], v} | arms]}}
+      {:ok, {:pattern_match, [], [scrutinee | arms]}}
     end
   end
 
-  defp split_ctor_arms(ctors, v, vs, rows) do
+  defp split_ctor_arms(ctors, seed, scrutinee, vs, rows) do
     Enum.reduce_while(ctors, {:ok, []}, fn cname, {:ok, acc} ->
       arity = split_arity(cname, rows)
-      ws = for i <- 1..arity//1, do: v <> "_" <> cname <> Integer.to_string(i)
+      ws = for i <- 1..arity//1, do: seed <> "_" <> cname <> Integer.to_string(i)
 
       sub_rows =
         Enum.flat_map(rows, fn {[p | ps], g, body} ->
@@ -7012,8 +7386,7 @@ defmodule Cure.Elab.Elaborator do
 
             {:variable, _m, x} ->
               wilds = for w <- ws, do: {:variable, [], w <> "_x"}
-              repl = {:variable, [], v}
-              [{wilds ++ ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}]
+              [{wilds ++ ps, subst_guard(g, x, scrutinee), subst_surface_var(body, x, scrutinee)}]
           end
         end)
 
@@ -7040,13 +7413,12 @@ defmodule Cure.Elab.Elaborator do
 
   # Catch-all sub-matrix for constructors not explicitly listed: only the
   # variable rows survive (each binding its variable to `v`), column dropped.
-  defp split_default(v, vs, rows) do
+  defp split_default(scrutinee, vs, rows) do
     default_rows =
       Enum.flat_map(rows, fn {[p | ps], g, body} ->
         case p do
           {:variable, _m, x} ->
-            repl = {:variable, [], v}
-            [{ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}]
+            [{ps, subst_guard(g, x, scrutinee), subst_surface_var(body, x, scrutinee)}]
 
           _ ->
             []
@@ -9374,7 +9746,15 @@ defmodule Cure.Elab.Elaborator do
         [dup | _] -> {:error, {:nonlinear_pattern, String.to_atom(dup)}}
       end
     else
-      {:error, {:unsupported_pattern, :nested_constructor_arg}}
+      offending = Enum.find(positional, &(not match?({:variable, _meta, _name}, &1)))
+
+      {:error,
+       {:unsupported_pattern,
+        %{
+          reason: :unlowered_nested_constructor_argument,
+          shape: pattern_shape(offending),
+          span: surface_expression_span(offending)
+        }}}
     end
   end
 

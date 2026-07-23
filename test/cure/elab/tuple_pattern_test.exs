@@ -4,8 +4,9 @@ defmodule Cure.Elab.TuplePatternTest do
   irrefutable, so a single `%[x, y] -> body` arm is a destructure, not a coverage
   problem. `try_tuple_match` lowers it to the already-supported projections:
   `body[x ↦ p.1, y ↦ p.2]` (Core `{:fst}`/`{:snd}` on the elaborated variable
-  scrutinee), so no `{:vdata}` scrutinee and no new eliminator is needed. Scope:
-  variable scrutinee, flat 2-tuple of variables/wildcards. Oracle
+  scrutinee), so no `{:vdata}` scrutinee and no new eliminator is needed.
+  Refutable tuple positions are lowered to nested matches over those same
+  projections, preserving constructor coverage and source diagnostics. Oracle
   `match/mt13_tuple_pattern` pins accept/accept parity.
   """
   use ExUnit.Case, async: true
@@ -146,6 +147,107 @@ defmodule Cure.Elab.TuplePatternTest do
     assert apply(mod, :f, [:B]) == :Z
   end
 
+  test "a constructor's refutable tuple field is lowered, exhaustive, and runs" do
+    src =
+      @nat <>
+        "  type T = A(Sigma(a: Nat, Nat)) | B\n" <>
+        "  fn f(t: T) -> Nat = match t\n" <>
+        "    A(%[S(x), y]) -> x\n" <>
+        "    A(%[Z(), y]) -> y\n" <>
+        "    B() -> Z()\n" <>
+        "end\n"
+
+    {:ok, environment} = Program.elaborate(src)
+
+    {:ok, mod} =
+      Emit.compile_and_load(environment, module: :"Cure.RefutableConstructorTupleE2E", functions: [:f])
+
+    assert apply(mod, :f, [{:A, {{:S, {:S, :Z}}, :Z}}]) == {:S, :Z}
+    assert apply(mod, :f, [{:A, {:Z, {:S, :Z}}}]) == {:S, :Z}
+    assert apply(mod, :f, [:B]) == :Z
+  end
+
+  test "tuple and constructor columns compose in the same pattern matrix" do
+    src =
+      @nat <>
+        "  type T = A(Nat, Sigma(a: Nat, Nat)) | B\n" <>
+        "  fn f(t: T) -> Nat = match t\n" <>
+        "    A(S(x), %[S(y), z]) -> x\n" <>
+        "    A(S(x), %[Z(), z]) -> z\n" <>
+        "    A(Z(), %[y, z]) -> y\n" <>
+        "    B() -> Z()\n" <>
+        "end\n"
+
+    {:ok, environment} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(environment, module: :"Cure.MixedTupleMatrixE2E", functions: [:f])
+
+    assert apply(mod, :f, [{:A, {:S, {:S, :Z}}, {{:S, :Z}, :Z}}]) == {:S, :Z}
+    assert apply(mod, :f, [{:A, {:S, :Z}, {:Z, {:S, :Z}}}]) == {:S, :Z}
+    assert apply(mod, :f, [{:A, :Z, {{:S, :Z}, :Z}}]) == {:S, :Z}
+    assert apply(mod, :f, [:B]) == :Z
+  end
+
+  test "a constructor tuple field reports its missing inner constructor at the authored pattern" do
+    src =
+      @nat <>
+        "  type T = A(Sigma(a: Nat, Nat)) | B\n" <>
+        "  fn f(t: T) -> Nat = match t\n" <>
+        "    A(%[S(x), y]) -> x\n" <>
+        "    B() -> Z()\n" <>
+        "end\n"
+
+    assert {:error,
+            {:source_context,
+             {:tuple_missing_branch,
+              %{
+                branch: :"M#Z",
+                tuple_pattern_position: 1,
+                tuple_pattern_insertion_span: insertion_span
+              }}, _} = error} = Program.elaborate(src)
+
+    assert {insertion_span.start_line, insertion_span.start_column} == {5, 23}
+
+    {diagnostic, registry} = Errors.to_diagnostic(error, "constructor_tuple_gap.cure", src)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TUPLE PATTERN IS MISSING `Z` IN POSITION 1 [E118] -- constructor_tuple_gap.cure
+
+             The value in tuple position 1 can be `Z`, but no tuple branch handles that
+             constructor there.
+
+             at constructor_tuple_gap.cure:5:23
+             5 |     A(%[S(x), y]) -> x
+               |         ----          ^ this tuple position handles another constructor here; add a tuple branch with `Z` in position 1
+
+             Hint: Add `%[Z(...), _] -> ...`, or a tuple catch-all branch
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 4, "character" => 22},
+             "end" => %{"line" => 4, "character" => 22}
+           }
+
+    assert [related] = lsp["relatedInformation"]
+
+    assert related["location"]["range"] == %{
+             "start" => %{"line" => 4, "character" => 8},
+             "end" => %{"line" => 4, "character" => 12}
+           }
+
+    assert lsp["data"]["payload"] == %{
+             "branch" => "M#Z",
+             "checking" => "f",
+             "kind" => "missing_branch",
+             "position" => 1
+           }
+
+    fixed = String.replace(src, "    A(%[S(x), y]) -> x\n", "    A(%[S(x), y]) -> x\n    A(%[Z(), y]) -> y\n")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "constructor_tuple_gap_fixed.cure")
+  end
+
   test "a branch binder shadowing a constructor's tuple element gets exact source roles" do
     src =
       @nat <>
@@ -269,6 +371,87 @@ defmodule Cure.Elab.TuplePatternTest do
 
     # y is the first component of the inner pair, i.e. p.2.1.
     assert apply(mod, :f, [{:Z, {{:S, :Z}, {:S, {:S, :Z}}}}]) == {:S, :Z}
+  end
+
+  test "constructor patterns inside a tuple are exhaustive and run on the BEAM" do
+    src =
+      @nat <>
+        "  fn f(p: Sigma(a: Nat, Nat)) -> Nat = match p\n" <>
+        "    %[S(x), y] -> x\n" <>
+        "    %[Z(), y] -> y\n" <>
+        "  fn g(p: Sigma(a: Nat, Nat)) -> Nat = match p\n" <>
+        "    %[x, S(y)] -> y\n" <>
+        "    %[x, Z()] -> x\n" <>
+        "end\n"
+
+    {:ok, environment} = Program.elaborate(src)
+
+    {:ok, mod} =
+      Emit.compile_and_load(environment, module: :"Cure.RefutableTupleE2E", functions: [:f, :g])
+
+    assert apply(mod, :f, [{{:S, {:S, :Z}}, :Z}]) == {:S, :Z}
+    assert apply(mod, :f, [{:Z, {:S, :Z}}]) == {:S, :Z}
+    assert apply(mod, :g, [{:Z, {:S, {:S, :Z}}}]) == {:S, :Z}
+    assert apply(mod, :g, [{{:S, :Z}, :Z}]) == {:S, :Z}
+  end
+
+  test "a missing constructor in a tuple position gets a contextual branch repair" do
+    src =
+      @nat <>
+        "  fn f(p: Sigma(a: Nat, Nat)) -> Nat = match p\n" <>
+        "    %[S(x), y] -> x\n" <>
+        "end\n"
+
+    assert {:error,
+            {:source_context,
+             {:tuple_missing_branch,
+              %{
+                branch: :"M#Z",
+                tuple_pattern_position: 1,
+                tuple_pattern_insertion_span: insertion_span
+              }}, _} = error} = Program.elaborate(src)
+
+    assert {insertion_span.start_line, insertion_span.start_column} == {4, 20}
+
+    {diagnostic, registry} = Errors.to_diagnostic(error, "nested_tuple_gap.cure", src)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TUPLE PATTERN IS MISSING `Z` IN POSITION 1 [E118] ----- nested_tuple_gap.cure
+
+             The value in tuple position 1 can be `Z`, but no tuple branch handles that
+             constructor there.
+
+             at nested_tuple_gap.cure:4:20
+             4 |     %[S(x), y] -> x
+               |       ----         ^ this tuple position handles another constructor here; add a tuple branch with `Z` in position 1
+
+             Hint: Add `%[Z(...), _] -> ...`, or a tuple catch-all branch
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 3, "character" => 19},
+             "end" => %{"line" => 3, "character" => 19}
+           }
+
+    assert [related] = lsp["relatedInformation"]
+
+    assert related["location"]["range"] == %{
+             "start" => %{"line" => 3, "character" => 6},
+             "end" => %{"line" => 3, "character" => 10}
+           }
+
+    assert lsp["data"]["payload"] == %{
+             "branch" => "M#Z",
+             "checking" => "f",
+             "kind" => "missing_branch",
+             "position" => 1
+           }
+
+    fixed = String.replace(src, "    %[S(x), y] -> x\n", "    %[S(x), y] -> x\n    %[Z(), y] -> y\n")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "nested_tuple_gap_fixed.cure")
   end
 
   test "a let-bound pair can be projected (Σ β-rule through substitution)" do

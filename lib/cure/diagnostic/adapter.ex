@@ -933,6 +933,13 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: named_default_nonvariable_failure(details, context, opts)
 
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :unlowered_nested_constructor_argument} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: unlowered_nested_constructor_failure(details, context, opts)
+
   def from_error({:source_context, {:unsupported_pattern, shape}, context}, opts) when is_map(context) do
     from_error(
       %SyntaxProblem{
@@ -1024,6 +1031,14 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:source_context, {:missing_branch, branch}, context}, opts) when is_map(context) do
     coverage_problem(:missing_branch, branch, context, opts)
+  end
+
+  def from_error(
+        {:source_context, {:tuple_missing_branch, %{branch: branch} = details}, context},
+        opts
+      )
+      when is_map(context) do
+    coverage_problem(:missing_branch, branch, Map.merge(context, Map.delete(details, :branch)), opts)
   end
 
   def from_error({:source_context, :branch_type, context}, opts) when is_map(context) do
@@ -6807,15 +6822,51 @@ defmodule Cure.Diagnostic.Adapter do
     {title, body, primary, secondary, hint} =
       case kind do
         :missing_branch ->
-          span = missing_branch_insertion_span(context) || Map.get(context, :span)
+          case Map.get(context, :tuple_pattern_position) do
+            position when is_integer(position) ->
+              arity = Map.get(context, :tuple_pattern_arity, position)
+              span = Map.get(context, :tuple_pattern_insertion_span) || missing_branch_insertion_span(context)
 
-          {
-            "Pattern match is missing `#{branch_name}`",
-            "This match can receive `#{branch_name}`, but no branch handles that constructor.",
-            pickup_label(span, :primary, "add a `#{branch_name}` branch here"),
-            [],
-            "Add a `#{branch_name}(...) -> ...` branch, or a catch-all branch"
-          }
+              secondary =
+                context
+                |> Map.get(:tuple_pattern_element_spans, [])
+                |> Enum.map(
+                  &pickup_label(
+                    &1,
+                    :secondary,
+                    "this tuple position handles another constructor here"
+                  )
+                )
+                |> Enum.reject(&is_nil/1)
+
+              tuple_shape =
+                1..arity
+                |> Enum.map(fn index -> if index == position, do: "#{branch_name}(...)", else: "_" end)
+                |> Enum.join(", ")
+
+              {
+                "Tuple pattern is missing `#{branch_name}` in position #{position}",
+                "The value in tuple position #{position} can be `#{branch_name}`, but no tuple branch handles that constructor there.",
+                pickup_label(
+                  span || Map.get(context, :span),
+                  :primary,
+                  "add a tuple branch with `#{branch_name}` in position #{position}"
+                ),
+                secondary,
+                "Add `%[#{tuple_shape}] -> ...`, or a tuple catch-all branch"
+              }
+
+            _ ->
+              span = missing_branch_insertion_span(context) || Map.get(context, :span)
+
+              {
+                "Pattern match is missing `#{branch_name}`",
+                "This match can receive `#{branch_name}`, but no branch handles that constructor.",
+                pickup_label(span, :primary, "add a `#{branch_name}` branch here"),
+                [],
+                "Add a `#{branch_name}(...) -> ...` branch, or a catch-all branch"
+              }
+          end
 
         :reachable_impossible ->
           span = branch_pattern_span(List.first(matching)) || Map.get(context, :span)
@@ -6860,7 +6911,14 @@ defmodule Cure.Diagnostic.Adapter do
       primary: primary || primary_label(opts, "fix this pattern match"),
       secondary: secondary,
       suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{kind: kind, branch: branch, checking: Map.get(context, :checking)}
+      payload:
+        Map.merge(
+          %{kind: kind, branch: branch, checking: Map.get(context, :checking)},
+          case Map.get(context, :tuple_pattern_position) do
+            position when is_integer(position) -> %{position: position}
+            _ -> %{}
+          end
+        )
     )
   end
 
@@ -7111,6 +7169,35 @@ defmodule Cure.Diagnostic.Adapter do
         kind: :unsupported_pattern,
         reason: :named_default_nonvariable,
         name: name,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp unlowered_nested_constructor_failure(details, context, opts) do
+    shape = details |> Map.get(:shape, :pattern) |> name_to_string()
+    span = Map.get(details, :span) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E090",
+      key: :unrecognized_pattern,
+      severity: :error,
+      title: "Nested constructor pattern could not be lowered",
+      body:
+        Doc.paragraph(
+          "This nested `#{shape}` pattern reached a context that only accepts direct constructor binders. Split the nested test into a second match so each constructor is checked at its own level."
+        ),
+      primary: pickup_label(span, :primary, "move this nested pattern into a second match"),
+      suggestions: [
+        %Suggestion{
+          message: "Bind this constructor field to a name, then match that name in the branch body",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :unsupported_pattern,
+        reason: :unlowered_nested_constructor_argument,
+        shape: shape,
         checking: Map.get(context, :checking)
       }
     )
