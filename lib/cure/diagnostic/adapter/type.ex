@@ -15,6 +15,7 @@ defmodule Cure.Diagnostic.Adapter.Type do
     ProvenanceFrame,
     Span,
     Suggestion,
+    TextEdit,
     TypeProblem
   }
 
@@ -462,6 +463,36 @@ defmodule Cure.Diagnostic.Adapter.Type do
           context,
           opts
         )
+
+  def from_error(
+        {:source_context, {:bounded_lit_out_of_range, value, bound}, context},
+        opts
+      )
+      when is_map(context),
+      do: bounded_literal_failure(value, bound, context, opts)
+
+  def from_error({:bounded_lit_out_of_range, value, bound}, opts),
+    do: bounded_literal_failure(value, bound, %{}, opts)
+
+  def from_error(
+        {:source_context, {:result_type_not_family, family}, context},
+        opts
+      )
+      when is_map(context),
+      do: constructor_result_family_failure(family, context, opts)
+
+  def from_error({:result_type_not_family, detail}, opts),
+    do: generic_result_family_failure(detail, opts)
+
+  def from_error(
+        {:source_context, {:effect_binder_erased, details}, context},
+        opts
+      )
+      when is_map(details) and is_map(context),
+      do: erased_effect_binder_failure(details, context, opts)
+
+  def from_error({:effect_binder_erased, details}, opts) when is_map(details),
+    do: erased_effect_binder_failure(details, %{}, opts)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
@@ -1469,6 +1500,220 @@ defmodule Cure.Diagnostic.Adapter.Type do
 
     (chain_frames ++ source_frames)
     |> Enum.uniq_by(& &1.name)
+  end
+
+  defp bounded_literal_failure(value, bound, context, opts) do
+    literal_span = Map.get(context, :span) || Keyword.get(opts, :span)
+    expectation_span = Map.get(context, :expectation_span)
+
+    {interval, hint} =
+      if is_integer(bound) and bound > 0 do
+        {
+          "from `0` through `#{bound - 1}`",
+          "Use an integer from 0 through #{bound - 1}"
+        }
+      else
+        {
+          "in an empty interval because its bound is `#{bound}`",
+          "Use a positive bound before constructing this value"
+        }
+      end
+
+    secondary =
+      [
+        related_label(
+          expectation_span,
+          literal_span,
+          "this annotation requires `Bounded(#{bound})`"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "#{value} is outside `Bounded(#{bound})`",
+      body: Doc.paragraph("`Bounded(#{bound})` contains integer values #{interval}, but this literal is `#{value}`."),
+      primary:
+        label_at(
+          literal_span,
+          :primary,
+          "this value does not fit the declared bound"
+        ) || primary(opts, "this value does not fit the declared bound"),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind: :bounded_lit_out_of_range,
+        value: value,
+        bound: bound,
+        minimum: 0,
+        maximum: if(is_integer(bound) and bound > 0, do: bound - 1, else: nil)
+      }
+    )
+  end
+
+  defp constructor_result_family_failure(family, context, opts) do
+    expected = short_name(Map.get(context, :expected_family, family))
+    observed = short_name(Map.get(context, :observed_family, :unknown))
+    constructor = short_name(Map.get(context, :constructor, :constructor))
+    parameter_count = Map.get(context, :parameter_count, 0)
+    index_count = Map.get(context, :index_count, 0)
+
+    primary_span =
+      Map.get(context, :result_span) || Map.get(context, :span) ||
+        Keyword.get(opts, :span)
+
+    secondary =
+      [
+        related_label(
+          Map.get(context, :constructor_name_span),
+          primary_span,
+          "this constructor belongs to `#{expected}`"
+        ),
+        related_label(
+          Map.get(context, :family_name_span),
+          primary_span,
+          "`#{expected}` is the family being declared"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "`#{constructor}` returns `#{observed}` instead of `#{expected}`",
+      body:
+        Doc.paragraph(
+          "Every constructor must produce a value of the type family that declares it. `#{constructor}` is declared under `#{expected}`, but the final type in its signature is `#{observed}`."
+        ),
+      primary:
+        label_at(
+          primary_span,
+          :primary,
+          "this result names `#{observed}`, not constructor family `#{expected}`"
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message:
+            constructor_result_hint(
+              expected,
+              parameter_count,
+              index_count
+            ),
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :result_type_not_family,
+        family: expected,
+        observed_family: observed,
+        constructor: constructor,
+        parameter_count: parameter_count,
+        index_count: index_count
+      }
+    )
+  end
+
+  defp generic_result_family_failure(detail, opts) do
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Result type is not a type family",
+      body: Doc.paragraph("This dependent result must be a type family indexed by the function's result."),
+      primary: primary(opts, "return a valid indexed type"),
+      payload: %{kind: :result_type_not_family, detail: detail}
+    )
+  end
+
+  defp constructor_result_hint(family, 0, 0),
+    do: "End this constructor signature with `#{family}`"
+
+  defp constructor_result_hint(family, parameter_count, index_count) do
+    positions =
+      [
+        if(parameter_count > 0,
+          do: "#{parameter_count} #{plural(parameter_count, "parameter")}"
+        ),
+        if(index_count > 0,
+          do: "#{index_count} #{plural(index_count, "index")}"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" and ")
+
+    "End this constructor signature with `#{family}` applied to its #{positions}"
+  end
+
+  defp erased_effect_binder_failure(details, context, opts) do
+    binder_name = Map.get(context, :binder_name)
+    type_span = Map.get(context, :span) || Keyword.get(opts, :span)
+    binder_span = Map.get(context, :binder_span)
+    opener = Map.get(context, :opener_span)
+    closer = Map.get(context, :closer_span)
+    binder_text = if binder_name, do: " `#{name(binder_name)}`", else: ""
+
+    secondary =
+      [
+        related_label(
+          binder_span,
+          type_span,
+          "this parameter is declared inside erased implicit braces"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    suggestions =
+      case {opener, closer} do
+        {%Span{} = open, %Span{} = close} ->
+          [
+            %Suggestion{
+              message: "Make#{binder_text} a present parameter by removing the implicit braces",
+              applicability: :machine_applicable,
+              edits: [
+                %TextEdit{span: open, replacement: ""},
+                %TextEdit{span: close, replacement: ""}
+              ]
+            }
+          ]
+
+        _ ->
+          [
+            %Suggestion{
+              message: "Make#{binder_text} a present parameter; an effect value cannot be erased",
+              applicability: :manual
+            }
+          ]
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Effect parameter cannot be erased",
+      body:
+        Doc.paragraph(
+          "The parameter#{binder_text} carries an `Effect` value, but implicit braces mark it for erasure. Removing that parameter at runtime could discard a computation the type says must remain available."
+        ),
+      primary:
+        label_at(
+          type_span,
+          :primary,
+          "this `Effect` type requires a runtime-present parameter"
+        ),
+      secondary: secondary,
+      suggestions: suggestions,
+      payload: %{
+        kind: :effect_binder_erased,
+        definition: Map.get(details, :def),
+        binder_index: Map.get(details, :binder),
+        binder: binder_name,
+        expression_category: Map.get(context, :expression_category, :effect_binder)
+      }
+    )
   end
 
   defp record_update_base(details, context, opts) do

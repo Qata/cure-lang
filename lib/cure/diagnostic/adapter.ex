@@ -1613,9 +1613,9 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: extern_union_failure(:indistinct, name, reason, context, opts)
 
-  def from_error({:source_context, {:bounded_lit_out_of_range, value, bound}, context}, opts)
+  def from_error({:source_context, {:bounded_lit_out_of_range, _value, _bound}, context} = error, opts)
       when is_map(context),
-      do: bounded_literal_failure(value, bound, context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error(
         {:source_context, {:cannot_infer_dependent_match, _inferred_type}, context} = error,
@@ -1624,9 +1624,9 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {:result_type_not_family, family}, context}, opts)
+  def from_error({:source_context, {:result_type_not_family, _family}, context} = error, opts)
       when is_map(context),
-      do: constructor_result_family_failure(family, context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error(
         {:source_context, {:typed_pattern_type_mismatch, _type_ast}, %{field_type: field_type}} = error,
@@ -1667,9 +1667,9 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:source_context, {:effect_binder_erased, details}, context}, opts)
+  def from_error({:source_context, {:effect_binder_erased, details}, context} = error, opts)
       when is_map(details) and is_map(context),
-      do: erased_effect_binder_failure(details, context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:source_context, {:forced_pattern_not_in_pattern, _meta}, context}, opts)
       when is_map(context),
@@ -2082,8 +2082,8 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:applied_non_function, details} = error, opts) when is_map(details),
     do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:effect_binder_erased, details}, opts) when is_map(details),
-    do: erased_effect_binder_failure(details, %{}, opts)
+  def from_error({:effect_binder_erased, details} = error, opts) when is_map(details),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -2288,6 +2288,9 @@ defmodule Cure.Diagnostic.Adapter do
            ],
       do: TypeAdapter.from_error(error, opts)
 
+  def from_error({:result_type_not_family, _detail} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
+
   def from_error({kind, detail}, opts)
       when kind in [
              :unsupported_expression,
@@ -2299,7 +2302,6 @@ defmodule Cure.Diagnostic.Adapter do
              :duplicate_default_pattern,
              :impossible_default_pattern,
              :unreachable_after_default_pattern,
-             :result_type_not_family,
              :constructor_result_mismatch,
              :dependent_record_projection,
              :with_indexed_scrutinee_unsupported,
@@ -3772,8 +3774,8 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:rewrite_no_match, first, second, goal}, opts),
     do: contextual_type_failure(:rewrite_no_match, %{first: first, second: second, goal: goal}, opts)
 
-  def from_error({:bounded_lit_out_of_range, value, bound}, opts),
-    do: bounded_literal_failure(value, bound, %{}, opts)
+  def from_error({:bounded_lit_out_of_range, _value, _bound} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
@@ -3953,110 +3955,11 @@ defmodule Cure.Diagnostic.Adapter do
   defp runtime_shape_name(:list), do: "list"
   defp runtime_shape_name(shape), do: name_to_string(shape)
 
-  defp bounded_literal_failure(value, bound, context, opts) do
-    literal_span = Map.get(context, :span) || Keyword.get(opts, :span)
-    expectation_span = Map.get(context, :expectation_span)
-
-    {interval, hint} =
-      if is_integer(bound) and bound > 0 do
-        {"from `0` through `#{bound - 1}`", "Use an integer from 0 through #{bound - 1}"}
-      else
-        {"in an empty interval because its bound is `#{bound}`", "Use a positive bound before constructing this value"}
-      end
-
-    secondary =
-      case expectation_span do
-        %Span{} = span when span != literal_span ->
-          [%Label{span: span, style: :secondary, message: "this annotation requires `Bounded(#{bound})`"}]
-
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "#{value} is outside `Bounded(#{bound})`",
-      body: Doc.paragraph("`Bounded(#{bound})` contains integer values #{interval}, but this literal is `#{value}`."),
-      primary:
-        if(literal_span,
-          do: %Label{span: literal_span, style: :primary, message: "this value does not fit the declared bound"},
-          else: primary_label(opts, "this value does not fit the declared bound")
-        ),
-      secondary: secondary,
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{
-        kind: :bounded_lit_out_of_range,
-        value: value,
-        bound: bound,
-        minimum: 0,
-        maximum: if(is_integer(bound) and bound > 0, do: bound - 1, else: nil)
-      }
-    )
-  end
-
   defp record_owner(name) do
     case name_to_string(name) |> String.split("#", parts: 2) do
       [owner, _name] -> owner
       [_name] -> nil
     end
-  end
-
-  defp constructor_result_family_failure(family, context, opts) do
-    expected = surface_declaration_name(Map.get(context, :expected_family, family))
-    observed = surface_declaration_name(Map.get(context, :observed_family, :unknown))
-    constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
-    parameter_count = Map.get(context, :parameter_count, 0)
-    index_count = Map.get(context, :index_count, 0)
-    primary_span = Map.get(context, :result_span) || Map.get(context, :span) || Keyword.get(opts, :span)
-
-    secondary =
-      [
-        sibling_dependency_label(
-          Map.get(context, :constructor_name_span),
-          primary_span,
-          "this constructor belongs to `#{expected}`"
-        ),
-        sibling_dependency_label(
-          Map.get(context, :family_name_span),
-          primary_span,
-          "`#{expected}` is the family being declared"
-        )
-      ]
-      |> Enum.reject(&is_nil/1)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "`#{constructor}` returns `#{observed}` instead of `#{expected}`",
-      body:
-        Doc.paragraph(
-          "Every constructor must produce a value of the type family that declares it. `#{constructor}` is declared under `#{expected}`, but the final type in its signature is `#{observed}`."
-        ),
-      primary:
-        pickup_label(
-          primary_span,
-          :primary,
-          "this result names `#{observed}`, not constructor family `#{expected}`"
-        ),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: constructor_result_hint(expected, parameter_count, index_count),
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :result_type_not_family,
-        family: expected,
-        observed_family: observed,
-        constructor: constructor,
-        parameter_count: parameter_count,
-        index_count: index_count
-      }
-    )
   end
 
   defp checked_constructor_result_failure(unsolved_name, context, opts) do
@@ -4296,21 +4199,6 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  defp constructor_result_hint(family, 0, 0),
-    do: "End this constructor signature with `#{family}`"
-
-  defp constructor_result_hint(family, parameter_count, index_count) do
-    positions =
-      [
-        if(parameter_count > 0, do: "#{parameter_count} #{plural(parameter_count, "parameter")}"),
-        if(index_count > 0, do: "#{index_count} #{plural(index_count, "index")}")
-      ]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.join(" and ")
-
-    "End this constructor signature with `#{family}` applied to its #{positions}"
-  end
-
   defp sibling_dependency_label(%Span{} = span, primary_span, message) when span != primary_span,
     do: pickup_label(span, :secondary, message)
 
@@ -4537,66 +4425,6 @@ defmodule Cure.Diagnostic.Adapter do
       suggestions: [%Suggestion{message: suggestion, applicability: :manual}],
       provenance: provenance ++ Keyword.get(opts, :provenance, []),
       payload: %{kind: kind, frames: frames, chain: chain}
-    )
-  end
-
-  defp erased_effect_binder_failure(details, context, opts) do
-    name = Map.get(context, :binder_name)
-    type_span = Map.get(context, :span) || Keyword.get(opts, :span)
-    binder_span = Map.get(context, :binder_span)
-    opener = Map.get(context, :opener_span)
-    closer = Map.get(context, :closer_span)
-
-    binder_text = if name, do: " `#{name_to_string(name)}`", else: ""
-
-    secondary =
-      case binder_span do
-        %Span{} = span when span != type_span ->
-          [pickup_label(span, :secondary, "this parameter is declared inside erased implicit braces")]
-
-        _ ->
-          []
-      end
-
-    suggestions =
-      case {opener, closer} do
-        {%Span{} = open, %Span{} = close} ->
-          [
-            %Suggestion{
-              message: "Make#{binder_text} a present parameter by removing the implicit braces",
-              applicability: :machine_applicable,
-              edits: [%TextEdit{span: open, replacement: ""}, %TextEdit{span: close, replacement: ""}]
-            }
-          ]
-
-        _ ->
-          [
-            %Suggestion{
-              message: "Make#{binder_text} a present parameter; an effect value cannot be erased",
-              applicability: :manual
-            }
-          ]
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Effect parameter cannot be erased",
-      body:
-        Doc.paragraph(
-          "The parameter#{binder_text} carries an `Effect` value, but implicit braces mark it for erasure. Removing that parameter at runtime could discard a computation the type says must remain available."
-        ),
-      primary: pickup_label(type_span, :primary, "this `Effect` type requires a runtime-present parameter"),
-      secondary: secondary,
-      suggestions: suggestions,
-      payload: %{
-        kind: :effect_binder_erased,
-        definition: Map.get(details, :def),
-        binder_index: Map.get(details, :binder),
-        binder: name,
-        expression_category: Map.get(context, :expression_category, :effect_binder)
-      }
     )
   end
 

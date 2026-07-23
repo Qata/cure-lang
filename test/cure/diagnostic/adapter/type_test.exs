@@ -744,4 +744,54 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
                span: invocation
              )
   end
+
+  test "bounded, constructor-family, and erased-effect boundaries are type-owned" do
+    source = "5 Mk : Other {effect}\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:boundaries, source, "boundaries.cure")
+    {:ok, literal} = SourceRegistry.span(registry, :boundaries, 0, 1)
+    {:ok, constructor} = SourceRegistry.span(registry, :boundaries, 2, 4)
+    {:ok, result} = SourceRegistry.span(registry, :boundaries, 7, 12)
+    {:ok, opener} = SourceRegistry.span(registry, :boundaries, 13, 14)
+    {:ok, effect} = SourceRegistry.span(registry, :boundaries, 14, 20)
+    {:ok, closer} = SourceRegistry.span(registry, :boundaries, 20, 21)
+
+    errors = [
+      {:source_context, {:bounded_lit_out_of_range, 5, 3}, %{span: literal}},
+      {:source_context, {:result_type_not_family, :Vec},
+       %{
+         expected_family: :Vec,
+         observed_family: :Other,
+         constructor: :Mk,
+         constructor_name_span: constructor,
+         result_span: result,
+         parameter_count: 1,
+         index_count: 1
+       }},
+      {:source_context, {:effect_binder_erased, %{def: :run, binder: 0}},
+       %{
+         binder_name: "effect",
+         binder_span: effect,
+         span: effect,
+         opener_span: opener,
+         closer_span: closer
+       }}
+    ]
+
+    for error <- errors do
+      direct = TypeAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E093"
+      assert direct.primary
+      assert direct.suggestions != []
+    end
+
+    effect_diagnostic = TypeAdapter.from_error(List.last(errors))
+
+    assert [%{applicability: :machine_applicable, edits: [_, _]}] =
+             effect_diagnostic.suggestions
+
+    rendered = Renderer.plain(effect_diagnostic, registry, width: 80)
+    assert rendered =~ "EFFECT PARAMETER CANNOT BE ERASED"
+    assert rendered =~ "Hint: Make `effect` a present parameter"
+  end
 end
