@@ -146,6 +146,10 @@ defmodule Cure.Diagnostic.Adapter.NameTest do
     assert superinterface == Adapter.from_error({:missing_superinterface, :Ord, :Eq, :Int})
     assert superinterface.code == "E105"
 
+    deriving = NameAdapter.from_error({:cannot_derive, :Equatable})
+    assert deriving == Adapter.from_error({:cannot_derive, :Equatable})
+    assert deriving.code == "E105"
+
     assert_raise Cure.Diagnostic.UnhandledError, fn ->
       NameAdapter.from_error({:ordinary_type_failure, :not_a_name_error})
     end

@@ -214,7 +214,12 @@ defmodule Cure.Diagnostic.Adapter.Name do
     do: interface_failure(:instance_head_ill_formed, %{reason: reason}, opts)
 
   def from_error({:missing_superinterface, interface, super_interface, head}, opts),
-    do: missing_superinterface(interface, super_interface, %{head: head}, opts)
+    do:
+      interface_failure(
+        :missing_superinterface,
+        %{interface: interface, superinterface: super_interface, head: head},
+        opts
+      )
 
   def from_error(
         {:missing_superinterface,
@@ -225,6 +230,40 @@ defmodule Cure.Diagnostic.Adapter.Name do
 
   def from_error({:missing_superinterface, %{interface: interface, superinterface: super_interface} = details}, opts),
     do: missing_superinterface(interface, super_interface, details, opts)
+
+  def from_error({:cannot_derive, interface}, opts),
+    do: deriving_failure(:cannot_derive, %{interface: interface}, %{}, opts)
+
+  def from_error({:deriving_needs_strings, interface}, opts),
+    do: deriving_failure(:deriving_needs_strings, %{interface: interface}, %{}, opts)
+
+  def from_error({:deriving_needs_constraints, interface, type_name}, opts),
+    do: deriving_failure(:deriving_needs_constraints, %{interface: interface, type: type_name}, %{}, opts)
+
+  def from_error({:cannot_derive_shape, interface, type_name}, opts),
+    do: deriving_failure(:cannot_derive_shape, %{interface: interface, type: type_name}, %{}, opts)
+
+  def from_error({:cannot_derive_method, interface, method, reason}, opts),
+    do: deriving_failure(:cannot_derive_method, %{interface: interface, method: method, reason: reason}, %{}, opts)
+
+  def from_error({:source_context, {:cannot_derive, interface}, context}, opts) when is_map(context),
+    do: deriving_failure(:cannot_derive, %{interface: interface}, context, opts)
+
+  def from_error({:source_context, {:deriving_needs_strings, interface}, context}, opts) when is_map(context),
+    do: deriving_failure(:deriving_needs_strings, %{interface: interface}, context, opts)
+
+  def from_error({:source_context, {:deriving_needs_constraints, interface, type_name}, context}, opts)
+      when is_map(context),
+      do: deriving_failure(:deriving_needs_constraints, %{interface: interface, type: type_name}, context, opts)
+
+  def from_error({:source_context, {:cannot_derive_shape, interface, type_name}, context}, opts)
+      when is_map(context),
+      do: deriving_failure(:cannot_derive_shape, %{interface: interface, type: type_name}, context, opts)
+
+  def from_error({:source_context, {:cannot_derive_method, interface, method, reason}, context}, opts)
+      when is_map(context),
+      do:
+        deriving_failure(:cannot_derive_method, %{interface: interface, method: method, reason: reason}, context, opts)
 
   def from_error(
         {:source_context, {:unsupported_guard, %{reason: :shadowed} = details}, context},
@@ -603,6 +642,11 @@ defmodule Cure.Diagnostic.Adapter.Name do
           {"Instance head is not well formed",
            "The interface instance head cannot be used as a valid implementation head.",
            "use a well-formed instance head"}
+
+        :missing_superinterface ->
+          {"Required superinterface is missing",
+           "Interface `#{name_to_string(details.interface)}` requires `#{name_to_string(details.superinterface)}` for this implementation.",
+           "implement the required superinterface first"}
       end
 
     Diagnostic.new(
@@ -721,6 +765,71 @@ defmodule Cure.Diagnostic.Adapter.Name do
         expected_surface: expected_surface,
         actual_surface: actual_surface
       }
+    )
+  end
+
+  @doc false
+  def deriving_failure(kind, details, context, opts) do
+    {title, message, label, hint} =
+      case kind do
+        :cannot_derive ->
+          {"Cannot derive interface",
+           "Cure cannot derive interface `#{name_to_string(details.interface)}` for this declaration.",
+           "automatic derivation is unavailable for this interface",
+           "Implement `#{name_to_string(details.interface)}` manually, or remove it from the deriving clause"}
+
+        :deriving_needs_strings ->
+          {"Deriving requires string support",
+           "Interface `#{name_to_string(details.interface)}` can only be derived for a type with string-compatible members.",
+           "this derived interface needs string-compatible members",
+           "Use string-compatible members, or implement `#{name_to_string(details.interface)}` manually"}
+
+        :deriving_needs_constraints ->
+          {"Cannot derive `#{name_to_string(details.interface)}` for `#{name_to_string(details.type)}`",
+           "A field of `#{name_to_string(details.type)}` uses one of the type's parameters directly. Deriving `#{name_to_string(details.interface)}` would need an interface dictionary for that parameter, which automatic derivation cannot thread yet.",
+           "this derived interface needs a constraint on the type parameter",
+           "Implement `#{name_to_string(details.interface)}` for `#{name_to_string(details.type)}` manually, or remove the parameter-typed field"}
+
+        :cannot_derive_shape ->
+          {"Cannot derive for this type shape",
+           "Interface `#{name_to_string(details.interface)}` cannot be derived for `#{name_to_string(details.type)}` because its shape is unsupported.",
+           "automatic derivation does not support this declaration shape",
+           "Change the type shape, or implement `#{name_to_string(details.interface)}` manually"}
+
+        :cannot_derive_method ->
+          {"Cannot derive interface method",
+           "Method `#{name_to_string(details.method)}` of `#{name_to_string(details.interface)}` cannot be generated for this type.",
+           "this interface method cannot be generated", "Implement `#{name_to_string(details.method)}` explicitly"}
+      end
+
+    primary_span = Map.get(context, :deriving_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+    declaration_span = Map.get(context, :declaration_name_span) || Map.get(context, :declaration_span)
+    declaration_name = Map.get(context, :checking) || Map.get(details, :type)
+
+    secondary =
+      case declaration_span do
+        %Span{} = span when span != primary_span ->
+          message =
+            if declaration_name,
+              do: "this declares `#{name_to_string(declaration_name)}`",
+              else: "this is the declaration being derived"
+
+          [%Label{span: span, style: :secondary, message: message}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: pickup_label(primary_span, :primary, label) || primary(opts, label),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
     )
   end
 
