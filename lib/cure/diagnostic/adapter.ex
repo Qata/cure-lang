@@ -1800,14 +1800,14 @@ defmodule Cure.Diagnostic.Adapter do
     end
   end
 
-  def from_error({:index_mismatch, _details}, opts),
-    do: kernel_type_failure(:index_mismatch, opts)
+  def from_error({:index_mismatch, _details} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
 
-  def from_error({:cannot_unify, _actual, _expected}, opts),
-    do: kernel_type_failure(:cannot_unify, opts)
+  def from_error({:cannot_unify, _actual, _expected} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
 
-  def from_error({:escaping_variable, _id}, opts),
-    do: kernel_type_failure(:escaping_variable, opts)
+  def from_error({:escaping_variable, _id} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
 
   def from_error({:hole_in_inference_position, name}, opts),
     do: inferred_hole_failure(name, %{}, opts)
@@ -1824,11 +1824,11 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({kind} = error, opts) when kind in [:binary_match_needs_default, :map_match_needs_default],
     do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:ctor_requires_checking_mode, family}, opts),
-    do: kernel_type_failure(:ctor_requires_checking_mode, Keyword.put(opts, :family, family))
+  def from_error({:ctor_requires_checking_mode, _family} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
 
-  def from_error({:bounded_bound_not_concrete, bound}, opts),
-    do: kernel_type_failure(:bounded_bound_not_concrete, Keyword.put(opts, :bound, bound))
+  def from_error({:bounded_bound_not_concrete, _bound} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
 
   def from_error({:cyclic_typealiases, aliases}, opts),
     do: declaration_conflict(:cyclic_typealiases, %{aliases: aliases}, opts)
@@ -2210,12 +2210,11 @@ defmodule Cure.Diagnostic.Adapter do
              :hole_in_inference_position,
              :ctor_requires_checking_mode,
              :bounded_bound_not_concrete
-           ] do
-    kernel_type_failure(kind, opts)
-  end
+           ],
+      do: KernelAdapter.from_error(kind, opts)
 
-  def from_error({:occurs_check, id, _term}, opts),
-    do: kernel_type_failure(:occurs_check, Keyword.put(opts, :variable, id))
+  def from_error({:occurs_check, _id, _term} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
 
   def from_error({:no_instance, _interface, _head} = error, opts),
     do: TypeAdapter.from_error(error, opts)
@@ -4919,131 +4918,6 @@ defmodule Cure.Diagnostic.Adapter do
   defp plural(1, singular), do: singular
   defp plural(_count, singular), do: singular <> "s"
   defp count_phrase(count, singular), do: "#{count} #{plural(count, singular)}"
-
-  defp kernel_type_failure(kind, opts) do
-    {title, message, label} =
-      case kind do
-        :index_mismatch ->
-          {"Dependent index mismatch", "A dependent index does not agree with the value required by this expression.",
-           "make the indexed values agree"}
-
-        :cannot_unify ->
-          {"Types cannot be unified", "The type checker could not make these types definitionally equal.",
-           "change the expression or annotation so the types agree"}
-
-        :escaping_variable ->
-          {"Type variable escapes its scope", "A type variable would escape the scope in which it was introduced.",
-           "keep this type variable within its binding"}
-
-        :occurs_check ->
-          {"Infinite type detected", "A type variable would have to contain itself, producing an infinite type.",
-           "break the recursive type equation"}
-
-        :arg_arity ->
-          {"Wrong number of type arguments",
-           "This type application has a different number of arguments than its declaration.",
-           "supply exactly the declared arguments"}
-
-        :ctor_arity ->
-          {"Wrong number of constructor arguments",
-           "This constructor application has a different number of arguments than its declaration.",
-           "supply exactly the constructor arguments"}
-
-        :domain_mismatch ->
-          {"Function domain mismatch", "This function is being applied to a value of the wrong type.",
-           "change the argument to match the function domain"}
-
-        :grade_mismatch ->
-          {"Relevance grade mismatch", "This value is used with a relevance grade that its type does not allow.",
-           "use the value at its declared relevance"}
-
-        :bad_motive ->
-          {"Invalid case motive", "The dependent case motive is not a well-formed type family.",
-           "make the case motive a function over the scrutinee"}
-
-        :not_a_type ->
-          {"Expected a type", "This expression does not evaluate to a type where one is required.",
-           "use a type expression here"}
-
-        :not_a_type_value ->
-          {"Expected a type value", "This expression is not a valid type value in this position.",
-           "use a well-formed type value"}
-
-        :universe_level ->
-          {"Universe level mismatch", "This type lives above the universe level allowed here.",
-           "lower the universe level or widen the surrounding type"}
-
-        :universe_ceiling ->
-          {"Universe level is too high", "This type would exceed Cure's supported universe ceiling.",
-           "reduce the universe level"}
-
-        :hole_in_inference_position ->
-          {"Hole needs an expected type", "This hole appears where the kernel cannot infer its type.",
-           "add an annotation that determines the hole's type"}
-
-        :ctor_requires_checking_mode ->
-          {"Constructor needs an expected type", "This constructor cannot be inferred without checking information.",
-           "add a type annotation at the constructor use"}
-
-        :bounded_bound_not_concrete ->
-          {"Bound must be concrete", "This bounded type declaration requires a concrete bound.",
-           "replace the bound with a concrete value"}
-
-        :bounded_family_unregistered ->
-          {"Bounded literal type is unavailable", "This literal requires the standard Bounded type family.",
-           "import or register the Bounded type family"}
-
-        :absurd_in_reachable_position ->
-          {"Impossible branch is reachable", "This absurd branch is reachable in the current type.",
-           "make the branch unreachable or prove the contradiction"}
-
-        :opaque_not_eliminable ->
-          {"Opaque value cannot be eliminated", "This opaque value cannot be reduced or matched here.",
-           "use the public interface of the opaque value"}
-
-        :case_scrutinee_not_data ->
-          {"Case scrutinee is not data", "A case expression must scrutinize a data value.",
-           "match on a data constructor"}
-
-        :not_total ->
-          {"Definition is not total", "This definition is used in a total context but is not total.",
-           "cover every case or remove the total-context use"}
-
-        :not_a_function ->
-          {"Application target is not a function", "This expression is applied but has no function type.",
-           "apply a function-valued expression"}
-
-        :coverage ->
-          {"Pattern match is not exhaustive", "This pattern match does not cover every possible value.",
-           "add the missing pattern or a default arm"}
-
-        :branch_arity ->
-          {"Pattern branch has the wrong arity", "The branch binds a different number of fields than its constructor.",
-           "make the pattern match the constructor fields"}
-
-        :branch_type ->
-          {"Pattern branches disagree", "The branches of this expression do not produce one compatible type.",
-           "make every branch return the same type"}
-
-        :index_arity ->
-          {"Indexed type has the wrong number of indices", "This indexed application does not match its declaration.",
-           "supply exactly the declared indices"}
-
-        _ ->
-          {"Kernel type check failed", "The kernel could not validate this type or term.",
-           "add an annotation or revise the term"}
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      payload: %{kind: kind}
-    )
-  end
 
   defp contextual_type_failure(kind, details, opts) do
     {title, message, label} =

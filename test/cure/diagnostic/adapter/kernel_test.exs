@@ -43,4 +43,45 @@ defmodule Cure.Diagnostic.Adapter.KernelTest do
       KernelAdapter.from_error({:unknown_global, :missing})
     end
   end
+
+  test "trusted type rejections are owned by the kernel adapter" do
+    source = "bad\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:kernel, source, "kernel.cure")
+    {:ok, span} = SourceRegistry.span(registry, :kernel, 0, 3)
+
+    errors = [
+      {:index_mismatch, :details},
+      {:cannot_unify, :actual, :expected},
+      {:escaping_variable, 1},
+      {:occurs_check, 1, :term},
+      {:ctor_requires_checking_mode, :Family},
+      {:bounded_bound_not_concrete, :bound},
+      :arg_arity,
+      :ctor_arity,
+      :domain_mismatch,
+      :grade_mismatch,
+      :bad_motive,
+      :not_a_type,
+      :not_a_type_value,
+      :universe_level,
+      :universe_ceiling
+    ]
+
+    for error <- errors do
+      direct = KernelAdapter.from_error(error, span: span)
+      assert Adapter.from_error(error, span: span) == direct
+      assert direct.code == "E093"
+      assert direct.primary.span == span
+      assert direct.payload.kind
+    end
+
+    rendered =
+      KernelAdapter.from_error({:cannot_unify, :actual, :expected},
+        span: span
+      )
+      |> Renderer.plain(registry, width: 80)
+
+    assert rendered =~ "TYPES CANNOT BE UNIFIED [E093]"
+    assert rendered =~ "^^^ change the expression or annotation so the types agree"
+  end
 end
