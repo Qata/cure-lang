@@ -890,6 +890,13 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: shadowed_sub_union_pattern_failure(details, context, opts)
 
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :shadowed_as, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: shadowed_sub_union_pattern_failure(details, context, opts)
+
   def from_error({:source_context, {:unsupported_pattern, shape}, context}, opts) when is_map(context) do
     from_error(
       %SyntaxProblem{
@@ -6895,6 +6902,12 @@ defmodule Cure.Diagnostic.Adapter do
 
     {body, type_message} =
       case reason do
+        :shadowed_as ->
+          {
+            "The outer `#{name}` binds the complete value matched by this as-pattern. A nested binder uses the same name, so substituting the reconstructed value could capture the inner binding.",
+            "this is the pattern reconstructed for the outer binding"
+          }
+
         :shadowed_literal_member ->
           {
             "The outer `#{name}` stands for a literal union member. This nested pattern binds another value with the same name, so rewriting uses of the literal could capture the inner value.",

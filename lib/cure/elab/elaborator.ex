@@ -5675,12 +5675,28 @@ defmodule Cure.Elab.Elaborator do
       pattern = Keyword.fetch!(meta, :pattern)
       {clean, subs} = strip_as_patterns(pattern)
 
+      shadowed =
+        Enum.find(subs, fn {name, _reconstruction} ->
+          binds_any?(single_body(body), [name])
+        end)
+
       cond do
         subs == [] ->
           {:cont, {:ok, acc ++ [arm]}}
 
-        binds_any?(single_body(body), Enum.map(subs, &elem(&1, 0))) ->
-          {:halt, {:error, {:unsupported_pattern, :shadowed_as}}}
+        shadowed != nil ->
+          {name, reconstruction} = shadowed
+
+          {:halt,
+           {:error,
+            {:unsupported_pattern,
+             %{
+               reason: :shadowed_as,
+               name: name,
+               span: as_pattern_binding_span(pattern, name),
+               type_span: surface_expression_span(reconstruction),
+               shadow_span: first_binding_span(body, name)
+             }}}}
 
         true ->
           b2 =
@@ -5692,6 +5708,22 @@ defmodule Cure.Elab.Elaborator do
       end
     end)
   end
+
+  defp as_pattern_binding_span({:as_pattern, meta, [name, _subpattern]}, name) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp as_pattern_binding_span({_tag, _meta, children}, name) when is_list(children),
+    do: Enum.find_value(children, &as_pattern_binding_span(&1, name))
+
+  defp as_pattern_binding_span(list, name) when is_list(list),
+    do: Enum.find_value(list, &as_pattern_binding_span(&1, name))
+
+  defp as_pattern_binding_span(_other, _name), do: nil
 
   # Strip inline as-patterns from a pattern tree → `{cleaned_pattern, [{name,
   # reconstruction}]}`. The reconstruction is the cleaned sub-pattern (valid as an

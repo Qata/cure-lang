@@ -699,6 +699,74 @@ defmodule Cure.Elab.UnionTest do
       fixed = String.replace(src, "fn(n) -> n", "fn(value) -> value")
       assert {:ok, _environment} = Program.elaborate(fixed, file: "literal_shadow_fixed.cure")
     end
+
+    test "a nested binder shadowing an as-pattern labels the reconstructed pattern" do
+      src = """
+      mod A
+        type Nat = Z | S(Nat)
+        fn f(x: Nat) -> Nat = match x
+          whole @ S(n) ->
+            let g : (Nat) -> Nat = fn(whole) -> whole
+            g(n)
+          Z() -> Z()
+      end
+      """
+
+      assert {:error,
+              {:source_context,
+               {:unsupported_pattern, %{reason: :shadowed_as, name: "whole", shadow_span: shadow_span}}, _} = error} =
+               Program.elaborate(src)
+
+      assert shadow_span.start_line == 5
+      assert shadow_span.start_column == 33
+
+      {diagnostic, registry} = Errors.to_diagnostic(error, "as_shadow.cure", src)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- NESTED PATTERN SHADOWS `WHOLE` [E090] ------------------------ as_shadow.cure
+
+               The outer `whole` binds the complete value matched by this as-pattern. A nested
+               binder uses the same name, so substituting the reconstructed value could capture
+               the inner binding.
+
+               at as_shadow.cure:5:33
+               4 |     whole @ S(n) ->
+                 |     -----   ---- this outer pattern binds `whole`; this is the pattern reconstructed for the outer binding
+               5 |       let g : (Nat) -> Nat = fn(whole) -> whole
+                 |                                 ^^^^^ rename this inner binder so it does not shadow `whole`
+
+               Hint: Give the nested binder a different name and update its branch body
+               """)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+
+      assert lsp["range"] == %{
+               "start" => %{"line" => 4, "character" => 32},
+               "end" => %{"line" => 4, "character" => 37}
+             }
+
+      assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+               %{
+                 "start" => %{"line" => 3, "character" => 4},
+                 "end" => %{"line" => 3, "character" => 9}
+               },
+               %{
+                 "start" => %{"line" => 3, "character" => 12},
+                 "end" => %{"line" => 3, "character" => 16}
+               }
+             ]
+
+      assert lsp["data"]["payload"] == %{
+               "checking" => "f",
+               "kind" => "unsupported_pattern",
+               "name" => "whole",
+               "reason" => "shadowed_as"
+             }
+
+      fixed = String.replace(src, "fn(whole) -> whole", "fn(value) -> value")
+      assert {:ok, _environment} = Program.elaborate(fixed, file: "as_shadow_fixed.cure")
+    end
   end
 
   describe "dependent-pipeline routing sees a union wherever it appears" do
