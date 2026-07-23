@@ -208,6 +208,25 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
     assert MacroAdapter.from_error(:invalid_raw_tokens).key == :macro_raw_validation
   end
 
+  test "reducer validation producers are owned by the macro family" do
+    errors = [
+      {:unknown_reducer_constructor, [:A]},
+      {:incomplete_reducer, [:B, :C]},
+      {:reducer_arity, :A, 1, 2},
+      :invalid_reducer_arms,
+      :invalid_reducer_arm,
+      :duplicate_reducer_constructor
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.key == :macro_reducer_validation
+      assert direct.suggestions != []
+    end
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 

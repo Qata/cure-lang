@@ -258,6 +258,19 @@ defmodule Cure.Diagnostic.Adapter.Macro do
   def from_error(:invalid_raw_tokens, opts),
     do: raw_failure(:invalid_raw_tokens, %{}, opts)
 
+  def from_error({:unknown_reducer_constructor, constructors}, opts),
+    do: reducer_failure(:unknown_reducer_constructor, %{constructors: constructors}, opts)
+
+  def from_error({:incomplete_reducer, constructors}, opts),
+    do: reducer_failure(:incomplete_reducer, %{constructors: constructors}, opts)
+
+  def from_error({:reducer_arity, constructor, actual, expected}, opts),
+    do: reducer_failure(:reducer_arity, %{constructor: constructor, actual: actual, expected: expected}, opts)
+
+  def from_error(kind, opts)
+      when kind in [:invalid_reducer_arms, :invalid_reducer_arm, :duplicate_reducer_constructor],
+      do: reducer_failure(kind, %{}, opts)
+
   def from_error({:macro_expansion_cycle, frames}, opts)
       when is_list(frames),
       do:
@@ -723,6 +736,53 @@ defmodule Cure.Diagnostic.Adapter.Macro do
     do:
       {"Raw macro token stream is malformed", "Raw macro capture expected a list of lexer tokens.",
        "replace this raw token stream", "Pass the lexer tokens belonging to the raw macro input"}
+
+  @doc false
+  def reducer_failure(kind, details, opts),
+    do: simple_macro_failure(:macro_reducer_validation, kind, reducer_content(kind, details), opts)
+
+  defp reducer_content(:invalid_reducer_arms, _details),
+    do:
+      {"Reducer arms are malformed", "Reducer arms must be provided as a list with one arm for every constructor.",
+       "rewrite this reducer arm list", "Provide a list of constructor arms"}
+
+  defp reducer_content(:invalid_reducer_arm, _details),
+    do:
+      {"Reducer arm is malformed",
+       "Every reducer arm needs a constructor, an optional list of text bindings, and a body expression.",
+       "rewrite this reducer arm", "Provide `constructor`, `bindings`, and `body` for this arm"}
+
+  defp reducer_content(:duplicate_reducer_constructor, _details),
+    do:
+      {"Reducer constructor is repeated",
+       "Two reducer arms match the same constructor, so one arm can never be selected.",
+       "remove or change this duplicate arm", "Keep exactly one arm for each constructor"}
+
+  defp reducer_content(:unknown_reducer_constructor, %{constructors: constructors}) do
+    rendered = Enum.map_join(constructors, ", ", &"`#{name_to_string(&1)}`")
+    verb = if length(constructors) == 1, do: "does", else: "do"
+
+    {"Reducer uses an unknown constructor",
+     "The reducer refers to #{constructor_phrase(constructors, rendered)}, which #{verb} not belong to the reflected data type.",
+     "replace this unknown constructor", "Use only constructors declared by the reduced data type"}
+  end
+
+  defp reducer_content(:incomplete_reducer, %{constructors: constructors}) do
+    rendered = Enum.map_join(constructors, ", ", &"`#{name_to_string(&1)}`")
+
+    {"Reducer does not cover every constructor",
+     "The reducer has no arm for #{constructor_phrase(constructors, rendered)}.", "add the missing constructor arm",
+     "Add one arm for every listed constructor"}
+  end
+
+  defp reducer_content(:reducer_arity, %{constructor: constructor, actual: actual, expected: expected}),
+    do:
+      {"Reducer arm has the wrong number of bindings",
+       "The `#{name_to_string(constructor)}` arm binds #{actual} values, but its constructor carries #{expected}.",
+       "make these bindings match the constructor", "Use exactly #{expected} bindings in this arm"}
+
+  defp constructor_phrase([_one], rendered), do: "constructor #{rendered}"
+  defp constructor_phrase(_many, rendered), do: "constructors #{rendered}"
 
   defp packet_content(:invalid_packet_name, %{detail: name}) do
     {"Packet name is invalid",
