@@ -196,7 +196,80 @@ defmodule Cure.Diagnostic.Adapter.Type do
       when is_map(context),
       do: mixed_with_arms(context, opts)
 
+  def from_error(
+        {:source_context, {:with_indexed_scrutinee_unsupported, family}, context},
+        opts
+      )
+      when is_map(context),
+      do: indexed_with_proof(family, context, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp indexed_with_proof(family, context, opts) do
+    family = family |> name() |> String.split("#") |> List.last()
+    proof_name = Map.get(context, :proof_name)
+    proof_span = Map.get(context, :proof_span) || Map.get(context, :span)
+    scrutinee_span = Map.get(context, :scrutinee_span)
+
+    proof_binding =
+      if proof_name,
+        do: "The `proof #{proof_name}` clause asks Cure to bind a value equation in every branch.",
+        else: "This `with` asks Cure to transport a value equation into every branch."
+
+    branch_labels =
+      context
+      |> Map.get(:branch_patterns, [])
+      |> Enum.flat_map(fn
+        %{span: %Span{} = span} ->
+          [%Label{span: span, style: :secondary, message: "this branch would need an indexed value equation"}]
+
+        _ ->
+          []
+      end)
+
+    scrutinee_label =
+      case scrutinee_span do
+        %Span{} = span ->
+          [%Label{span: span, style: :secondary, message: "this value belongs to indexed family `#{family}`"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Indexed with cannot bind a value proof",
+      body:
+        Doc.stack([
+          Doc.paragraph(proof_binding),
+          Doc.paragraph(
+            "`#{family}` is indexed, so its branch constructors can refine type indices. Cure cannot also synthesize the whole-value equation requested by this form."
+          )
+        ]),
+      primary: %Label{
+        span: proof_span || Keyword.get(opts, :span),
+        style: :primary,
+        message: "this proof binding is unsupported for an indexed `with`"
+      },
+      secondary: scrutinee_label ++ branch_labels,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Remove `proof #{proof_name || "..."}` when the equation is unused, or rewrite every branch in the indexed LHS-rematch form",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :with_indexed_scrutinee_unsupported,
+        checking: Map.get(context, :checking),
+        family: family,
+        proof_name: proof_name,
+        branch_count: length(branch_labels)
+      }
+    )
+  end
 
   defp mixed_with_arms(context, opts) do
     arms =

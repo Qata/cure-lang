@@ -360,4 +360,34 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert rendered =~ "possible outlier: this is the only rematch"
     assert rendered =~ "Hint: Make every branch use the same `with` form"
   end
+
+  test "indexed with proof failures label the proof, scrutinee, and every branch" do
+    source = "value proof pf\nA -> a\nB -> b\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:indexed_with, source, "indexed_with.cure")
+    {:ok, scrutinee} = SourceRegistry.span(registry, :indexed_with, 0, 5)
+    {:ok, proof} = SourceRegistry.span(registry, :indexed_with, 6, 14)
+    {:ok, first} = SourceRegistry.span(registry, :indexed_with, 15, 21)
+    {:ok, second} = SourceRegistry.span(registry, :indexed_with, 22, 28)
+
+    error =
+      {:source_context, {:with_indexed_scrutinee_unsupported, :"Main#Vector"},
+       %{
+         proof_name: "pf",
+         proof_span: proof,
+         scrutinee_span: scrutinee,
+         branch_patterns: [%{span: first}, %{span: second}]
+       }}
+
+    direct = TypeAdapter.from_error(error)
+    assert Adapter.from_error(error) == direct
+    assert direct.primary.span == proof
+    assert Enum.map(direct.secondary, & &1.span) == [scrutinee, first, second]
+    assert direct.payload.family == "Vector"
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "INDEXED WITH CANNOT BIND A VALUE PROOF [E093]"
+    assert rendered =~ "this value belongs to indexed family `Vector`"
+    assert rendered =~ "this branch would need an indexed value equation"
+    assert rendered =~ "Hint: Remove `proof pf`"
+  end
 end
