@@ -359,6 +359,26 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
            }
   end
 
+  test "macro declaration validation retains contextual details" do
+    errors = [
+      {:missing_diagnosis, [{:failure, :bad}]},
+      {:rule_unpinned, [:run]},
+      {:example_mismatch, [%{keyword: :run}]},
+      {:example_type_mismatch, [%{keyword: :run}]},
+      {:computed_example_error, [%{keyword: :run}]},
+      {:source_context, {:reserved_syntax_field, :context, [:run]}, %{hole_spans: []}},
+      {:source_context, {:unsupported_hole_type, :Proof}, %{hole_spans: []}}
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.key == :macro_validation_failed
+      assert direct.suggestions != []
+    end
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 

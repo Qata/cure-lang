@@ -377,6 +377,39 @@ defmodule Cure.Diagnostic.Adapter.Macro do
       when kind in [:not_a_nat, :invalid_macro_fuzz_rule, :invalid_macro_fuzz_bindings],
       do: fuzz_input_failure(kind, %{}, opts)
 
+  def from_error({:missing_diagnosis, points}, opts), do: validation_failure(:missing_diagnosis, points, opts)
+  def from_error({:rule_unpinned, keywords}, opts), do: validation_failure(:rule_unpinned, keywords, opts)
+
+  def from_error({:example_mismatch, mismatches}, opts),
+    do: validation_failure(:example_mismatch, mismatches, opts)
+
+  def from_error({:example_type_mismatch, failures}, opts),
+    do: validation_failure(:example_type_mismatch, failures, opts)
+
+  def from_error({:computed_example_error, failures}, opts),
+    do: validation_failure(:computed_example_error, failures, opts)
+
+  def from_error({:source_context, {:missing_diagnosis, points}, context}, opts) when is_map(context),
+    do: validation_failure(:missing_diagnosis, points, opts, context)
+
+  def from_error({:source_context, {:rule_unpinned, keywords}, context}, opts) when is_map(context),
+    do: validation_failure(:rule_unpinned, keywords, opts, context)
+
+  def from_error({:source_context, {:example_mismatch, mismatches}, context}, opts) when is_map(context),
+    do: validation_failure(:example_mismatch, mismatches, opts, context)
+
+  def from_error({:source_context, {:example_type_mismatch, failures}, context}, opts) when is_map(context),
+    do: validation_failure(:example_type_mismatch, failures, opts, context)
+
+  def from_error({:source_context, {:computed_example_error, failures}, context}, opts) when is_map(context),
+    do: validation_failure(:computed_example_error, failures, opts, context)
+
+  def from_error({:source_context, {:reserved_syntax_field, field, keywords}, context}, opts) when is_map(context),
+    do: validation_failure(:reserved_syntax_field, %{first: field, second: keywords}, opts, context)
+
+  def from_error({:source_context, {:unsupported_hole_type, category}, context}, opts) when is_map(context),
+    do: validation_failure(:unsupported_hole_type, %{detail: category}, opts, context)
+
   def from_error({kind, _detail}, opts)
       when kind in [
              :invalid_syntax_attr,
@@ -1111,6 +1144,169 @@ defmodule Cure.Diagnostic.Adapter.Macro do
       {"Macro author diagnostic is malformed",
        "A macro author diagnostic must be a reflected `Failure` value with an atom name and syntax arguments.",
        "rebuild this author diagnostic", "Return `Failure(name, arguments)` inside `Rejected`"}
+
+  @doc false
+  def validation_failure(kind, details, opts),
+    do: validation_failure(kind, details, opts, %{})
+
+  @doc false
+  def validation_failure(kind, details, opts, context) do
+    span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_validation_failed,
+      severity: :error,
+      title: validation_title(kind),
+      body: Doc.paragraph(validation_message(kind, details)),
+      primary: label(span, :primary, validation_primary_label(kind)),
+      secondary: validation_secondary_labels(kind, context, span),
+      suggestions: validation_suggestions(kind),
+      payload: %{kind: kind, details: details, macro: Map.get(context, :macro)}
+    )
+  end
+
+  defp validation_title(:missing_diagnosis), do: "Macro explanations are incomplete"
+  defp validation_title(:rule_unpinned), do: "Macro rule needs a worked example"
+  defp validation_title(:example_mismatch), do: "Macro example has the wrong expansion"
+  defp validation_title(:example_type_mismatch), do: "Macro example has the wrong type"
+  defp validation_title(:computed_example_error), do: "Computed macro example failed"
+  defp validation_title(:reserved_syntax_field), do: "Macro hole uses a reserved name"
+  defp validation_title(:unsupported_hole_type), do: "Macro hole cannot be generated for proofs"
+  defp validation_title(_kind), do: "Macro validation failed"
+
+  defp validation_primary_label(:missing_diagnosis), do: "add clauses for the unexplained failure points"
+  defp validation_primary_label(:rule_unpinned), do: "add a worked example beneath this rule"
+  defp validation_primary_label(:example_mismatch), do: "this pin does not match the actual expansion"
+  defp validation_primary_label(:example_type_mismatch), do: "this pinned type does not accept the expansion"
+  defp validation_primary_label(:computed_example_error), do: "this computed example could not be checked"
+  defp validation_primary_label(:reserved_syntax_field), do: "this hole name is reserved for expansion context"
+  defp validation_primary_label(:unsupported_hole_type), do: "the proof generator cannot construct this category"
+  defp validation_primary_label(_kind), do: "this macro declaration is incomplete or inconsistent"
+
+  defp validation_secondary_labels(:missing_diagnosis, context, primary_span),
+    do:
+      context
+      |> Map.get(:rule_spans, [])
+      |> Enum.map(&label(&1, :secondary, "this rule declares an unexplained failure point"))
+      |> Enum.reject(&(&1.span == primary_span))
+
+  defp validation_secondary_labels(:rule_unpinned, context, primary_span),
+    do:
+      context
+      |> Map.get(:rule_spans, [])
+      |> Enum.drop(1)
+      |> Enum.map(&label(&1, :secondary, "this rule also needs a worked example"))
+      |> Enum.reject(&(&1.span == primary_span))
+
+  defp validation_secondary_labels(kind, context, primary_span)
+       when kind in [:example_mismatch, :example_type_mismatch, :computed_example_error],
+       do:
+         context
+         |> Map.get(:rule_spans, [])
+         |> Enum.map(&label(&1, :secondary, "this rule owns the failing example"))
+         |> Enum.reject(&(&1.span == primary_span))
+
+  defp validation_secondary_labels(:reserved_syntax_field, context, primary_span),
+    do:
+      context
+      |> Map.get(:hole_spans, [])
+      |> Enum.map(&label(&1, :secondary, "this hole also uses the reserved context name"))
+      |> Enum.reject(&(&1.span == primary_span))
+
+  defp validation_secondary_labels(:unsupported_hole_type, context, primary_span),
+    do:
+      context
+      |> Map.get(:hole_spans, [])
+      |> Enum.map(&label(&1, :secondary, "this hole uses the same unsupported category"))
+      |> Enum.reject(&(&1.span == primary_span))
+
+  defp validation_secondary_labels(_kind, _context, _primary_span), do: []
+
+  defp validation_suggestions(:missing_diagnosis),
+    do: [%Suggestion{message: "Add one `explain` clause for each listed failure point", applicability: :manual}]
+
+  defp validation_suggestions(:rule_unpinned),
+    do: [
+      %Suggestion{message: "Add `example use_site expands expected` beneath each listed rule", applicability: :manual}
+    ]
+
+  defp validation_suggestions(:example_mismatch),
+    do: [%Suggestion{message: "Update the pinned expansion or fix the macro rule", applicability: :manual}]
+
+  defp validation_suggestions(:example_type_mismatch),
+    do: [%Suggestion{message: "Use the expansion's actual type or fix the macro rule", applicability: :manual}]
+
+  defp validation_suggestions(:computed_example_error),
+    do: [%Suggestion{message: "Fix the computed expander or its worked example", applicability: :manual}]
+
+  defp validation_suggestions(:reserved_syntax_field),
+    do: [%Suggestion{message: "Rename this hole; `context` is supplied automatically", applicability: :manual}]
+
+  defp validation_suggestions(:unsupported_hole_type),
+    do: [
+      %Suggestion{
+        message: "Use a generatable category, or mark the rule `contextual` when proof needs its call site",
+        applicability: :manual
+      }
+    ]
+
+  defp validation_suggestions(_kind), do: []
+
+  defp validation_message(:missing_diagnosis, points),
+    do: "The macro does not explain every declared failure point: #{failure_points(points)}."
+
+  defp validation_message(:rule_unpinned, keywords),
+    do: "These macro rules have no worked example: #{Enum.join(Enum.map(keywords, &name_to_string/1), ", ")}."
+
+  defp validation_message(:example_mismatch, mismatches),
+    do: "Macro example(s) do not match their actual expansions: #{example_names(mismatches)}."
+
+  defp validation_message(:example_type_mismatch, failures),
+    do: "Macro example(s) have the wrong type: #{example_names(failures)}."
+
+  defp validation_message(:computed_example_error, failures),
+    do: "A computed macro example failed while being checked: #{example_names(failures)}."
+
+  defp validation_message(:reserved_syntax_field, %{first: field, second: keywords}),
+    do:
+      "The hole `#{field}` in #{rule_names(keywords)} conflicts with the reflected expansion context supplied to computed rules."
+
+  defp validation_message(:unsupported_hole_type, %{detail: category}),
+    do:
+      "The generative expansion proof has no safe value generator for the `#{name_to_string(category)}` hole category."
+
+  defp validation_message(kind, _details), do: "Macro validation failed for #{name_to_string(kind)}."
+
+  defp failure_points(points) do
+    Enum.map_join(points, ", ", fn
+      {:failure, name} -> "author failure `#{name}`"
+      {:hole_kind, kind} -> "#{kind} hole"
+      {:keyword, keyword} -> "keyword `#{keyword}`"
+      _point -> "an additional declared failure point"
+    end)
+  end
+
+  defp example_names(values) when is_list(values) do
+    names =
+      values
+      |> Enum.map(fn
+        %{keyword: keyword} -> name_to_string(keyword)
+        %{"keyword" => keyword} -> name_to_string(keyword)
+        _ -> nil
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    case names do
+      [] -> "the affected examples"
+      names -> Enum.join(names, ", ")
+    end
+  end
+
+  defp rule_names([keyword]), do: "the `#{name_to_string(keyword)}` rule"
+
+  defp rule_names(keywords) when is_list(keywords),
+    do: "the #{Enum.map_join(keywords, ", ", &"`#{name_to_string(&1)}`")} rules"
 
   defp module_content(:module_rule_not_fully_consumed, _details),
     do:
