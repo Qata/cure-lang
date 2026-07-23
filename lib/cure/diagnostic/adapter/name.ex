@@ -130,6 +130,10 @@ defmodule Cure.Diagnostic.Adapter.Name do
     unknown_name(:member, method, opts)
   end
 
+  def from_error({:implementation_scope, %{kind: kind} = details}, opts)
+      when kind in [:member_outside, :empty],
+      do: implementation_scope_failure(kind, details, opts)
+
   def from_error({:ambiguous_name, name, modules}, opts) when is_list(modules),
     do: ambiguous_name(name, modules, opts)
 
@@ -652,6 +656,70 @@ defmodule Cure.Diagnostic.Adapter.Name do
         }
       ],
       payload: %{kind: :missing_method, interface: interface, method: method, head: head, head_id: head_id}
+    )
+  end
+
+  defp implementation_scope_failure(:member_outside, details, opts) do
+    implementation = "#{name_to_string(details.interface)} for #{name_to_string(details.for)}"
+    primary_span = Map.get(details, :member_span) || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(details, :implementation_span) do
+        %Span{} = span -> [%Label{span: span, style: :secondary, message: "this implementation has no nested members"}]
+        _ -> []
+      end
+
+    suggestions =
+      case Map.get(details, :insertion_span) do
+        %Span{} = span ->
+          [
+            %Suggestion{
+              message: "Indent `#{name_to_string(details.member)}` beneath the implementation",
+              applicability: :machine_applicable,
+              edits: [%TextEdit{span: span, replacement: Map.get(details, :indentation, "  ")}]
+            }
+          ]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E116",
+      key: :implementation_scope,
+      severity: :error,
+      title: "Implementation member is outside its implementation scope",
+      body:
+        Doc.paragraph(
+          "`#{name_to_string(details.member)}` appears to implement `#{implementation}`, but it is aligned outside that implementation. Implementation members must be indented beneath their `implementation` declaration."
+        ),
+      primary: pickup_label(primary_span, :primary, "indent this member so it belongs to the implementation"),
+      secondary: secondary,
+      suggestions: suggestions,
+      payload: details
+    )
+  end
+
+  defp implementation_scope_failure(:empty, details, opts) do
+    span = Map.get(details, :implementation_span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E116",
+      key: :implementation_scope,
+      severity: :error,
+      title: "Implementation has no members",
+      body:
+        Doc.paragraph(
+          "The implementation of `#{name_to_string(details.interface)}` for `#{name_to_string(details.for)}` is empty. Every implementation must contain at least one nested member."
+        ),
+      primary: pickup_label(span, :primary, "add the implementation's members beneath this declaration"),
+      suggestions: [
+        %Suggestion{
+          message: "Add and indent the required interface members beneath this implementation",
+          applicability: :manual
+        }
+      ],
+      payload: details
     )
   end
 

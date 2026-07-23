@@ -828,80 +828,9 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unknown_interface_method, details} = error, opts) when is_map(details),
     do: NameAdapter.from_error(error, opts)
 
-  def from_error({:implementation_scope, %{kind: :member_outside} = details}, opts) do
-    implementation = "#{name_to_string(details.interface)} for #{name_to_string(details.for)}"
-    primary_span = Map.get(details, :member_span) || Keyword.get(opts, :span)
-
-    secondary =
-      case Map.get(details, :implementation_span) do
-        %Span{} = span ->
-          [%Label{span: span, style: :secondary, message: "this implementation has no nested members"}]
-
-        _ ->
-          []
-      end
-
-    suggestions =
-      case Map.get(details, :insertion_span) do
-        %Span{} = span ->
-          [
-            %Suggestion{
-              message: "Indent `#{name_to_string(details.member)}` beneath the implementation",
-              applicability: :machine_applicable,
-              edits: [%TextEdit{span: span, replacement: Map.get(details, :indentation, "  ")}]
-            }
-          ]
-
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: "E116",
-      key: :implementation_scope,
-      severity: :error,
-      title: "Implementation member is outside its implementation scope",
-      body:
-        Doc.paragraph(
-          "`#{name_to_string(details.member)}` appears to implement `#{implementation}`, but it is aligned outside that implementation. Implementation members must be indented beneath their `implementation` declaration."
-        ),
-      primary:
-        primary_label(
-          Keyword.put(opts, :span, primary_span),
-          "indent this member so it belongs to the implementation"
-        ),
-      secondary: secondary,
-      suggestions: suggestions,
-      payload: details
-    )
-  end
-
-  def from_error({:implementation_scope, %{kind: :empty} = details}, opts) do
-    span = Map.get(details, :implementation_span) || Keyword.get(opts, :span)
-
-    Diagnostic.new(
-      code: "E116",
-      key: :implementation_scope,
-      severity: :error,
-      title: "Implementation has no members",
-      body:
-        Doc.paragraph(
-          "The implementation of `#{name_to_string(details.interface)}` for `#{name_to_string(details.for)}` is empty. Every implementation must contain at least one nested member."
-        ),
-      primary:
-        primary_label(
-          Keyword.put(opts, :span, span),
-          "add the implementation's members beneath this declaration"
-        ),
-      suggestions: [
-        %Suggestion{
-          message: "Add and indent the required interface members beneath this implementation",
-          applicability: :manual
-        }
-      ],
-      payload: details
-    )
-  end
+  def from_error({:implementation_scope, %{kind: kind} = details}, opts)
+      when kind in [:member_outside, :empty],
+      do: NameAdapter.from_error({:implementation_scope, details}, opts)
 
   def from_error({:missing_method, interface, method}, opts),
     do: NameAdapter.from_error({:missing_method, interface, method}, opts)
