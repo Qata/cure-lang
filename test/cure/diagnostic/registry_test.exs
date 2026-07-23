@@ -58,7 +58,7 @@ defmodule Cure.Diagnostic.RegistryTest do
     e090 = Registry.fetch!("E090")
     assert e090.producers == [:elaboration]
     assert e090.producer_fixtures == %{elaboration: :unrecognized_pattern_elaboration}
-    assert File.read!("lib/cure/elab/elaborator.ex") =~ "{:error, {:unsupported_pattern"
+    assert File.read!("lib/cure/elab/elaborator.ex") =~ "{:unsupported_pattern,"
   end
 
   test "retired codes remain explainable but are excluded from reachable coverage" do

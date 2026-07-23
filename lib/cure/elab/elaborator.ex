@@ -874,12 +874,25 @@ defmodule Cure.Elab.Elaborator do
   # and the kernel is never asked to infer a bare pair. This is what makes a
   # let-bound pair work: `let p = %[a, b]` is substitution-based, so `p.1`/`p.2`
   # become `%[a, b].1`/`.2` after inlining.
-  def elaborate_expr_typed({:attribute_access, meta, [{:tuple, _tm, [a, b]}]} = expr, names, ctx, env) do
-    case Keyword.fetch!(meta, :attribute) do
-      "1" -> elaborate_expr_typed(a, names, ctx, env)
-      "2" -> elaborate_expr_typed(b, names, ctx, env)
-      _ -> {:error, {:unsupported_expression, expr}}
-    end
+  def elaborate_expr_typed({:attribute_access, meta, [{:tuple, _tm, [a, b]} = pair]}, names, ctx, env) do
+    field = Keyword.fetch!(meta, :attribute)
+
+    result =
+      case field do
+        "1" ->
+          elaborate_expr_typed(a, names, ctx, env)
+
+        "2" ->
+          elaborate_expr_typed(b, names, ctx, env)
+
+        _ ->
+          case parse_positional_index(field) do
+            {:ok, index} -> {:error, {:telescope_index_out_of_bounds, index, 2}}
+            :error -> record_projection(pair, field, names, ctx, env)
+          end
+      end
+
+    attach_projection_context(result, meta, pair, field)
   end
 
   def elaborate_expr_typed({:attribute_access, meta, [inner]} = expr, names, ctx, env) do
@@ -4504,7 +4517,14 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp with_arm_context({:match_arm, meta, _children}) do
-    %{style: :ordinary, span: surface_expression_span({:match_arm, meta, []})}
+    pattern = Keyword.get(meta, :pattern)
+
+    %{
+      style: :ordinary,
+      span: surface_expression_span({:match_arm, meta, []}),
+      pattern_span: surface_expression_span(pattern),
+      pattern_kind: if(match?({:variable, _, _}, pattern), do: :catch_all, else: :constructor)
+    }
   end
 
   defp with_arm_context(arm), do: %{style: :unknown, span: surface_expression_span(arm)}
@@ -5036,7 +5056,7 @@ defmodule Cure.Elab.Elaborator do
   # `{:absurd}` branch; coverage is enforced by the kernel's check_coverage.
   defp elaborate_with_branches(arms, %{ctx: ctx, env: env, dname: dname} = cfg) do
     with {:ok, {arm_map, default}} <- partition_arms(arms, ctx, env, dname),
-         :ok <- reject_with_default(default) do
+         :ok <- reject_with_default(default, arms) do
       arm_map
       |> Enum.reduce_while({:ok, []}, fn
         {_cname, {:impossible_marked, _pattern}}, {:ok, acc} ->
@@ -5054,8 +5074,39 @@ defmodule Cure.Elab.Elaborator do
 
   # A `with`/`with`-rematch clause refines by restating constructor patterns; a
   # bare variable/wildcard catch-all has no refinement to offer here.
-  defp reject_with_default(nil), do: :ok
-  defp reject_with_default({vname, _body}), do: {:error, {:unsupported_pattern, {:default_in_with, vname}}}
+  defp reject_with_default(nil, _arms), do: :ok
+
+  defp reject_with_default({vname, _body}, arms) do
+    default_arm =
+      Enum.find(arms, fn
+        {:match_arm, meta, _body} ->
+          match?({:variable, _pattern_meta, ^vname}, Keyword.get(meta, :pattern))
+
+        _ ->
+          false
+      end)
+
+    default_pattern =
+      case default_arm do
+        {:match_arm, meta, _body} -> Keyword.get(meta, :pattern)
+        _ -> nil
+      end
+
+    {:error,
+     {:source_context,
+      {:unsupported_pattern,
+       %{
+         reason: :default_in_with,
+         name: vname,
+         span: surface_expression_span(default_pattern)
+       }},
+      %{
+        span: surface_expression_span(default_pattern),
+        with_arms: Enum.map(arms, &with_arm_context/1),
+        expression_category: :pattern,
+        expectation_origin: :with_refinement
+      }}}
+  end
 
   defp elaborate_with_branch(cname, pattern, body_expr, cfg) do
     %{
@@ -5243,7 +5294,7 @@ defmodule Cure.Elab.Elaborator do
   # convoy `(case e …) cap`.
   defp elaborate_with_motivegen_branches(arms, %{ctx: ctx, env: env, dname: dname} = cfg) do
     with {:ok, {arm_map, default}} <- partition_arms(arms, ctx, env, dname),
-         :ok <- reject_with_default(default) do
+         :ok <- reject_with_default(default, arms) do
       arm_map
       |> Enum.reduce_while({:ok, []}, fn
         {_cname, {:impossible_marked, _pattern}}, {:ok, acc} ->

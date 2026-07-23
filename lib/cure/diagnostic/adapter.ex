@@ -934,6 +934,13 @@ defmodule Cure.Diagnostic.Adapter do
       do: named_default_nonvariable_failure(details, context, opts)
 
   def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :default_in_with, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: with_default_pattern_failure(details, context, opts)
+
+  def from_error(
         {:source_context, {:unsupported_pattern, %{reason: :unlowered_nested_constructor_argument} = details}, context},
         opts
       )
@@ -7344,6 +7351,44 @@ defmodule Cure.Diagnostic.Adapter do
       payload: %{
         kind: :unsupported_pattern,
         reason: :named_default_nonvariable,
+        name: name,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp with_default_pattern_failure(details, context, opts) do
+    name = name_to_string(details.name)
+    span = Map.get(details, :span) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    constructor_labels =
+      context
+      |> Map.get(:with_arms, [])
+      |> Enum.filter(&(Map.get(&1, :pattern_kind) == :constructor))
+      |> Enum.map(&(Map.get(&1, :pattern_span) || Map.get(&1, :span)))
+      |> Enum.map(&pickup_label(&1, :secondary, "this branch refines a constructor"))
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E090",
+      key: :unrecognized_pattern,
+      severity: :error,
+      title: "`with` needs constructor branches",
+      body:
+        Doc.paragraph(
+          "The catch-all pattern `#{name}` does not identify a constructor, so it cannot refine the matched value or any dependent types. A `with` branch must restate one concrete constructor."
+        ),
+      primary: pickup_label(span, :primary, "replace this catch-all with a constructor pattern"),
+      secondary: constructor_labels,
+      suggestions: [
+        %Suggestion{
+          message: "Add the remaining constructor branches explicitly, or use `match` when no refinement is needed",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :unsupported_pattern,
+        reason: :default_in_with,
         name: name,
         checking: Map.get(context, :checking)
       }
