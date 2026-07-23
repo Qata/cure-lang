@@ -888,6 +888,10 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:source_context, {:unsupported_guard, :non_exhaustive}, context}, opts)
+      when is_map(context),
+      do: non_exhaustive_guard_failure(context, opts)
+
   def from_error({:source_context, {:unsolved_metavariables, name}, context}, opts) when is_map(context) do
     cond do
       Map.get(context, :constructor_result_mismatch) ->
@@ -6817,6 +6821,53 @@ defmodule Cure.Diagnostic.Adapter do
       body: Doc.paragraph(body),
       primary: primary_label(opts, label),
       payload: Map.merge(%{kind: kind, checking: Map.get(context, :checking)}, details)
+    )
+  end
+
+  defp non_exhaustive_guard_failure(context, opts) do
+    branches = Map.get(context, :branch_patterns, [])
+
+    guard_labels =
+      branches
+      |> Enum.flat_map(fn
+        %{guard_span: %Span{} = span} ->
+          [pickup_label(span, :secondary, "this condition does not cover every remaining value")]
+
+        _ ->
+          []
+      end)
+
+    insertion = missing_branch_insertion_span(context)
+
+    primary =
+      case insertion do
+        %Span{} = span -> pickup_label(span, :primary, "add an unguarded fallback branch here")
+        _ -> pickup_label(Map.get(context, :span) || Keyword.get(opts, :span), :primary, "this match needs a fallback")
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Guarded branches leave a gap",
+      body:
+        Doc.paragraph(
+          "Cure cannot prove that these guard conditions cover every value accepted by their patterns. If every condition is false, this match has no result."
+        ),
+      primary: primary,
+      secondary: guard_labels,
+      suggestions: [
+        %Suggestion{
+          message: "Add an unguarded `_ -> ...` branch, or make the final guards exact complements",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :unsupported_guard,
+        reason: :non_exhaustive,
+        checking: Map.get(context, :checking),
+        guard_count: length(guard_labels)
+      }
     )
   end
 

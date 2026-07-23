@@ -6,7 +6,9 @@ defmodule Cure.Elab.GuardLintTest do
   """
   use ExUnit.Case, async: false
 
+  alias Cure.Compiler.Errors
   alias Cure.Core.{Builtins, Context, Env}
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.GuardLint
 
   # Context with two machine-Int vars: index 0 and index 1, over a builtins-
@@ -147,7 +149,54 @@ defmodule Cure.Elab.GuardLintTest do
           "    x when x < b -> Z()\n" <>
           "    x when x > b -> S(Z())\nend\n"
 
-      assert {:error, {:source_context, {:unsupported_guard, :non_exhaustive}, _}} = Program.elaborate(src)
+      assert {:error, {:source_context, {:unsupported_guard, :non_exhaustive}, _} = error} =
+               Program.elaborate(src)
+
+      {diagnostic, registry} = Errors.to_diagnostic(error, "guard_gap.cure", src)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- GUARDED BRANCHES LEAVE A GAP [E093] -------------------------- guard_gap.cure
+
+               Cure cannot prove that these guard conditions cover every value accepted by
+               their patterns. If every condition is false, this match has no result.
+
+               at guard_gap.cure:5:27
+               4 |     x when x < b -> Z()
+                 |            ----- this condition does not cover every remaining value
+               5 |     x when x > b -> S(Z())
+                 |            -----          ^ this condition does not cover every remaining value; add an unguarded fallback branch here
+
+               Hint: Add an unguarded `_ -> ...` branch, or make the final guards exact complements
+               """)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+
+      assert lsp["range"] == %{
+               "start" => %{"line" => 4, "character" => 26},
+               "end" => %{"line" => 4, "character" => 26}
+             }
+
+      assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+               %{
+                 "start" => %{"line" => 3, "character" => 11},
+                 "end" => %{"line" => 3, "character" => 16}
+               },
+               %{
+                 "start" => %{"line" => 4, "character" => 11},
+                 "end" => %{"line" => 4, "character" => 16}
+               }
+             ]
+
+      assert lsp["data"]["payload"] == %{
+               "checking" => "cmp",
+               "guard_count" => 2,
+               "kind" => "unsupported_guard",
+               "reason" => "non_exhaustive"
+             }
+
+      fixed = String.replace(src, "    x when x > b -> S(Z())\n", "    x when x > b -> S(Z())\n    _ -> Z()\n")
+      assert {:ok, _environment} = Program.elaborate(fixed, file: "guard_gap_fixed.cure")
     end
 
     test "semantically exhaustive but untranslatable guards still reject (K13 observable)" do

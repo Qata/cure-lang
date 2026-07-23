@@ -1220,6 +1220,11 @@ defmodule Cure.Elab.Declarations do
       family: family,
       span: arm_span(arm_meta),
       pattern_span: surface_pattern_span(arm_meta, pattern),
+      guard_span:
+        case Cure.MetaAST.Metadata.source_info(arm_meta) do
+          %Cure.MetaAST.SourceInfo{guard: %Cure.Diagnostic.Span{} = span} -> span
+          _ -> nil
+        end,
       variable_spans: pattern_variable_spans(pattern)
     }
   end
