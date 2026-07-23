@@ -226,7 +226,233 @@ defmodule Cure.Diagnostic.Adapter.Type do
       when is_map(context),
       do: dependent_projection(record, field, context, opts)
 
+  def from_error({:typed_pattern_type_mismatch, type_ast}, opts) do
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Pattern annotation does not match",
+      body: Doc.paragraph("This pattern's annotation is incompatible with the value it matches."),
+      primary: primary(opts, "change the pattern or its type annotation"),
+      payload: %{kind: :typed_pattern, annotation: pattern_annotation(type_ast)}
+    )
+  end
+
+  def from_error(
+        {:source_context, {:typed_pattern_type_mismatch, _type_ast}, %{field_type: field_type} = context},
+        opts
+      )
+      when not is_nil(field_type),
+      do: typed_pattern_annotation(context, opts)
+
+  def from_error(
+        {:source_context, {:forced_pattern_not_in_pattern, _meta},
+         %{forced_pattern_position: :positional_constructor_argument} = context},
+        opts
+      ),
+      do: positional_forced_pattern(context, opts)
+
+  def from_error(
+        {:source_context, {:forced_pattern_mismatch, actual, expected}, %{forced_pattern_span: _} = context},
+        opts
+      ),
+      do: forced_pattern_mismatch(actual, expected, context, opts)
+
+  def from_error({:source_context, {:forced_pattern_mismatch, actual, expected}, context}, opts)
+      when is_map(context) do
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Forced pattern does not match",
+      body: Doc.paragraph("This forced pattern does not match the value's expected type."),
+      primary:
+        primary(Keyword.put_new(opts, :span, Map.get(context, :span)), "change the forced pattern or its expected type"),
+      payload: %{kind: :forced_pattern_mismatch, actual: actual, expected: expected}
+    )
+  end
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp typed_pattern_annotation(context, opts) do
+    constructor = short_name(Map.get(context, :constructor, :constructor))
+    binder = name(Map.get(context, :binder, "field"))
+    annotated = pattern_type(Map.get(context, :annotated_type))
+    field_type = pattern_type(Map.get(context, :field_type))
+    argument_index = Map.get(context, :argument_index, 0)
+    primary_span = Map.get(context, :annotation_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      [
+        related_label(
+          Map.get(context, :binder_span) || Map.get(context, :typed_pattern_span),
+          primary_span,
+          "`#{binder}` is the field being annotated"
+        ),
+        related_label(
+          Map.get(context, :constructor_pattern_span) || Map.get(context, :constructor_name_span),
+          primary_span,
+          "`#{constructor}` provides this field as `#{field_type}`"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "`#{binder}` is annotated as `#{annotated}`, but `#{constructor}` stores `#{field_type}`",
+      body:
+        Doc.paragraph(
+          "Visible field #{argument_index + 1} of `#{constructor}` has type `#{field_type}`. This pattern annotates `#{binder}` as `#{annotated}`, so the annotation cannot describe the value selected by the constructor."
+        ),
+      primary:
+        if(match?(%Span{}, primary_span),
+          do: %Label{
+            span: primary_span,
+            style: :primary,
+            message: "this says `#{annotated}`, but the constructor field is `#{field_type}`"
+          }
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Change the annotation to `#{field_type}`, or remove it and let `#{constructor}` determine the field type",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :typed_pattern_type_mismatch,
+        constructor: constructor,
+        binder: binder,
+        argument_index: argument_index,
+        annotated: annotated,
+        field_type: field_type,
+        checking: Map.get(context, :checking, :pattern)
+      }
+    )
+  end
+
+  defp positional_forced_pattern(context, opts) do
+    constructor = short_name(Map.get(context, :constructor, :constructor))
+    argument_index = Map.get(context, :argument_index, 0)
+    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(context, :constructor_span) do
+        %Span{} = span when span != primary_span ->
+          [%Label{span: span, style: :secondary, message: "this constructor pattern supplies positional fields"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Dot pattern must name an implicit field",
+      body:
+        Doc.paragraph(
+          "Field #{argument_index + 1} of `#{constructor}` is positional. A dot pattern checks a value that constructor-index refinement already determined, so it must be written inside a named implicit pattern such as `{index = .value}`."
+        ),
+      primary:
+        if(match?(%Span{}, primary_span),
+          do: %Label{span: primary_span, style: :primary, message: "this forced check is in a positional field"}
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Bind this positional field normally, or move the dot check to the constructor's corresponding named implicit field",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :positional_forced_pattern,
+        constructor: constructor,
+        argument_index: argument_index,
+        expectation_origin: :pattern
+      }
+    )
+  end
+
+  defp forced_pattern_mismatch(actual, expected, context, opts) do
+    constructor = short_name(Map.get(context, :constructor, :constructor))
+    implicit_name = name(Map.get(context, :implicit_name, "index"))
+    actual_surface = Map.get(context, :written_surface) || pattern_type(actual)
+    expected_surface = Map.get(context, :expected_surface) || pattern_type(expected)
+    primary_span = Map.get(context, :forced_pattern_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      [
+        related_label(
+          Map.get(context, :named_implicit_span),
+          primary_span,
+          "this check targets the hidden `#{implicit_name}` field"
+        ),
+        related_label(
+          Map.get(context, :constructor_name_span),
+          primary_span,
+          "`#{constructor}` fixes the value of `#{implicit_name}` from the matched index"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Forced `#{implicit_name}` does not match `#{constructor}`",
+      body:
+        Doc.paragraph(
+          "The dot expression denotes `#{actual_surface}`, but matching `#{constructor}` fixes `#{implicit_name}` as `#{expected_surface}`. A forced pattern checks an index already determined by the scrutinee; it cannot choose a different value."
+        ),
+      primary:
+        if(match?(%Span{}, primary_span),
+          do: %Label{
+            span: primary_span,
+            style: :primary,
+            message: "this forced value disagrees with the index fixed here"
+          }
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Change the dot expression to the value fixed by `#{constructor}`, or bind `#{implicit_name}` without a dot when it is not forced",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :forced_pattern_mismatch,
+        constructor: constructor,
+        implicit_name: implicit_name,
+        actual: actual_surface,
+        expected: expected_surface,
+        expectation_origin: :pattern
+      }
+    )
+  end
+
+  defp pattern_type({:data, family, parameters, indices}) do
+    arguments = Enum.map(parameters ++ indices, &pattern_type/1)
+    application(short_name(family), arguments)
+  end
+
+  defp pattern_type({:ctor, constructor, arguments}),
+    do: application(short_name(constructor), Enum.map(arguments, &pattern_type/1))
+
+  defp pattern_type({:global, global}), do: short_name(global)
+  defp pattern_type({:meta, _id}), do: "?"
+  defp pattern_type(other), do: surface_type(other)
+
+  defp application(head, []), do: head
+  defp application(head, arguments), do: "#{head}(#{Enum.join(arguments, ", ")})"
+
+  defp pattern_annotation({:variable, _meta, variable}), do: name(variable)
+  defp pattern_annotation(type), do: surface_type(type)
 
   defp record_update_base(details, context, opts) do
     record = Map.fetch!(details, :record)

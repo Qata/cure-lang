@@ -1043,16 +1043,14 @@ defmodule Cure.Diagnostic.Adapter do
       do: StaticAnalysis.from_error(error, opts)
 
   def from_error(
-        {:source_context, {:forced_pattern_mismatch, actual, expected}, %{forced_pattern_span: _} = context},
+        {:source_context, {:forced_pattern_mismatch, _actual, _expected}, %{forced_pattern_span: _}} = error,
         opts
-      ) do
-    forced_pattern_mismatch_failure(actual, expected, context, opts)
-  end
+      ),
+      do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {:forced_pattern_mismatch, actual, expected}, context}, opts)
-      when is_map(context) do
-    pattern_problem(:forced_pattern_mismatch, %{actual: actual, expected: expected}, context, opts)
-  end
+  def from_error({:source_context, {:forced_pattern_mismatch, _actual, _expected}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error(
         {:source_context, {:named_implicit_unforced, name}, %{named_implicit_status: :unforced} = context},
@@ -1645,11 +1643,11 @@ defmodule Cure.Diagnostic.Adapter do
       do: constructor_result_family_failure(family, context, opts)
 
   def from_error(
-        {:source_context, {:typed_pattern_type_mismatch, _type_ast}, %{field_type: field_type} = context},
+        {:source_context, {:typed_pattern_type_mismatch, _type_ast}, %{field_type: field_type}} = error,
         opts
       )
       when not is_nil(field_type),
-      do: typed_pattern_annotation_failure(context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error(
         {:source_context, {:typed_pattern_arity, _position}, %{visible_arity: _} = context},
@@ -1659,10 +1657,10 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error(
         {:source_context, {:forced_pattern_not_in_pattern, _meta},
-         %{forced_pattern_position: :positional_constructor_argument} = context},
+         %{forced_pattern_position: :positional_constructor_argument}} = error,
         opts
       ),
-      do: positional_forced_pattern_failure(context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:source_context, {:applied_non_function, details}, context} = error, opts)
       when is_map(details) and is_map(context),
@@ -2604,17 +2602,8 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:typed_pattern_type_mismatch, type_ast}, opts) do
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Pattern annotation does not match",
-      body: Doc.paragraph("This pattern's annotation is incompatible with the value it matches."),
-      primary: primary_label(opts, "change the pattern or its type annotation"),
-      payload: %{kind: :typed_pattern, annotation: surface_pattern_annotation(type_ast)}
-    )
-  end
+  def from_error({:typed_pattern_type_mismatch, _type_ast} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:extern_untyped_head, message, meta}, opts) when is_binary(message) and is_list(meta) do
     Diagnostic.new(
@@ -4226,64 +4215,6 @@ defmodule Cure.Diagnostic.Adapter do
   defp constructor_result_surface_type({:meta, _id}), do: "?"
   defp constructor_result_surface_type(other), do: surface_type(other)
 
-  defp typed_pattern_annotation_failure(context, opts) do
-    constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
-    binder = name_to_string(Map.get(context, :binder, "field"))
-    annotated = constructor_result_surface_type(Map.get(context, :annotated_type))
-    field_type = constructor_result_surface_type(Map.get(context, :field_type))
-    argument_index = Map.get(context, :argument_index, 0)
-    primary_span = Map.get(context, :annotation_span) || Map.get(context, :span) || Keyword.get(opts, :span)
-
-    secondary =
-      [
-        sibling_dependency_label(
-          Map.get(context, :binder_span) || Map.get(context, :typed_pattern_span),
-          primary_span,
-          "`#{binder}` is the field being annotated"
-        ),
-        sibling_dependency_label(
-          Map.get(context, :constructor_pattern_span) || Map.get(context, :constructor_name_span),
-          primary_span,
-          "`#{constructor}` provides this field as `#{field_type}`"
-        )
-      ]
-      |> Enum.reject(&is_nil/1)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "`#{binder}` is annotated as `#{annotated}`, but `#{constructor}` stores `#{field_type}`",
-      body:
-        Doc.paragraph(
-          "Visible field #{argument_index + 1} of `#{constructor}` has type `#{field_type}`. This pattern annotates `#{binder}` as `#{annotated}`, so the annotation cannot describe the value selected by the constructor."
-        ),
-      primary:
-        pickup_label(
-          primary_span,
-          :primary,
-          "this says `#{annotated}`, but the constructor field is `#{field_type}`"
-        ),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message:
-            "Change the annotation to `#{field_type}`, or remove it and let `#{constructor}` determine the field type",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :typed_pattern_type_mismatch,
-        constructor: constructor,
-        binder: binder,
-        argument_index: argument_index,
-        annotated: annotated,
-        field_type: field_type,
-        checking: Map.get(context, :checking, :pattern)
-      }
-    )
-  end
-
   defp typed_pattern_arity_failure(context, opts) do
     constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
     binder = name_to_string(Map.get(context, :binder, "field"))
@@ -4332,114 +4263,6 @@ defmodule Cure.Diagnostic.Adapter do
         supplied_arity: supplied,
         visible_arity: accepted,
         checking: Map.get(context, :checking, :pattern)
-      }
-    )
-  end
-
-  defp positional_forced_pattern_failure(context, opts) do
-    constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
-    argument_index = Map.get(context, :argument_index, 0)
-    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
-
-    secondary =
-      case Map.get(context, :constructor_span) do
-        %Span{} = span when span != primary_span ->
-          [
-            pickup_label(
-              span,
-              :secondary,
-              "this constructor pattern supplies positional fields"
-            )
-          ]
-
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Dot pattern must name an implicit field",
-      body:
-        Doc.paragraph(
-          "Field #{argument_index + 1} of `#{constructor}` is positional. A dot pattern checks a value that constructor-index refinement already determined, so it must be written inside a named implicit pattern such as `{index = .value}`."
-        ),
-      primary:
-        pickup_label(
-          primary_span,
-          :primary,
-          "this forced check is in a positional field"
-        ),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message:
-            "Bind this positional field normally, or move the dot check to the constructor's corresponding named implicit field",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :positional_forced_pattern,
-        constructor: constructor,
-        argument_index: argument_index,
-        expectation_origin: :pattern
-      }
-    )
-  end
-
-  defp forced_pattern_mismatch_failure(actual, expected, context, opts) do
-    constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
-    implicit_name = name_to_string(Map.get(context, :implicit_name, "index"))
-    actual_surface = Map.get(context, :written_surface) || constructor_result_surface_type(actual)
-    expected_surface = Map.get(context, :expected_surface) || constructor_result_surface_type(expected)
-    primary_span = Map.get(context, :forced_pattern_span) || Map.get(context, :span) || Keyword.get(opts, :span)
-
-    secondary =
-      [
-        sibling_dependency_label(
-          Map.get(context, :named_implicit_span),
-          primary_span,
-          "this check targets the hidden `#{implicit_name}` field"
-        ),
-        sibling_dependency_label(
-          Map.get(context, :constructor_name_span),
-          primary_span,
-          "`#{constructor}` fixes the value of `#{implicit_name}` from the matched index"
-        )
-      ]
-      |> Enum.reject(&is_nil/1)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Forced `#{implicit_name}` does not match `#{constructor}`",
-      body:
-        Doc.paragraph(
-          "The dot expression denotes `#{actual_surface}`, but matching `#{constructor}` fixes `#{implicit_name}` as `#{expected_surface}`. A forced pattern checks an index already determined by the scrutinee; it cannot choose a different value."
-        ),
-      primary:
-        pickup_label(
-          primary_span,
-          :primary,
-          "this forced value disagrees with the index fixed here"
-        ),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message:
-            "Change the dot expression to the value fixed by `#{constructor}`, or bind `#{implicit_name}` without a dot when it is not forced",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :forced_pattern_mismatch,
-        constructor: constructor,
-        implicit_name: implicit_name,
-        actual: actual_surface,
-        expected: expected_surface,
-        expectation_origin: :pattern
       }
     )
   end
@@ -13248,9 +13071,6 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp surface_type(type) when is_binary(type), do: type
   defp surface_type(type), do: print_core(type)
-
-  defp surface_pattern_annotation({:variable, _meta, name}), do: name_to_string(name)
-  defp surface_pattern_annotation(type), do: surface_type(type)
 
   defp macro_title(macro), do: macro |> name_to_string() |> String.capitalize()
 

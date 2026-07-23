@@ -475,4 +475,50 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert rendered =~ "`flag` supplies part of `value`'s type"
     assert rendered =~ "Hint: Pattern-match `Box` and bind flag, value together"
   end
+
+  test "typed and forced pattern failures retain annotation, binder, and constructor roles" do
+    source = "Ctor(value: Bool) .index\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:patterns, source, "patterns.cure")
+    {:ok, constructor} = SourceRegistry.span(registry, :patterns, 0, 17)
+    {:ok, binder} = SourceRegistry.span(registry, :patterns, 5, 10)
+    {:ok, annotation} = SourceRegistry.span(registry, :patterns, 12, 16)
+    {:ok, forced} = SourceRegistry.span(registry, :patterns, 18, 24)
+
+    typed =
+      {:source_context, {:typed_pattern_type_mismatch, {:variable, [], "Bool"}},
+       %{
+         constructor: :"Main#Ctor",
+         binder: "value",
+         annotated_type: {:data, :Bool, [], []},
+         field_type: {:data, :Int, [], []},
+         annotation_span: annotation,
+         binder_span: binder,
+         constructor_pattern_span: constructor
+       }}
+
+    mismatch =
+      {:source_context, {:forced_pattern_mismatch, {:ctor, :Wrong, []}, {:ctor, :Expected, []}},
+       %{
+         constructor: :"Main#Ctor",
+         implicit_name: "index",
+         forced_pattern_span: forced,
+         named_implicit_span: forced,
+         constructor_name_span: constructor
+       }}
+
+    for error <- [typed, mismatch] do
+      direct = TypeAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E093"
+      assert direct.suggestions != []
+    end
+
+    assert TypeAdapter.from_error(typed).primary.span == annotation
+    assert Enum.map(TypeAdapter.from_error(typed).secondary, & &1.span) == [binder, constructor]
+    assert TypeAdapter.from_error(mismatch).primary.span == forced
+
+    rendered = Renderer.plain(TypeAdapter.from_error(typed), registry, width: 80)
+    assert rendered =~ "`VALUE` IS ANNOTATED AS `BOOL`, BUT `CTOR` STORES `INT`"
+    assert rendered =~ "Hint: Change the annotation to `Int`"
+  end
 end
