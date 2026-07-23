@@ -132,6 +132,23 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
     end
   end
 
+  test "unit validation producers are owned by the macro family" do
+    errors = [
+      {:duplicate_unit, "ms"},
+      {:invalid_unit, "ms"},
+      {:unknown_unit, "ms"},
+      {:invalid_unit_literal, :bad, "ms"}
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.key == :macro_unit_validation
+      assert direct.suggestions != []
+    end
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 

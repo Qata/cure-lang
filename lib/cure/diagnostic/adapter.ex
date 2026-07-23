@@ -1625,14 +1625,14 @@ defmodule Cure.Diagnostic.Adapter do
       do: macro_family_failure({kind, detail}, opts)
 
   def from_error({:duplicate_unit, suffix}, opts),
-    do: macro_unit_failure(:duplicate_unit, %{suffix: suffix}, opts)
+    do: MacroAdapter.from_error({:duplicate_unit, suffix}, opts)
 
   def from_error({kind, detail}, opts)
       when kind in [:invalid_unit, :unknown_unit],
-      do: macro_unit_failure(kind, %{suffix: detail}, opts)
+      do: MacroAdapter.from_error({kind, detail}, opts)
 
   def from_error({:invalid_unit_literal, value, suffix}, opts),
-    do: macro_unit_failure(:invalid_unit_literal, %{value: value, suffix: suffix}, opts)
+    do: MacroAdapter.from_error({:invalid_unit_literal, value, suffix}, opts)
 
   def from_error({:invalid_check_name, name}, opts),
     do: macro_check_failure(:invalid_check_name, %{name: name}, opts)
@@ -4722,21 +4722,6 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp macro_validation_failure(kind, details, opts), do: macro_validation_failure(kind, details, opts, %{})
 
-  defp macro_unit_failure(kind, details, opts) do
-    {title, message, label, hint} = macro_unit_content(kind, details)
-
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_unit_validation,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
   defp macro_check_failure(kind, details, opts) do
     {title, message, label, hint} = macro_check_content(kind, details)
 
@@ -5436,42 +5421,6 @@ defmodule Cure.Diagnostic.Adapter do
       "Two properties in this check plan have the same name, so their generated results cannot be distinguished.",
       "rename or remove this property",
       "Give every property in the check plan a unique name"
-    }
-  end
-
-  defp macro_unit_content(:duplicate_unit, %{suffix: suffix}) do
-    {
-      "Unit suffix is already declared",
-      "The `#{name_to_string(suffix)}` suffix is registered more than once, so a literal would have two possible scales.",
-      "rename or remove this unit declaration",
-      "Keep exactly one declaration for the `#{name_to_string(suffix)}` suffix"
-    }
-  end
-
-  defp macro_unit_content(:invalid_unit, %{suffix: suffix}) do
-    {
-      "Unit declaration is invalid",
-      "The `#{name_to_string(suffix)}` unit needs a text suffix, a positive numeric scale, and an atom naming its dimension.",
-      "fix this unit declaration",
-      "Use a positive scale and a stable dimension such as `duration`"
-    }
-  end
-
-  defp macro_unit_content(:unknown_unit, %{suffix: suffix}) do
-    {
-      "Unit suffix is unknown",
-      "The `#{name_to_string(suffix)}` suffix is used by this literal, but no unit with that suffix is registered.",
-      "declare this unit or change the suffix",
-      "Register `#{name_to_string(suffix)}` before using it in a literal"
-    }
-  end
-
-  defp macro_unit_content(:invalid_unit_literal, %{value: value, suffix: suffix}) do
-    {
-      "Unit literal is malformed",
-      "A unit literal needs a numeric value and a text suffix, but this one uses value `#{name_to_string(value)}` and suffix `#{name_to_string(suffix)}`.",
-      "rewrite this unit literal",
-      "Use a number followed by a registered text suffix"
     }
   end
 

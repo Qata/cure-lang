@@ -211,6 +211,15 @@ defmodule Cure.Diagnostic.Adapter.Macro do
            ],
       do: board_failure(kind, %{}, opts)
 
+  def from_error({:duplicate_unit, suffix}, opts),
+    do: unit_failure(:duplicate_unit, %{suffix: suffix}, opts)
+
+  def from_error({kind, detail}, opts) when kind in [:invalid_unit, :unknown_unit],
+    do: unit_failure(kind, %{suffix: detail}, opts)
+
+  def from_error({:invalid_unit_literal, value, suffix}, opts),
+    do: unit_failure(:invalid_unit_literal, %{value: value, suffix: suffix}, opts)
+
   def from_error({:macro_expansion_cycle, frames}, opts)
       when is_list(frames),
       do:
@@ -419,6 +428,47 @@ defmodule Cure.Diagnostic.Adapter.Macro do
     {"Board flash offset is outside the device",
      "The application or library partition starts at or beyond the declared flash size.",
      "move this partition inside flash", "Choose `app_offset` and `libs_offset` values smaller than `size`"}
+  end
+
+  @doc false
+  def unit_failure(kind, details, opts) do
+    {title, message, label_text, hint} = unit_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_unit_validation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: label(Keyword.get(opts, :span), :primary, label_text),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp unit_content(:duplicate_unit, %{suffix: suffix}) do
+    {"Unit suffix is already declared",
+     "The `#{name_to_string(suffix)}` suffix is registered more than once, so a literal would have two possible scales.",
+     "rename or remove this unit declaration",
+     "Keep exactly one declaration for the `#{name_to_string(suffix)}` suffix"}
+  end
+
+  defp unit_content(:invalid_unit, %{suffix: suffix}) do
+    {"Unit declaration is invalid",
+     "The `#{name_to_string(suffix)}` unit needs a text suffix, a positive numeric scale, and an atom naming its dimension.",
+     "fix this unit declaration", "Use a positive scale and a stable dimension such as `duration`"}
+  end
+
+  defp unit_content(:unknown_unit, %{suffix: suffix}) do
+    {"Unit suffix is unknown",
+     "The `#{name_to_string(suffix)}` suffix is used by this literal, but no unit with that suffix is registered.",
+     "declare this unit or change the suffix", "Register `#{name_to_string(suffix)}` before using it in a literal"}
+  end
+
+  defp unit_content(:invalid_unit_literal, %{value: value, suffix: suffix}) do
+    {"Unit literal is malformed",
+     "A unit literal needs a numeric value and a text suffix, but this one uses value `#{name_to_string(value)}` and suffix `#{name_to_string(suffix)}`.",
+     "rewrite this unit literal", "Use a number followed by a registered text suffix"}
   end
 
   defp packet_content(:invalid_packet_name, %{detail: name}) do
