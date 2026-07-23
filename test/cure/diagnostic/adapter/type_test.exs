@@ -521,4 +521,57 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert rendered =~ "`VALUE` IS ANNOTATED AS `BOOL`, BUT `CTOR` STORES `INT`"
     assert rendered =~ "Hint: Change the annotation to `Int`"
   end
+
+  test "dependent sibling and telescope failures are owned by the type adapter" do
+    source = "r c1 c2 with r t.9\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:dependent, source, "dependent.cure")
+    {:ok, c1} = SourceRegistry.span(registry, :dependent, 2, 4)
+    {:ok, c2} = SourceRegistry.span(registry, :dependent, 5, 7)
+    {:ok, with_expression} = SourceRegistry.span(registry, :dependent, 8, 14)
+    {:ok, scrutinee} = SourceRegistry.span(registry, :dependent, 13, 14)
+    {:ok, receiver} = SourceRegistry.span(registry, :dependent, 15, 16)
+    {:ok, index} = SourceRegistry.span(registry, :dependent, 17, 18)
+    {:ok, projection} = SourceRegistry.span(registry, :dependent, 15, 18)
+
+    sibling =
+      {:source_context, {:with_sibling_dependency_unsupported, :sibling_references_sibling},
+       %{
+         dependent: "c2",
+         dependency: "c1",
+         checking: :handle,
+         parameter_sites: [
+           %{name: "c1", type_span: c1},
+           %{name: "c2", type_span: c2}
+         ],
+         scrutinee_span: scrutinee,
+         span: with_expression
+       }}
+
+    telescope =
+      {:source_context, {:telescope_index_out_of_bounds, 9, 3},
+       %{
+         checking: :bad,
+         projection_syntax: :dot,
+         receiver_span: receiver,
+         index_span: index,
+         span: projection
+       }}
+
+    for error <- [sibling, telescope] do
+      direct = TypeAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E093"
+      assert direct.primary
+      assert direct.secondary != []
+      assert direct.suggestions != []
+    end
+
+    sibling_rendered = Renderer.plain(TypeAdapter.from_error(sibling), registry, width: 80)
+    assert sibling_rendered =~ "WITH CANNOT REFINE DEPENDENT SIBLINGS"
+    assert sibling_rendered =~ "Hint: Nest a second match after refining `c1`"
+
+    telescope_rendered = Renderer.plain(TypeAdapter.from_error(telescope), registry, width: 80)
+    assert telescope_rendered =~ "TUPLE POSITION 9 IS OUT OF RANGE"
+    assert telescope_rendered =~ "Hint: Use a tuple position from 1 through 3"
+  end
 end

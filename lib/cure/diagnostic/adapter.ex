@@ -1667,11 +1667,11 @@ defmodule Cure.Diagnostic.Adapter do
       do: TypeAdapter.from_error(error, opts)
 
   def from_error(
-        {:source_context, {:telescope_index_out_of_bounds, index, arity}, context},
+        {:source_context, {:telescope_index_out_of_bounds, index, arity}, context} = error,
         opts
       )
       when is_integer(index) and is_integer(arity) and is_map(context),
-      do: telescope_index_failure(index, arity, context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:source_context, {:unknown_erasure_class, _name, _class}, context} = error, opts)
       when is_map(context),
@@ -1717,25 +1717,12 @@ defmodule Cure.Diagnostic.Adapter do
       do: TypeAdapter.from_error(error, opts)
 
   def from_error(
-        {:source_context, {:with_sibling_dependency_unsupported, reason}, context},
+        {:source_context, {:with_sibling_dependency_unsupported, reason}, context} = error,
         opts
       )
       when reason in [:sibling_references_sibling, :kept_references_sibling] and
-             is_map(context) do
-    if Map.has_key?(context, :dependent) do
-      with_sibling_dependency_failure(
-        %{
-          reason: reason,
-          dependent: Map.get(context, :dependent),
-          dependency: Map.get(context, :dependency)
-        },
-        context,
-        opts
-      )
-    else
-      contextual_type_failure(:with_sibling_dependency_unsupported, %{detail: reason}, opts)
-    end
-  end
+             is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:source_context, {:rewrite_no_match, _left, _right}, context}, opts)
       when is_map(context),
@@ -4333,148 +4320,10 @@ defmodule Cure.Diagnostic.Adapter do
     "End this constructor signature with `#{family}` applied to its #{positions}"
   end
 
-  defp with_sibling_dependency_failure(details, context, opts) do
-    dependent = name_to_string(Map.get(details, :dependent))
-    dependency = name_to_string(Map.get(details, :dependency))
-    reason = Map.get(details, :reason)
-    dependent_site = parameter_site(context, dependent)
-    dependency_site = parameter_site(context, dependency)
-    expression_span = Map.get(context, :span) || Keyword.get(opts, :span)
-    scrutinee_span = Map.get(context, :scrutinee_span)
-
-    {body, primary_message, dependency_message, hint} =
-      case reason do
-        :sibling_references_sibling ->
-          {
-            "`#{dependent}` must be refined when this `with` chooses a constructor, but its type also depends on `#{dependency}`, which must be refined by the same match. Cure cannot currently generalize one refined sibling over another without changing their dependency order.",
-            "the type of `#{dependent}` depends on another value refined by this `with`",
-            "`#{dependency}` must also be refined by this match",
-            "Nest a second match after refining `#{dependency}`, or change `#{dependent}` so its type does not depend on `#{dependency}`"
-          }
-
-        :kept_references_sibling ->
-          {
-            "`#{dependent}` is not itself refined by this `with`, but its type depends on `#{dependency}`, which is. Keeping `#{dependent}` while changing the type of `#{dependency}` would leave the context ill-formed.",
-            "this parameter would keep a type tied to a refined sibling",
-            "`#{dependency}` changes type across these branches",
-            "Move `#{dependent}` inside the refined branch, or change its type so it does not depend on `#{dependency}`"
-          }
-      end
-
-    primary_span = parameter_site_span(dependent_site) || expression_span
-
-    secondary =
-      [
-        sibling_dependency_label(
-          parameter_site_span(dependency_site),
-          primary_span,
-          dependency_message
-        ),
-        sibling_dependency_label(
-          scrutinee_span,
-          primary_span,
-          "this is the value whose constructor would refine those sibling types"
-        ),
-        sibling_dependency_label(
-          expression_span,
-          primary_span,
-          "this `with` requires the unsupported dependent refinement"
-        )
-      ]
-      |> Enum.reject(&is_nil/1)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "With cannot refine dependent siblings in this order",
-      body: Doc.paragraph(body),
-      primary: pickup_label(primary_span, :primary, primary_message),
-      secondary: secondary,
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{
-        kind: :with_sibling_dependency_unsupported,
-        reason: reason,
-        checking: Map.get(context, :checking),
-        dependent: dependent,
-        dependency: dependency
-      }
-    )
-  end
-
-  defp parameter_site(context, name) do
-    context
-    |> Map.get(:parameter_sites, [])
-    |> Enum.find(&(name_to_string(Map.get(&1, :name)) == name))
-  end
-
-  defp parameter_site_span(%{type_span: %Span{} = span}), do: span
-  defp parameter_site_span(%{span: %Span{} = span}), do: span
-  defp parameter_site_span(_site), do: nil
-
   defp sibling_dependency_label(%Span{} = span, primary_span, message) when span != primary_span,
     do: pickup_label(span, :secondary, message)
 
   defp sibling_dependency_label(_span, _primary_span, _message), do: nil
-
-  defp telescope_index_failure(index, arity, context, opts) do
-    syntax = Map.get(context, :projection_syntax, :dot)
-
-    primary_span =
-      Map.get(context, :index_span) || Map.get(context, :field_span) || Map.get(context, :span) ||
-        Keyword.get(opts, :span)
-
-    receiver_span = Map.get(context, :receiver_span)
-    expression_span = Map.get(context, :span)
-    position_word = if arity == 1, do: "position", else: "positions"
-
-    body =
-      "This tuple has #{arity} #{position_word}, numbered from 1 through #{arity}, but this projection asks for position #{index}. Tuple projection is checked at compile time, so an out-of-range position can never produce a value."
-
-    primary_message =
-      case syntax do
-        :element -> "index #{index} is outside this #{arity}-element tuple"
-        _ -> "position .#{index} does not exist on this #{arity}-element tuple"
-      end
-
-    secondary =
-      [
-        sibling_dependency_label(
-          receiver_span,
-          primary_span,
-          "this expression has a tuple type with #{arity} #{position_word}"
-        ),
-        sibling_dependency_label(
-          expression_span,
-          primary_span,
-          "this complete projection cannot succeed"
-        )
-      ]
-      |> Enum.reject(&is_nil/1)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Tuple position #{index} is out of range",
-      body: Doc.paragraph(body),
-      primary: pickup_label(primary_span, :primary, primary_message),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Use a tuple position from 1 through #{arity}",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :telescope_index_out_of_bounds,
-        index: index,
-        arity: arity,
-        syntax: syntax,
-        checking: Map.get(context, :checking)
-      }
-    )
-  end
 
   defp pattern_only_syntax(kind, context, opts) do
     whole = Map.get(context, :span) || Keyword.get(opts, :span)
