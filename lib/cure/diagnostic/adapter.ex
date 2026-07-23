@@ -893,43 +893,48 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   def from_error({:source_context, {:unsolved_metavariables, name}, context}, opts) when is_map(context) do
-    if Map.get(context, :constructor_result_mismatch) do
-      checked_constructor_result_failure(name, context, opts)
-    else
-      opts = Keyword.put_new(opts, :span, Map.get(context, :span))
-      primary = primary_label(opts, "these hidden arguments cannot be inferred")
+    cond do
+      Map.get(context, :constructor_result_mismatch) ->
+        checked_constructor_result_failure(name, context, opts)
 
-      secondary =
-        case {Map.get(context, :expectation_span), primary} do
-          {%Span{} = span, %Label{span: primary_span}} when span != primary_span ->
-            [%Label{span: span, style: :secondary, message: "this result annotation still leaves them unknown"}]
+      Map.get(context, :expectation_origin) == :constructor_argument ->
+        nested_constructor_implicit_failure(name, context, opts)
 
-          _ ->
-            []
-        end
+      true ->
+        opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+        primary = primary_label(opts, "these hidden arguments cannot be inferred")
 
-      Diagnostic.new(
-        code: "E011",
-        key: :missing_implicit_argument,
-        severity: :error,
-        title: "Missing implicit argument",
-        body:
-          Doc.stack([
-            Doc.paragraph("Cure could not infer every implicit argument for `#{name}` at this call site."),
-            Doc.paragraph(
-              "The call leaves hidden type or index values unconstrained. Provide arguments that determine them, or use the result where its dependent type is known."
-            )
-          ]),
-        primary: primary,
-        secondary: secondary,
-        suggestions: [
-          %Suggestion{
-            message: "Provide arguments or a result type that determines the hidden values",
-            applicability: :manual
-          }
-        ],
-        payload: Map.put(context, :name, name)
-      )
+        secondary =
+          case {Map.get(context, :expectation_span), primary} do
+            {%Span{} = span, %Label{span: primary_span}} when span != primary_span ->
+              [%Label{span: span, style: :secondary, message: "this result annotation still leaves them unknown"}]
+
+            _ ->
+              []
+          end
+
+        Diagnostic.new(
+          code: "E011",
+          key: :missing_implicit_argument,
+          severity: :error,
+          title: "Missing implicit argument",
+          body:
+            Doc.stack([
+              Doc.paragraph("Cure could not infer every implicit argument for `#{name}` at this call site."),
+              Doc.paragraph(
+                "The call leaves hidden type or index values unconstrained. Provide arguments that determine them, or use the result where its dependent type is known."
+              )
+            ]),
+          primary: primary,
+          secondary: secondary,
+          suggestions: [
+            %Suggestion{
+              message: "Provide arguments or a result type that determines the hidden values",
+              applicability: :manual
+            }
+          ],
+          payload: Map.put(context, :name, name)
+        )
     end
   end
 
@@ -4571,6 +4576,61 @@ defmodule Cure.Diagnostic.Adapter do
         expected: expected,
         actual: actual,
         checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp nested_constructor_implicit_failure(name, context, opts) do
+    constructor = surface_declaration_name(name)
+    owner = context |> Map.get(:checking, :constructor) |> surface_declaration_name()
+    argument_index = Map.get(context, :argument_index, 0)
+    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(context, :expectation_span) do
+        %Span{} = span when span != primary_span ->
+          [
+            pickup_label(
+              span,
+              :secondary,
+              "the surrounding result still does not determine these indices"
+            )
+          ]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E011",
+      key: :missing_implicit_argument,
+      severity: :error,
+      title: "Cannot infer `#{constructor}` inside `#{owner}`",
+      body:
+        Doc.paragraph(
+          "Argument #{argument_index + 1} of `#{owner}` uses `#{constructor}`, but its hidden type or index values are still unknown. The surrounding result and the other constructor fields do not determine them."
+        ),
+      primary:
+        pickup_label(
+          primary_span,
+          :primary,
+          "this nested constructor needs an expected indexed type"
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Use `#{constructor}` where its expected field type is known, or change the sibling arguments or result annotation so its indices are determined",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :nested_constructor_implicit,
+        name: name,
+        constructor: constructor,
+        owner: Map.get(context, :checking),
+        argument_index: argument_index,
+        expectation_origin: :constructor_argument
       }
     )
   end

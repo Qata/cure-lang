@@ -2241,7 +2241,7 @@ defmodule Cure.Elab.Elaborator do
                       attach_constructor_result_mismatch(orig, details, meta, args)
 
                     {:error, _} ->
-                      orig
+                      attach_nested_constructor_context(orig, aligned_args, cres)
                   end
               end
           end
@@ -3981,8 +3981,8 @@ defmodule Cure.Elab.Elaborator do
         {:ok, term, type} ->
           {:cont, {:ok, acc ++ [{term, Quote.reify(type, depth, env)}]}}
 
-        {:error, _} = err ->
-          {:halt, err}
+        {:error, _} = error ->
+          {:halt, error}
       end
     end)
   end
@@ -10169,6 +10169,65 @@ defmodule Cure.Elab.Elaborator do
   defp attach_constructor_result_mismatch({:error, reason}, details, meta, args) do
     {:error, {:source_context, reason, constructor_result_mismatch_context(details, meta, args)}}
   end
+
+  defp attach_nested_constructor_context(
+         {:error, {:unsolved_metavariables, name} = reason},
+         args,
+         owner
+       ) do
+    case nested_constructor_site(args, name) do
+      {argument_index, expression} ->
+        span = surface_expression_span(expression)
+
+        {:error,
+         {:source_context, reason,
+          %{
+            line: span && span.start_line,
+            column: span && span.start_column,
+            length: span && max(1, span.end_column - span.start_column),
+            span: span,
+            checking: owner,
+            expression_category: :function_call,
+            expectation_origin: :constructor_argument,
+            argument_index: argument_index
+          }}}
+
+      nil ->
+        {:error, reason}
+    end
+  end
+
+  defp attach_nested_constructor_context(error, _args, _owner), do: error
+
+  defp nested_constructor_site(args, target) do
+    target = target |> Cure.Elab.Name.base() |> to_string()
+
+    args
+    |> Enum.with_index()
+    |> Enum.find_value(fn {argument, index} ->
+      case nested_named_call(argument, target) do
+        nil -> nil
+        expression -> {index, expression}
+      end
+    end)
+  end
+
+  defp nested_named_call({:function_call, meta, children} = expression, target)
+       when is_list(meta) do
+    if Keyword.get(meta, :name) |> to_string() == target do
+      expression
+    else
+      Enum.find_value(children, &nested_named_call(&1, target))
+    end
+  end
+
+  defp nested_named_call({_tag, _meta, children}, target) when is_list(children),
+    do: Enum.find_value(children, &nested_named_call(&1, target))
+
+  defp nested_named_call(children, target) when is_list(children),
+    do: Enum.find_value(children, &nested_named_call(&1, target))
+
+  defp nested_named_call(_expression, _target), do: nil
 
   defp constructor_result_mismatch_context(details, meta, args) do
     info = Cure.MetaAST.Metadata.source_info(meta)

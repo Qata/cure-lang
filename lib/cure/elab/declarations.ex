@@ -1085,10 +1085,25 @@ defmodule Cure.Elab.Declarations do
           end
 
         merged_context =
-          if Map.get(merged_context, :expectation_origin) == :annotation and expectation_span do
+          if expectation_span &&
+               (Map.get(merged_context, :expectation_origin) == :annotation or
+                  match?({:unsolved_metavariables, _}, nested_reason)) do
             Map.put(merged_context, :expectation_span, expectation_span)
           else
             merged_context
+          end
+
+        merged_context =
+          case Map.get(merged_context, :span) do
+            %Cure.Diagnostic.Span{} = span ->
+              Map.merge(merged_context, %{
+                line: span.start_line,
+                column: span.start_column,
+                length: max(1, span.end_column - span.start_column)
+              })
+
+            _ ->
+              merged_context
           end
 
         {:error, {:source_context, nested_reason, merged_context}}
