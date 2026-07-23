@@ -94,6 +94,12 @@ defmodule Cure.Diagnostic.Adapter.NameTest do
       assert NameAdapter.from_error(error).code == "E091"
     end
 
+    diagnostic = NameAdapter.from_error({:ambiguous_name, :shared, ["Left", "Right"]})
+    assert diagnostic == Adapter.from_error({:ambiguous_name, :shared, ["Left", "Right"]})
+    assert diagnostic.code == "E089"
+    assert diagnostic.payload == %{namespace: :value, name: "shared", owners: ["Left", "Right"]}
+    assert hd(diagnostic.suggestions).message =~ "`Left.shared` or `Right.shared`"
+
     assert_raise Cure.Diagnostic.UnhandledError, fn ->
       NameAdapter.from_error({:ordinary_type_failure, :not_a_name_error})
     end

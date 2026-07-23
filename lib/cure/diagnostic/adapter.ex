@@ -2754,26 +2754,8 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:ambiguous_name, name, modules}, opts) when is_list(modules) do
-    spelling = name_to_string(name)
-    owners = Enum.map(modules, &name_to_string/1)
-
-    Diagnostic.new(
-      code: "E089",
-      key: :ambiguous_name,
-      severity: :error,
-      title: "Ambiguous name",
-      message: "`#{spelling}` is provided by more than one imported module.",
-      primary: primary_label(opts, "qualification is required here"),
-      suggestions: [
-        %Suggestion{
-          message: "Qualify the name as #{Enum.map_join(owners, " or ", &"`#{&1}.#{spelling}`")}",
-          applicability: :manual
-        }
-      ],
-      payload: %{namespace: :value, name: spelling, owners: owners}
-    )
-  end
+  def from_error({:ambiguous_name, _name, _modules} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
   def from_error({:duplicate_module, name, paths}, opts) when is_list(paths) do
     Diagnostic.new(

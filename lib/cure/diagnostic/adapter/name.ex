@@ -126,7 +126,32 @@ defmodule Cure.Diagnostic.Adapter.Name do
     unknown_name(:member, method, opts)
   end
 
+  def from_error({:ambiguous_name, name, modules}, opts) when is_list(modules),
+    do: ambiguous_name(name, modules, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  @doc false
+  def ambiguous_name(name, modules, opts \\ []) do
+    spelling = name_to_string(name)
+    owners = Enum.map(modules, &name_to_string/1)
+
+    Diagnostic.new(
+      code: "E089",
+      key: :ambiguous_name,
+      severity: :error,
+      title: "Ambiguous name",
+      body: Doc.paragraph("`#{spelling}` is provided by more than one imported module."),
+      primary: primary(opts, "qualification is required here"),
+      suggestions: [
+        %Suggestion{
+          message: "Qualify the name as #{Enum.map_join(owners, " or ", &"`#{&1}.#{spelling}`")}",
+          applicability: :manual
+        }
+      ],
+      payload: %{namespace: :value, name: spelling, owners: owners}
+    )
+  end
 
   @doc false
   def record_field_unknown(record, field, available_fields, context, opts) do
