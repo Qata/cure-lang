@@ -129,6 +129,9 @@ defmodule Cure.Diagnostic.Adapter.Name do
   def from_error({:ambiguous_name, name, modules}, opts) when is_list(modules),
     do: ambiguous_name(name, modules, opts)
 
+  def from_error({:ambiguous_method, method, interfaces}, opts) when is_list(interfaces),
+    do: ambiguous_member(method, interfaces, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
   @doc false
@@ -150,6 +153,79 @@ defmodule Cure.Diagnostic.Adapter.Name do
         }
       ],
       payload: %{namespace: :value, name: spelling, owners: owners}
+    )
+  end
+
+  @doc false
+  def ambiguous_member(method, interfaces, opts \\ []),
+    do: ambiguous_member(method, interfaces, %{}, opts)
+
+  def ambiguous_member(method, interfaces, context, opts) do
+    spelling = name_to_string(method)
+    owners = Enum.map(interfaces, &name_to_string/1)
+    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    declarations =
+      context
+      |> Map.get(:method_declarations, [])
+      |> Enum.filter(&match?(%{span: %Span{}}, &1))
+
+    secondary =
+      declarations
+      |> Enum.reject(&(&1.span == primary_span))
+      |> Enum.map(fn declaration ->
+        %Label{
+          span: declaration.span,
+          style: :secondary,
+          message: "`#{spelling}` is also declared by `#{name_to_string(declaration.interface)}` here"
+        }
+      end)
+
+    primary_owner =
+      Enum.find_value(declarations, fn declaration ->
+        if declaration.span == primary_span, do: name_to_string(declaration.interface)
+      end)
+
+    owner_list = Enum.map_join(owners, " and ", &"`#{&1}`")
+
+    Diagnostic.new(
+      code: "E089",
+      key: :ambiguous_name,
+      severity: :error,
+      title: "Method `#{spelling}` is declared by multiple interfaces",
+      body:
+        Doc.paragraph(
+          "Both #{owner_list} declare `#{spelling}`. Interface methods share one unqualified namespace, so Cure could not determine which declaration an unqualified `#{spelling}(...)` call should use."
+        ),
+      primary:
+        if(primary_span,
+          do: %Label{
+            span: primary_span,
+            style: :primary,
+            message:
+              if(primary_owner,
+                do: "`#{primary_owner}` repeats the interface method `#{spelling}`",
+                else: "this repeats the interface method `#{spelling}`"
+              )
+          },
+          else: primary(opts, "rename this interface method")
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Rename `#{spelling}` in one interface so every interface method has a unique name",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :ambiguous_method,
+        method: spelling,
+        interfaces: owners,
+        declarations:
+          Enum.map(declarations, fn declaration ->
+            %{interface: name_to_string(declaration.interface)}
+          end)
+      }
     )
   end
 

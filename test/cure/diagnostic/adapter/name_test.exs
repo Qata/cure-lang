@@ -100,6 +100,11 @@ defmodule Cure.Diagnostic.Adapter.NameTest do
     assert diagnostic.payload == %{namespace: :value, name: "shared", owners: ["Left", "Right"]}
     assert hd(diagnostic.suggestions).message =~ "`Left.shared` or `Right.shared`"
 
+    method = NameAdapter.from_error({:ambiguous_method, :size, [:Eqs, :Ord]})
+    assert method == Adapter.from_error({:ambiguous_method, :size, [:Eqs, :Ord]})
+    assert method.code == "E089"
+    assert method.payload.kind == :ambiguous_method
+
     assert_raise Cure.Diagnostic.UnhandledError, fn ->
       NameAdapter.from_error({:ordinary_type_failure, :not_a_name_error})
     end
