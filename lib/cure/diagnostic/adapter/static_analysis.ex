@@ -35,7 +35,69 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysis do
     usage_failure(details, context, opts)
   end
 
+  def from_error({:totality_required, name}, opts),
+    do: totality_failure(name, %{}, opts)
+
+  def from_error({:compile_time_totality, name, reason}, opts),
+    do: totality_failure(name, %{totality_reason: reason}, opts)
+
+  def from_error({:source_context, {:totality_required, name}, context}, opts)
+      when is_map(context),
+      do: totality_failure(name, context, opts)
+
+  def from_error({:source_context, {:compile_time_totality, name, reason}, context}, opts)
+      when is_map(context),
+      do: totality_failure(name, Map.put(context, :totality_reason, reason), opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp totality_failure(name, context, opts) do
+    calls = Map.get(context, :recursive_call_spans, [])
+    definition = Map.get(context, :definition_span)
+    {primary, secondary} = totality_labels(calls, definition, opts)
+
+    Diagnostic.new(
+      code: "E013",
+      key: :totality_failure,
+      severity: :error,
+      title: "Function must be total",
+      body:
+        Doc.paragraph(
+          "`#{name_to_string(name)}` is evaluated while checking types, but the compiler cannot prove that every call to it terminates."
+        ),
+      primary: primary,
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Make each recursive call use a structurally smaller argument, or keep this function out of types",
+          applicability: :manual
+        }
+      ],
+      notes: ["Runtime-only functions may remain partial; only compile-time computation requires a total definition."],
+      payload: %{
+        name: name,
+        checking: Map.get(context, :checking, Keyword.get(opts, :checking)),
+        reason: Map.get(context, :totality_reason)
+      }
+    )
+  end
+
+  defp totality_labels([first | rest], definition, _opts) do
+    primary =
+      label(first, :primary, "this recursive call participates in an unproven termination cycle")
+
+    calls =
+      Enum.map(rest, &label(&1, :secondary, "another recursive call in this cycle is here"))
+
+    owner =
+      label(definition, :secondary, "this type-level function must terminate on every input")
+
+    {primary, Enum.reject(calls ++ [owner], &is_nil/1)}
+  end
+
+  defp totality_labels([], _definition, opts) do
+    {primary(opts, "this definition is used in a type and must always terminate"), []}
+  end
 
   defp relevance_failure(details, context, opts) do
     site = Map.get(details, :site, :runtime)
@@ -228,4 +290,8 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysis do
 
   defp label(%Span{} = span, style, message), do: %Label{span: span, style: style, message: message}
   defp label(_, _style, _message), do: nil
+
+  defp name_to_string(name) when is_atom(name), do: Atom.to_string(name)
+  defp name_to_string(name) when is_binary(name), do: name
+  defp name_to_string(name), do: inspect(name)
 end

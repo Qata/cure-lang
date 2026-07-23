@@ -1572,14 +1572,13 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(details) and is_map(context),
       do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:source_context, {:totality_required, name}, context}, opts) when is_map(context) do
-    totality_failure(name, context, opts)
-  end
+  def from_error({:source_context, {:totality_required, _name}, context} = error, opts)
+      when is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:source_context, {:compile_time_totality, name, reason}, context}, opts)
-      when is_map(context) do
-    totality_failure(name, Map.put(context, :totality_reason, reason), opts)
-  end
+  def from_error({:source_context, {:compile_time_totality, _name, _reason}, context} = error, opts)
+      when is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
 
   def from_error({:source_context, {:final_core_violation, name, rejections}, context}, opts)
       when is_list(rejections) and is_map(context) do
@@ -2702,13 +2701,11 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:totality_required, name}, opts) do
-    totality_failure(name, %{}, opts)
-  end
+  def from_error({:totality_required, _name} = error, opts),
+    do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:compile_time_totality, name, reason}, opts) do
-    totality_failure(name, %{totality_reason: reason}, opts)
-  end
+  def from_error({:compile_time_totality, _name, _reason} = error, opts),
+    do: StaticAnalysis.from_error(error, opts)
 
   def from_error({:pickup_no_else, details}, opts) when is_map(details) do
     clauses = pickup_spans(details.clauses)
@@ -6015,55 +6012,6 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp operator_conflict_labels([], opts, primary_message, _secondary_message),
     do: {primary_label(opts, primary_message), []}
-
-  defp totality_failure(name, context, opts) do
-    spelling = name_to_string(name)
-    calls = Map.get(context, :recursive_call_spans, [])
-    definition = Map.get(context, :definition_span)
-    {primary, secondary} = totality_labels(calls, definition, opts)
-
-    Diagnostic.new(
-      code: "E013",
-      key: :totality_failure,
-      severity: :error,
-      title: "Function must be total",
-      body:
-        Doc.paragraph(
-          "`#{spelling}` is evaluated while checking types, but the compiler cannot prove that every call to it terminates."
-        ),
-      primary: primary,
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Make each recursive call use a structurally smaller argument, or keep this function out of types",
-          applicability: :manual
-        }
-      ],
-      notes: ["Runtime-only functions may remain partial; only compile-time computation requires a total definition."],
-      payload: %{
-        name: name,
-        checking: Map.get(context, :checking, Keyword.get(opts, :checking)),
-        reason: Map.get(context, :totality_reason)
-      }
-    )
-  end
-
-  defp totality_labels([first | rest], definition, _opts) do
-    primary =
-      pickup_label(first, :primary, "this recursive call participates in an unproven termination cycle")
-
-    call_labels =
-      Enum.map(rest, &pickup_label(&1, :secondary, "another recursive call in this cycle is here"))
-
-    definition_label =
-      pickup_label(definition, :secondary, "this type-level function must terminate on every input")
-
-    {primary, Enum.reject(call_labels ++ [definition_label], &is_nil/1)}
-  end
-
-  defp totality_labels([], _definition, opts) do
-    {primary_label(opts, "this definition is used in a type and must always terminate"), []}
-  end
 
   defp inferred_hole_failure(name, context, opts) do
     opts =

@@ -39,6 +39,52 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysisTest do
     end
   end
 
+  test "totality labels every recursive call and the owning declaration" do
+    source = "fn loop() = loop() + loop()\n"
+
+    registry =
+      SourceRegistry.new()
+      |> SourceRegistry.register(:totality, source, "totality.cure")
+
+    {:ok, definition} = SourceRegistry.span(registry, :totality, 0, 27)
+    {:ok, first_call} = SourceRegistry.span(registry, :totality, 12, 16)
+    {:ok, second_call} = SourceRegistry.span(registry, :totality, 21, 25)
+
+    error =
+      {:source_context, {:compile_time_totality, :"Main#loop", :not_total},
+       %{
+         definition_span: definition,
+         recursive_call_spans: [first_call, second_call],
+         checking: :"Main#loop"
+       }}
+
+    direct = StaticAnalysis.from_error(error)
+    assert Adapter.from_error(error) == direct
+    assert direct.code == "E013"
+    assert direct.payload.reason == :not_total
+    assert direct.primary.span == first_call
+    assert Enum.map(direct.secondary, & &1.span) == [second_call, definition]
+
+    assert Renderer.plain(direct, registry, width: 80) ==
+             """
+             -- FUNCTION MUST BE TOTAL [E013] --------------------------------- totality.cure
+
+             `Main#loop` is evaluated while checking types, but the compiler cannot prove
+             that every call to it terminates.
+
+             at totality.cure:1:13
+             1 | fn loop() = loop() + loop()
+               | --------------------------- this type-level function must terminate on every input
+               |             ^^^^     ---- this recursive call participates in an unproven termination cycle; another recursive call in this cycle is here
+
+             Note: Runtime-only functions may remain partial; only compile-time computation
+                   requires a total definition.
+
+             Hint: Make each recursive call use a structurally smaller argument, or keep this function out of types
+             """
+             |> String.trim_trailing()
+  end
+
   test "resource usage preserves declaration and earlier-use regions" do
     source = "x x x\n"
     registry = SourceRegistry.new() |> SourceRegistry.register(:usage, source, "usage.cure")
