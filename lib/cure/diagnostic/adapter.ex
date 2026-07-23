@@ -1642,6 +1642,9 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:source_context, :with_mixed_rematch_arms, context}, opts) when is_map(context),
     do: mixed_with_arm_failure(context, opts)
 
+  def from_error({:source_context, :with_scrutinee_not_data, context}, opts) when is_map(context),
+    do: with_scrutinee_not_data_failure(context, opts)
+
   def from_error({:source_context, {:rewrite_no_match, _left, _right}, context}, opts)
       when is_map(context),
       do: rewrite_failure(:rewrite_no_match, context, opts)
@@ -6569,6 +6572,86 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp mixed_with_style_name(:ordinary), do: "ordinary `Pattern -> body`"
   defp mixed_with_style_name(:rematch), do: "rematch `ParentPattern | WithPattern -> body`"
+
+  defp with_scrutinee_not_data_failure(context, opts) do
+    actual_type = context |> Map.get(:actual_type) |> surface_type()
+    scrutinee_span = Map.get(context, :scrutinee_span) || Map.get(context, :span)
+    form = Map.get(context, :with_form, :ordinary)
+
+    branch_labels =
+      context
+      |> Map.get(:with_arms, [])
+      |> Enum.flat_map(fn
+        %{span: %Span{} = span} ->
+          [
+            %Label{
+              span: span,
+              style: :secondary,
+              message: with_non_data_branch_label(form)
+            }
+          ]
+
+        _ ->
+          []
+      end)
+
+    opener_label =
+      case Map.get(context, :opener_span) do
+        %Span{} = span when span != scrutinee_span ->
+          [%Label{span: span, style: :secondary, message: "this `with` tries to refine the value by constructors"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "With requires a data value",
+      body:
+        Doc.stack([
+          Doc.paragraph(
+            "This `with` scrutinee has type `#{actual_type}`, which does not provide data constructors to refine."
+          ),
+          Doc.paragraph(with_non_data_explanation(form))
+        ]),
+      primary: %Label{
+        span: scrutinee_span || Keyword.get(opts, :span),
+        style: :primary,
+        message: "`#{actual_type}` cannot be split into constructor branches"
+      },
+      secondary: opener_label ++ branch_labels,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Use `pickup` for conditions on primitive values, or remove `with` when no constructor refinement is needed",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :with_scrutinee_not_data,
+        checking: Map.get(context, :checking),
+        actual_type: actual_type,
+        with_form: form,
+        branch_count: length(branch_labels)
+      }
+    )
+  end
+
+  defp with_non_data_explanation(:rematch) do
+    "A rematch branch can restate the parent patterns only when the value after `with` belongs to a constructor-defined data type."
+  end
+
+  defp with_non_data_explanation(_ordinary) do
+    "A `with` block refines its surrounding goal through the constructors of the value after `with`; it is not a general conditional."
+  end
+
+  defp with_non_data_branch_label(:rematch),
+    do: "this rematch branch needs a constructor-defined `with` value"
+
+  defp with_non_data_branch_label(_ordinary),
+    do: "this branch cannot refine a value without constructors"
 
   defp contextual_type_failure(kind, details, opts) do
     {title, message, label} =

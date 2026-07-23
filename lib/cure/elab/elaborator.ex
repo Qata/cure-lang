@@ -4443,7 +4443,7 @@ defmodule Cure.Elab.Elaborator do
           end
 
         _ ->
-          {:error, :with_scrutinee_not_data}
+          with_scrutinee_not_data(scrut_expr, scrut_type, arms)
       end
     end
   end
@@ -4493,9 +4493,23 @@ defmodule Cure.Elab.Elaborator do
           end
 
         _ ->
-          {:error, :with_scrutinee_not_data}
+          with_scrutinee_not_data(scrut_expr, scrut_type, arms)
       end
     end
+  end
+
+  defp with_scrutinee_not_data(scrutinee, actual_type, arms) do
+    arm_contexts = Enum.map(arms, &with_arm_context/1)
+
+    {:error,
+     {:source_context, :with_scrutinee_not_data,
+      %{
+        span: surface_expression_span(scrutinee),
+        scrutinee_span: surface_expression_span(scrutinee),
+        actual_type: actual_type,
+        with_form: if(Enum.any?(arms, &with_rematch_arm?/1), do: :rematch, else: :ordinary),
+        with_arms: arm_contexts
+      }}}
   end
 
   # Build `cname => {:matched, with_pattern, body} | {:impossible_marked, ...}`,
