@@ -162,6 +162,17 @@ defmodule Cure.Diagnostic.RegistryTest do
            }
   end
 
+  test "E091 names its exhaustive family converter for both producer branches" do
+    entry = Registry.fetch!("E091")
+
+    assert entry.converter == Cure.Diagnostic.Adapter.Name
+
+    assert entry.producer_converters == %{
+             name_resolution: {Cure.Diagnostic.Adapter.Name, :from_error},
+             pattern_checker: {Cure.Diagnostic.Adapter.Name, :from_error}
+           }
+  end
+
   test "producer catalog validation requires every code and producer branch independently" do
     entry = Registry.fetch!("E094")
     assert entry.producers |> Enum.sort() == [:lexer, :parser]

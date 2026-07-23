@@ -28,8 +28,6 @@ defmodule Cure.Diagnostic.Adapter do
   alias Cure.Diagnostic.Suggest
   alias Cure.MetaAST.Metadata
 
-  @unknown_name_code "E091"
-
   @spec from_error(term(), keyword()) :: Diagnostic.t()
   def from_error(error, opts \\ [])
 
@@ -1156,19 +1154,13 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:source_context, {:unknown_record, name}, context}, opts) when is_map(context),
     do: unknown_record_failure(name, Map.get(context, :available_records, []), context, opts)
 
-  def from_error({:source_context, {:unknown_field, record, field}, context}, opts) when is_map(context) do
-    opts =
-      opts
-      |> Keyword.put_new(:span, Map.get(context, :span))
-      |> Keyword.put(:owner, record)
-      |> Keyword.put(:checking, Map.get(context, :checking))
-
-    unknown_name(:member, "#{name_to_string(record)}.#{name_to_string(field)}", opts)
-  end
+  def from_error({:source_context, {:unknown_field, _record, _field}, context} = error, opts)
+      when is_map(context),
+      do: NameAdapter.from_error(error, opts)
 
   def from_error({:source_context, {:unknown_field, record, field, available_fields}, context}, opts)
       when is_map(context) and is_list(available_fields) do
-    record_field_unknown_failure(record, field, available_fields, context, opts)
+    NameAdapter.from_error({:source_context, {:unknown_field, record, field, available_fields}, context}, opts)
   end
 
   def from_error({:source_context, {:projection_not_a_record, record}, context}, opts) when is_map(context) do
@@ -1182,32 +1174,12 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: dependent_record_projection_failure(record, field, context, opts)
 
-  def from_error({:unknown_field, record, field}, opts) do
-    unknown_name(:member, "#{name_to_string(record)}.#{name_to_string(field)}", Keyword.put(opts, :owner, record))
-  end
+  def from_error({:unknown_field, _record, _field} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:unknown_field, record, field, available_fields}, opts) when is_list(available_fields) do
-    candidates =
-      Enum.map(available_fields, fn candidate ->
-        %{
-          id: {:record_field, record, candidate},
-          name: name_to_string(candidate),
-          namespace: :member,
-          owner: record,
-          imported: true,
-          origin: :record_shape
-        }
-      end)
-
-    opts =
-      opts
-      |> Keyword.put(:owner, record)
-      |> Keyword.put(:record, record)
-      |> Keyword.put(:candidates, candidates)
-      |> Keyword.put(:display_name, "#{name_to_string(record)}.#{name_to_string(field)}")
-
-    unknown_name(:member, name_to_string(field), opts)
-  end
+  def from_error({:unknown_field, _record, _field, available_fields} = error, opts)
+      when is_list(available_fields),
+      do: NameAdapter.from_error(error, opts)
 
   def from_error({:source_context, {:projection_non_record, field}, context}, opts) when is_map(context) do
     projection_receiver_failure(nil, Map.put_new(context, :field, field), opts)
@@ -1327,46 +1299,21 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:source_context, {:foreign_ctor, constructor}, context}, opts)
       when is_map(context),
-      do: foreign_constructor_failure(constructor, context, opts)
+      do: NameAdapter.from_error({:source_context, {:foreign_ctor, constructor}, context}, opts)
 
-  def from_error({:source_context, {kind, name}, context}, opts)
+  def from_error({:source_context, {kind, _name}, context} = error, opts)
       when kind in [:unknown_ctor, :foreign_ctor, :unknown_pattern_constructor, :unknown_family] and
-             is_map(context) do
-    opts =
-      opts
-      |> Keyword.put_new(:span, Map.get(context, :span))
-      |> Keyword.put(:candidates, Map.get(context, :name_candidates, []))
-      |> Keyword.put(:available_candidates, Map.get(context, :name_candidates, []))
-      |> Keyword.put(:arity, Map.get(context, :name_arity))
+             is_map(context),
+      do: NameAdapter.from_error(error, opts)
 
-    namespace = if kind == :unknown_family, do: :type, else: :constructor
-    unknown_name(namespace, name, Keyword.put(opts, :checking, Map.get(context, :checking)))
-  end
+  def from_error({:no_such_interface, _interface} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:no_such_interface, %{interface: interface} = details}, opts) do
-    opts =
-      opts
-      |> Keyword.put(:span, Map.get(details, :span) || Keyword.get(opts, :span))
-      |> Keyword.put(:candidates, Map.get(details, :candidates, []))
+  def from_error({:unknown_interface_method, _interface, _method} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-    unknown_name(:interface, interface, opts)
-  end
-
-  def from_error({:no_such_interface, interface}, opts),
-    do: unknown_name(:interface, interface, opts)
-
-  def from_error({:unknown_interface_method, interface, method}, opts),
-    do: unknown_name(:member, method, Keyword.put(opts, :checking, interface))
-
-  def from_error({:unknown_interface_method, %{interface: interface, method: method} = details}, opts) do
-    opts =
-      opts
-      |> Keyword.put(:span, Map.get(details, :span) || Keyword.get(opts, :span))
-      |> Keyword.put(:checking, interface)
-      |> Keyword.put(:candidates, Map.get(details, :candidates, []))
-
-    unknown_name(:member, method, opts)
-  end
+  def from_error({:unknown_interface_method, details} = error, opts) when is_map(details),
+    do: NameAdapter.from_error(error, opts)
 
   def from_error({:implementation_scope, %{kind: :member_outside} = details}, opts) do
     implementation = "#{name_to_string(details.interface)} for #{name_to_string(details.for)}"
@@ -2481,45 +2428,15 @@ defmodule Cure.Diagnostic.Adapter do
            ],
       do: surface_structure_failure(kind, detail, opts)
 
-  def from_error({:unknown_global, name}, opts),
-    do: unknown_name(:value, name, opts)
+  def from_error({kind, _name} = error, opts)
+      when kind in [:unknown_global, :unbound_var, :unknown_family, :unknown_ctor, :foreign_ctor, :unknown_constructor],
+      do: NameAdapter.from_error(error, opts)
 
-  def from_error({:unbound_var, name}, opts),
-    do: unknown_name(:value, name, opts)
+  def from_error({:unknown_global, _name, details} = error, opts) when is_map(details),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:unknown_family, name}, opts),
-    do: unknown_name(:type, name, opts)
-
-  def from_error({:unknown_ctor, name}, opts),
-    do: unknown_name(:constructor, name, opts)
-
-  def from_error({:foreign_ctor, name}, opts),
-    do: unknown_name(:constructor, name, opts)
-
-  def from_error({:unknown_global, name, details}, opts) when is_map(details),
-    do: unknown_name(:value, name, Keyword.put(opts, :kernel_context, details))
-
-  def from_error({:unknown_name, details}, opts) when is_map(details) do
-    namespace = Map.get(details, :namespace, :value)
-    name = Map.get(details, :name, "<unknown>")
-
-    unknown_name(
-      namespace,
-      name,
-      opts
-      |> Keyword.put(:candidates, Map.get(details, :candidates, []))
-      |> Keyword.put(:owner, Map.get(details, :owner))
-      |> Keyword.put(:checking, Map.get(details, :checking))
-      |> Keyword.put(:arity, Map.get(details, :arity))
-      |> Keyword.put(:expected_namespace, Map.get(details, :expected_namespace))
-      |> Keyword.put(:imported_from, Map.get(details, :imported_from))
-      |> Keyword.put(:span, Map.get(details, :span))
-      |> Keyword.put(:provenance, Map.get(details, :provenance, []))
-    )
-  end
-
-  def from_error({:unknown_constructor, name}, opts),
-    do: unknown_name(:constructor, name, opts)
+  def from_error({:unknown_name, details} = error, opts) when is_map(details),
+    do: NameAdapter.from_error(error, opts)
 
   def from_error({:unfilled_hole, details}, opts) when is_map(details) do
     opts = Keyword.put_new(opts, :span, Map.get(details, :span))
@@ -4330,65 +4247,6 @@ defmodule Cure.Diagnostic.Adapter do
         record: record_name,
         field: field,
         dependencies: dependencies,
-        checking: Map.get(context, :checking)
-      }
-    )
-  end
-
-  defp record_field_unknown_failure(record, field, available_fields, context, opts) do
-    field = name_to_string(field)
-    record_name = surface_declaration_name(record)
-    field_span = Map.get(context, :field_span) || Map.get(context, :span)
-    receiver_span = Map.get(context, :receiver_span)
-
-    candidates =
-      Enum.map(available_fields, fn candidate ->
-        %{
-          id: {:record_field, record, candidate},
-          name: name_to_string(candidate),
-          namespace: :member,
-          owner: record,
-          imported: true,
-          origin: :record_shape
-        }
-      end)
-
-    ranking_opts =
-      opts
-      |> Keyword.put(:span, field_span)
-      |> Keyword.put(:owner, record)
-      |> Keyword.put(:record, record)
-
-    candidate_details = NameAdapter.rank_candidates(candidates, field, :member, ranking_opts)
-
-    secondary =
-      case receiver_span do
-        %Span{} = span when span != field_span ->
-          [%Label{span: span, style: :secondary, message: "this value has record type `#{record_name}`"}]
-
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: @unknown_name_code,
-      key: :unknown_name,
-      severity: :error,
-      title: "`#{record_name}` has no field `#{field}`",
-      body: Doc.paragraph("The record `#{record_name}` does not declare a field named `#{field}`."),
-      primary:
-        if(field_span,
-          do: %Label{span: field_span, style: :primary, message: "`#{record_name}` has no field named `#{field}`"}
-        ),
-      secondary: secondary,
-      suggestions: NameAdapter.candidate_suggestions(candidate_details, field, ranking_opts),
-      payload: %{
-        namespace: :member,
-        name: field,
-        owner: record,
-        record: record,
-        candidates: Enum.map(candidate_details, & &1.name),
-        candidate_details: candidate_details,
         checking: Map.get(context, :checking)
       }
     )
@@ -8804,93 +8662,6 @@ defmodule Cure.Diagnostic.Adapter do
           |> Enum.filter(&(&1.kind in [:bare, :applied]))
           |> Enum.uniq_by(& &1.kind)
           |> Enum.map(&%{kind: &1.kind, method: Map.get(&1, :method)})
-      }
-    )
-  end
-
-  defp foreign_constructor_failure(constructor, context, opts) do
-    constructor_id = name_to_string(constructor)
-    constructor_name = surface_declaration_name(constructor)
-    actual_family_id = Map.get(context, :actual_family)
-    expected_family_id = Map.get(context, :expected_family)
-    actual_family = surface_declaration_name(actual_family_id)
-    expected_family = surface_declaration_name(expected_family_id)
-
-    pattern_span =
-      context
-      |> Map.get(:branch_patterns, [])
-      |> Enum.find_value(fn pattern ->
-        if name_to_string(Map.get(pattern, :name)) == constructor_name,
-          do: Map.get(pattern, :pattern_span) || Map.get(pattern, :span)
-      end)
-
-    primary_span = pattern_span || Map.get(context, :span) || Keyword.get(opts, :span)
-
-    secondary =
-      case Map.get(context, :expectation_span) do
-        %Span{} = span when span != primary_span ->
-          [%Label{span: span, style: :secondary, message: "this match expects constructors from `#{expected_family}`"}]
-
-        _ ->
-          []
-      end
-
-    expected_constructor_ids = Map.get(context, :expected_constructors, [])
-    expected_constructors = Enum.map(expected_constructor_ids, &surface_declaration_name/1)
-
-    suggestions =
-      case {expected_constructors, primary_span} do
-        {[replacement], %Span{} = span} ->
-          [
-            %Suggestion{
-              message: "Replace `#{constructor_name}` with `#{replacement}`",
-              applicability: :machine_applicable,
-              edits: [%TextEdit{span: span, replacement: replacement <> "()"}]
-            }
-          ]
-
-        {[_ | _] = constructors, _span} ->
-          [
-            %Suggestion{
-              message: "Use one of #{Enum.map_join(constructors, ", ", &"`#{&1}`")}",
-              applicability: :manual
-            }
-          ]
-
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: "E091",
-      key: :unknown_name,
-      severity: :error,
-      title: "`#{constructor_name}` does not belong to `#{expected_family}`",
-      body:
-        Doc.paragraph(
-          "`#{constructor_name}` is a constructor of `#{actual_family}`, but this match scrutinizes `#{expected_family}`. Every constructor pattern must come from the scrutinee's type."
-        ),
-      primary:
-        if(primary_span,
-          do: %Label{
-            span: primary_span,
-            style: :primary,
-            message: "this constructor belongs to `#{actual_family}`, not `#{expected_family}`"
-          },
-          else: primary_label(opts, "use a constructor from the matched type")
-        ),
-      secondary: secondary,
-      suggestions: suggestions,
-      payload: %{
-        kind: :foreign_ctor,
-        constructor: constructor_name,
-        constructor_id: constructor_id,
-        actual_family: actual_family,
-        actual_family_id: name_to_string(actual_family_id),
-        expected_family: expected_family,
-        expected_family_id: name_to_string(expected_family_id),
-        expected_constructors: expected_constructors,
-        expected_constructor_ids: Enum.map(expected_constructor_ids, &name_to_string/1)
       }
     )
   end

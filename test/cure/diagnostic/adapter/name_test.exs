@@ -76,4 +76,26 @@ defmodule Cure.Diagnostic.Adapter.NameTest do
     assert suggestion.message =~ "`Std.Io.print`"
     assert suggestion.message =~ "Qualify it or import its module"
   end
+
+  test "raw producer variants route exhaustively through the name family" do
+    variants = [
+      {:unknown_global, :missing},
+      {:unbound_var, :missing},
+      {:unknown_family, :Missing},
+      {:unknown_ctor, :Missing},
+      {:unknown_constructor, :Missing},
+      {:unknown_field, :Point, :z, [:x, :y]},
+      {:no_such_interface, :Missing},
+      {:unknown_interface_method, :Eq, :missing}
+    ]
+
+    for error <- variants do
+      assert NameAdapter.from_error(error) == Adapter.from_error(error)
+      assert NameAdapter.from_error(error).code == "E091"
+    end
+
+    assert_raise Cure.Diagnostic.UnhandledError, fn ->
+      NameAdapter.from_error({:ordinary_type_failure, :not_a_name_error})
+    end
+  end
 end

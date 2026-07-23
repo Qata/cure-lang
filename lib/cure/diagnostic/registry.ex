@@ -1831,6 +1831,7 @@ defmodule Cure.Diagnostic.Registry do
   end
 
   defp converter(code) when code in @operational, do: Cure.Diagnostic.Adapter.Operational
+  defp converter("E091"), do: Cure.Diagnostic.Adapter.Name
   defp converter(code) when code in @structured, do: Cure.Diagnostic.Adapter
   defp converter(_code), do: Cure.Compiler.Errors
 
@@ -1849,6 +1850,10 @@ defmodule Cure.Diagnostic.Registry do
 
   defp producer_converter("E101", :macro_expansion),
     do: {Cure.Diagnostic.Adapter, :from_error}
+
+  defp producer_converter("E091", producer)
+       when producer in [:name_resolution, :pattern_checker],
+       do: {Cure.Diagnostic.Adapter.Name, :from_error}
 
   defp producer_converter(_code, :operational),
     do: {Cure.Diagnostic.Adapter.Operational, :from_error}
