@@ -1836,6 +1836,7 @@ defmodule Cure.Diagnostic.Registry do
   defp converter("E103"), do: Cure.Diagnostic.Adapter.Kernel
   defp converter("E104"), do: Cure.Diagnostic.Adapter.StaticAnalysis
   defp converter("E117"), do: Cure.Diagnostic.Adapter.StaticAnalysis
+  defp converter("E118"), do: Cure.Diagnostic.Adapter.StaticAnalysis
   defp converter(code) when code in @structured, do: Cure.Diagnostic.Adapter
   defp converter(_code), do: Cure.Compiler.Errors
 
@@ -1872,6 +1873,9 @@ defmodule Cure.Diagnostic.Registry do
     do: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
 
   defp producer_converter("E117", :elaboration),
+    do: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
+
+  defp producer_converter("E118", :elaboration),
     do: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
 
   defp producer_converter(_code, :operational),

@@ -203,6 +203,17 @@ defmodule Cure.Diagnostic.RegistryTest do
            }
   end
 
+  test "totality and pattern coverage have exhaustive static-analysis ownership" do
+    for {code, producer} <- [{"E013", :totality_checker}, {"E118", :elaboration}] do
+      entry = Registry.fetch!(code)
+      assert entry.converter == Cure.Diagnostic.Adapter.StaticAnalysis
+
+      assert entry.producer_converters == %{
+               producer => {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
+             }
+    end
+  end
+
   test "producer catalog validation requires every code and producer branch independently" do
     entry = Registry.fetch!("E094")
     assert entry.producers |> Enum.sort() == [:lexer, :parser]

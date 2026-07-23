@@ -49,7 +49,140 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysis do
       when is_map(context),
       do: totality_failure(name, Map.put(context, :totality_reason, reason), opts)
 
+  def from_error({:source_context, {:missing_branch, branch}, context}, opts)
+      when is_map(context),
+      do: coverage_failure(:missing_branch, branch, context, opts)
+
+  def from_error(
+        {:source_context, {:tuple_missing_branch, %{branch: branch} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: coverage_failure(:missing_branch, branch, Map.merge(context, Map.delete(details, :branch)), opts)
+
+  def from_error({:source_context, {:reachable_impossible, branch}, context}, opts)
+      when is_map(context),
+      do: coverage_failure(:reachable_impossible, branch, context, opts)
+
+  def from_error({:source_context, {:duplicate_branch, branch}, context}, opts)
+      when is_map(context),
+      do: coverage_failure(:duplicate_branch, branch, context, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp coverage_failure(kind, branch, context, opts) do
+    branch_name = surface_name(branch)
+    matching = Enum.filter(Map.get(context, :branch_patterns, []), &(Map.get(&1, :name) == branch_name))
+
+    {title, body, primary, secondary, hint} =
+      coverage_copy(kind, branch_name, matching, context, opts)
+
+    payload =
+      %{kind: kind, branch: branch, checking: Map.get(context, :checking)}
+      |> maybe_put(:position, Map.get(context, :tuple_pattern_position))
+
+    Diagnostic.new(
+      code: "E118",
+      key: :pattern_coverage,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: primary || primary(opts, "fix this pattern match"),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: payload
+    )
+  end
+
+  defp coverage_copy(:missing_branch, branch, _matching, %{tuple_pattern_position: position} = context, _opts)
+       when is_integer(position) do
+    arity = Map.get(context, :tuple_pattern_arity, position)
+    insertion = Map.get(context, :tuple_pattern_insertion_span) || insertion_span(context)
+
+    secondary =
+      context
+      |> Map.get(:tuple_pattern_element_spans, [])
+      |> Enum.map(&label(&1, :secondary, "this tuple position handles another constructor here"))
+      |> Enum.reject(&is_nil/1)
+
+    shape =
+      1..arity
+      |> Enum.map_join(", ", fn index -> if index == position, do: "#{branch}(...)", else: "_" end)
+
+    {
+      "Tuple pattern is missing `#{branch}` in position #{position}",
+      "The value in tuple position #{position} can be `#{branch}`, but no tuple branch handles that constructor there.",
+      label(
+        insertion || Map.get(context, :span),
+        :primary,
+        "add a tuple branch with `#{branch}` in position #{position}"
+      ),
+      secondary,
+      "Add `%[#{shape}] -> ...`, or a tuple catch-all branch"
+    }
+  end
+
+  defp coverage_copy(:missing_branch, branch, _matching, context, _opts) do
+    {
+      "Pattern match is missing `#{branch}`",
+      "This match can receive `#{branch}`, but no branch handles that constructor.",
+      label(insertion_span(context) || Map.get(context, :span), :primary, "add a `#{branch}` branch here"),
+      [],
+      "Add a `#{branch}(...) -> ...` branch, or a catch-all branch"
+    }
+  end
+
+  defp coverage_copy(:reachable_impossible, branch, matching, context, _opts) do
+    {
+      "`#{branch}` is reachable here",
+      "This branch is marked `impossible`, but `#{branch}` can occur for the matched type and indices.",
+      label(branch_span(List.first(matching)) || Map.get(context, :span), :primary, "this constructor is reachable"),
+      [],
+      "Replace `impossible` with a result for the `#{branch}` case"
+    }
+  end
+
+  defp coverage_copy(:duplicate_branch, branch, matching, context, _opts) do
+    first = List.first(matching)
+    duplicate = List.last(matching)
+
+    secondary =
+      case label(branch_span(first), :secondary, "`#{branch}` is first handled here") do
+        nil -> []
+        first_label -> [first_label]
+      end
+
+    {
+      "`#{branch}` has more than one branch",
+      "Only one branch may handle each constructor. The later `#{branch}` branch can never be selected independently.",
+      label(
+        branch_span(duplicate) || Map.get(context, :span),
+        :primary,
+        "this repeats the earlier `#{branch}` branch"
+      ),
+      secondary,
+      "Combine these `#{branch}` cases or remove the duplicate branch"
+    }
+  end
+
+  defp insertion_span(context) do
+    case context |> Map.get(:branch_patterns, []) |> List.last() do
+      %{span: %Span{} = span} ->
+        %{span | start_byte: span.end_byte, start_line: span.end_line, start_column: span.end_column}
+
+      _ ->
+        nil
+    end
+  end
+
+  defp branch_span(%{pattern_span: %Span{} = span}), do: span
+  defp branch_span(%{span: %Span{} = span}), do: span
+  defp branch_span(_pattern), do: nil
+
+  defp surface_name(name), do: name |> name_to_string() |> String.split("#") |> List.last()
+
+  defp maybe_put(map, _key, value) when not is_integer(value), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp totality_failure(name, context, opts) do
     calls = Map.get(context, :recursive_call_spans, [])

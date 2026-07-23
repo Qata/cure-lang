@@ -111,4 +111,35 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysisTest do
     assert rendered =~ "this parameter is declared `linear` here"
     assert rendered =~ "Hint: Pass `x` only to linear parameters"
   end
+
+  test "pattern coverage owns missing, impossible, duplicate, and tuple gaps" do
+    source = "Z() Z()\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:coverage, source, "coverage.cure")
+    {:ok, first} = SourceRegistry.span(registry, :coverage, 0, 3)
+    {:ok, duplicate} = SourceRegistry.span(registry, :coverage, 4, 7)
+
+    context = %{
+      span: duplicate,
+      branch_patterns: [
+        %{name: "Z", pattern_span: first, span: first},
+        %{name: "Z", pattern_span: duplicate, span: duplicate}
+      ]
+    }
+
+    errors = [
+      {:source_context, {:missing_branch, :"Main#S"}, context},
+      {:source_context, {:reachable_impossible, :"Main#Z"}, context},
+      {:source_context, {:duplicate_branch, :"Main#Z"}, context},
+      {:source_context,
+       {:tuple_missing_branch, %{branch: :"Main#S", tuple_pattern_position: 1, tuple_pattern_arity: 2}}, context}
+    ]
+
+    for error <- errors do
+      direct = StaticAnalysis.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E118"
+      assert direct.primary.span
+      assert direct.suggestions != []
+    end
+  end
 end
