@@ -2759,24 +2759,15 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:ambiguous_name, _name, _modules} = error, opts),
     do: NameAdapter.from_error(error, opts)
 
-  def from_error({:duplicate_module, name, paths}, opts) when is_list(paths) do
-    Diagnostic.new(
-      code: "E087",
-      key: :duplicate_module,
-      severity: :error,
-      title: "Duplicate module",
-      message: "Module `#{name_to_string(name)}` is declared by more than one file: #{Enum.join(paths, ", ")}.",
-      primary: primary_label(opts, "one declaration is here"),
-      payload: %{module: name_to_string(name), paths: paths}
-    )
-  end
+  def from_error({:duplicate_module, _name, _paths} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
   def from_error({:duplicate_module_identity, name, other_path, path}, opts) do
-    from_error({:duplicate_module, name, [other_path, path]}, opts)
+    NameAdapter.from_error({:duplicate_module_identity, name, other_path, path}, opts)
   end
 
   def from_error({:duplicate_module_identity, name, paths}, opts) when is_list(paths) do
-    from_error({:duplicate_module, name, paths}, opts)
+    NameAdapter.from_error({:duplicate_module_identity, name, paths}, opts)
   end
 
   def from_error({:import_cycle, hops}, opts) when is_list(hops) do

@@ -132,6 +132,15 @@ defmodule Cure.Diagnostic.Adapter.Name do
   def from_error({:ambiguous_method, method, interfaces}, opts) when is_list(interfaces),
     do: ambiguous_member(method, interfaces, opts)
 
+  def from_error({:duplicate_module, name, paths}, opts) when is_list(paths),
+    do: duplicate_module(name, paths, opts)
+
+  def from_error({:duplicate_module_identity, name, other_path, path}, opts),
+    do: duplicate_module(name, [other_path, path], opts)
+
+  def from_error({:duplicate_module_identity, name, paths}, opts) when is_list(paths),
+    do: duplicate_module(name, paths, opts)
+
   def from_error(
         {:source_context, {:unsupported_guard, %{reason: :shadowed} = details}, context},
         opts
@@ -177,6 +186,21 @@ defmodule Cure.Diagnostic.Adapter.Name do
         }
       ],
       payload: %{namespace: :value, name: spelling, owners: owners}
+    )
+  end
+
+  @doc false
+  def duplicate_module(name, paths, opts \\ []) do
+    module = name_to_string(name)
+
+    Diagnostic.new(
+      code: "E087",
+      key: :duplicate_module,
+      severity: :error,
+      title: "Duplicate module",
+      message: "Module `#{module}` is declared by more than one file: #{Enum.join(paths, ", ")}.",
+      primary: primary(opts, "one declaration is here"),
+      payload: %{module: module, paths: paths}
     )
   end
 

@@ -105,6 +105,11 @@ defmodule Cure.Diagnostic.Adapter.NameTest do
     assert method.code == "E089"
     assert method.payload.kind == :ambiguous_method
 
+    duplicate = NameAdapter.from_error({:duplicate_module_identity, "Demo", "a.cure", "b.cure"})
+    assert duplicate == Adapter.from_error({:duplicate_module_identity, "Demo", "a.cure", "b.cure"})
+    assert duplicate.code == "E087"
+    assert duplicate.payload.paths == ["a.cure", "b.cure"]
+
     assert_raise Cure.Diagnostic.UnhandledError, fn ->
       NameAdapter.from_error({:ordinary_type_failure, :not_a_name_error})
     end
