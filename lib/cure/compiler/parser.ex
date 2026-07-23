@@ -6837,15 +6837,37 @@ defmodule Cure.Compiler.Parser do
   # faithful first slice). Produces `{:with_rematch_arm, meta, [body]}` with the
   # restated `:parent_patterns` and the with-`:pattern` in meta.
   defp finish_with_rematch_arm(parent_patterns, state) do
+    separator_token = if match?(%Token{type: :bar}, peek(state)), do: peek(state)
     state = expect_with_rematch_separator(state, parent_patterns)
     state = skip_newlines(state)
     {with_pattern, state} = parse_expr(state, 0)
     state = skip_newlines(state)
+    arrow_token = if match?(%Token{type: :arrow}, peek(state)), do: peek(state)
     state = expect_branch_arrow(state, :with_rematch_arm, with_pattern)
     state = skip_newlines(state)
     {body, state} = parse_expr_or_block(state)
 
-    meta = [parent_patterns: parent_patterns, pattern: with_pattern]
+    parent_spans = Enum.map(parent_patterns, &first_node_source_span/1) |> Enum.reject(&is_nil/1)
+    pattern_span = first_node_source_span(with_pattern)
+    body_span = first_node_source_span(body)
+    first_span = List.first(parent_spans) || pattern_span
+    whole = through_spans(first_span, body_span || pattern_span || List.last(parent_spans))
+
+    fields =
+      %{}
+      |> maybe_put_source_field(:rematch_separator, separator_token)
+
+    meta =
+      [parent_patterns: parent_patterns, pattern: with_pattern]
+      |> Metadata.put_source_info(%SourceInfo{
+        whole: whole,
+        operator: arrow_token && arrow_token.span,
+        operands: parent_spans,
+        pattern: pattern_span,
+        body: body_span,
+        fields: fields
+      })
+
     {{:with_rematch_arm, meta, [body]}, state}
   end
 

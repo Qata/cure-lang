@@ -4316,7 +4316,12 @@ defmodule Cure.Elab.Elaborator do
         if Enum.all?(arms, &with_rematch_arm?/1) do
           elaborate_with_rematch(scrut_expr, arms, original_params, result_type_term, names, ctx, env)
         else
-          {:error, :with_mixed_rematch_arms}
+          {:error,
+           {:source_context, :with_mixed_rematch_arms,
+            %{
+              span: mixed_with_primary_span(arms),
+              with_arms: Enum.map(arms, &with_arm_context/1)
+            }}}
         end
 
       true ->
@@ -4326,6 +4331,29 @@ defmodule Cure.Elab.Elaborator do
 
   defp with_rematch_arm?({:with_rematch_arm, _, _}), do: true
   defp with_rematch_arm?(_), do: false
+
+  defp with_arm_context({:with_rematch_arm, meta, _children}) do
+    %{style: :rematch, span: surface_expression_span({:with_rematch_arm, meta, []})}
+  end
+
+  defp with_arm_context({:match_arm, meta, _children}) do
+    %{style: :ordinary, span: surface_expression_span({:match_arm, meta, []})}
+  end
+
+  defp with_arm_context(arm), do: %{style: :unknown, span: surface_expression_span(arm)}
+
+  defp mixed_with_primary_span(arms) do
+    contexts = Enum.map(arms, &with_arm_context/1)
+    frequencies = Enum.frequencies_by(contexts, & &1.style)
+
+    outlier =
+      Enum.find(contexts, fn context ->
+        Map.get(frequencies, context.style) == 1 and map_size(frequencies) > 1 and
+          Enum.any?(frequencies, fn {style, count} -> style != context.style and count > 1 end)
+      end)
+
+    Map.get(outlier || List.first(contexts) || %{}, :span)
+  end
 
   # Capability A/B (no LHS re-match): value-abstracting motive + eq-arrow sibling
   # transport, restricted to a NON-indexed scrutinee family. This is the original

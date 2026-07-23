@@ -1639,6 +1639,9 @@ defmodule Cure.Diagnostic.Adapter do
       when kind in [:rewrite_requires_expected_type, :rewrite_proof_not_equality] and is_map(context),
       do: rewrite_failure(kind, context, opts)
 
+  def from_error({:source_context, :with_mixed_rematch_arms, context}, opts) when is_map(context),
+    do: mixed_with_arm_failure(context, opts)
+
   def from_error({:source_context, {:rewrite_no_match, _left, _right}, context}, opts)
       when is_map(context),
       do: rewrite_failure(:rewrite_no_match, context, opts)
@@ -6470,6 +6473,102 @@ defmodule Cure.Diagnostic.Adapter do
       "#{owner}.#{name}"
     end
   end
+
+  defp mixed_with_arm_failure(context, opts) do
+    arms =
+      context
+      |> Map.get(:with_arms, [])
+      |> Enum.filter(&match?(%{style: style, span: %Span{}} when style in [:ordinary, :rematch], &1))
+
+    frequencies = Enum.frequencies_by(arms, & &1.style)
+
+    outlier_index =
+      Enum.find_index(arms, fn arm ->
+        Map.get(frequencies, arm.style) == 1 and
+          Enum.any?(frequencies, fn {style, count} -> style != arm.style and count > 1 end)
+      end)
+
+    labels =
+      arms
+      |> Enum.with_index()
+      |> Enum.map(fn {arm, index} ->
+        message = mixed_with_arm_label(arm.style, index == outlier_index)
+        %{span: arm.span, message: message, index: index}
+      end)
+
+    {primary, secondary} =
+      case labels do
+        [] ->
+          {primary_label(Keyword.put_new(opts, :span, Map.get(context, :span)), "use one branch form throughout"), []}
+
+        labels ->
+          chosen_index = outlier_index || 0
+          chosen = Enum.at(labels, chosen_index)
+
+          primary = %Label{span: chosen.span, style: :primary, message: chosen.message}
+
+          secondary =
+            labels
+            |> Enum.reject(&(&1.index == chosen_index))
+            |> Enum.map(&%Label{span: &1.span, style: :secondary, message: &1.message})
+
+          {primary, secondary}
+      end
+
+    body =
+      if outlier_index do
+        style = arms |> Enum.at(outlier_index) |> Map.fetch!(:style)
+
+        Doc.stack([
+          Doc.paragraph(
+            "Possible outlier: only one branch uses the #{mixed_with_style_name(style)} form; the other branches use the other form."
+          ),
+          Doc.paragraph(
+            "A `with` block must use one shape throughout: either `Pattern -> body` in every branch, or `ParentPattern | WithPattern -> body` in every branch."
+          )
+        ])
+      else
+        Doc.stack([
+          Doc.paragraph("These branches mix the two forms accepted by a `with` block."),
+          Doc.paragraph(
+            "Use either `Pattern -> body` in every branch, or `ParentPattern | WithPattern -> body` in every branch."
+          )
+        ])
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "With branches use incompatible forms",
+      body: body,
+      primary: primary,
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Make every branch use the same `with` form; changing forms may change which values are refined",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :with_mixed_rematch_arms,
+        checking: Map.get(context, :checking),
+        branch_forms: Enum.map(arms, & &1.style),
+        outlier_branch: outlier_index
+      }
+    )
+  end
+
+  defp mixed_with_arm_label(style, true),
+    do: "possible outlier: this is the only #{mixed_with_style_name(style)} branch"
+
+  defp mixed_with_arm_label(:ordinary, false), do: "ordinary branch: `Pattern -> body`"
+
+  defp mixed_with_arm_label(:rematch, false),
+    do: "rematch branch: `ParentPattern | WithPattern -> body`"
+
+  defp mixed_with_style_name(:ordinary), do: "ordinary `Pattern -> body`"
+  defp mixed_with_style_name(:rematch), do: "rematch `ParentPattern | WithPattern -> body`"
 
   defp contextual_type_failure(kind, details, opts) do
     {title, message, label} =

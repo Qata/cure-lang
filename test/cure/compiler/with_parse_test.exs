@@ -7,6 +7,7 @@ defmodule Cure.Compiler.WithParseTest do
   use ExUnit.Case, async: true
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Diagnostic.Renderer
+  alias Cure.MetaAST.Metadata
 
   defp parse(src) do
     {:ok, toks} = Lexer.tokenize(src, emit_events: false)
@@ -146,6 +147,37 @@ defmodule Cure.Compiler.WithParseTest do
     assert Keyword.get(pm, :name) == "S"
     assert {:function_call, wm, _} = Keyword.fetch!(m1, :pattern)
     assert Keyword.get(wm, :name) == "VS"
+  end
+
+  test "ordinary and rematch arms both own their complete authored ranges" do
+    src = """
+    mod M
+      type Nat = Z | S(Nat)
+      fn foo(n: Nat) -> Nat =
+        with n
+          Z() -> Z()
+          S(m) | S(m) -> S(m)
+    """
+
+    assert {:ok, ast} = parse(src)
+
+    {:with_abs, meta, [_scrutinee, ordinary, rematch]} =
+      collect(ast, [])
+      |> Enum.find(fn node -> match?({:with_abs, _, [_, _, _]}, node) end)
+
+    outer = Metadata.source_info(meta)
+    ordinary_info = ordinary |> elem(1) |> Metadata.source_info()
+    rematch_info = rematch |> elem(1) |> Metadata.source_info()
+
+    assert {outer.whole.start_line, outer.whole.end_line} == {4, 6}
+    assert Enum.map(outer.branches, &{&1.start_line, &1.end_line}) == [{5, 5}, {6, 6}]
+    assert {ordinary_info.whole.start_column, ordinary_info.whole.end_column} == {7, 17}
+    assert {rematch_info.whole.start_column, rematch_info.whole.end_column} == {7, 26}
+    assert {rematch_info.pattern.start_column, rematch_info.pattern.end_column} == {14, 18}
+    assert [%{start_column: 7, end_column: 11}] = rematch_info.operands
+    assert rematch_info.fields.rematch_separator.start_column == 12
+    assert rematch_info.operator.start_column == 19
+    assert rematch_info.body.start_column == 22
   end
 
   test "block-form `with` clause restating multiple (comma-sep) parent patterns" do
