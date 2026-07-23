@@ -226,6 +226,20 @@ defmodule Cure.Diagnostic.Adapter.Macro do
   def from_error(kind, opts) when kind in [:invalid_check_property, :duplicate_check_property],
     do: check_failure(kind, %{}, opts)
 
+  def from_error(kind, opts)
+      when kind in [
+             :invalid_protocol_roles,
+             :invalid_protocol_role,
+             :duplicate_protocol_role,
+             :invalid_protocol_steps,
+             :invalid_protocol_step,
+             :invalid_protocol_message,
+             :invalid_protocol_options,
+             :invalid_protocol_choices,
+             :invalid_protocol_choice
+           ],
+      do: protocol_failure(kind, %{}, opts)
+
   def from_error({:invalid_protocol_name, name}, opts),
     do: protocol_failure(:invalid_protocol_name, %{name: name}, opts)
 
@@ -1310,48 +1324,58 @@ defmodule Cure.Diagnostic.Adapter.Macro do
 
   defp module_content(:module_rule_not_fully_consumed, _details),
     do:
-      {"Macro rule does not consume its use site",
-       "This macro rule leaves part of the use site unmatched, so the expansion would be ambiguous.",
-       "make this rule consume the complete use site", "Extend the rule or add a rule for the remaining syntax"}
+      {"Module macro leaves input unconsumed",
+       "This module macro expands one declaration but leaves additional authored tokens outside the matched rule.",
+       "match the complete module-macro input", "Extend the rule to consume the remaining tokens or remove them"}
 
   defp module_content(:not_a_module_rule, _details),
     do:
-      {"Macro rule is not a module rule", "This declaration is being used where a structured module rule is required.",
-       "replace this declaration with a module rule", "Use a valid module rule with its declared syntax family"}
+      {"Macro rule cannot expand a module",
+       "This rule is being executed as a module macro, but it was not declared with module scope.",
+       "use a module-scoped macro rule", "Declare this syntax as a module rule before executing it here"}
 
   defp module_content(:invalid_module_rule_set, _details),
     do:
-      {"Module rule set is malformed", "A module macro needs a list of well-formed module rules.",
-       "rewrite this module rule set", "Provide a list of structured module rules"}
+      {"Module macro rule set is malformed",
+       "Module expansion needs a list containing valid syntax rules from the same macro.",
+       "rewrite this module-macro rule set", "Provide the parsed syntax rules that own this module rule"}
 
   defp module_content(:invalid_module_rule_bindings, _details),
     do:
-      {"Module rule bindings are malformed",
-       "Every module rule binding must name a declared capture and provide a valid syntax value.",
-       "rewrite these module bindings", "Bind only declared captures to structured syntax"}
+      {"Module macro bindings are malformed",
+       "Module-rule bindings must map each declared hole name to its captured syntax value.",
+       "rewrite these module-macro bindings", "Provide a map from hole names to captured syntax"}
 
   defp module_content(:invalid_macro_extension_rules, _details),
     do:
-      {"Macro extension rules are malformed", "A macro extension must provide a valid rule set for its target family.",
-       "rewrite these extension rules", "Use structured rules that match the extended syntax family"}
+      {"Macro extension lists are malformed",
+       "Open-category composition needs separate lists of base rules and extension rules.",
+       "rewrite these macro extension lists", "Provide one list of base rules and one list of extension rules"}
 
   defp module_content(:invalid_macro_extension_rule, _details),
     do:
-      {"Macro extension rule is malformed",
-       "This extension rule does not have the fields required to expand its target family.",
-       "rewrite this extension rule", "Provide a valid target family, pattern, and expansion"}
+      {"Macro extension rule is malformed", "Every base or extension rule must be a parsed macro-rule map.",
+       "rewrite this macro extension rule", "Provide valid parsed macro rules in both lists"}
 
   defp module_content(:closed_category_extension, %{categories: categories}),
     do:
       {"Closed macro category cannot be extended",
-       "The macro attempts to extend a closed category: #{Enum.map_join(categories, ", ", &name_to_string/1)}.",
-       "remove this extension", "Use an open syntax family or add the case to its original declaration"}
+       "The extension adds syntax to #{category_phrase(categories)}, but only categories declared open accept external rules.",
+       "remove this closed-category extension", "Declare the category open or move the syntax into its owning macro"}
 
   defp module_content(:ambiguous_macro_extension, %{keywords: keywords}),
     do:
-      {"Macro extension is ambiguous",
-       "These extension keywords match more than one family: #{Enum.map_join(keywords, ", ", &name_to_string/1)}.",
-       "make the extension unambiguous", "Choose keywords owned by exactly one syntax family"}
+      {"Macro extension repeats a keyword",
+       "The composed macro would contain multiple rules beginning with #{keyword_phrase(keywords)}, making dispatch ambiguous.",
+       "rename this extension keyword", "Give each composed rule a distinct leading keyword"}
+
+  defp category_phrase([one]), do: "closed category `#{name_to_string(one)}`"
+
+  defp category_phrase(categories),
+    do: "closed categories #{Enum.map_join(categories, ", ", &"`#{name_to_string(&1)}`")}"
+
+  defp keyword_phrase([one]), do: "keyword `#{name_to_string(one)}`"
+  defp keyword_phrase(keywords), do: "keywords #{Enum.map_join(keywords, ", ", &"`#{name_to_string(&1)}`")}"
 
   @doc false
   def family_failure(details, opts) when is_map(details) do
