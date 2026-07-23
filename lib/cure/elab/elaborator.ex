@@ -7245,7 +7245,14 @@ defmodule Cure.Elab.Elaborator do
           end
 
         :error ->
-          {:halt, {:error, {:named_implicit_unforced, name}}}
+          {:halt,
+           {:error,
+            named_implicit_unforced_error(
+              name,
+              inner,
+              named_meta,
+              constructor_meta
+            )}}
       end
     end)
   end
@@ -7313,6 +7320,36 @@ defmodule Cure.Elab.Elaborator do
        expected_surface: forced_term_surface(expected, branch_names),
        expectation_origin: :pattern,
        expression_category: :forced_pattern
+     }}
+  end
+
+  defp named_implicit_unforced_error(name, inner, named_meta, constructor_meta) do
+    forced_info =
+      case inner do
+        {:forced_pattern, meta, _children} -> Cure.MetaAST.Metadata.source_info(meta)
+        _ -> nil
+      end
+
+    named_info = Cure.MetaAST.Metadata.source_info(named_meta)
+    constructor_info = Cure.MetaAST.Metadata.source_info(constructor_meta)
+    span = (forced_info && forced_info.whole) || (named_info && named_info.whole)
+
+    {:source_context, {:named_implicit_unforced, name},
+     %{
+       line: span && span.start_line,
+       column: span && span.start_column,
+       length: span && max(1, span.end_column - span.start_column),
+       span: span,
+       forced_pattern_span: forced_info && forced_info.whole,
+       named_implicit_span: named_info && named_info.whole,
+       named_implicit_name_span: named_info && named_info.name,
+       constructor_span: constructor_info && constructor_info.whole,
+       constructor_name_span: constructor_info && (constructor_info.callee || constructor_info.name),
+       constructor: Keyword.get(constructor_meta, :name),
+       implicit_name: name,
+       expectation_origin: :pattern,
+       expression_category: :named_implicit_pattern,
+       named_implicit_status: :unforced
      }}
   end
 

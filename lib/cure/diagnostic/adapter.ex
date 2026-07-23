@@ -997,6 +997,12 @@ defmodule Cure.Diagnostic.Adapter do
     pattern_problem(:forced_pattern_mismatch, %{actual: actual, expected: expected}, context, opts)
   end
 
+  def from_error(
+        {:source_context, {:named_implicit_unforced, name}, %{named_implicit_status: :unforced} = context},
+        opts
+      ),
+      do: named_implicit_unforced_failure(name, context, opts)
+
   def from_error({:source_context, {:named_implicit_unforced, name}, context}, opts) when is_map(context) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
 
@@ -4878,6 +4884,57 @@ defmodule Cure.Diagnostic.Adapter do
         implicit_name: implicit_name,
         actual: actual_surface,
         expected: expected_surface,
+        expectation_origin: :pattern
+      }
+    )
+  end
+
+  defp named_implicit_unforced_failure(name, context, opts) do
+    constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
+    implicit_name = name_to_string(name)
+    primary_span = Map.get(context, :forced_pattern_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      [
+        sibling_dependency_label(
+          Map.get(context, :named_implicit_span),
+          primary_span,
+          "this pattern refers to hidden field `#{implicit_name}`"
+        ),
+        sibling_dependency_label(
+          Map.get(context, :constructor_name_span),
+          primary_span,
+          "`#{constructor}` does not expose `#{implicit_name}` in its result index"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E011",
+      key: :missing_implicit_argument,
+      severity: :error,
+      title: "`#{implicit_name}` is not fixed by matching `#{constructor}`",
+      body:
+        Doc.paragraph(
+          "The result type of `#{constructor}` does not determine its hidden `#{implicit_name}` field. A dot pattern can only check a value already fixed by the scrutinee, so this field must be bound to a variable instead."
+        ),
+      primary:
+        pickup_label(
+          primary_span,
+          :primary,
+          "this dot expression has no forced value to check"
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Replace the dot expression with a variable binding, for example `{#{implicit_name} = value}`",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :named_implicit_unforced,
+        constructor: constructor,
+        implicit_name: implicit_name,
         expectation_origin: :pattern
       }
     )
