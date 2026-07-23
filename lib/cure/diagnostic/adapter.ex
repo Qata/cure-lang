@@ -1663,9 +1663,9 @@ defmodule Cure.Diagnostic.Adapter do
       ),
       do: positional_forced_pattern_failure(context, opts)
 
-  def from_error({:source_context, {:applied_non_function, details}, context}, opts)
+  def from_error({:source_context, {:applied_non_function, details}, context} = error, opts)
       when is_map(details) and is_map(context),
-      do: non_callable_application(details, context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error(
         {:source_context, {:telescope_index_out_of_bounds, index, arity}, context},
@@ -2104,8 +2104,8 @@ defmodule Cure.Diagnostic.Adapter do
            ],
       do: contextual_type_failure(kind, %{}, opts)
 
-  def from_error({:applied_non_function, details}, opts) when is_map(details),
-    do: non_callable_application(details, %{}, opts)
+  def from_error({:applied_non_function, details} = error, opts) when is_map(details),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:effect_binder_erased, details}, opts) when is_map(details),
     do: erased_effect_binder_failure(details, %{}, opts)
@@ -4956,65 +4956,6 @@ defmodule Cure.Diagnostic.Adapter do
         checking: Map.get(context, :checking)
       }
     )
-  end
-
-  defp non_callable_application(details, context, opts) do
-    index = Map.get(details, :argument_index, 0)
-    actual = surface_type(Map.get(details, :actual))
-    callee = Map.get(context, :callee_name)
-    callee_span = Map.get(context, :callee_span)
-    argument_span = Map.get(context, :argument_span)
-    fallback_span = Map.get(context, :span) || Keyword.get(opts, :span)
-
-    {title, body, primary_span, primary_message, secondary, hint} =
-      if index == 0 do
-        {
-          "`#{actual}` value is not callable",
-          "Parentheses apply a function or constructor, but this expression has type `#{actual}`. It cannot accept the argument written after it.",
-          callee_span || fallback_span,
-          "this expression has type `#{actual}`, not a function type",
-          non_callable_labels([{argument_span, "this argument has nowhere to go"}], callee_span),
-          "Remove the parentheses, or replace this expression with a function or constructor"
-        }
-      else
-        name = if callee, do: "`#{callee}`", else: "This call"
-
-        {
-          "#{name} is given too many arguments",
-          "After accepting #{index} #{if(index == 1, do: "argument", else: "arguments")}, #{name} produces `#{actual}`. That result is not a function, so it cannot accept argument #{index + 1}.",
-          argument_span || fallback_span,
-          "this extra argument is applied to a `#{actual}` result",
-          non_callable_labels(
-            [{callee_span, "#{name} has already produced its result before this argument"}],
-            argument_span
-          ),
-          "Remove argument #{index + 1}, or call a function whose result accepts another argument"
-        }
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(body),
-      primary: pickup_label(primary_span, :primary, primary_message),
-      secondary: secondary,
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{
-        kind: :applied_non_function,
-        actual_type: actual,
-        argument_index: index,
-        callee: callee,
-        expression_category: Map.get(context, :expression_category, :function_call)
-      }
-    )
-  end
-
-  defp non_callable_labels(labels, primary_span) do
-    labels
-    |> Enum.filter(fn {span, _message} -> match?(%Span{}, span) and span != primary_span end)
-    |> Enum.map(fn {span, message} -> pickup_label(span, :secondary, message) end)
   end
 
   defp pattern_only_syntax(kind, context, opts) do

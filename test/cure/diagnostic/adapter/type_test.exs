@@ -228,4 +228,35 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert Renderer.plain(ambiguity, registry, width: 80) =~
              "Hint: Choose `List.map(...)` or `Sequence.map(...)`"
   end
+
+  test "non-callable applications label the value and stranded argument" do
+    source = "value(argument)\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:application, source, "application.cure")
+    {:ok, callee} = SourceRegistry.span(registry, :application, 0, 5)
+    {:ok, argument} = SourceRegistry.span(registry, :application, 6, 14)
+
+    error =
+      {:source_context, {:applied_non_function, %{actual: {:data, :Int, [], []}, argument_index: 0}},
+       %{callee_span: callee, argument_span: argument, callee_name: :value}}
+
+    direct = TypeAdapter.from_error(error)
+    assert Adapter.from_error(error) == direct
+    assert direct.primary.span == callee
+    assert hd(direct.secondary).span == argument
+
+    assert Renderer.plain(direct, registry, width: 80) ==
+             """
+             -- `INT` VALUE IS NOT CALLABLE [E093] ------------------------- application.cure
+
+             Parentheses apply a function or constructor, but this expression has type `Int`.
+             It cannot accept the argument written after it.
+
+             at application.cure:1:1
+             1 | value(argument)
+               | ^^^^^ -------- this expression has type `Int`, not a function type; this argument has nowhere to go
+
+             Hint: Remove the parentheses, or replace this expression with a function or constructor
+             """
+             |> String.trim_trailing()
+  end
 end

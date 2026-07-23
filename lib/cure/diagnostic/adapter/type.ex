@@ -170,7 +170,72 @@ defmodule Cure.Diagnostic.Adapter.Type do
   def from_error({:ambiguous_overload, name, owners}, opts),
     do: overload_ambiguity(name, owners, opts)
 
+  def from_error({:applied_non_function, details}, opts) when is_map(details),
+    do: non_callable(details, %{}, opts)
+
+  def from_error({:source_context, {:applied_non_function, details}, context}, opts)
+      when is_map(details) and is_map(context),
+      do: non_callable(details, context, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp non_callable(details, context, opts) do
+    index = Map.get(details, :argument_index, 0)
+    actual = surface_type(Map.get(details, :actual))
+    callee = Map.get(context, :callee_name)
+    callee_span = Map.get(context, :callee_span)
+    argument_span = Map.get(context, :argument_span)
+    fallback_span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    {title, body, primary_span, primary_message, related, hint} =
+      if index == 0 do
+        {
+          "`#{actual}` value is not callable",
+          "Parentheses apply a function or constructor, but this expression has type `#{actual}`. It cannot accept the argument written after it.",
+          callee_span || fallback_span,
+          "this expression has type `#{actual}`, not a function type",
+          [{argument_span, "this argument has nowhere to go"}],
+          "Remove the parentheses, or replace this expression with a function or constructor"
+        }
+      else
+        callee_name = if callee, do: "`#{callee}`", else: "This call"
+
+        {
+          "#{callee_name} is given too many arguments",
+          "After accepting #{index} #{if(index == 1, do: "argument", else: "arguments")}, #{callee_name} produces `#{actual}`. That result is not a function, so it cannot accept argument #{index + 1}.",
+          argument_span || fallback_span,
+          "this extra argument is applied to a `#{actual}` result",
+          [{callee_span, "#{callee_name} has already produced its result before this argument"}],
+          "Remove argument #{index + 1}, or call a function whose result accepts another argument"
+        }
+      end
+
+    secondary =
+      related
+      |> Enum.filter(fn {span, _message} -> match?(%Span{}, span) and span != primary_span end)
+      |> Enum.map(fn {span, message} -> %Label{span: span, style: :secondary, message: message} end)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary:
+        if(match?(%Span{}, primary_span),
+          do: %Label{span: primary_span, style: :primary, message: primary_message}
+        ),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind: :applied_non_function,
+        actual_type: actual,
+        argument_index: index,
+        callee: callee,
+        expression_category: Map.get(context, :expression_category, :function_call)
+      }
+    )
+  end
 
   defp instance_failure(interface, head, context, opts) do
     interface = name(interface)
