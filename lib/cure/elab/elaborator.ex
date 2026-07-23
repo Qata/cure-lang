@@ -6712,15 +6712,59 @@ defmodule Cure.Elab.Elaborator do
   defp desugar_with_default(arms, scrut_expr) do
     {ctor_arms, defaults} = Enum.split_with(arms, &(not default_arm?(&1)))
 
-    with [{:match_arm, dmeta, dbody0}] <- defaults,
-         true <- default_arm?(List.last(arms)) or :not_last,
-         {:variable, _m, dvname} <- Keyword.fetch!(dmeta, :pattern),
-         {:ok, dbody} <- resolve_default_body(dvname, single_body(dbody0), scrut_expr) do
-      with {:ok, compiled} <- compile_nested_groups(weave_default(ctor_arms, dbody)) do
-        {:ok, compiled ++ [{:match_arm, [pattern: {:variable, [], "_"}], dbody}]}
-      end
-    else
-      _ -> {:error, {:unsupported_pattern, :catchall_with_nesting}}
+    case defaults do
+      [{:match_arm, dmeta, dbody0} = default] ->
+        pattern = Keyword.fetch!(dmeta, :pattern)
+        {:variable, _m, dvname} = pattern
+
+        cond do
+          default != List.last(arms) ->
+            next_arm = Enum.at(arms, Enum.find_index(arms, &(&1 == default)) + 1)
+
+            {:error,
+             {:unreachable_after_default_pattern,
+              %{
+                name: dvname,
+                span: surface_expression_span(arm_pattern(next_arm)),
+                default_span: surface_expression_span(pattern)
+              }}}
+
+          dvname != "_" and binds_any?(dbody0, [dvname]) ->
+            {:error,
+             {:unsupported_pattern,
+              %{
+                reason: :shadowed_default,
+                name: dvname,
+                span: pattern_binder_span(pattern, dvname),
+                shadow_span: first_binding_span(dbody0, dvname)
+              }}}
+
+          true ->
+            case resolve_default_body(dvname, single_body(dbody0), scrut_expr) do
+              {:ok, dbody} ->
+                with {:ok, compiled} <- compile_nested_groups(weave_default(ctor_arms, dbody)) do
+                  {:ok, compiled ++ [{:match_arm, [pattern: {:variable, [], "_"}], dbody}]}
+                end
+
+              {:error, :nonvariable_scrutinee} ->
+                {:error,
+                 {:unsupported_pattern,
+                  %{
+                    reason: :named_default_nonvariable,
+                    name: dvname,
+                    span: pattern_binder_span(pattern, dvname),
+                    type_span: surface_expression_span(scrut_expr)
+                  }}}
+            end
+        end
+
+      [_first | _rest] ->
+        {:match_arm, meta, _body} = List.last(defaults)
+        {:variable, _m, name} = Keyword.fetch!(meta, :pattern)
+        {:error, {:duplicate_default_pattern, name}}
+
+      [] ->
+        compile_nested_groups(arms)
     end
   end
 

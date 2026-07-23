@@ -925,6 +925,14 @@ defmodule Cure.Diagnostic.Adapter do
       when reason in [:shadowed_catchall, :shadowed_literal_catchall, :shadowed_default] and is_map(context),
       do: shadowed_sub_union_pattern_failure(details, context, opts)
 
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :named_default_nonvariable, name: _name} = details},
+         context},
+        opts
+      )
+      when is_map(context),
+      do: named_default_nonvariable_failure(details, context, opts)
+
   def from_error({:source_context, {:unsupported_pattern, shape}, context}, opts) when is_map(context) do
     from_error(
       %SyntaxProblem{
@@ -1642,7 +1650,12 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   def from_error({:source_context, {kind, detail}, context}, opts)
-      when kind in [:nonlinear_pattern, :duplicate_default_pattern, :impossible_default_pattern] and
+      when kind in [
+             :nonlinear_pattern,
+             :duplicate_default_pattern,
+             :impossible_default_pattern,
+             :unreachable_after_default_pattern
+           ] and
              is_map(context) do
     pattern_structure_failure(kind, detail, context, opts)
   end
@@ -1907,7 +1920,12 @@ defmodule Cure.Diagnostic.Adapter do
     do: inferred_hole_failure(name, %{}, opts)
 
   def from_error({kind, detail}, opts)
-      when kind in [:nonlinear_pattern, :duplicate_default_pattern, :impossible_default_pattern],
+      when kind in [
+             :nonlinear_pattern,
+             :duplicate_default_pattern,
+             :impossible_default_pattern,
+             :unreachable_after_default_pattern
+           ],
       do: pattern_structure_failure(kind, detail, %{}, opts)
 
   def from_error({kind}, opts) when kind in [:binary_match_needs_default, :map_match_needs_default],
@@ -2382,6 +2400,7 @@ defmodule Cure.Diagnostic.Adapter do
              :nonlinear_pattern,
              :duplicate_default_pattern,
              :impossible_default_pattern,
+             :unreachable_after_default_pattern,
              :typealias_not_a_type,
              :result_type_not_family,
              :constructor_result_mismatch,
@@ -6472,6 +6491,8 @@ defmodule Cure.Diagnostic.Adapter do
   defp pattern_structure_failure(kind, detail, context, opts) do
     {title, body, primary, secondary, hint} = pattern_structure_content(kind, detail, context, opts)
 
+    name = if is_map(detail), do: Map.get(detail, :name), else: detail
+
     Diagnostic.new(
       code: "E119",
       key: :pattern_structure,
@@ -6481,7 +6502,7 @@ defmodule Cure.Diagnostic.Adapter do
       primary: primary || primary_label(opts, "fix this pattern"),
       secondary: secondary,
       suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{kind: kind, name: detail, checking: Map.get(context, :checking)}
+      payload: %{kind: kind, name: name, checking: Map.get(context, :checking)}
     )
   end
 
@@ -6727,6 +6748,32 @@ defmodule Cure.Diagnostic.Adapter do
       ),
       [],
       "Use constructor patterns whose indices prove impossibility, or provide a result for this catch-all"
+    }
+  end
+
+  defp pattern_structure_content(:unreachable_after_default_pattern, details, _context, opts) do
+    name = details |> Map.get(:name) |> name_to_string()
+
+    secondary =
+      case pickup_label(
+             Map.get(details, :default_span),
+             :secondary,
+             "this catch-all already accepts every remaining value as `#{name}`"
+           ) do
+        nil -> []
+        label -> [label]
+      end
+
+    {
+      "Branch appears after a catch-all",
+      "No value can reach this branch because the preceding catch-all pattern already accepts every value not handled above it.",
+      pickup_label(
+        Map.get(details, :span) || Keyword.get(opts, :span),
+        :primary,
+        "this branch can never be reached"
+      ),
+      secondary,
+      "Move the catch-all to the end of the match, or narrow it to a constructor pattern"
     }
   end
 
@@ -7021,6 +7068,48 @@ defmodule Cure.Diagnostic.Adapter do
       payload: %{
         kind: :unsupported_pattern,
         reason: reason,
+        name: name,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp named_default_nonvariable_failure(details, context, opts) do
+    name = name_to_string(details.name)
+    pattern_span = Map.get(details, :span)
+    scrutinee_span = Map.get(details, :type_span) || Map.get(context, :scrutinee_span)
+    primary_span = pattern_span || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case pickup_label(
+             scrutinee_span,
+             :secondary,
+             "this expression has no existing name for the catch-all to bind"
+           ) do
+        nil -> []
+        label -> [label]
+      end
+
+    Diagnostic.new(
+      code: "E090",
+      key: :unrecognized_pattern,
+      severity: :error,
+      title: "Catch-all `#{name}` needs a stable value",
+      body:
+        Doc.paragraph(
+          "This named catch-all must refer to the complete matched value, but the match scrutinizes an expression directly. Bind that expression once before matching so `#{name}` has an unambiguous value."
+        ),
+      primary: pickup_label(primary_span, :primary, "this catch-all needs the complete matched value"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Bind the matched expression with `let`, then match the new name",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :unsupported_pattern,
+        reason: :named_default_nonvariable,
         name: name,
         checking: Map.get(context, :checking)
       }
