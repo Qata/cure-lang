@@ -4000,6 +4000,12 @@ defmodule Cure.Elab.Elaborator do
   @spec elaborate_match(term(), [tuple()], term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
   def elaborate_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
+    with :ok <- validate_positional_forced_patterns(arms0) do
+      elaborate_validated_match(scrut_expr, arms0, result_type_term, names, ctx, env)
+    end
+  end
+
+  defp elaborate_validated_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
     # A tuple SCRUTINEE (`match %[xs, ys] | %[C(…), D(…)] -> …`) is lowered to a
     # nested single-scrutinee match (`match xs | C(…) -> match ys | D(…) -> …`),
     # so the existing dependent single-scrutinee machinery handles it — absurd
@@ -4020,6 +4026,63 @@ defmodule Cure.Elab.Elaborator do
       elaborate_match_dispatch(scrut_expr, arms0, result_type_term, names, ctx, env)
     end
   end
+
+  defp validate_positional_forced_patterns(arms) do
+    Enum.reduce_while(arms, :ok, fn
+      {:match_arm, meta, _body}, :ok ->
+        case positional_forced_pattern(Keyword.get(meta, :pattern)) do
+          nil ->
+            {:cont, :ok}
+
+          {forced_meta, constructor_meta, argument_index} ->
+            forced_info = Cure.MetaAST.Metadata.source_info(forced_meta)
+            constructor_info = Cure.MetaAST.Metadata.source_info(constructor_meta)
+            span = forced_info && forced_info.whole
+
+            {:halt,
+             {:error,
+              {:source_context, {:forced_pattern_not_in_pattern, forced_meta},
+               %{
+                 line: span && span.start_line,
+                 column: span && span.start_column,
+                 length: span && max(1, span.end_column - span.start_column),
+                 span: span,
+                 constructor: Keyword.get(constructor_meta, :name),
+                 constructor_span: constructor_info && (constructor_info.callee || constructor_info.name),
+                 argument_index: argument_index,
+                 expectation_origin: :pattern,
+                 expression_category: :forced_pattern,
+                 forced_pattern_position: :positional_constructor_argument
+               }}}}
+        end
+
+      _arm, :ok ->
+        {:cont, :ok}
+    end)
+  end
+
+  defp positional_forced_pattern({:function_call, meta, args}) do
+    args
+    |> Enum.with_index()
+    |> Enum.find_value(fn
+      {{:forced_pattern, forced_meta, _children}, index} ->
+        {forced_meta, meta, index}
+
+      {{:named_implicit_pat, _named_meta, _children}, _index} ->
+        nil
+
+      {argument, _index} ->
+        positional_forced_pattern(argument)
+    end)
+  end
+
+  defp positional_forced_pattern({_tag, _meta, children}) when is_list(children),
+    do: Enum.find_value(children, &positional_forced_pattern/1)
+
+  defp positional_forced_pattern(children) when is_list(children),
+    do: Enum.find_value(children, &positional_forced_pattern/1)
+
+  defp positional_forced_pattern(_pattern), do: nil
 
   # A *named* default (`… | other -> body`) binds the WHOLE scrutinee value, but
   # `desugar_with_default` can only do so when the scrutinee is already a

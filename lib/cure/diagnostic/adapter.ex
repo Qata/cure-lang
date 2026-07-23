@@ -1664,6 +1664,13 @@ defmodule Cure.Diagnostic.Adapter do
       ),
       do: typed_pattern_arity_failure(context, opts)
 
+  def from_error(
+        {:source_context, {:forced_pattern_not_in_pattern, _meta},
+         %{forced_pattern_position: :positional_constructor_argument} = context},
+        opts
+      ),
+      do: positional_forced_pattern_failure(context, opts)
+
   def from_error({:source_context, {:applied_non_function, details}, context}, opts)
       when is_map(details) and is_map(context),
       do: non_callable_application(details, context, opts)
@@ -4757,6 +4764,58 @@ defmodule Cure.Diagnostic.Adapter do
         supplied_arity: supplied,
         visible_arity: accepted,
         checking: Map.get(context, :checking, :pattern)
+      }
+    )
+  end
+
+  defp positional_forced_pattern_failure(context, opts) do
+    constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
+    argument_index = Map.get(context, :argument_index, 0)
+    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(context, :constructor_span) do
+        %Span{} = span when span != primary_span ->
+          [
+            pickup_label(
+              span,
+              :secondary,
+              "this constructor pattern supplies positional fields"
+            )
+          ]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Dot pattern must name an implicit field",
+      body:
+        Doc.paragraph(
+          "Field #{argument_index + 1} of `#{constructor}` is positional. A dot pattern checks a value that constructor-index refinement already determined, so it must be written inside a named implicit pattern such as `{index = .value}`."
+        ),
+      primary:
+        pickup_label(
+          primary_span,
+          :primary,
+          "this forced check is in a positional field"
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message:
+            "Bind this positional field normally, or move the dot check to the constructor's corresponding named implicit field",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :positional_forced_pattern,
+        constructor: constructor,
+        argument_index: argument_index,
+        expectation_origin: :pattern
       }
     )
   end
