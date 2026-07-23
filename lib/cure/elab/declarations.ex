@@ -1024,6 +1024,11 @@ defmodule Cure.Elab.Declarations do
       checking: checking,
       span: if(source_info, do: source_info.whole),
       opener_span: if(source_info, do: source_info.opener),
+      scrutinee_span: if(source_info, do: List.first(source_info.operands)),
+      proof_span: if(source_info, do: Map.get(source_info.fields, :proof_clause)),
+      proof_keyword_span: if(source_info, do: Map.get(source_info.fields, :proof_keyword)),
+      proof_name_span: if(source_info, do: Map.get(source_info.fields, :proof_name)),
+      proof_name: Keyword.get(meta, :proof),
       expectation_span: expectation_span,
       expression_category: expression_category(expression),
       expectation_origin: expectation_origin,
@@ -1148,24 +1153,29 @@ defmodule Cure.Elab.Declarations do
   defp expression_category(_expression), do: :expression
 
   defp branch_patterns({:pattern_match, _meta, [_scrutinee | arms]}, env) do
-    Enum.map(arms, fn
-      {:match_arm, arm_meta, _body} ->
-        pattern = Keyword.get(arm_meta, :pattern)
-
-        %{
-          name: pattern_label(pattern),
-          kind: pattern_kind(pattern, env),
-          span: arm_span(arm_meta),
-          pattern_span: surface_pattern_span(arm_meta, pattern),
-          variable_spans: pattern_variable_spans(pattern)
-        }
-
-      _ ->
-        %{name: "unknown branch", span: nil}
-    end)
+    Enum.map(arms, &branch_pattern(&1, env))
   end
 
+  defp branch_patterns({:with_abs, _meta, [_scrutinee | arms]}, env),
+    do: Enum.map(arms, &branch_pattern(&1, env))
+
   defp branch_patterns(_expression, _env), do: []
+
+  defp branch_pattern({family, arm_meta, _body}, env)
+       when family in [:match_arm, :with_rematch_arm] and is_list(arm_meta) do
+    pattern = Keyword.get(arm_meta, :pattern)
+
+    %{
+      name: pattern_label(pattern),
+      kind: pattern_kind(pattern, env),
+      family: family,
+      span: arm_span(arm_meta),
+      pattern_span: surface_pattern_span(arm_meta, pattern),
+      variable_spans: pattern_variable_spans(pattern)
+    }
+  end
+
+  defp branch_pattern(_arm, _env), do: %{name: "unknown branch", span: nil}
 
   defp branch_type_reason?(:branch_type), do: true
   defp branch_type_reason?({:branch_type, _details}), do: true

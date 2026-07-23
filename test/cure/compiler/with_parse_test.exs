@@ -67,6 +67,11 @@ defmodule Cure.Compiler.WithParseTest do
     assert {:variable, _, "n"} = scrut
     assert Keyword.get(meta, :proof) == "pf"
     assert length(arms) == 2
+
+    source_info = Metadata.source_info(meta)
+    assert {source_info.fields.proof_clause.start_column, source_info.fields.proof_clause.end_column} == {12, 20}
+    assert {source_info.fields.proof_keyword.start_column, source_info.fields.proof_keyword.end_column} == {12, 17}
+    assert {source_info.fields.proof_name.start_column, source_info.fields.proof_name.end_column} == {18, 20}
   end
 
   test "`proof` after a call scrutinee is not consumed as another scrutinee" do

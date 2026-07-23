@@ -6435,7 +6435,7 @@ defmodule Cure.Compiler.Parser do
     # Optional `proof <ident>` (capability B): binds the scrutinee equation
     # `Eq(T, e, pat)` in each branch. `proof` is a soft keyword recognised only
     # in this slot; elsewhere it stays an ordinary identifier.
-    {proof, state} = parse_optional_with_proof(state)
+    {proof, proof_source, state} = parse_optional_with_proof(state)
     state = skip_newlines(state)
 
     base_meta = [line: token.line, col: token.col]
@@ -6452,22 +6452,26 @@ defmodule Cure.Compiler.Parser do
               expect_container_close(state, :rbrace, :branch_block, open_token, arms, false, %{family: :with})
 
             meta = put_match_source_info(meta, token, single, arms, state)
-            {{:with_abs, meta, [single | arms]}, state}
+            ast = {:with_abs, meta, [single | arms]}
+            {put_with_proof_source_info(ast, proof_source), state}
 
           %Token{type: :indent} ->
             state = advance(state)
             {arms, state} = parse_with_block_arms(state)
             state = expect_dedent(state)
             meta = put_match_source_info(meta, token, single, arms, state)
-            {{:with_abs, meta, [single | arms]}, state}
+            ast = {:with_abs, meta, [single | arms]}
+            {put_with_proof_source_info(ast, proof_source), state}
 
           _ ->
             meta = put_match_source_info(meta, token, single, [], state)
-            {{:with_abs, meta, [single]}, state}
+            ast = {:with_abs, meta, [single]}
+            {put_with_proof_source_info(ast, proof_source), state}
         end
 
       _ ->
-        parse_multi_with_abs(scruts, proof, base_meta, token, state)
+        {ast, state} = parse_multi_with_abs(scruts, proof, base_meta, token, state)
+        {put_with_proof_source_info(ast, proof_source), state}
     end
   end
 
@@ -6900,30 +6904,47 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  # `proof <ident>` after a with-scrutinee. Returns `{name, state}` (name a
-  # string) when present, else `{nil, state}` leaving the stream untouched.
+  # `proof <ident>` after a with-scrutinee. Returns the semantic name and the
+  # exact token-owned clause roles when present, leaving the stream untouched
+  # otherwise.
   defp parse_optional_with_proof(state) do
     case peek(state) do
-      %Token{type: :keyword, value: :proof} ->
+      %Token{type: type, value: value} = proof_token
+      when (type == :keyword and value == :proof) or (type == :identifier and value == "proof") ->
         case peek_at(state, 1) do
-          %Token{type: :identifier, value: name} ->
-            {name, state |> advance() |> advance()}
+          %Token{type: :identifier, value: name} = name_token ->
+            source = %{
+              whole: through_spans(proof_token.span, name_token.span),
+              keyword: proof_token.span,
+              name: name_token.span
+            }
+
+            {name, source, state |> advance() |> advance()}
 
           _ ->
-            {nil, state}
-        end
-
-      %Token{type: :identifier, value: "proof"} ->
-        case peek_at(state, 1) do
-          %Token{type: :identifier, value: name} ->
-            {name, state |> advance() |> advance()}
-
-          _ ->
-            {nil, state}
+            {nil, nil, state}
         end
 
       _ ->
-        {nil, state}
+        {nil, nil, state}
+    end
+  end
+
+  defp put_with_proof_source_info(ast, nil), do: ast
+
+  defp put_with_proof_source_info({:with_abs, meta, children}, source) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{} = info ->
+        fields =
+          info.fields
+          |> Map.put(:proof_clause, source.whole)
+          |> Map.put(:proof_keyword, source.keyword)
+          |> Map.put(:proof_name, source.name)
+
+        {:with_abs, Metadata.put_source_info(meta, %{info | fields: fields}), children}
+
+      _ ->
+        {:with_abs, meta, children}
     end
   end
 
