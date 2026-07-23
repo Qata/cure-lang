@@ -883,6 +883,13 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: shadowed_sub_union_pattern_failure(details, context, opts)
 
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :shadowed_literal_member, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: shadowed_sub_union_pattern_failure(details, context, opts)
+
   def from_error({:source_context, {:unsupported_pattern, shape}, context}, opts) when is_map(context) do
     from_error(
       %SyntaxProblem{
@@ -6880,10 +6887,26 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp shadowed_sub_union_pattern_failure(details, context, opts) do
     name = name_to_string(details.name)
+    reason = Map.get(details, :reason)
     outer_span = Map.get(details, :span)
     shadow_span = Map.get(details, :shadow_span)
     type_span = Map.get(details, :type_span)
     primary_span = shadow_span || outer_span || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    {body, type_message} =
+      case reason do
+        :shadowed_literal_member ->
+          {
+            "The outer `#{name}` stands for a literal union member. This nested pattern binds another value with the same name, so rewriting uses of the literal could capture the inner value.",
+            "this branch names a literal union member"
+          }
+
+        _ ->
+          {
+            "The outer `#{name}` represents a narrowed union value. This nested pattern binds another value with the same name, so rewriting uses of the outer value could capture the inner one.",
+            "this branch keeps the remaining union members"
+          }
+      end
 
     secondary =
       [
@@ -6896,7 +6919,7 @@ defmodule Cure.Diagnostic.Adapter do
         end,
         case type_span do
           %Span{} = span when span != primary_span and span != outer_span ->
-            pickup_label(span, :secondary, "this branch keeps the remaining union members")
+            pickup_label(span, :secondary, type_message)
 
           _ ->
             nil
@@ -6909,10 +6932,7 @@ defmodule Cure.Diagnostic.Adapter do
       key: :unrecognized_pattern,
       severity: :error,
       title: "Nested pattern shadows `#{name}`",
-      body:
-        Doc.paragraph(
-          "The outer `#{name}` represents a narrowed union value. This nested pattern binds another value with the same name, so rewriting uses of the outer value could capture the inner one."
-        ),
+      body: Doc.paragraph(body),
       primary: pickup_label(primary_span, :primary, "rename this inner binder so it does not shadow `#{name}`"),
       secondary: secondary,
       suggestions: [
@@ -6923,7 +6943,7 @@ defmodule Cure.Diagnostic.Adapter do
       ],
       payload: %{
         kind: :unsupported_pattern,
-        reason: :shadowed_sub_union,
+        reason: reason,
         name: name,
         checking: Map.get(context, :checking)
       }

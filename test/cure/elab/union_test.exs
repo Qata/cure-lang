@@ -631,6 +631,74 @@ defmodule Cure.Elab.UnionTest do
       assert shadow_span.start_line == 6
       assert shadow_span.start_column == 37
     end
+
+    test "a nested binder shadowing a named literal member gets both source roles" do
+      src = """
+      mod L
+        fn f(x: Int | 3) -> Int = match x
+          n: Int -> n
+          n: 3 ->
+            let g : (Int) -> Int = fn(n) -> n
+            g(1)
+      end
+      """
+
+      assert {:error,
+              {:source_context,
+               {:unsupported_pattern, %{reason: :shadowed_literal_member, name: "n", shadow_span: shadow_span}}, _} =
+                error} =
+               Program.elaborate(src)
+
+      assert shadow_span.start_line == 5
+      assert shadow_span.start_column == 33
+
+      {diagnostic, registry} = Errors.to_diagnostic(error, "literal_shadow.cure", src)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- NESTED PATTERN SHADOWS `N` [E090] ----------------------- literal_shadow.cure
+
+               The outer `n` stands for a literal union member. This nested pattern binds
+               another value with the same name, so rewriting uses of the literal could capture
+               the inner value.
+
+               at literal_shadow.cure:5:33
+               4 |     n: 3 ->
+                 |     -  - this outer pattern binds `n`; this branch names a literal union member
+               5 |       let g : (Int) -> Int = fn(n) -> n
+                 |                                 ^ rename this inner binder so it does not shadow `n`
+
+               Hint: Give the nested binder a different name and update its branch body
+               """)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+
+      assert lsp["range"] == %{
+               "start" => %{"line" => 4, "character" => 32},
+               "end" => %{"line" => 4, "character" => 33}
+             }
+
+      assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+               %{
+                 "start" => %{"line" => 3, "character" => 4},
+                 "end" => %{"line" => 3, "character" => 5}
+               },
+               %{
+                 "start" => %{"line" => 3, "character" => 7},
+                 "end" => %{"line" => 3, "character" => 8}
+               }
+             ]
+
+      assert lsp["data"]["payload"] == %{
+               "checking" => "f",
+               "kind" => "unsupported_pattern",
+               "name" => "n",
+               "reason" => "shadowed_literal_member"
+             }
+
+      fixed = String.replace(src, "fn(n) -> n", "fn(value) -> value")
+      assert {:ok, _environment} = Program.elaborate(fixed, file: "literal_shadow_fixed.cure")
+    end
   end
 
   describe "dependent-pipeline routing sees a union wherever it appears" do

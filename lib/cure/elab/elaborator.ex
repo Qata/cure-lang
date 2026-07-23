@@ -4383,7 +4383,18 @@ defmodule Cure.Elab.Elaborator do
       # exactly as the sub-union branch substitutes its fresh payload binder. And run the
       # SAME capture guard: this branch was skipping it entirely.
       m.payload == nil and binds_any?(body, [name]) ->
-        {:error, {:unsupported_pattern, :shadowed_literal_member}}
+        pattern_info = Cure.MetaAST.Metadata.source_info(pm)
+
+        {:error,
+         {:unsupported_pattern,
+          %{
+            reason: :shadowed_literal_member,
+            name: name,
+            member: m.key,
+            span: pattern_info && (pattern_info.name || pattern_info.whole),
+            type_span: (pattern_info && pattern_info.annotation) || surface_expression_span(type_ast),
+            shadow_span: first_binding_span(body, name)
+          }}}
 
       m.payload == nil ->
         pattern = {:function_call, [name: Atom.to_string(cname)], []}
