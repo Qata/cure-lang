@@ -271,6 +271,44 @@ defmodule Cure.Diagnostic.Adapter.Macro do
       when kind in [:invalid_reducer_arms, :invalid_reducer_arm, :duplicate_reducer_constructor],
       do: reducer_failure(kind, %{}, opts)
 
+  def from_error({:invalid_syntax_node, _attrs, _kids}, opts),
+    do: syntax_decode_failure(:invalid_syntax_node, %{}, opts)
+
+  def from_error({:invalid_syntax_node, _detail}, opts),
+    do: syntax_decode_failure(:invalid_syntax_node, %{}, opts)
+
+  def from_error({:invalid_syntax_leaf, tag}, opts),
+    do: syntax_decode_failure(:invalid_syntax_leaf, %{tag: tag}, opts)
+
+  def from_error({:invalid_syntax_failure, name}, opts),
+    do: syntax_decode_failure(:invalid_syntax_failure, %{name: name}, opts)
+
+  def from_error({:unsupported_syntax_core, _term}, opts),
+    do: syntax_decode_failure(:unsupported_syntax_core, %{}, opts)
+
+  def from_error({:invalid_syntax_attrs, _core}, opts),
+    do: syntax_decode_failure(:invalid_syntax_attrs, %{}, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :invalid_syntax_attr,
+             :invalid_syntax_list,
+             :invalid_syntax_string,
+             :invalid_syntax_literal,
+             :invalid_syntax_pair
+           ],
+      do: syntax_decode_failure(kind, %{}, opts)
+
+  def from_error({kind, _detail}, opts)
+      when kind in [
+             :invalid_syntax_attr,
+             :invalid_syntax_list,
+             :invalid_syntax_string,
+             :invalid_syntax_literal,
+             :invalid_syntax_pair
+           ],
+      do: syntax_decode_failure(kind, %{}, opts)
+
   def from_error({:macro_expansion_cycle, frames}, opts)
       when is_list(frames),
       do:
@@ -783,6 +821,70 @@ defmodule Cure.Diagnostic.Adapter.Macro do
 
   defp constructor_phrase([_one], rendered), do: "constructor #{rendered}"
   defp constructor_phrase(_many, rendered), do: "constructors #{rendered}"
+
+  @doc false
+  def syntax_decode_failure(kind, details, opts),
+    do: simple_macro_failure(:macro_syntax_decode, kind, syntax_decode_content(kind, details), opts)
+
+  defp syntax_decode_content(:invalid_syntax_node, _details),
+    do:
+      {"Generated syntax node is malformed",
+       "A reflected `Node` must contain an atom tag, an attribute list, and a list of syntax children.",
+       "rebuild this syntax node", "Construct `Node(tag, attributes, children)` with valid values"}
+
+  defp syntax_decode_content(:invalid_syntax_leaf, %{tag: tag}),
+    do:
+      {"Generated syntax leaf is malformed",
+       "The `#{name_to_string(tag)}` reflected `Leaf` does not contain a valid attribute list and syntax literal.",
+       "rebuild this syntax leaf", "Construct `Leaf(tag, attributes, literal)` with valid values"}
+
+  defp syntax_decode_content(:invalid_syntax_failure, %{name: name}),
+    do:
+      {"Macro failure value is malformed",
+       "The `#{name_to_string(name)}` failure does not contain a valid list of reflected syntax arguments.",
+       "rebuild this macro failure", "Construct `Failure(name, arguments)` with valid syntax arguments"}
+
+  defp syntax_decode_content(:unsupported_syntax_core, _details),
+    do:
+      {"Macro returned a non-syntax value",
+       "The computed macro returned a Core value that is not a `Std.Syntax` constructor.", "return a syntax value here",
+       "Return `Node`, `Leaf`, `Raw`, `Quoted`, or `Failure` from the macro"}
+
+  defp syntax_decode_content(:invalid_syntax_attrs, _details),
+    do:
+      {"Generated syntax attributes are malformed",
+       "Syntax attributes must be a `Std.List` of atom-keyed `KV` entries.", "rebuild this attribute list",
+       "Use `KV(atom_key, syntax_literal)` for every attribute"}
+
+  defp syntax_decode_content(:invalid_syntax_attr, _details),
+    do:
+      {"Generated syntax attribute is malformed",
+       "A syntax attribute must be an atom-keyed `KV` entry containing a valid syntax literal.",
+       "rebuild this syntax attribute", "Use `KV(atom_key, syntax_literal)`"}
+
+  defp syntax_decode_content(:invalid_syntax_list, _details),
+    do:
+      {"Generated syntax list is malformed",
+       "A reflected syntax list must use the `Std.List` `Nil` and `Cons` constructors.", "rebuild this syntax list",
+       "Construct a proper `Std.List` value"}
+
+  defp syntax_decode_content(:invalid_syntax_string, _details),
+    do:
+      {"Generated syntax string is malformed",
+       "A reflected syntax string must contain a proper list of bounded character literals.",
+       "rebuild this syntax string", "Construct `SStr` from valid character values"}
+
+  defp syntax_decode_content(:invalid_syntax_literal, _details),
+    do:
+      {"Generated syntax literal is malformed",
+       "This value is not one of the supported `Std.Syntax` literal constructors.", "replace this syntax literal",
+       "Use `SInt`, `SFloat`, `SStr`, `SBool`, `SAtom`, `SList`, `SSyntax`, `SMap`, or `SOpaque`"}
+
+  defp syntax_decode_content(:invalid_syntax_pair, _details),
+    do:
+      {"Generated syntax-map pair is malformed",
+       "Every entry in an `SMap` must be an `SPair` containing two valid syntax literals.",
+       "rebuild this syntax-map pair", "Use `SPair(key, value)` inside `SMap`"}
 
   defp packet_content(:invalid_packet_name, %{detail: name}) do
     {"Packet name is invalid",

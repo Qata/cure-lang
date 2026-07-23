@@ -227,6 +227,30 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
     end
   end
 
+  test "syntax decoding producers are owned by the macro family" do
+    errors = [
+      {:invalid_syntax_node, [], []},
+      {:invalid_syntax_node, :bad},
+      {:invalid_syntax_leaf, :Node},
+      {:invalid_syntax_failure, :bad},
+      {:unsupported_syntax_core, :core},
+      {:invalid_syntax_attrs, :attrs},
+      {:invalid_syntax_attr, :attr},
+      {:invalid_syntax_list, :list},
+      {:invalid_syntax_string, :string},
+      {:invalid_syntax_literal, :literal},
+      {:invalid_syntax_pair, :pair}
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.key == :macro_syntax_decode
+      assert direct.suggestions != []
+    end
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 
