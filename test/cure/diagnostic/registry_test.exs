@@ -185,6 +185,15 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert entry.producer_converters.elaboration == {Cure.Diagnostic.Adapter, :from_error}
   end
 
+  test "E104 is owned by the exhaustive static-analysis converter" do
+    entry = Registry.fetch!("E104")
+    assert entry.converter == Cure.Diagnostic.Adapter.StaticAnalysis
+
+    assert entry.producer_converters == %{
+             elaboration: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
+           }
+  end
+
   test "producer catalog validation requires every code and producer branch independently" do
     entry = Registry.fetch!("E094")
     assert entry.producers |> Enum.sort() == [:lexer, :parser]

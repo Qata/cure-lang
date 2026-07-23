@@ -1833,6 +1833,7 @@ defmodule Cure.Diagnostic.Registry do
   defp converter(code) when code in @operational, do: Cure.Diagnostic.Adapter.Operational
   defp converter("E091"), do: Cure.Diagnostic.Adapter.Name
   defp converter("E103"), do: Cure.Diagnostic.Adapter.Kernel
+  defp converter("E104"), do: Cure.Diagnostic.Adapter.StaticAnalysis
   defp converter(code) when code in @structured, do: Cure.Diagnostic.Adapter
   defp converter(_code), do: Cure.Compiler.Errors
 
@@ -1861,6 +1862,9 @@ defmodule Cure.Diagnostic.Registry do
 
   defp producer_converter("E093", :kernel),
     do: {Cure.Diagnostic.Adapter.Type, :from_error}
+
+  defp producer_converter("E104", :elaboration),
+    do: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
 
   defp producer_converter(_code, :operational),
     do: {Cure.Diagnostic.Adapter.Operational, :from_error}

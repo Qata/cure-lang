@@ -25,6 +25,7 @@ defmodule Cure.Diagnostic.Adapter do
   alias Cure.Diagnostic.Adapter.Kernel, as: KernelAdapter
   alias Cure.Diagnostic.Adapter.Name, as: NameAdapter
   alias Cure.Diagnostic.Adapter.Operational
+  alias Cure.Diagnostic.Adapter.StaticAnalysis
   alias Cure.Diagnostic.Adapter.Type, as: TypeAdapter
   alias Cure.Diagnostic.Suggest
   alias Cure.MetaAST.Metadata
@@ -75,9 +76,8 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:non_strictly_positive, _family} = error, opts),
     do: KernelAdapter.from_error(error, opts)
 
-  def from_error({:erased_used_relevantly, details}, opts) when is_map(details) do
-    relevance_failure(details, %{}, opts)
-  end
+  def from_error({:erased_used_relevantly, details} = error, opts) when is_map(details),
+    do: StaticAnalysis.from_error(error, opts)
 
   def from_error({:usage_violation, details}, opts) when is_map(details) do
     usage_failure(details, %{}, opts)
@@ -1565,19 +1565,9 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: KernelAdapter.from_error(error, opts)
 
-  def from_error(
-        {:source_context, {:erased_used_relevantly, details}, context},
-        opts
-      )
-      when is_map(details) and is_map(context) do
-    opts =
-      case Map.get(context, :span) do
-        %Span{} = span -> Keyword.put_new(opts, :span, span)
-        _ -> opts
-      end
-
-    relevance_failure(details, context, opts)
-  end
+  def from_error({:source_context, {:erased_used_relevantly, details}, context} = error, opts)
+      when is_map(details) and is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
 
   def from_error(
         {:source_context, {:usage_violation, details}, context},
@@ -10363,67 +10353,6 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp pickup_spans(spans), do: Enum.filter(spans, &match?(%Span{}, &1))
-
-  defp relevance_failure(details, context, opts) do
-    site = Map.get(details, :site, :runtime)
-    binder = Map.get(details, :binder)
-    binder_name = Map.get(context, :binder_name)
-
-    subject =
-      cond do
-        is_binary(binder_name) -> "The erased parameter `#{binder_name}`"
-        is_atom(binder_name) and not is_nil(binder_name) -> "The erased parameter `#{binder_name}`"
-        is_nil(binder) -> "An erased value"
-        true -> "Erased binder #{binder}"
-      end
-
-    site_description = relevance_site_description(site)
-
-    secondary =
-      case pickup_label(
-             Map.get(context, :binder_span),
-             :secondary,
-             "`#{binder_name || "this value"}` is erased here"
-           ) do
-        nil -> []
-        label -> [label]
-      end
-
-    Diagnostic.new(
-      code: "E104",
-      key: :erased_value_used_relevantly,
-      severity: :error,
-      title: "Erased value used relevantly",
-      body: Doc.paragraph("#{subject} is used as #{site_description}, but erased parameters do not exist at runtime."),
-      primary: primary_label(opts, relevance_primary_message(site)),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: relevance_suggestion(binder_name),
-          applicability: :manual
-        }
-      ],
-      payload: details
-    )
-  end
-
-  defp relevance_primary_message(:returned), do: "this returns an erased value at runtime"
-  defp relevance_primary_message(:present_arg), do: "this passes an erased value to a runtime argument"
-  defp relevance_primary_message(:scrutinee), do: "this match inspects an erased value at runtime"
-  defp relevance_primary_message(:applied), do: "this applies an erased value as a runtime function"
-  defp relevance_primary_message(_site), do: "this uses an erased value at runtime"
-
-  defp relevance_site_description(:returned), do: "the function's runtime result"
-  defp relevance_site_description(:present_arg), do: "an argument that exists at runtime"
-  defp relevance_site_description(:scrutinee), do: "the value inspected by a runtime match"
-  defp relevance_site_description(:applied), do: "a function called at runtime"
-  defp relevance_site_description(_site), do: "a value needed at runtime"
-
-  defp relevance_suggestion(name) when is_binary(name) or (is_atom(name) and not is_nil(name)),
-    do: "Declare `#{name}` as a runtime parameter, or keep it out of runtime expressions"
-
-  defp relevance_suggestion(_name),
-    do: "Use a runtime parameter here, or keep the erased value out of runtime expressions"
 
   defp usage_failure(details, context, opts) do
     declared = Map.get(details, :declared, :unknown)
