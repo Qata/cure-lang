@@ -160,7 +160,6 @@ defmodule Cure.DiagnosticExerciserTest do
        {:invalid_macro_family,
         %{reason: {:syntax_family_cycle, ["A", "B", "A"]}, related_spans: [], line: 1, column: 1}}},
       {"missing stdlib source", "E095", {:missing_stdlib_source, "Std.Missing", "/tmp/Std/Missing.cure"}},
-      {"operator conflict", "E106", {:builtin_operator_not_overloadable, :|>}},
       {"unsupported async", "E107", {:unsupported_async, "async primitive is unavailable", [line: 2]}},
       {"splice outside quote", "E108", {:splice_outside_quote, :splice, [line: 2]}},
       {"proof chain syntax", "E109",

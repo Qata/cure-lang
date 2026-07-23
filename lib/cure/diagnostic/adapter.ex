@@ -275,10 +275,6 @@ defmodule Cure.Diagnostic.Adapter do
     operator_conflict(:conflicting_precedence_group, details, opts)
   end
 
-  def from_error({:builtin_operator_not_overloadable, operator}, opts) do
-    operator_conflict(:builtin_operator_not_overloadable, %{operator: operator}, opts)
-  end
-
   def from_error({:unsupported_operand_type, operator}, opts),
     do: operator_failure(:unsupported_operand_type, operator, %{}, opts)
 
@@ -2410,27 +2406,6 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unknown_constructor, name}, opts),
     do: unknown_name(:constructor, name, opts)
 
-  def from_error({:unknown_type, name}, opts),
-    do: unknown_name(:type, name, opts)
-
-  def from_error({:unknown_module, name}, opts),
-    do: unknown_name(:module, name, opts)
-
-  def from_error({:unknown_member, module, name}, opts),
-    do: unknown_name(:member, "#{module}.#{name}", Keyword.put(opts, :owner, module))
-
-  def from_error({:unbound_variable, message, meta}, opts) when is_binary(message) and is_list(meta) do
-    Diagnostic.new(
-      code: "E002",
-      key: :unbound_variable,
-      severity: :error,
-      title: "Unbound variable",
-      message: message,
-      primary: primary_label(opts, "this variable is not bound here"),
-      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
-    )
-  end
-
   def from_error({:unfilled_hole, details}, opts) when is_map(details) do
     opts = Keyword.put_new(opts, :span, Map.get(details, :span))
     primary = primary_label(opts, "replace this hole with an expression")
@@ -2895,24 +2870,6 @@ defmodule Cure.Diagnostic.Adapter do
       primary: primary_label(opts, "the cycle begins here"),
       notes: ["Cycle members compile together in deterministic order; qualify cross-module calls when order matters."],
       payload: %{hops: hops}
-    )
-  end
-
-  def from_error({:unresolved_import, name, arity, imports, line}, opts) when is_list(imports) do
-    spelling = name_to_string(name)
-    modules = Enum.map(imports, &name_to_string/1)
-
-    Diagnostic.new(
-      code: "W088",
-      key: :unresolved_import,
-      severity: :warning,
-      title: "Unresolved import",
-      message: "This warning means `#{spelling}/#{arity}` matches no export of #{Enum.join(modules, ", ")}.",
-      primary: primary_label(opts, "this call falls back to a local call"),
-      suggestions: [
-        %Suggestion{message: "Qualify the call with the module that defines it", applicability: :manual}
-      ],
-      payload: %{name: spelling, arity: arity, imports: modules, line: line}
     )
   end
 
@@ -6297,10 +6254,6 @@ defmodule Cure.Diagnostic.Adapter do
           {"Conflicting precedence group",
            "The precedence group `#{name_to_string(details.name)}` is declared with incompatible associativity or ordering rules. Give the declarations identical bodies, or rename one group.",
            "this declaration conflicts with the earlier group", "the incompatible group declaration is here"}
-
-        :builtin_operator_not_overloadable ->
-          {"Operator declaration conflict", "The built-in operator `#{details.operator}` cannot be overloaded.",
-           "adjust this operator declaration", nil}
       end
 
     {primary, secondary} =

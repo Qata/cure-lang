@@ -824,13 +824,6 @@ defmodule Cure.Diagnostic.HostTest do
     refute rematch =~ ":with_rematch_arity_mismatch"
   end
 
-  test "renders operator declaration conflicts" do
-    rendered = Host.render({:builtin_operator_not_overloadable, :|>}, "demo.cure")
-
-    assert rendered =~ "[E106]"
-    assert rendered =~ "cannot be overloaded"
-  end
-
   test "renders unsupported async and quote-boundary failures" do
     async = Host.render({:unsupported_async, "async primitive is unavailable", [line: 2]}, "demo.cure")
     assert async =~ "[E107]"
@@ -939,16 +932,5 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "[E101]"
     assert rendered =~ "fingerprint"
     refute rendered =~ ":unregistered_compiler_reason"
-  end
-
-  test "simple name-resolution families use structured host output" do
-    assert Cure.Compiler.Errors.format_with_source({:unknown_type, "Missing"}, "demo.cure", "type Use = Missing\n") =~
-             "[E091]"
-
-    assert Cure.Compiler.Errors.format_with_source({:unknown_module, "Missing"}, "demo.cure", "use Missing\n") =~
-             "[E091]"
-
-    assert Cure.Compiler.Errors.format_with_source({:unknown_member, "Demo", "missing"}, "demo.cure", "Demo.missing\n") =~
-             "[E091]"
   end
 end

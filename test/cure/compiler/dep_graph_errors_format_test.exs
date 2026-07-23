@@ -27,17 +27,4 @@ defmodule Cure.Compiler.DepGraphErrorsFormatTest do
     assert out =~ "one.cure"
     assert out =~ "two.cure"
   end
-
-  test "unresolved import fallback formats as a warning with code" do
-    out =
-      Errors.format_error(
-        {:unresolved_import, "ping", 0, [:"Cure.LibA"], 7},
-        "user.cure"
-      )
-
-    assert out =~ "W088"
-    assert out =~ "ping/0"
-    assert out =~ "Cure.LibA"
-    assert out =~ "warning"
-  end
 end
