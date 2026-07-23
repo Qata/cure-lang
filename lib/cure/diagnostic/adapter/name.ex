@@ -265,6 +265,13 @@ defmodule Cure.Diagnostic.Adapter.Name do
       do:
         deriving_failure(:cannot_derive_method, %{interface: interface, method: method, reason: reason}, context, opts)
 
+  def from_error({:inconsistent_head_kind, interface}, opts),
+    do: inconsistent_interface_head(interface, %{}, opts)
+
+  def from_error({:source_context, {:inconsistent_head_kind, interface}, context}, opts)
+      when is_map(context),
+      do: inconsistent_interface_head(interface, context, opts)
+
   def from_error(
         {:source_context, {:unsupported_guard, %{reason: :shadowed} = details}, context},
         opts
@@ -830,6 +837,58 @@ defmodule Cure.Diagnostic.Adapter.Name do
       secondary: secondary,
       suggestions: [%Suggestion{message: hint, applicability: :manual}],
       payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  @doc false
+  def inconsistent_interface_head(interface, context, opts) do
+    interface = name_to_string(interface)
+    parameter = name_to_string(Map.get(context, :head_parameter, "the head parameter"))
+    uses = Map.get(context, :head_uses, [])
+    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    bare = Enum.find(uses, &(&1.kind == :bare and match?(%Span{}, &1.span)))
+    applied = Enum.find(uses, &(&1.kind == :applied and match?(%Span{}, &1.span)))
+    primary_span = (applied && applied.span) || primary_span
+
+    secondary =
+      case bare do
+        %{span: %Span{} = span} when span != primary_span ->
+          [%Label{span: span, style: :secondary, message: "`#{parameter}` is used as a complete type here"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "`#{interface}` uses `#{parameter}` at two different kinds",
+      body:
+        Doc.paragraph(
+          "The interface head `#{parameter}` is used both as a complete type and as a type constructor such as `#{parameter}(a)`. One interface parameter must have one consistent kind in every method signature."
+        ),
+      primary:
+        pickup_label(primary_span, :primary, "`#{parameter}` is used as a type constructor here") ||
+          primary(opts, "use this interface parameter at one consistent kind"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Use `#{parameter}` consistently as either a type or a type constructor",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :inconsistent_head_kind,
+        interface: interface,
+        head_parameter: parameter,
+        uses:
+          uses
+          |> Enum.filter(&(&1.kind in [:bare, :applied]))
+          |> Enum.uniq_by(& &1.kind)
+          |> Enum.map(&%{kind: &1.kind, method: Map.get(&1, :method)})
+      }
     )
   end
 

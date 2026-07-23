@@ -852,7 +852,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:source_context, {:inconsistent_head_kind, interface}, context}, opts)
       when is_map(context),
-      do: inconsistent_interface_head(interface, context, opts)
+      do: NameAdapter.from_error({:source_context, {:inconsistent_head_kind, interface}, context}, opts)
 
   def from_error({:source_context, {:no_named_instance, name}, context}, opts) when is_map(context) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
@@ -3264,7 +3264,7 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:cannot_emit, _reason} = error, opts), do: Codegen.from_error(error, opts)
 
   def from_error({:inconsistent_head_kind, name}, opts),
-    do: declaration_conflict(:inconsistent_head_kind, %{name: name}, opts)
+    do: NameAdapter.from_error({:inconsistent_head_kind, name}, opts)
 
   def from_error({:lift_module_error, details}, opts) when is_map(details) do
     macro = get_in(details, [:source_provenance, :macro]) || :macro
@@ -4642,69 +4642,6 @@ defmodule Cure.Diagnostic.Adapter do
       end
 
     {title, message, label}
-  end
-
-  defp inconsistent_interface_head(interface, context, opts) do
-    interface = name_to_string(interface)
-    parameter = name_to_string(Map.get(context, :head_parameter, "the head parameter"))
-    uses = Map.get(context, :head_uses, [])
-    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
-
-    bare = Enum.find(uses, &(&1.kind == :bare and match?(%Span{}, &1.span)))
-    applied = Enum.find(uses, &(&1.kind == :applied and match?(%Span{}, &1.span)))
-    primary_span = (applied && applied.span) || primary_span
-
-    secondary =
-      case bare do
-        %{span: %Span{} = span} when span != primary_span ->
-          [
-            %Label{
-              span: span,
-              style: :secondary,
-              message: "`#{parameter}` is used as a complete type here"
-            }
-          ]
-
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: "E105",
-      key: :declaration_conflict,
-      severity: :error,
-      title: "`#{interface}` uses `#{parameter}` at two different kinds",
-      body:
-        Doc.paragraph(
-          "The interface head `#{parameter}` is used both as a complete type and as a type constructor such as `#{parameter}(a)`. One interface parameter must have one consistent kind in every method signature."
-        ),
-      primary:
-        if(primary_span,
-          do: %Label{
-            span: primary_span,
-            style: :primary,
-            message: "`#{parameter}` is used as a type constructor here"
-          },
-          else: primary_label(opts, "use this interface parameter at one consistent kind")
-        ),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Use `#{parameter}` consistently as either a type or a type constructor",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :inconsistent_head_kind,
-        interface: interface,
-        head_parameter: parameter,
-        uses:
-          uses
-          |> Enum.filter(&(&1.kind in [:bare, :applied]))
-          |> Enum.uniq_by(& &1.kind)
-          |> Enum.map(&%{kind: &1.kind, method: Map.get(&1, :method)})
-      }
-    )
   end
 
   defp arity_failure(kind, details, opts) do

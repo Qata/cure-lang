@@ -150,6 +150,10 @@ defmodule Cure.Diagnostic.Adapter.NameTest do
     assert deriving == Adapter.from_error({:cannot_derive, :Equatable})
     assert deriving.code == "E105"
 
+    head_kind = NameAdapter.from_error({:inconsistent_head_kind, :Eq})
+    assert head_kind == Adapter.from_error({:inconsistent_head_kind, :Eq})
+    assert head_kind.code == "E105"
+
     assert_raise Cure.Diagnostic.UnhandledError, fn ->
       NameAdapter.from_error({:ordinary_type_failure, :not_a_name_error})
     end
