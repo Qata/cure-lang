@@ -143,4 +143,48 @@ defmodule Cure.Diagnostic.Adapter.SyntaxTest do
     assert rendered =~ "^^^^^ this operator has no direct index lowering"
     assert rendered =~ "Hint: Define the computation as a total function"
   end
+
+  test "unsupported surface structures retain nested AST source ownership" do
+    source = "[head | tail]\n"
+
+    registry =
+      SourceRegistry.new()
+      |> SourceRegistry.register(:surface, source, "surface.cure")
+
+    {:ok, span} = SourceRegistry.span(registry, :surface, 0, 13)
+
+    detail =
+      {:list_pattern, [source_info: %Cure.MetaAST.SourceInfo{whole: span}], []}
+
+    error =
+      {:source_context, {:unsupported_comprehension_pattern, detail}, %{span: nil}}
+
+    direct = SyntaxAdapter.from_error(error)
+    assert Adapter.from_error(error) == direct
+    assert direct.code == "E093"
+    assert direct.primary.span == span
+    assert direct.payload.observed_shape == :list_pattern
+    assert direct.suggestions != []
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "LIST GENERATOR NEEDS A VARIABLE PATTERN"
+    assert rendered =~ "^^^^^^^^^^^^^ bind one variable in this generator"
+    assert rendered =~ "Hint: Bind one name here"
+
+    for kind <- [
+          :unsupported_binary_generator_pattern,
+          :unsupported_binary_segment,
+          :unsupported_binary_match_arm,
+          :unsupported_map_match_arm,
+          :unsupported_map_value_pattern,
+          :unsupported_map_key_pattern,
+          :unsupported_block_statement,
+          :unsupported_block
+        ] do
+      error = {kind, detail}
+
+      assert Adapter.from_error(error, span: span) ==
+               SyntaxAdapter.from_error(error, span: span)
+    end
+  end
 end

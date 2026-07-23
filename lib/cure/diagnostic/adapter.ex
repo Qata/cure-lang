@@ -1565,7 +1565,7 @@ defmodule Cure.Diagnostic.Adapter do
       when kind in [:binary_match_needs_default, :map_match_needs_default] and is_map(context),
       do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:source_context, {kind, detail}, context}, opts)
+  def from_error({:source_context, {kind, _detail}, context} = error, opts)
       when kind in [
              :unsupported_comprehension_pattern,
              :unsupported_binary_generator_pattern,
@@ -1576,10 +1576,8 @@ defmodule Cure.Diagnostic.Adapter do
              :unsupported_map_key_pattern,
              :unsupported_block_statement,
              :unsupported_block
-           ] and is_map(context) do
-    span = surface_detail_span(detail) || Map.get(context, :span)
-    surface_structure_failure(kind, detail, Keyword.put(opts, :span, span))
-  end
+           ] and is_map(context),
+      do: SyntaxAdapter.from_error(error, opts)
 
   def from_error({:source_context, {:primitive_missing_builtin, name}, context}, opts)
       when is_map(context),
@@ -2331,7 +2329,7 @@ defmodule Cure.Diagnostic.Adapter do
            ] and is_map(details),
       do: SyntaxAdapter.from_error(error, opts)
 
-  def from_error({kind, detail}, opts)
+  def from_error({kind, _detail} = error, opts)
       when kind in [
              :unsupported_comprehension_pattern,
              :unsupported_binary_generator_pattern,
@@ -2343,7 +2341,7 @@ defmodule Cure.Diagnostic.Adapter do
              :unsupported_block_statement,
              :unsupported_block
            ],
-      do: surface_structure_failure(kind, detail, opts)
+      do: SyntaxAdapter.from_error(error, opts)
 
   def from_error({kind, _name} = error, opts)
       when kind in [:unknown_global, :unbound_var, :unknown_family, :unknown_ctor, :foreign_ctor, :unknown_constructor],
@@ -5208,150 +5206,6 @@ defmodule Cure.Diagnostic.Adapter do
       end
 
     TypeAdapter.contextual_failure(kind, details, opts, {title, message, label})
-  end
-
-  defp surface_structure_failure(kind, detail, opts) do
-    {title, message, label, hint} = surface_structure_content(kind)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{kind: kind, observed_shape: surface_ast_shape(detail)}
-    )
-  end
-
-  defp surface_structure_content(:unsupported_comprehension_pattern) do
-    {
-      "List generator needs a variable pattern",
-      "A list-comprehension generator can bind one variable in the dependent pipeline. This destructuring pattern cannot be translated without changing its matching behavior.",
-      "bind one variable in this generator",
-      "Bind one name here, then destructure it with `match` inside the comprehension body"
-    }
-  end
-
-  defp surface_structure_content(:unsupported_binary_generator_pattern) do
-    {
-      "Binary generator needs one byte variable",
-      "A binary-comprehension generator currently accepts one unsized, untyped byte variable. Sized segments, typed segments, and destructuring patterns do not have a supported runtime translation.",
-      "use one plain byte variable here",
-      "Write a generator such as `<<byte>> <- bytes`, then transform `byte` in the body"
-    }
-  end
-
-  defp surface_structure_content(:unsupported_binary_segment) do
-    {
-      "Binary segment form is not supported",
-      "Binary construction and matching currently support ordinary 8-bit byte expressions, plus a final variable `rest/binary` tail in patterns. This sized, typed, or otherwise structured segment cannot be lowered faithfully.",
-      "this binary segment cannot be lowered",
-      "Use plain byte segments, or move rich bit-syntax encoding and decoding behind an explicit binary helper"
-    }
-  end
-
-  defp surface_structure_content(:unsupported_binary_match_arm) do
-    {
-      "Binary match arm has an unsupported pattern",
-      "A binary match may use byte-segment patterns followed by a wildcard or variable fallback. This arm has a different pattern shape and cannot participate in the binary match translation.",
-      "rewrite this binary match arm",
-      "Use a `<<...>>` byte pattern here, or make this the final `_` fallback arm"
-    }
-  end
-
-  defp surface_structure_content(:unsupported_map_match_arm) do
-    {
-      "Map match arm has an unsupported pattern",
-      "A map match may use map patterns followed by a wildcard or variable fallback. This arm has a different pattern shape and cannot participate in the open-map match translation.",
-      "rewrite this map match arm",
-      "Use a `%{...}` map pattern here, or make this the final `_` fallback arm"
-    }
-  end
-
-  defp surface_structure_content(:unsupported_map_value_pattern) do
-    {
-      "Map value pattern is not supported",
-      "Map-pattern values may bind a variable, ignore the value with `_`, or compare it with a literal. Nested value patterns are not yet supported by the open-map translation.",
-      "simplify this map value pattern",
-      "Bind this value to one name, then inspect or match it inside the branch body"
-    }
-  end
-
-  defp surface_structure_content(:unsupported_map_key_pattern) do
-    {
-      "Map pattern key must be an atom literal",
-      "Map matching currently translates atom-literal keys into guarded lookups. A computed, variable, or non-atom key would require different matching semantics.",
-      "use an atom literal as this map key",
-      "Write a fixed atom key such as `status:`; use `get` explicitly for a dynamic key"
-    }
-  end
-
-  defp surface_structure_content(:unsupported_block_statement) do
-    {
-      "Block statement must be a `let` binding",
-      "Every non-final statement in an expression block must be a `let` binding. A plain assignment or expression before the final result has no sequencing meaning here.",
-      "make this a `let` binding or the final expression",
-      "Prefix this binding with `let`, or move the expression to the final line of the block"
-    }
-  end
-
-  defp surface_structure_content(:unsupported_block) do
-    {
-      "Expression block has an unsupported shape",
-      "An expression block must contain zero or more `let` bindings followed by exactly one final result expression.",
-      "rewrite this expression block",
-      "Keep `let` bindings first and finish the block with the value it should return"
-    }
-  end
-
-  defp surface_ast_shape({tag, _meta, _children}) when is_atom(tag), do: tag
-  defp surface_ast_shape([_ | _]), do: :sequence
-  defp surface_ast_shape([]), do: :empty
-  defp surface_ast_shape(value) when is_atom(value), do: value
-  defp surface_ast_shape(_value), do: :unknown
-
-  defp surface_detail_span({_tag, meta, children}) when is_list(meta) do
-    case Metadata.source_info(meta) do
-      %Cure.MetaAST.SourceInfo{whole: %Span{} = span} -> span
-      _ -> surface_child_span(children)
-    end
-  end
-
-  defp surface_detail_span(meta) when is_list(meta) do
-    case Metadata.source_info(meta) do
-      %Cure.MetaAST.SourceInfo{whole: %Span{} = span} -> span
-      _ -> nil
-    end
-  end
-
-  defp surface_detail_span(_detail), do: nil
-
-  defp surface_child_span(children) when is_list(children) do
-    spans = Enum.map(children, &surface_detail_span/1) |> Enum.reject(&is_nil/1)
-
-    case spans do
-      [] -> nil
-      spans -> cover_surface_spans(spans)
-    end
-  end
-
-  defp surface_child_span(_children), do: nil
-
-  defp cover_surface_spans([%Span{} = first | rest]) do
-    Enum.reduce(rest, first, fn %Span{} = span, %Span{} = covered ->
-      if span.source_id == covered.source_id do
-        %Span{
-          covered
-          | end_byte: max(covered.end_byte, span.end_byte),
-            end_line: if(span.end_byte >= covered.end_byte, do: span.end_line, else: covered.end_line),
-            end_column: if(span.end_byte >= covered.end_byte, do: span.end_column, else: covered.end_column)
-        }
-      else
-        covered
-      end
-    end)
   end
 
   defp contextual_type_fallback(_kind, opts) do
