@@ -210,7 +210,204 @@ defmodule Cure.Diagnostic.Adapter.Type do
       when is_map(context),
       do: dependent_match_inference(context, opts)
 
+  def from_error({:source_context, {:record_update_base_mismatch, details}, context}, opts)
+      when is_map(details) and is_map(context),
+      do: record_update_base(details, context, opts)
+
+  def from_error({:source_context, {:projection_not_a_record, record}, context}, opts)
+      when is_map(context),
+      do: projection_receiver(record, context, opts)
+
+  def from_error({:source_context, {:projection_non_record, field}, context}, opts)
+      when is_map(context),
+      do: projection_receiver(nil, Map.put_new(context, :field, field), opts)
+
+  def from_error({:source_context, {:dependent_record_projection, record, field}, context}, opts)
+      when is_map(context),
+      do: dependent_projection(record, field, context, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp record_update_base(details, context, opts) do
+    record = Map.fetch!(details, :record)
+    actual = Map.fetch!(details, :actual)
+    record_surface = short_name(record)
+    actual_surface = if is_atom(actual), do: short_name(actual), else: surface_type(actual)
+    base_span = Map.get(context, :base_span) || Map.get(context, :span)
+    record_span = Map.get(context, :record_name_span)
+
+    secondary =
+      case record_span do
+        %Span{} = span when span != base_span ->
+          [%Label{span: span, style: :secondary, message: "this update constructs `#{record_surface}`"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "`#{record_surface}` update needs a `#{record_surface}` value",
+      body:
+        Doc.paragraph(
+          "The value before `|` has type `#{actual_surface}`, but a `#{record_surface}` update must start from another `#{record_surface}` value."
+        ),
+      primary:
+        if(match?(%Span{}, base_span),
+          do: %Label{span: base_span, style: :primary, message: "this value has type `#{actual_surface}`"},
+          else: primary(opts, "use a `#{record_surface}` value here")
+        ),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: "Use a `#{record_surface}` value before `|`", applicability: :manual}],
+      payload: %{
+        kind: :record_update_base_mismatch,
+        record: record,
+        record_surface: record_surface,
+        actual: actual,
+        actual_surface: actual_surface,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp projection_receiver(record, context, opts) do
+    field = context |> Map.get(:field) |> name()
+    receiver_span = Map.get(context, :receiver_span) || Map.get(context, :span)
+    field_span = Map.get(context, :field_span)
+    actual_type = if record, do: short_name(record)
+
+    {title, body, receiver_message} =
+      if actual_type do
+        {
+          "Cannot project `#{field}` from `#{actual_type}`",
+          "This value has type `#{actual_type}`, which is not a record and therefore has no field named `#{field}`.",
+          "this value has type `#{actual_type}`, not a record"
+        }
+      else
+        {
+          "Record projection requires a record",
+          "This value is not a record, so it has no field named `#{field}`.",
+          "this value is not a record"
+        }
+      end
+
+    secondary =
+      case field_span do
+        %Span{} = span when span != receiver_span ->
+          [%Label{span: span, style: :secondary, message: "this projection asks for field `#{field}`"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary:
+        if(match?(%Span{}, receiver_span),
+          do: %Label{span: receiver_span, style: :primary, message: receiver_message},
+          else: primary(opts, receiver_message)
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{message: "Use a record value before `.#{field}`, or remove the projection", applicability: :manual}
+      ],
+      payload: %{
+        kind: if(record, do: :projection_not_a_record, else: :projection_non_record),
+        actual_type: actual_type,
+        actual_type_id: record,
+        field: field,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp dependent_projection(record, field, context, opts) do
+    record_name = short_name(record)
+    field = name(field)
+    dependencies = Map.get(context, :dependent_fields, [])
+    dependency_list = Enum.map_join(dependencies, ", ", &"`#{&1}`")
+    primary_span = Map.get(context, :field_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+    projected_site = Map.get(context, :projected_field_declaration, %{})
+    dependent_sites = Map.get(context, :dependent_field_declarations, %{})
+
+    dependency_phrase =
+      case dependencies do
+        [dependency] -> "the earlier field `#{dependency}`"
+        [] -> "an earlier field"
+        _ -> "the earlier fields #{dependency_list}"
+      end
+
+    secondary =
+      [
+        related_label(
+          Map.get(context, :receiver_span),
+          primary_span,
+          "this value has dependent record type `#{record_name}`"
+        ),
+        related_label(
+          site_span(projected_site),
+          primary_span,
+          "`#{field}` is declared with a type that depends on #{dependency_phrase}"
+        )
+      ] ++
+        Enum.map(dependencies, fn dependency ->
+          related_label(
+            dependent_sites |> Map.get(dependency) |> site_span(),
+            primary_span,
+            "`#{dependency}` supplies part of `#{field}`'s type"
+          )
+        end)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "`#{field}` cannot be projected without its dependency",
+      body:
+        Doc.paragraph(
+          "The type of `#{record_name}.#{field}` depends on #{dependency_phrase}. Projecting only `#{field}` would discard the value needed to state its result type. Destructure the record so the dependent fields remain in scope together."
+        ),
+      primary:
+        if(match?(%Span{}, primary_span),
+          do: %Label{
+            span: primary_span,
+            style: :primary,
+            message: "this projection separates `#{field}` from #{dependency_phrase}"
+          }
+        ),
+      secondary: Enum.reject(secondary, &is_nil/1),
+      suggestions: [
+        %Suggestion{
+          message: "Pattern-match `#{record_name}` and bind #{Enum.join(dependencies ++ [field], ", ")} together",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :dependent_record_projection,
+        record: record_name,
+        field: field,
+        dependencies: dependencies,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp related_label(%Span{} = span, primary_span, message) when span != primary_span,
+    do: %Label{span: span, style: :secondary, message: message}
+
+  defp related_label(_span, _primary_span, _message), do: nil
+
+  defp site_span(%{type_span: %Span{} = span}), do: span
+  defp site_span(%{span: %Span{} = span}), do: span
+  defp site_span(_site), do: nil
+
+  defp short_name(value), do: value |> name() |> String.split("#") |> List.last()
 
   defp dependent_match_inference(context, opts) do
     branch = Enum.find(Map.get(context, :branch_patterns, []), &match?(%{span: %Span{}}, &1))

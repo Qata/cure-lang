@@ -417,4 +417,62 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert rendered =~ "this match has no expected result type"
     assert rendered =~ "Hint: Add a result annotation to `tail`"
   end
+
+  test "record update and projection failures preserve every authored role" do
+    source = "Point{base | value: 1}\nbase.value\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:records, source, "records.cure")
+    {:ok, record_name} = SourceRegistry.span(registry, :records, 0, 5)
+    {:ok, base} = SourceRegistry.span(registry, :records, 6, 10)
+    {:ok, receiver} = SourceRegistry.span(registry, :records, 23, 27)
+    {:ok, field} = SourceRegistry.span(registry, :records, 28, 33)
+
+    update =
+      {:source_context, {:record_update_base_mismatch, %{record: :"Main#Point", actual: :"Std.Int#Int"}},
+       %{record_name_span: record_name, base_span: base}}
+
+    projection =
+      {:source_context, {:projection_not_a_record, :"Std.Int#Int"},
+       %{field: "value", receiver_span: receiver, field_span: field}}
+
+    for error <- [update, projection] do
+      direct = TypeAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E093"
+      assert direct.suggestions != []
+    end
+
+    assert TypeAdapter.from_error(update).primary.span == base
+    assert hd(TypeAdapter.from_error(update).secondary).span == record_name
+    assert TypeAdapter.from_error(projection).primary.span == receiver
+    assert hd(TypeAdapter.from_error(projection).secondary).span == field
+  end
+
+  test "dependent projection labels the receiver, declaration, and prerequisite fields" do
+    source = "flag value box.value\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:dependent_record, source, "dependent_record.cure")
+    {:ok, flag_decl} = SourceRegistry.span(registry, :dependent_record, 0, 4)
+    {:ok, value_decl} = SourceRegistry.span(registry, :dependent_record, 5, 10)
+    {:ok, receiver} = SourceRegistry.span(registry, :dependent_record, 11, 14)
+    {:ok, field} = SourceRegistry.span(registry, :dependent_record, 15, 20)
+
+    error =
+      {:source_context, {:dependent_record_projection, :"Main#Box", "value"},
+       %{
+         field_span: field,
+         receiver_span: receiver,
+         dependent_fields: ["flag"],
+         projected_field_declaration: %{type_span: value_decl},
+         dependent_field_declarations: %{"flag" => %{type_span: flag_decl}}
+       }}
+
+    direct = TypeAdapter.from_error(error)
+    assert Adapter.from_error(error) == direct
+    assert direct.primary.span == field
+    assert Enum.map(direct.secondary, & &1.span) == [receiver, value_decl, flag_decl]
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "`VALUE` CANNOT BE PROJECTED WITHOUT ITS DEPENDENCY [E093]"
+    assert rendered =~ "`flag` supplies part of `value`'s type"
+    assert rendered =~ "Hint: Pattern-match `Box` and bind flag, value together"
+  end
 end

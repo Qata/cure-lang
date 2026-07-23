@@ -1125,16 +1125,16 @@ defmodule Cure.Diagnostic.Adapter do
     NameAdapter.from_error({:source_context, {:unknown_field, record, field, available_fields}, context}, opts)
   end
 
-  def from_error({:source_context, {:projection_not_a_record, record}, context}, opts) when is_map(context) do
-    projection_receiver_failure(record, context, opts)
-  end
+  def from_error({:source_context, {:projection_not_a_record, _record}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error(
-        {:source_context, {:dependent_record_projection, record, field}, context},
+        {:source_context, {:dependent_record_projection, _record, _field}, context} = error,
         opts
       )
       when is_map(context),
-      do: dependent_record_projection_failure(record, field, context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:unknown_field, _record, _field} = error, opts),
     do: NameAdapter.from_error(error, opts)
@@ -1143,9 +1143,9 @@ defmodule Cure.Diagnostic.Adapter do
       when is_list(available_fields),
       do: NameAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {:projection_non_record, field}, context}, opts) when is_map(context) do
-    projection_receiver_failure(nil, Map.put_new(context, :field, field), opts)
-  end
+  def from_error({:source_context, {:projection_non_record, _field}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:unknown_record, name}, opts),
     do: from_error({:source_context, {:unknown_record, name}, %{}}, opts)
@@ -1255,9 +1255,9 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:source_context, {:record_update_base_mismatch, details}, context}, opts)
+  def from_error({:source_context, {:record_update_base_mismatch, details}, context} = error, opts)
       when is_map(details) and is_map(context),
-      do: record_update_base_failure(details, context, opts)
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:source_context, {:foreign_ctor, constructor}, context}, opts)
       when is_map(context),
@@ -3864,55 +3864,6 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  defp record_update_base_failure(details, context, opts) do
-    record = Map.fetch!(details, :record)
-    actual = Map.fetch!(details, :actual)
-    record_surface = surface_declaration_name(record)
-    actual_surface = if(is_atom(actual), do: surface_declaration_name(actual), else: surface_type(actual))
-    base_span = Map.get(context, :base_span) || Map.get(context, :span)
-    record_span = Map.get(context, :record_name_span)
-
-    secondary =
-      case record_span do
-        %Span{} = span when span != base_span ->
-          [%Label{span: span, style: :secondary, message: "this update constructs `#{record_surface}`"}]
-
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "`#{record_surface}` update needs a `#{record_surface}` value",
-      body:
-        Doc.paragraph(
-          "The value before `|` has type `#{actual_surface}`, but a `#{record_surface}` update must start from another `#{record_surface}` value."
-        ),
-      primary:
-        if(base_span,
-          do: %Label{span: base_span, style: :primary, message: "this value has type `#{actual_surface}`"},
-          else: primary_label(opts, "use a `#{record_surface}` value here")
-        ),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Use a `#{record_surface}` value before `|`",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :record_update_base_mismatch,
-        record: record,
-        record_surface: record_surface,
-        actual: actual,
-        actual_surface: actual_surface,
-        checking: Map.get(context, :checking)
-      }
-    )
-  end
-
   defp extern_union_failure(kind, name, detail, context, opts) do
     name = surface_declaration_name(name)
     return_span = Map.get(context, :return_span) || Map.get(context, :span)
@@ -4083,142 +4034,6 @@ defmodule Cure.Diagnostic.Adapter do
       [owner, _name] -> owner
       [_name] -> nil
     end
-  end
-
-  defp dependent_record_projection_failure(record, field, context, opts) do
-    record_name = surface_declaration_name(record)
-    field = name_to_string(field)
-    dependencies = Map.get(context, :dependent_fields, [])
-    dependency_list = Enum.map_join(dependencies, ", ", &"`#{&1}`")
-    primary_span = Map.get(context, :field_span) || Map.get(context, :span) || Keyword.get(opts, :span)
-    receiver_span = Map.get(context, :receiver_span)
-    projected_site = Map.get(context, :projected_field_declaration, %{})
-    dependent_sites = Map.get(context, :dependent_field_declarations, %{})
-
-    dependency_phrase =
-      case dependencies do
-        [dependency] -> "the earlier field `#{dependency}`"
-        [] -> "an earlier field"
-        _ -> "the earlier fields #{dependency_list}"
-      end
-
-    secondary =
-      [
-        sibling_dependency_label(
-          receiver_span,
-          primary_span,
-          "this value has dependent record type `#{record_name}`"
-        ),
-        sibling_dependency_label(
-          parameter_site_span(projected_site),
-          primary_span,
-          "`#{field}` is declared with a type that depends on #{dependency_phrase}"
-        )
-      ] ++
-        Enum.flat_map(dependencies, fn dependency ->
-          case dependent_sites |> Map.get(dependency) |> parameter_site_span() do
-            %Span{} = span ->
-              [
-                sibling_dependency_label(
-                  span,
-                  primary_span,
-                  "`#{dependency}` supplies part of `#{field}`'s type"
-                )
-              ]
-
-            _ ->
-              []
-          end
-        end)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "`#{field}` cannot be projected without its dependency",
-      body:
-        Doc.paragraph(
-          "The type of `#{record_name}.#{field}` depends on #{dependency_phrase}. Projecting only `#{field}` would discard the value needed to state its result type. Destructure the record so the dependent fields remain in scope together."
-        ),
-      primary:
-        pickup_label(
-          primary_span,
-          :primary,
-          "this projection separates `#{field}` from #{dependency_phrase}"
-        ),
-      secondary: Enum.reject(secondary, &is_nil/1),
-      suggestions: [
-        %Suggestion{
-          message: "Pattern-match `#{record_name}` and bind #{Enum.join(dependencies ++ [field], ", ")} together",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :dependent_record_projection,
-        record: record_name,
-        field: field,
-        dependencies: dependencies,
-        checking: Map.get(context, :checking)
-      }
-    )
-  end
-
-  defp projection_receiver_failure(record, context, opts) do
-    field = context |> Map.get(:field) |> name_to_string()
-    receiver_span = Map.get(context, :receiver_span) || Map.get(context, :span)
-    field_span = Map.get(context, :field_span)
-    actual_type = if(record, do: surface_declaration_name(record))
-
-    {title, body, receiver_message} =
-      if actual_type do
-        {
-          "Cannot project `#{field}` from `#{actual_type}`",
-          "This value has type `#{actual_type}`, which is not a record and therefore has no field named `#{field}`.",
-          "this value has type `#{actual_type}`, not a record"
-        }
-      else
-        {
-          "Record projection requires a record",
-          "This value is not a record, so it has no field named `#{field}`.",
-          "this value is not a record"
-        }
-      end
-
-    secondary =
-      case field_span do
-        %Span{} = span when span != receiver_span ->
-          [%Label{span: span, style: :secondary, message: "this projection asks for field `#{field}`"}]
-
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(body),
-      primary:
-        if(receiver_span,
-          do: %Label{span: receiver_span, style: :primary, message: receiver_message},
-          else: primary_label(opts, receiver_message)
-        ),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Use a record value before `.#{field}`, or remove the projection",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: if(record, do: :projection_not_a_record, else: :projection_non_record),
-        actual_type: actual_type,
-        actual_type_id: record,
-        field: field,
-        checking: Map.get(context, :checking)
-      }
-    )
   end
 
   defp constructor_result_family_failure(family, context, opts) do
