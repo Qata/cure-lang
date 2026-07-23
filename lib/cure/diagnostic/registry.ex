@@ -12,6 +12,7 @@ defmodule Cure.Diagnostic.Registry.Entry do
     :schema_version,
     :producers,
     :producer_fixtures,
+    :producer_converters,
     :converter,
     :converter_function,
     :catalog_case,
@@ -33,6 +34,7 @@ defmodule Cure.Diagnostic.Registry.Entry do
           schema_version: pos_integer(),
           producers: [atom(), ...],
           producer_fixtures: %{optional(atom()) => atom()},
+          producer_converters: %{optional(atom()) => {module(), atom()}},
           converter: module(),
           converter_function: atom(),
           catalog_case: atom() | nil,
@@ -1564,6 +1566,7 @@ defmodule Cure.Diagnostic.Registry do
         schema_version: 1,
         producers: producers(code),
         producer_fixtures: producer_fixtures(code),
+        producer_converters: producer_converters(code),
         converter: converter(code),
         converter_function: converter_function(code),
         catalog_case: Map.get(@catalog_cases, code),
@@ -1835,6 +1838,27 @@ defmodule Cure.Diagnostic.Registry do
   defp converter_function(code) when code in @structured, do: :from_error
   defp converter_function(_code), do: :format_error
 
+  defp producer_converters(code) do
+    Map.new(producers(code), fn producer ->
+      {producer, producer_converter(code, producer)}
+    end)
+  end
+
+  defp producer_converter("E101", :beam_writer),
+    do: {Cure.Diagnostic.Adapter.Codegen, :from_error}
+
+  defp producer_converter("E101", :macro_expansion),
+    do: {Cure.Diagnostic.Adapter, :from_error}
+
+  defp producer_converter(_code, :operational),
+    do: {Cure.Diagnostic.Operational, :from_error}
+
+  defp producer_converter(code, _producer) when code in @structured,
+    do: {Cure.Diagnostic.Adapter, :from_error}
+
+  defp producer_converter(_code, _producer),
+    do: {Cure.Compiler.Errors, :format_error}
+
   defp producers(code) when code in @retired, do: []
 
   defp producers(code)
@@ -2016,6 +2040,17 @@ defmodule Cure.Diagnostic.Registry do
       entry.status == :reachable and
           Enum.any?(entry.producers, &(not producer_loaded?(&1))) ->
         {:error, {:unreachable_producer, entry.code}}
+
+      entry.status == :reachable and
+          MapSet.new(Map.keys(entry.producer_converters)) != MapSet.new(entry.producers) ->
+        {:error, {:missing_producer_converter, entry.code}}
+
+      entry.status == :reachable and
+          Enum.any?(entry.producer_converters, fn {_producer, {module, function}} ->
+            not is_atom(module) or not is_atom(function) or
+              not Code.ensure_loaded?(module) or not function_exported?(module, function, 2)
+          end) ->
+        {:error, {:missing_producer_converter_function, entry.code}}
 
       entry.status == :reachable and entry.converter == Cure.Compiler.Errors ->
         {:error, {:legacy_converter, entry.code}}

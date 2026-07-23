@@ -116,6 +116,16 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert {:error, {:missing_converter_function, ^code}} =
              Registry.validate([%{entry | converter_function: :does_not_exist}])
 
+    assert {:error, {:missing_producer_converter, ^code}} =
+             Registry.validate([%{entry | producer_converters: %{}}])
+
+    [producer | _] = entry.producers
+
+    assert {:error, {:missing_producer_converter_function, ^code}} =
+             Registry.validate([
+               %{entry | producer_converters: Map.put(entry.producer_converters, producer, {String, :does_not_exist})}
+             ])
+
     assert {:error, {:reachable_without_catalog_case, ^code}} =
              Registry.validate([%{entry | catalog_case: nil}])
 
@@ -140,6 +150,16 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert :ok = Registry.validate_producer_coverage()
     assert :ok = Registry.validate_producer_catalog()
     assert :ok = Cure.Diagnostic.Registry.Inventory.validate(inventory)
+  end
+
+  test "E101 records the converter for every trusted producer boundary" do
+    entry = Registry.fetch!("E101")
+
+    assert entry.producer_converters == %{
+             beam_writer: {Cure.Diagnostic.Adapter.Codegen, :from_error},
+             macro_expansion: {Cure.Diagnostic.Adapter, :from_error},
+             operational: {Cure.Diagnostic.Operational, :from_error}
+           }
   end
 
   test "producer catalog validation requires every code and producer branch independently" do

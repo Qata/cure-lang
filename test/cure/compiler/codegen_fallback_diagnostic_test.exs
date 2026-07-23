@@ -2,6 +2,7 @@ defmodule Cure.Compiler.CodegenFallbackDiagnosticTest do
   use ExUnit.Case, async: true
 
   alias Cure.Compiler.{BeamWriter, Errors}
+  alias Cure.Diagnostic.Adapter.Codegen
   alias Cure.Diagnostic.Renderer
 
   test "an injected BEAM rejection keeps stage, module, source, reason, and fingerprint" do
@@ -46,6 +47,17 @@ defmodule Cure.Compiler.CodegenFallbackDiagnosticTest do
              Cure.Diagnostic.Registry.validate_exercised_producer_fixtures([:internal_failure_beam_writer],
                only_producers: [:beam_writer]
              )
+
+    direct =
+      Codegen.from_error(reason,
+        codegen_stage: :ignored,
+        source_file: "also-ignored.cure"
+      )
+
+    assert direct.code == diagnostic.code
+    assert direct.title == diagnostic.title
+    assert direct.body == diagnostic.body
+    assert direct.payload == diagnostic.payload
   end
 
   test "fallback fingerprints are stable for the same failure and differ with stage" do
