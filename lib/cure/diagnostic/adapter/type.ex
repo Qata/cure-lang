@@ -97,6 +97,47 @@ defmodule Cure.Diagnostic.Adapter.Type do
     end
   end
 
+  def from_error({:lambda_expected_pi, %{expected: expected} = details}, opts) do
+    expected_surface = surface_type(expected)
+    parameter_index = Map.get(details, :parameter_index, 0)
+
+    secondary =
+      case Map.get(details, :parameter_span) do
+        %Span{} = span ->
+          [%Label{span: span, style: :secondary, message: "this parameter needs a function input type"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Lambda needs a function type",
+      body:
+        Doc.paragraph(
+          "This lambda has parameter #{parameter_index + 1}, but its surrounding context expects `#{expected_surface}` at that point. An untyped lambda parameter can only be checked when the expected type provides a corresponding function input."
+        ),
+      primary: primary(opts, "this lambda is used where a non-function value is required"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Pass this lambda to a function-valued parameter, or replace it with a `#{expected_surface}` value",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :lambda_expected_pi,
+        expected_surface: expected_surface,
+        parameter_index: parameter_index
+      }
+    )
+  end
+
+  def from_error({:lambda_expected_pi, expected}, opts),
+    do: from_error({:lambda_expected_pi, %{expected: expected, parameter_index: 0}}, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
   @doc false

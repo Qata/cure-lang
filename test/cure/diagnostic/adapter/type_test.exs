@@ -102,4 +102,25 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
       TypeAdapter.from_error({:unknown_global, :missing})
     end
   end
+
+  test "lambda expectation failures are identical through the family and root adapter" do
+    source = "fn (x) -> x end\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:lambda, source, "lambda.cure")
+    {:ok, lambda_span} = SourceRegistry.span(registry, :lambda, 0, 15)
+    {:ok, parameter_span} = SourceRegistry.span(registry, :lambda, 4, 5)
+
+    error =
+      {:lambda_expected_pi, %{expected: {:data, :Bool, [], []}, parameter_index: 0, parameter_span: parameter_span}}
+
+    direct = TypeAdapter.from_error(error, span: lambda_span)
+    assert Adapter.from_error(error, span: lambda_span) == direct
+    assert direct.primary.span == lambda_span
+    assert hd(direct.secondary).span == parameter_span
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "LAMBDA NEEDS A FUNCTION TYPE [E093]"
+    assert rendered =~ "This lambda has parameter 1"
+    assert rendered =~ "this parameter needs a function input type"
+    assert rendered =~ "Hint: Pass this lambda to a function-valued parameter"
+  end
 end
