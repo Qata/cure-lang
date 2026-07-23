@@ -258,6 +258,21 @@ defmodule Cure.Diagnostic.Adapter.Macro do
   def from_error(:invalid_raw_tokens, opts),
     do: raw_failure(:invalid_raw_tokens, %{}, opts)
 
+  def from_error({kind, path}, opts)
+      when kind in [
+             :raw_syntax_in_expansion,
+             :quoted_syntax_in_expansion,
+             :malformed_expansion_syntax,
+             :malformed_expansion_attribute,
+             :malformed_expansion_map,
+             :malformed_expansion_literal,
+             :malformed_reflected_syntax,
+             :malformed_reflected_attribute,
+             :malformed_reflected_map,
+             :malformed_reflected_literal
+           ],
+      do: syntax_integrity_failure(kind, path, opts)
+
   def from_error({:unknown_reducer_constructor, constructors}, opts),
     do: reducer_failure(:unknown_reducer_constructor, %{constructors: constructors}, opts)
 
@@ -821,6 +836,109 @@ defmodule Cure.Diagnostic.Adapter.Macro do
 
   defp constructor_phrase([_one], rendered), do: "constructor #{rendered}"
   defp constructor_phrase(_many, rendered), do: "constructors #{rendered}"
+
+  @doc false
+  def syntax_integrity_failure(kind, path, opts) do
+    {title, message, label_text, hint} = syntax_integrity_content(kind, path)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_syntax_integrity,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: label(Keyword.get(opts, :span), :primary, label_text),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{kind: kind, path: path}
+    )
+  end
+
+  def syntax_integrity_content(:raw_syntax_in_expansion, path),
+    do:
+      {"Macro expansion contains raw syntax",
+       "The generated expansion contains reflection-only raw syntax at #{syntax_path_phrase(path)}.",
+       "return executable syntax here", "Build structured `Syntax`; keep `Raw` values inside reflected metadata"}
+
+  def syntax_integrity_content(:quoted_syntax_in_expansion, path),
+    do:
+      {"Macro expansion contains quoted syntax",
+       "The generated expansion still contains quoted syntax at #{syntax_path_phrase(path)}.",
+       "unquote this generated syntax", "Splice or otherwise unquote the value before returning the expansion"}
+
+  def syntax_integrity_content(:malformed_expansion_syntax, path),
+    do:
+      {"Macro expansion syntax is malformed",
+       "The generated expansion does not contain a valid `Node`, `Leaf`, or accepted failure value at #{syntax_path_phrase(path)}.",
+       "rebuild this generated syntax", "Return a well-formed structured `Syntax` value"}
+
+  def syntax_integrity_content(:malformed_expansion_attribute, path),
+    do:
+      {"Macro expansion attribute is malformed",
+       "A generated syntax attribute is not an atom-keyed literal pair at #{syntax_path_phrase(path)}.",
+       "rebuild this syntax attribute", "Use an atom key and a valid syntax literal value"}
+
+  def syntax_integrity_content(:malformed_expansion_map, path),
+    do:
+      {"Macro expansion map literal is malformed",
+       "A generated syntax-map entry is not a key-value pair at #{syntax_path_phrase(path)}.",
+       "rebuild this syntax map", "Provide valid syntax-literal key-value pairs"}
+
+  def syntax_integrity_content(:malformed_expansion_literal, path),
+    do:
+      {"Macro expansion literal is malformed",
+       "A generated syntax literal has the wrong shape or host value at #{syntax_path_phrase(path)}.",
+       "replace this syntax literal",
+       "Use a valid integer, float, string, boolean, atom, list, map, syntax, or opaque literal"}
+
+  def syntax_integrity_content(:malformed_reflected_syntax, path),
+    do:
+      {"Reflected syntax value is malformed",
+       "Syntax stored inside generated metadata has an invalid node shape at #{syntax_path_phrase(path)}.",
+       "rebuild this reflected syntax", "Store a well-formed reflected `Syntax` value"}
+
+  def syntax_integrity_content(:malformed_reflected_attribute, path),
+    do:
+      {"Reflected syntax attribute is malformed",
+       "An attribute inside reflected syntax is not an atom-keyed literal pair at #{syntax_path_phrase(path)}.",
+       "rebuild this reflected attribute", "Use an atom key and a valid reflected literal value"}
+
+  def syntax_integrity_content(:malformed_reflected_map, path),
+    do:
+      {"Reflected syntax map is malformed",
+       "A map stored inside reflected syntax contains an entry that is not a key-value pair at #{syntax_path_phrase(path)}.",
+       "rebuild this reflected map", "Provide valid reflected-literal key-value pairs"}
+
+  def syntax_integrity_content(:malformed_reflected_literal, path),
+    do:
+      {"Reflected syntax literal is malformed",
+       "A literal stored inside reflected syntax has the wrong shape or host value at #{syntax_path_phrase(path)}.",
+       "replace this reflected literal", "Use a valid reflected syntax literal"}
+
+  def syntax_integrity_content(kind, path),
+    do:
+      {"Macro syntax value is invalid",
+       "Generated syntax failed the `#{name_to_string(kind)}` integrity check at #{syntax_path_phrase(path)}.",
+       "rebuild this generated syntax", "Return a well-formed structured `Syntax` value"}
+
+  def syntax_path_phrase([]), do: "the expansion root"
+  def syntax_path_phrase(path), do: "`#{format_syntax_path(path)}`"
+
+  defp format_syntax_path(path) do
+    path
+    |> Enum.reverse()
+    |> Enum.map_join(".", fn
+      {:child, index} -> "child[#{index}]"
+      {:attribute, key, index} -> "attribute #{key}[#{index}]"
+      {:syntax_literal} -> "syntax literal"
+      {:map_key} -> "map key"
+      {:map_value} -> "map value"
+      {:list_item} -> "list item"
+      {:failure_arguments} -> "failure arguments"
+      {:raw_literal} -> "raw literal"
+      {:quoted_syntax} -> "quoted syntax"
+      other -> inspect(other)
+    end)
+  end
 
   @doc false
   def syntax_decode_failure(kind, details, opts),

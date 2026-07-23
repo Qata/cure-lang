@@ -251,6 +251,34 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
     end
   end
 
+  test "syntax integrity producers retain their failing path" do
+    path = [{:child, 1}, {:attribute, :span, 0}]
+
+    errors = [
+      {:raw_syntax_in_expansion, path},
+      {:quoted_syntax_in_expansion, []},
+      {:malformed_expansion_syntax, path},
+      {:malformed_expansion_attribute, path},
+      {:malformed_expansion_map, path},
+      {:malformed_expansion_literal, path},
+      {:malformed_reflected_syntax, path},
+      {:malformed_reflected_attribute, path},
+      {:malformed_reflected_map, path},
+      {:malformed_reflected_literal, path}
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.key == :macro_syntax_integrity
+      assert direct.payload.path == path or direct.payload.path == []
+      assert direct.suggestions != []
+    end
+
+    assert MacroAdapter.syntax_path_phrase(path) == "`attribute span[0].child[1]`"
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 
