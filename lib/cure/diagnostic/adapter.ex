@@ -23,6 +23,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   alias Cure.Diagnostic.Adapter.Codegen
   alias Cure.Diagnostic.Adapter.Arity
+  alias Cure.Diagnostic.Adapter.Declaration
   alias Cure.Diagnostic.Adapter.Kernel, as: KernelAdapter
   alias Cure.Diagnostic.Adapter.Macro, as: MacroAdapter
   alias Cure.Diagnostic.Adapter.Name, as: NameAdapter
@@ -1570,29 +1571,8 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:typed_pattern_type_mismatch, _type_ast} = error, opts),
     do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:extern_untyped_head, message, meta}, opts) when is_binary(message) and is_list(meta) do
-    Diagnostic.new(
-      code: "E056",
-      key: :extern_untyped_head,
-      severity: :error,
-      title: "@extern declaration missing a typed head",
-      message: message,
-      primary: primary_label(opts, "add parameter and return type annotations"),
-      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
-    )
-  end
-
-  def from_error({:extern_has_body, message, meta}, opts) when is_binary(message) and is_list(meta) do
-    Diagnostic.new(
-      code: "E057",
-      key: :extern_has_body,
-      severity: :error,
-      title: "@extern declaration has a body",
-      message: message,
-      primary: primary_label(opts, "remove the body from this extern declaration"),
-      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
-    )
-  end
+  def from_error({:extern_untyped_head, _, _} = error, opts), do: Declaration.from_error(error, opts)
+  def from_error({:extern_has_body, _, _} = error, opts), do: Declaration.from_error(error, opts)
 
   def from_error({:proof_shape_mismatch, message, name}, opts) when is_binary(message) do
     Diagnostic.new(
