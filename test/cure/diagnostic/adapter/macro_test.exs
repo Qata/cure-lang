@@ -105,6 +105,33 @@ defmodule Cure.Diagnostic.Adapter.MacroTest do
     end
   end
 
+  test "board validation producers are owned by the macro family" do
+    errors = [
+      {:invalid_board_name, :Board},
+      {:invalid_board_chip, :chip},
+      {:unknown_board_pin, 99},
+      {:invalid_board_capability, 8},
+      {:invalid_board_bus, :i2c},
+      {:unknown_bus_pin, :i2c},
+      {:missing_bus_capability, :i2c},
+      :invalid_board_definition,
+      :missing_board_chip,
+      :invalid_board_pins,
+      :invalid_board_capabilities,
+      :invalid_board_buses,
+      :invalid_board_flash,
+      :flash_offset_out_of_bounds
+    ]
+
+    for error <- errors do
+      direct = MacroAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E092"
+      assert direct.key == :macro_board_validation
+      assert direct.suggestions != []
+    end
+  end
+
   test "expansion failures blame authored invocation frames" do
     source = "outer inner\n"
 

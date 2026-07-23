@@ -611,7 +611,7 @@ defmodule Cure.Diagnostic.Adapter do
              :unknown_bus_pin,
              :missing_bus_capability
            ],
-      do: macro_board_failure(kind, %{detail: detail}, opts)
+      do: MacroAdapter.from_error({kind, detail}, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -623,7 +623,7 @@ defmodule Cure.Diagnostic.Adapter do
              :invalid_board_flash,
              :flash_offset_out_of_bounds
            ],
-      do: macro_board_failure(kind, %{}, opts)
+      do: MacroAdapter.from_error(kind, opts)
 
   def from_error({:codegen_error, {:computed_macro_error, _, _} = reason}, opts),
     do: from_error(reason, opts)
@@ -4722,21 +4722,6 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp macro_validation_failure(kind, details, opts), do: macro_validation_failure(kind, details, opts, %{})
 
-  defp macro_board_failure(kind, details, opts) do
-    {title, message, label, hint} = macro_board_content(kind, details)
-
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_board_validation,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
   defp macro_unit_failure(kind, details, opts) do
     {title, message, label, hint} = macro_unit_content(kind, details)
 
@@ -5487,132 +5472,6 @@ defmodule Cure.Diagnostic.Adapter do
       "A unit literal needs a numeric value and a text suffix, but this one uses value `#{name_to_string(value)}` and suffix `#{name_to_string(suffix)}`.",
       "rewrite this unit literal",
       "Use a number followed by a registered text suffix"
-    }
-  end
-
-  defp macro_board_content(:invalid_board_definition, _details) do
-    {
-      "Board definition is malformed",
-      "A board definition must be a map containing its chip, pins, capabilities, buses, and flash layout.",
-      "rewrite this board definition",
-      "Provide a board definition map with `chip`, `pins`, `capabilities`, `buses`, and `flash`"
-    }
-  end
-
-  defp macro_board_content(:invalid_board_name, %{detail: name}) do
-    {
-      "Board name is invalid",
-      "A board name must be an atom or string, but this definition uses `#{name_to_string(name)}`.",
-      "replace this board name",
-      "Use a stable board name such as `Esp32c3`"
-    }
-  end
-
-  defp macro_board_content(:missing_board_chip, _details) do
-    {
-      "Board chip is missing",
-      "The board definition does not identify the chip that owns its pins and peripherals.",
-      "add this board's chip",
-      "Add a `chip` entry such as `chip: :esp32c3`"
-    }
-  end
-
-  defp macro_board_content(:invalid_board_chip, %{detail: chip}) do
-    {
-      "Board chip is invalid",
-      "A chip identifier must be an atom or string, but this definition uses `#{name_to_string(chip)}`.",
-      "replace this chip identifier",
-      "Use a stable chip identifier such as `esp32c3`"
-    }
-  end
-
-  defp macro_board_content(:invalid_board_pins, _details) do
-    {
-      "Board pin set is invalid",
-      "Pins must be a non-negative inclusive range or a list of non-negative pin numbers.",
-      "fix this pin set",
-      "Use `{first, last}` or a list such as `[0, 1, 2]`"
-    }
-  end
-
-  defp macro_board_content(:unknown_board_pin, %{detail: pin}) do
-    {
-      "Capability refers to an unknown board pin",
-      "Pin `#{name_to_string(pin)}` has capabilities here, but it is not present in the board's pin set.",
-      "declare this pin or remove its capabilities",
-      "Add pin `#{name_to_string(pin)}` to `pins`, or remove this capability entry"
-    }
-  end
-
-  defp macro_board_content(:invalid_board_capability, %{detail: pin}) do
-    {
-      "Board pin has an invalid capability",
-      "Pin `#{name_to_string(pin)}` has a capability outside the supported GPIO, analog, strapping, USB, and touch set.",
-      "fix this pin's capabilities",
-      "Use only `input`, `output`, `adc`, `dac`, `strapping`, `usb`, or `touch`"
-    }
-  end
-
-  defp macro_board_content(:invalid_board_capabilities, _details) do
-    {
-      "Board capabilities are malformed",
-      "Board capabilities must be a map from each pin number to a list of supported capabilities.",
-      "rewrite this capability map",
-      "Map each pin to its capabilities, for example pin `8` to `input` and `output`"
-    }
-  end
-
-  defp macro_board_content(:invalid_board_bus, %{detail: bus}) do
-    {
-      "Board bus wiring is invalid",
-      "The `#{name_to_string(bus)}` bus needs an atom name and a map from signal names to pin numbers.",
-      "rewrite this bus wiring",
-      "Map each signal to its pin, for example `sda` to `8` and `scl` to `9`"
-    }
-  end
-
-  defp macro_board_content(:unknown_bus_pin, %{detail: bus}) do
-    {
-      "Board bus uses an unknown pin",
-      "The `#{name_to_string(bus)}` bus assigns at least one pin that is not present in the board's pin set.",
-      "fix this bus pin assignment",
-      "Assign every `#{name_to_string(bus)}` signal to a pin declared by `pins`"
-    }
-  end
-
-  defp macro_board_content(:missing_bus_capability, %{detail: bus}) do
-    {
-      "Board bus pin has no capability declaration",
-      "The `#{name_to_string(bus)}` bus uses a declared pin whose capabilities are missing, so generated peripheral checks cannot validate it.",
-      "declare capabilities for every bus pin",
-      "Add each `#{name_to_string(bus)}` pin to the `capabilities` map"
-    }
-  end
-
-  defp macro_board_content(:invalid_board_buses, _details) do
-    {
-      "Board bus table is malformed",
-      "Board buses must be a map from bus names to signal-to-pin wiring maps.",
-      "rewrite this bus table",
-      "Map each bus name to its signal-to-pin wiring"
-    }
-  end
-
-  defp macro_board_content(:invalid_board_flash, _details) do
-    {
-      "Board flash layout is malformed",
-      "Flash layout needs a positive total size and non-negative application and library offsets.",
-      "fix this flash layout",
-      "Provide integer `size`, `app_offset`, and `libs_offset` values"
-    }
-  end
-
-  defp macro_board_content(:flash_offset_out_of_bounds, _details) do
-    {
-      "Board flash offset is outside the device",
-      "The application or library partition starts at or beyond the declared flash size.",
-      "move this partition inside flash",
-      "Choose `app_offset` and `libs_offset` values smaller than `size`"
     }
   end
 

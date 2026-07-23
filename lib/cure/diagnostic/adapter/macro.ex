@@ -187,6 +187,30 @@ defmodule Cure.Diagnostic.Adapter.Macro do
       when kind in [:invalid_driver_register, :duplicate_driver_register, :overlapping_driver_register],
       do: driver_failure(kind, %{}, opts)
 
+  def from_error({kind, detail}, opts)
+      when kind in [
+             :invalid_board_name,
+             :invalid_board_chip,
+             :unknown_board_pin,
+             :invalid_board_capability,
+             :invalid_board_bus,
+             :unknown_bus_pin,
+             :missing_bus_capability
+           ],
+      do: board_failure(kind, %{detail: detail}, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :invalid_board_definition,
+             :missing_board_chip,
+             :invalid_board_pins,
+             :invalid_board_capabilities,
+             :invalid_board_buses,
+             :invalid_board_flash,
+             :flash_offset_out_of_bounds
+           ],
+      do: board_failure(kind, %{}, opts)
+
   def from_error({:macro_expansion_cycle, frames}, opts)
       when is_list(frames),
       do:
@@ -296,6 +320,105 @@ defmodule Cure.Diagnostic.Adapter.Macro do
     {"Driver register ranges overlap",
      "Two registers occupy at least one of the same bytes in the device register map.",
      "move or resize one of these registers", "Choose offsets and widths whose byte ranges do not overlap"}
+  end
+
+  @doc false
+  def board_failure(kind, details, opts) do
+    {title, message, label_text, hint} = board_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_board_validation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: label(Keyword.get(opts, :span), :primary, label_text),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp board_content(:invalid_board_definition, _details) do
+    {"Board definition is malformed",
+     "A board definition must be a map containing its chip, pins, capabilities, buses, and flash layout.",
+     "rewrite this board definition",
+     "Provide a board definition map with `chip`, `pins`, `capabilities`, `buses`, and `flash`"}
+  end
+
+  defp board_content(:invalid_board_name, %{detail: name}) do
+    {"Board name is invalid",
+     "A board name must be an atom or string, but this definition uses `#{name_to_string(name)}`.",
+     "replace this board name", "Use a stable board name such as `Esp32c3`"}
+  end
+
+  defp board_content(:missing_board_chip, _details) do
+    {"Board chip is missing", "The board definition does not identify the chip that owns its pins and peripherals.",
+     "add this board's chip", "Add a `chip` entry such as `chip: :esp32c3`"}
+  end
+
+  defp board_content(:invalid_board_chip, %{detail: chip}) do
+    {"Board chip is invalid",
+     "A chip identifier must be an atom or string, but this definition uses `#{name_to_string(chip)}`.",
+     "replace this chip identifier", "Use a stable chip identifier such as `esp32c3`"}
+  end
+
+  defp board_content(:invalid_board_pins, _details) do
+    {"Board pin set is invalid", "Pins must be a non-negative inclusive range or a list of non-negative pin numbers.",
+     "fix this pin set", "Use `{first, last}` or a list such as `[0, 1, 2]`"}
+  end
+
+  defp board_content(:unknown_board_pin, %{detail: pin}) do
+    {"Capability refers to an unknown board pin",
+     "Pin `#{name_to_string(pin)}` has capabilities here, but it is not present in the board's pin set.",
+     "declare this pin or remove its capabilities",
+     "Add pin `#{name_to_string(pin)}` to `pins`, or remove this capability entry"}
+  end
+
+  defp board_content(:invalid_board_capability, %{detail: pin}) do
+    {"Board pin has an invalid capability",
+     "Pin `#{name_to_string(pin)}` has a capability outside the supported GPIO, analog, strapping, USB, and touch set.",
+     "fix this pin's capabilities", "Use only `input`, `output`, `adc`, `dac`, `strapping`, `usb`, or `touch`"}
+  end
+
+  defp board_content(:invalid_board_capabilities, _details) do
+    {"Board capabilities are malformed",
+     "Board capabilities must be a map from each pin number to a list of supported capabilities.",
+     "rewrite this capability map", "Map each pin to its capabilities, for example pin `8` to `input` and `output`"}
+  end
+
+  defp board_content(:invalid_board_bus, %{detail: bus}) do
+    {"Board bus wiring is invalid",
+     "The `#{name_to_string(bus)}` bus needs an atom name and a map from signal names to pin numbers.",
+     "rewrite this bus wiring", "Map each signal to its pin, for example `sda` to `8` and `scl` to `9`"}
+  end
+
+  defp board_content(:unknown_bus_pin, %{detail: bus}) do
+    {"Board bus uses an unknown pin",
+     "The `#{name_to_string(bus)}` bus assigns at least one pin that is not present in the board's pin set.",
+     "fix this bus pin assignment", "Assign every `#{name_to_string(bus)}` signal to a pin declared by `pins`"}
+  end
+
+  defp board_content(:missing_bus_capability, %{detail: bus}) do
+    {"Board bus pin has no capability declaration",
+     "The `#{name_to_string(bus)}` bus uses a declared pin whose capabilities are missing, so generated peripheral checks cannot validate it.",
+     "declare capabilities for every bus pin", "Add each `#{name_to_string(bus)}` pin to the `capabilities` map"}
+  end
+
+  defp board_content(:invalid_board_buses, _details) do
+    {"Board bus table is malformed", "Board buses must be a map from bus names to signal-to-pin wiring maps.",
+     "rewrite this bus table", "Map each bus name to its signal-to-pin wiring"}
+  end
+
+  defp board_content(:invalid_board_flash, _details) do
+    {"Board flash layout is malformed",
+     "Flash layout needs a positive total size and non-negative application and library offsets.",
+     "fix this flash layout", "Provide integer `size`, `app_offset`, and `libs_offset` values"}
+  end
+
+  defp board_content(:flash_offset_out_of_bounds, _details) do
+    {"Board flash offset is outside the device",
+     "The application or library partition starts at or beyond the declared flash size.",
+     "move this partition inside flash", "Choose `app_offset` and `libs_offset` values smaller than `size`"}
   end
 
   defp packet_content(:invalid_packet_name, %{detail: name}) do
