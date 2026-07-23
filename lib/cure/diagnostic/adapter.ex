@@ -2301,6 +2301,9 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unsolved_parameters, constructor}, opts),
     do: contextual_type_failure(:unsolved_parameters, %{constructor: constructor}, opts)
 
+  def from_error({:untyped_parameter, %{name: _name} = details}, opts),
+    do: untyped_parameter_failure(details, opts)
+
   def from_error({:graded_let_needs_annotation, %{name: _name} = details}, opts),
     do: local_binding_annotation_failure(:graded, details, opts)
 
@@ -5407,6 +5410,34 @@ defmodule Cure.Diagnostic.Adapter do
         name: name,
         actual_surface: actual_surface,
         rhs_shape: Map.get(details, :rhs_shape, :expression)
+      }
+    )
+  end
+
+  defp untyped_parameter_failure(details, opts) do
+    name = name_to_string(details.name)
+    primary_span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "I need a type for `#{name}`",
+      body:
+        Doc.paragraph(
+          "Cure cannot tell what values `#{name}` may receive from its name alone. Every ordinary function parameter needs a type annotation."
+        ),
+      primary: pickup_label(primary_span, :primary, "this parameter needs a type after its name"),
+      suggestions: [
+        %Suggestion{
+          message:
+            "Add a type annotation, such as `#{name}: Int`; write `{#{name}}` only for an implicit type parameter",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :untyped_parameter,
+        name: name
       }
     )
   end

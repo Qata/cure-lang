@@ -2257,7 +2257,16 @@ defmodule Cure.Elab.Declarations do
             # over `Type`; it is erased, exactly like `{a: Type}`.
             {:cont, {:ok, tele ++ [{String.to_atom(pname), {:type, 0}}], quants ++ [:erased], [pname | scope]}}
           else
-            {:halt, {:error, {:untyped_parameter, pname}}}
+            info = Cure.MetaAST.Metadata.source_info(pmeta)
+
+            {:halt,
+             {:error,
+              {:untyped_parameter,
+               %{
+                 name: pname,
+                 span: info && (info.name || info.whole),
+                 parameter_span: info && info.whole
+               }}}}
           end
 
         type_expr ->
