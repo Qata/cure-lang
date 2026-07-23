@@ -60,17 +60,7 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:type_mismatch, message, meta}, opts) when is_binary(message) and is_list(meta) do
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Type mismatch",
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, "this expression has the wrong type"),
-      payload: %{message: message, meta: meta}
-    )
-  end
+  def from_error({:type_mismatch, _, _} = error, opts), do: TypeAdapter.from_error(error, opts)
 
   def from_error({:unknown_erasure_class, _name, _class} = error, opts),
     do: StaticAnalysis.from_error(error, opts)

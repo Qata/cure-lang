@@ -87,6 +87,18 @@ defmodule Cure.Diagnostic.Adapter.Type do
   @spec from_error(term(), keyword()) :: Diagnostic.t()
   def from_error(error, opts \\ [])
 
+  def from_error({:type_mismatch, message, meta}, opts) when is_binary(message) and is_list(meta) do
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Type mismatch",
+      body: Doc.paragraph(message),
+      primary: primary(opts, "this expression has the wrong type"),
+      payload: %{message: message, meta: meta}
+    )
+  end
+
   def from_error(%TypeProblem{} = problem, opts) do
     actual_surface = surface_type(problem.actual)
     expected_surface = surface_type(problem.expected)
