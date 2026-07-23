@@ -163,4 +163,31 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert rendered =~ "possible outlier: this branch has the incompatible type"
     assert rendered =~ "compare this branch with the declared result"
   end
+
+  test "operator failures preserve operator and operand regions through the type family" do
+    source = "left + right\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:operator, source, "operator.cure")
+    {:ok, left} = SourceRegistry.span(registry, :operator, 0, 4)
+    {:ok, operator} = SourceRegistry.span(registry, :operator, 5, 6)
+    {:ok, right} = SourceRegistry.span(registry, :operator, 7, 12)
+
+    error =
+      {:source_context, {:unsupported_operand_type, :+},
+       %{
+         operator_span: operator,
+         operand_spans: [left, right],
+         operand_types: [{:data, :Int, [], []}, {:data, :Bool, [], []}]
+       }}
+
+    direct = TypeAdapter.from_error(error)
+    assert Adapter.from_error(error) == direct
+    assert direct.primary.span == operator
+    assert Enum.map(direct.secondary, & &1.span) == [left, right]
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "The `+` operator does not accept `Int` on the left and `Bool` on the right"
+    assert rendered =~ "the left operand has type `Int`"
+    assert rendered =~ "the right operand has type `Bool`"
+    assert rendered =~ "Hint: Change the operand types"
+  end
 end

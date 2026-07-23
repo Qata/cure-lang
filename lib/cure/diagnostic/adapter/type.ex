@@ -146,7 +146,79 @@ defmodule Cure.Diagnostic.Adapter.Type do
   def from_error({:source_context, {:branch_type, details}, context}, opts) when is_map(context),
     do: branch_failure(Map.put(context, :branch_details, details), opts)
 
+  def from_error({kind, operator}, opts)
+      when kind in [:unsupported_operand_type, :no_operator_meaning],
+      do: operator_failure(kind, operator, %{}, opts)
+
+  def from_error({:source_context, {kind, operator}, context}, opts)
+      when kind in [:unsupported_operand_type, :no_operator_meaning] and is_map(context),
+      do: operator_failure(kind, operator, context, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp operator_failure(kind, operator, context, opts) do
+    spelling = name(operator)
+    types = context |> Map.get(:operand_types, []) |> Enum.map(&surface_type/1)
+    operator_span = Map.get(context, :operator_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    {title, body, primary_message, hint} = operator_copy(kind, spelling, types)
+
+    secondary =
+      context
+      |> Map.get(:operand_spans, [])
+      |> Enum.with_index()
+      |> Enum.map(fn {span, index} ->
+        side = if index == 0, do: "left", else: "right"
+
+        message =
+          case Enum.at(types, index) do
+            nil -> "the #{side} operand is here"
+            type -> "the #{side} operand has type `#{type}`"
+          end
+
+        if match?(%Span{}, span), do: %Label{span: span, style: :secondary, message: message}
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E093",
+      key: if(kind == :unsupported_operand_type, do: :operator_type_mismatch, else: :operator_resolution),
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary:
+        if(match?(%Span{}, operator_span),
+          do: %Label{span: operator_span, style: :primary, message: primary_message}
+        ),
+      secondary: if(kind == :unsupported_operand_type, do: secondary, else: []),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{kind: kind, operator: operator, operand_types: types}
+    )
+  end
+
+  defp operator_copy(:unsupported_operand_type, spelling, types) do
+    description =
+      case types do
+        [left, right] -> "`#{left}` on the left and `#{right}` on the right"
+        _ -> "the operand types used here"
+      end
+
+    {
+      "`#{spelling}` does not support these operands",
+      "The `#{spelling}` operator does not accept #{description}.",
+      "this operator is not defined for these operand types",
+      "Change the operand types, or use an operator or interface implementation defined for them"
+    }
+  end
+
+  defp operator_copy(:no_operator_meaning, spelling, _types) do
+    {
+      "`#{spelling}` has no definition",
+      "A fixity declaration tells Cure how to parse `#{spelling}`, but no function, constructor, or interface method with that name is available here.",
+      "this operator has precedence, but no callable definition",
+      "Define `#{spelling}` with two parameters, import its definition, or use an operator that is in scope"
+    }
+  end
 
   defp branch_failure(context, opts) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))

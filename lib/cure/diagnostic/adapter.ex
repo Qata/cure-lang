@@ -273,11 +273,11 @@ defmodule Cure.Diagnostic.Adapter do
     operator_conflict(:conflicting_precedence_group, details, opts)
   end
 
-  def from_error({:unsupported_operand_type, operator}, opts),
-    do: operator_failure(:unsupported_operand_type, operator, %{}, opts)
+  def from_error({:unsupported_operand_type, _operator} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:no_operator_meaning, operator}, opts),
-    do: operator_failure(:no_operator_meaning, operator, %{}, opts)
+  def from_error({:no_operator_meaning, _operator} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:cannot_infer_match_type, %{reason: reason} = details}, opts)
       when reason in [:no_constructor_arm, :scrutinee_not_data] do
@@ -1565,10 +1565,9 @@ defmodule Cure.Diagnostic.Adapter do
     inferred_hole_failure(Keyword.get(meta, :name), context, opts)
   end
 
-  def from_error({:source_context, {kind, operator}, context}, opts)
-      when kind in [:unsupported_operand_type, :no_operator_meaning] and is_map(context) do
-    operator_failure(kind, operator, context, opts)
-  end
+  def from_error({:source_context, {kind, _operator}, context} = error, opts)
+      when kind in [:unsupported_operand_type, :no_operator_meaning] and is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:source_context, {kind, _detail}, context} = error, opts)
       when kind in [
@@ -6021,66 +6020,6 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp primitive_tag_spelling(tag) when is_atom(tag), do: ":#{tag}"
   defp primitive_tag_spelling(tag), do: name_to_string(tag)
-
-  defp operator_failure(kind, operator, context, opts) do
-    spelling = name_to_string(operator)
-    types = context |> Map.get(:operand_types, []) |> Enum.map(&surface_type/1)
-    operator_span = Map.get(context, :operator_span) || Map.get(context, :span) || Keyword.get(opts, :span)
-
-    {title, body, primary_message, hint} =
-      case kind do
-        :unsupported_operand_type ->
-          description =
-            case types do
-              [left, right] -> "`#{left}` on the left and `#{right}` on the right"
-              _ -> "the operand types used here"
-            end
-
-          {
-            "`#{spelling}` does not support these operands",
-            "The `#{spelling}` operator does not accept #{description}.",
-            "this operator is not defined for these operand types",
-            "Change the operand types, or use an operator or interface implementation defined for them"
-          }
-
-        :no_operator_meaning ->
-          {
-            "`#{spelling}` has no definition",
-            "A fixity declaration tells Cure how to parse `#{spelling}`, but no function, constructor, or interface method with that name is available here.",
-            "this operator has precedence, but no callable definition",
-            "Define `#{spelling}` with two parameters, import its definition, or use an operator that is in scope"
-          }
-      end
-
-    secondary =
-      context
-      |> Map.get(:operand_spans, [])
-      |> Enum.with_index()
-      |> Enum.map(fn {span, index} ->
-        side = if index == 0, do: "left", else: "right"
-
-        message =
-          case Enum.at(types, index) do
-            nil -> "the #{side} operand is here"
-            type -> "the #{side} operand has type `#{type}`"
-          end
-
-        pickup_label(span, :secondary, message)
-      end)
-      |> Enum.reject(&is_nil/1)
-
-    Diagnostic.new(
-      code: "E093",
-      key: if(kind == :unsupported_operand_type, do: :operator_type_mismatch, else: :operator_resolution),
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(body),
-      primary: pickup_label(operator_span, :primary, primary_message),
-      secondary: if(kind == :unsupported_operand_type, do: secondary, else: []),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{kind: kind, operator: operator, operand_types: types}
-    )
-  end
 
   defp branch_pattern_span(%{pattern_span: %Span{} = span}), do: span
   defp branch_pattern_span(%{span: %Span{} = span}), do: span
