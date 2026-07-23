@@ -535,46 +535,48 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:missing_diagnosis, points}, opts), do: macro_validation_failure(:missing_diagnosis, points, opts)
-  def from_error({:rule_unpinned, keywords}, opts), do: macro_validation_failure(:rule_unpinned, keywords, opts)
+  def from_error({:missing_diagnosis, points}, opts),
+    do: MacroAdapter.validation_failure(:missing_diagnosis, points, opts)
+
+  def from_error({:rule_unpinned, keywords}, opts), do: MacroAdapter.validation_failure(:rule_unpinned, keywords, opts)
 
   def from_error({:source_context, {:missing_diagnosis, points}, context}, opts) when is_map(context),
-    do: macro_validation_failure(:missing_diagnosis, points, opts, context)
+    do: MacroAdapter.validation_failure(:missing_diagnosis, points, opts, context)
 
   def from_error({:source_context, {:rule_unpinned, keywords}, context}, opts) when is_map(context),
-    do: macro_validation_failure(:rule_unpinned, keywords, opts, context)
+    do: MacroAdapter.validation_failure(:rule_unpinned, keywords, opts, context)
 
   def from_error({:source_context, {:example_mismatch, mismatches}, context}, opts) when is_map(context),
-    do: macro_validation_failure(:example_mismatch, mismatches, opts, context)
+    do: MacroAdapter.validation_failure(:example_mismatch, mismatches, opts, context)
 
   def from_error({:source_context, {:example_type_mismatch, failures}, context}, opts) when is_map(context),
-    do: macro_validation_failure(:example_type_mismatch, failures, opts, context)
+    do: MacroAdapter.validation_failure(:example_type_mismatch, failures, opts, context)
 
   def from_error({:source_context, {:computed_example_error, failures}, context}, opts) when is_map(context),
-    do: macro_validation_failure(:computed_example_error, failures, opts, context)
+    do: MacroAdapter.validation_failure(:computed_example_error, failures, opts, context)
 
   def from_error({:source_context, {:reserved_syntax_field, field, keywords}, context}, opts) when is_map(context),
-    do: macro_validation_failure(:reserved_syntax_field, %{first: field, second: keywords}, opts, context)
+    do: MacroAdapter.validation_failure(:reserved_syntax_field, %{first: field, second: keywords}, opts, context)
 
   def from_error({:source_context, {:expansion_ill_typed, details}, context}, opts)
       when is_map(details) and is_map(context),
       do: expansion_proof_failure(details, context, opts)
 
   def from_error({:source_context, {:unsupported_hole_type, category}, context}, opts) when is_map(context),
-    do: macro_validation_failure(:unsupported_hole_type, %{detail: category}, opts, context)
+    do: MacroAdapter.validation_failure(:unsupported_hole_type, %{detail: category}, opts, context)
 
   def from_error({:source_context, {:generated_hole_not_well_typed, details}, context}, opts)
       when is_map(details) and is_map(context),
       do: generated_hole_invariant_failure(details, context, opts)
 
   def from_error({:example_mismatch, mismatches}, opts),
-    do: macro_validation_failure(:example_mismatch, mismatches, opts)
+    do: MacroAdapter.validation_failure(:example_mismatch, mismatches, opts)
 
   def from_error({:example_type_mismatch, failures}, opts),
-    do: macro_validation_failure(:example_type_mismatch, failures, opts)
+    do: MacroAdapter.validation_failure(:example_type_mismatch, failures, opts)
 
   def from_error({:computed_example_error, failures}, opts),
-    do: macro_validation_failure(:computed_example_error, failures, opts)
+    do: MacroAdapter.validation_failure(:computed_example_error, failures, opts)
 
   def from_error({kind, detail}, opts)
       when kind in [
@@ -1600,7 +1602,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: generated_hole_invariant_failure(%{term: term}, %{}, opts)
 
   def from_error({:example_use_site_not_fully_consumed, _unused, _ast}, opts),
-    do: macro_validation_failure(:example_use_site_not_fully_consumed, %{}, opts)
+    do: MacroAdapter.validation_failure(:example_use_site_not_fully_consumed, %{}, opts)
 
   def from_error({:closed_category_extension, categories}, opts),
     do: MacroAdapter.from_error({:closed_category_extension, categories}, opts)
@@ -1759,11 +1761,11 @@ defmodule Cure.Diagnostic.Adapter do
                :unsupported_hole_type,
                :invalid_generated_syntax
              ],
-      do: macro_validation_failure(kind, %{detail: detail}, opts)
+      do: MacroAdapter.validation_failure(kind, %{detail: detail}, opts)
 
   def from_error({kind, first, second}, opts)
       when kind in [:forward_packet_length, :invalid_packet_crc_fields, :reserved_syntax_field],
-      do: macro_validation_failure(kind, %{first: first, second: second}, opts)
+      do: MacroAdapter.validation_failure(kind, %{first: first, second: second}, opts)
 
   # C2/Core artifact decoding is an untrusted boundary. Its failures are
   # operational artifact diagnostics, not kernel terms to expose in default
@@ -1826,7 +1828,7 @@ defmodule Cure.Diagnostic.Adapter do
              :duplicate_driver_register,
              :overlapping_driver_register
            ],
-      do: macro_validation_failure(kind, %{}, opts)
+      do: MacroAdapter.validation_failure(kind, %{}, opts)
 
   def from_error(kind, opts) when kind in [:no_compatible_macro_input, :normalization_fuel_exhausted],
     do: from_error({:computed_macro_error, [], kind}, opts)
@@ -4699,9 +4701,6 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  defp macro_validation_failure(kind, details, opts),
-    do: MacroAdapter.validation_failure(kind, details, opts)
-
   defp lift_module_failure(kind, details, opts) do
     {title, message, label, hint} = lift_module_content(kind, details)
 
@@ -4779,9 +4778,6 @@ defmodule Cure.Diagnostic.Adapter do
       {"Lifted module name is repeated",
        "More than one generated declaration produces `#{name_to_string(name)}`, so the compiler cannot choose one module body.",
        "rename one lifted module", "Give every lifted module a unique qualified name"}
-
-  defp macro_validation_failure(kind, details, opts, context),
-    do: MacroAdapter.validation_failure(kind, details, opts, context)
 
   @spec unknown_name(atom(), term(), keyword()) :: Diagnostic.t()
   def unknown_name(namespace, name, opts \\ []),
