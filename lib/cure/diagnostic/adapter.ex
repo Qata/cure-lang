@@ -1658,20 +1658,7 @@ defmodule Cure.Diagnostic.Adapter do
     NameAdapter.from_error({:duplicate_module_identity, name, paths}, opts)
   end
 
-  def from_error({:import_cycle, hops}, opts) when is_list(hops) do
-    chain = Enum.map_join(hops, " -> ", fn hop -> "#{hop.module} (#{hop.path}:#{hop.line})" end)
-
-    Diagnostic.new(
-      code: "W086",
-      key: :import_cycle,
-      severity: :warning,
-      title: "Import cycle",
-      message: "This warning means the modules form a `use` cycle: #{chain}.",
-      primary: primary_label(opts, "the cycle begins here"),
-      notes: ["Cycle members compile together in deterministic order; qualify cross-module calls when order matters."],
-      payload: %{hops: hops}
-    )
-  end
+  def from_error({:import_cycle, _hops} = error, opts), do: NameAdapter.from_error(error, opts)
 
   def from_error(%TypeProblem{} = problem, opts) do
     TypeAdapter.from_error(problem, opts)
