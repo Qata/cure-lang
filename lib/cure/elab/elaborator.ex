@@ -6017,7 +6017,7 @@ defmodule Cure.Elab.Elaborator do
           elaborate_expr_checked(single_body(body), expected, names, ctx, env)
         end
 
-      {:variable, _m, name} ->
+      {:variable, _m, name} = pattern ->
         b = single_body(body)
 
         cond do
@@ -6030,7 +6030,15 @@ defmodule Cure.Elab.Elaborator do
             :not_applicable
 
           binds_any?(b, [name]) ->
-            {:error, {:unsupported_pattern, :shadowed_catchall}}
+            {:error,
+             {:unsupported_pattern,
+              %{
+                reason: :shadowed_catchall,
+                name: name,
+                span: pattern_binder_span(pattern, name),
+                type_span: surface_expression_span(scrut_expr),
+                shadow_span: first_binding_span(body, name)
+              }}}
 
           true ->
             elaborate_expr_checked(subst_surface_var(b, name, scrut_expr), expected, names, ctx, env)
@@ -6400,11 +6408,24 @@ defmodule Cure.Elab.Elaborator do
       {:variable, _m, "_"} ->
         elaborate_match_body(body, expected, names, ctx, env)
 
-      {:variable, _m, name} ->
+      {:variable, _m, name} = pattern ->
         cond do
-          not match?({:variable, _sm, _sn}, scrut_expr) -> :not_applicable
-          binds_any?(body, [name]) -> {:error, {:unsupported_pattern, :shadowed_literal_catchall}}
-          true -> elaborate_match_body(subst_surface_var(body, name, scrut_expr), expected, names, ctx, env)
+          not match?({:variable, _sm, _sn}, scrut_expr) ->
+            :not_applicable
+
+          binds_any?(body, [name]) ->
+            {:error,
+             {:unsupported_pattern,
+              %{
+                reason: :shadowed_literal_catchall,
+                name: name,
+                span: pattern_binder_span(pattern, name),
+                type_span: surface_expression_span(scrut_expr),
+                shadow_span: first_binding_span(body, name)
+              }}}
+
+          true ->
+            elaborate_match_body(subst_surface_var(body, name, scrut_expr), expected, names, ctx, env)
         end
     end
   end

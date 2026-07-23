@@ -14,6 +14,8 @@ defmodule Cure.Elab.CatchallPatternTest do
   """
   use ExUnit.Case, async: true
 
+  alias Cure.Compiler.Errors
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.{Program, Emit}
 
   @dep_hdr "mod M\n  type Dec = DDec | DCau\n  type G indices (d: Dec)\n    mkd : G(DDec)\n    seqg : G(d1) -> G(d2) -> G(DCau)\n"
@@ -36,6 +38,75 @@ defmodule Cure.Elab.CatchallPatternTest do
     src = "mod M\n  type Color = Red | Green | Blue\n  fn id2(c: Color) -> Color = match c\n    x -> x\nend\n"
 
     assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "a binder shadowing a lone catch-all gets exact source roles and a repair" do
+    src =
+      "mod M\n" <>
+        "  type Nat = Z | S(Nat)\n" <>
+        "  fn f(n: Nat) -> Nat = match n\n" <>
+        "    value ->\n" <>
+        "      let g : (Nat) -> Nat = fn(value) -> value\n" <>
+        "      g(n)\n" <>
+        "end\n"
+
+    assert {:error,
+            {:source_context,
+             {:unsupported_pattern,
+              %{reason: :shadowed_catchall, name: "value", span: outer_span, shadow_span: shadow_span}}, _} =
+              error} = Program.elaborate(src)
+
+    assert {outer_span.start_line, outer_span.start_column} == {4, 5}
+    assert {shadow_span.start_line, shadow_span.start_column} == {5, 33}
+
+    {diagnostic, registry} = Errors.to_diagnostic(error, "catchall_shadow.cure", src)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- NESTED PATTERN SHADOWS `VALUE` [E090] ------------------ catchall_shadow.cure
+
+             This catch-all pattern binds the complete matched value as `value`. A binder
+             inside the branch uses the same name, so substituting the scrutinee could
+             capture the inner value.
+
+             at catchall_shadow.cure:5:33
+             3 |   fn f(n: Nat) -> Nat = match n
+               |                               - this is the value bound by the catch-all
+             4 |     value ->
+               |     ----- this outer pattern binds `value`
+             5 |       let g : (Nat) -> Nat = fn(value) -> value
+               |                                 ^^^^^ rename this inner binder so it does not shadow `value`
+
+             Hint: Give the nested binder a different name and update its branch body
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 4, "character" => 32},
+             "end" => %{"line" => 4, "character" => 37}
+           }
+
+    assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+             %{
+               "start" => %{"line" => 3, "character" => 4},
+               "end" => %{"line" => 3, "character" => 9}
+             },
+             %{
+               "start" => %{"line" => 2, "character" => 30},
+               "end" => %{"line" => 2, "character" => 31}
+             }
+           ]
+
+    assert lsp["data"]["payload"] == %{
+             "checking" => "f",
+             "kind" => "unsupported_pattern",
+             "name" => "value",
+             "reason" => "shadowed_catchall"
+           }
+
+    fixed = String.replace(src, "fn(value) -> value", "fn(other) -> other")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "catchall_shadow_fixed.cure")
   end
 
   test "dependent catch-all reconstructs each constructor at its refined index" do
