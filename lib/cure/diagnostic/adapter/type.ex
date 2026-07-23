@@ -213,6 +213,15 @@ defmodule Cure.Diagnostic.Adapter.Type do
   def from_error({:lambda_expected_pi, expected}, opts),
     do: from_error({:lambda_expected_pi, %{expected: expected, parameter_index: 0}}, opts)
 
+  def from_error(
+        {:source_context, {:named_implicit_unforced, name}, %{named_implicit_status: :unforced} = context},
+        opts
+      ),
+      do: named_implicit_unforced_failure(name, context, opts)
+
+  def from_error({:source_context, {:named_implicit_unforced, name}, context}, opts) when is_map(context),
+    do: named_implicit_unforced_failure(name, context, opts)
+
   def from_error({:effect_arity, name, expected, actual}, opts),
     do:
       contextual_failure(
@@ -940,6 +949,58 @@ defmodule Cure.Diagnostic.Adapter.Type do
     do: %Label{span: span, style: style, message: message}
 
   defp label_at(_span, _style, _message), do: nil
+
+  defp named_implicit_unforced_failure(name, context, opts) do
+    constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
+    implicit_name = name(name)
+    primary_span = Map.get(context, :forced_pattern_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      [
+        label_at(
+          Map.get(context, :named_implicit_span),
+          :secondary,
+          "this pattern refers to hidden field `#{implicit_name}`"
+        ),
+        label_at(
+          Map.get(context, :constructor_name_span),
+          :secondary,
+          "`#{constructor}` does not expose `#{implicit_name}` in its result index"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E011",
+      key: :missing_implicit_argument,
+      severity: :error,
+      title: "`#{implicit_name}` is not fixed by matching `#{constructor}`",
+      body:
+        Doc.paragraph(
+          "The result type of `#{constructor}` does not determine its hidden `#{implicit_name}` field. A dot pattern can only check a value already fixed by the scrutinee, so this field must be bound to a variable instead."
+        ),
+      primary: label_at(primary_span, :primary, "this dot expression has no forced value to check"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Replace the dot expression with a variable binding, for example `{#{implicit_name} = value}`",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :named_implicit_unforced,
+        constructor: constructor,
+        implicit_name: implicit_name,
+        expectation_origin: :pattern
+      }
+    )
+  end
+
+  defp surface_declaration_name(name) do
+    name(name)
+    |> String.split("#")
+    |> List.last()
+  end
 
   defp contextual_type_failure(:with_sibling_dependency_unsupported, _details, opts) do
     Diagnostic.new(
