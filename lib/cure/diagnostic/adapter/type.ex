@@ -494,6 +494,36 @@ defmodule Cure.Diagnostic.Adapter.Type do
   def from_error({:effect_binder_erased, details}, opts) when is_map(details),
     do: erased_effect_binder_failure(details, %{}, opts)
 
+  def from_error(
+        {:source_context, {:extern_returns_union, name, codomain}, context},
+        opts
+      )
+      when is_map(context),
+      do: extern_union_failure(:nested, name, codomain, context, opts)
+
+  def from_error(
+        {:source_context, {:extern_union_indistinct, name, reason}, context},
+        opts
+      )
+      when is_map(context),
+      do: extern_union_failure(:indistinct, name, reason, context, opts)
+
+  def from_error({:extern_returns_union, name, codomain}, opts),
+    do:
+      generic_ffi_failure(
+        :extern_returns_union,
+        %{name: name, codomain: codomain},
+        opts
+      )
+
+  def from_error({:extern_union_indistinct, name, reason}, opts),
+    do:
+      generic_ffi_failure(
+        :extern_union_indistinct,
+        %{name: name, reason: reason},
+        opts
+      )
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
   defp typed_pattern_annotation(context, opts) do
@@ -1501,6 +1531,185 @@ defmodule Cure.Diagnostic.Adapter.Type do
     (chain_frames ++ source_frames)
     |> Enum.uniq_by(& &1.name)
   end
+
+  defp extern_union_failure(kind, extern_name, detail, context, opts) do
+    extern_name = short_name(extern_name)
+    return_span = Map.get(context, :return_span) || Map.get(context, :span)
+    extern_span = Map.get(context, :extern_span)
+    member_ids = Map.get(context, :union_members, [])
+    members = Enum.map(member_ids, &ffi_member_surface/1)
+
+    {title, body, message, hint} =
+      case kind do
+        :nested ->
+          union =
+            if members == [],
+              do: "an anonymous union",
+              else: Enum.join(members, " | ")
+
+          {
+            "Extern `#{extern_name}` nests a union in its return type",
+            "The return type contains `#{union}` inside another type. Erlang returns one raw value, and Cure can only identify and tag a union when that union is the outermost return type.",
+            "this return type nests a union across the foreign boundary",
+            "Return the union directly, or tag the nested value in the foreign function"
+          }
+
+        :indistinct ->
+          {
+            "Extern `#{extern_name}` returns an indistinguishable union",
+            ffi_indistinct_union_body(detail, members),
+            "these union members have indistinguishable BEAM representations",
+            "Return a tagged record or data type, or choose members with distinct BEAM shapes"
+          }
+      end
+
+    secondary =
+      [
+        related_label(
+          extern_span,
+          return_span,
+          "this declaration crosses an Erlang boundary"
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary:
+        label_at(return_span, :primary, message) ||
+          primary(opts, message),
+      secondary: secondary,
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind:
+          if(kind == :nested,
+            do: :extern_returns_union,
+            else: :extern_union_indistinct
+          ),
+        name: extern_name,
+        union_member_ids: member_ids,
+        union_members: members,
+        conflict: ffi_union_conflict_payload(detail)
+      }
+    )
+  end
+
+  defp generic_ffi_failure(kind, details, opts) do
+    {title, body, message} =
+      case kind do
+        :extern_returns_union ->
+          {"Extern return type is unsupported", "An extern declaration cannot return this union type.",
+           "use a representable foreign return type"}
+
+        :extern_union_indistinct ->
+          {"Extern union is indistinct", "The extern union members cannot be distinguished at the foreign boundary.",
+           "make the foreign union members representationally distinct"}
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: primary(opts, message),
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp ffi_indistinct_union_body(
+         {:same_runtime_shape, [{left, right, runtime_class} | _]},
+         _members
+       ) do
+    "`#{ffi_member_surface(left)}` and `#{ffi_member_surface(right)}` both arrive as BEAM #{runtime_shape_name(runtime_class)} values. Cure cannot tell which union alternative the foreign result belongs to."
+  end
+
+  defp ffi_indistinct_union_body(
+         {:same_erased_literal, [{left, right} | _]},
+         _members
+       ) do
+    "`#{ffi_member_surface(left)}` and `#{ffi_member_surface(right)}` erase to the same BEAM value. Cure cannot tell which union alternative the foreign result belongs to."
+  end
+
+  defp ffi_indistinct_union_body(
+         {:unsupported_member_shape, unsupported},
+         _members
+       ) do
+    "Cure has no single BEAM guard that can recognize #{Enum.map_join(unsupported, ", ", &"`#{ffi_member_surface(&1)}`")}. The raw foreign result therefore cannot be assigned to a union alternative safely."
+  end
+
+  defp ffi_indistinct_union_body(_reason, members) do
+    union =
+      if members == [],
+        do: "These union members",
+        else: Enum.map_join(members, " and ", &"`#{&1}`")
+
+    "#{union} cannot be distinguished after crossing the foreign boundary."
+  end
+
+  defp ffi_union_conflict_payload({:same_runtime_shape, collisions}) do
+    %{
+      kind: :same_runtime_shape,
+      pairs:
+        Enum.map(collisions, fn {left, right, runtime_class} ->
+          %{
+            left: ffi_member_surface(left),
+            right: ffi_member_surface(right),
+            runtime_shape: runtime_class
+          }
+        end)
+    }
+  end
+
+  defp ffi_union_conflict_payload({:same_erased_literal, collisions}) do
+    %{
+      kind: :same_erased_literal,
+      pairs:
+        Enum.map(collisions, fn {left, right} ->
+          %{
+            left: ffi_member_surface(left),
+            right: ffi_member_surface(right)
+          }
+        end)
+    }
+  end
+
+  defp ffi_union_conflict_payload({:unsupported_member_shape, members}),
+    do: %{
+      kind: :unsupported_member_shape,
+      members: Enum.map(members, &ffi_member_surface/1)
+    }
+
+  defp ffi_union_conflict_payload(_detail), do: nil
+
+  defp ffi_member_surface(member) do
+    member = name(member)
+
+    case String.split(member, "#", parts: 2) do
+      [type, literal]
+      when type in ["Int", "Nat", "Float", "String", "Atom", "Char", "Bool"] ->
+        literal
+
+      _ ->
+        Regex.replace(
+          ~r/[A-Za-z_][A-Za-z0-9_.]*#([A-Za-z_][A-Za-z0-9_]*)/,
+          member,
+          "\\1"
+        )
+    end
+  end
+
+  defp runtime_shape_name(:integer), do: "integer"
+  defp runtime_shape_name(:float), do: "floating-point"
+  defp runtime_shape_name(:binary), do: "binary"
+  defp runtime_shape_name(:atom), do: "atom"
+  defp runtime_shape_name(:boolean), do: "boolean"
+  defp runtime_shape_name(:list), do: "list"
+  defp runtime_shape_name(shape), do: name(shape)
 
   defp bounded_literal_failure(value, bound, context, opts) do
     literal_span = Map.get(context, :span) || Keyword.get(opts, :span)

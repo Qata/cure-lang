@@ -794,4 +794,36 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert rendered =~ "EFFECT PARAMETER CANNOT BE ERASED"
     assert rendered =~ "Hint: Make `effect` a present parameter"
   end
+
+  test "FFI union failures retain the return type and declaration boundary" do
+    source = "extern raw() -> Int | Nat\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:ffi, source, "ffi.cure")
+    {:ok, declaration} = SourceRegistry.span(registry, :ffi, 0, 10)
+    {:ok, return_type} = SourceRegistry.span(registry, :ffi, 16, 25)
+
+    error =
+      {:source_context,
+       {:extern_union_indistinct, :raw, {:same_runtime_shape, [{"Std.Int#Int", "Std.Nat#Nat", :integer}]}},
+       %{
+         extern_span: declaration,
+         return_span: return_type,
+         union_members: ["Std.Int#Int", "Std.Nat#Nat"]
+       }}
+
+    direct = TypeAdapter.from_error(error)
+    assert Adapter.from_error(error) == direct
+    assert direct.code == "E093"
+    assert direct.primary.span == return_type
+    assert hd(direct.secondary).span == declaration
+    assert direct.payload.conflict.kind == :same_runtime_shape
+    assert direct.suggestions != []
+
+    rendered = Renderer.plain(direct, registry, width: 80)
+    assert rendered =~ "EXTERN `RAW` RETURNS AN INDISTINGUISHABLE UNION"
+    assert rendered =~ "`Int` and `Nat` both arrive as BEAM integer values"
+    assert rendered =~ "Hint: Return a tagged record or data type"
+
+    bare = {:extern_returns_union, :raw, {:union, []}}
+    assert Adapter.from_error(bare) == TypeAdapter.from_error(bare)
+  end
 end
