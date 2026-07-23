@@ -6763,38 +6763,65 @@ defmodule Cure.Elab.Elaborator do
       end)
       |> Enum.uniq()
 
-    if Enum.any?(arms, fn {:match_arm, m, b} ->
-         binds_any?(single_body(b), pvars) or
-           (Keyword.get(m, :guard) && binds_any?(Keyword.get(m, :guard), pvars))
-       end) do
-      {:error, {:unsupported_pattern, :shadowed_nested}}
-    else
-      # Seed the fresh scrutinee names with a per-invocation unique tag. Every
-      # deeper name (`split_ctor_arms`, `split_default`) derives from these, so a
-      # unique seed makes the WHOLE lowered subtree's names unique. Without it,
-      # two independently-desugared nested matches — an outer arm whose body is
-      # itself a nested match — regenerate identical names (`$nSome1_Y1`) and the
-      # inner binder captures a reference the outer desugaring baked into the
-      # body (variable capture → spurious `:branch_type`). See
-      # nested_match_capture_test.exs.
-      tag = fresh_tag()
-      fresh = for i <- 1..k//1, do: "$n" <> tag <> cname <> Integer.to_string(i)
+    case nested_pattern_shadow(arms, pvars) do
+      %{name: name, pattern: pattern, shadow_span: shadow_span} ->
+        {:error,
+         {:unsupported_pattern,
+          %{
+            reason: :shadowed_nested,
+            name: name,
+            span: pattern_binder_span(pattern, name),
+            type_span: surface_expression_span(pattern),
+            shadow_span: shadow_span
+          }}}
 
-      rows =
-        Enum.map(arms, fn {:match_arm, m, b} ->
-          {:function_call, _fm, as} = Keyword.fetch!(m, :pattern)
-          {as, Keyword.get(m, :guard), single_body(b)}
-        end)
+      nil ->
+        # Seed the fresh scrutinee names with a per-invocation unique tag. Every
+        # deeper name (`split_ctor_arms`, `split_default`) derives from these, so a
+        # unique seed makes the WHOLE lowered subtree's names unique. Without it,
+        # two independently-desugared nested matches — an outer arm whose body is
+        # itself a nested match — regenerate identical names (`$nSome1_Y1`) and the
+        # inner binder captures a reference the outer desugaring baked into the
+        # body (variable capture → spurious `:branch_type`). See
+        # nested_match_capture_test.exs.
+        tag = fresh_tag()
+        fresh = for i <- 1..k//1, do: "$n" <> tag <> cname <> Integer.to_string(i)
 
-      case compile_matrix(fresh, rows) do
-        {:ok, inner} ->
-          outer_pat = {:function_call, fmeta, Enum.map(fresh, &{:variable, [], &1})}
-          {:ok, [{:match_arm, [pattern: outer_pat], inner}]}
+        rows =
+          Enum.map(arms, fn {:match_arm, m, b} ->
+            {:function_call, _fm, as} = Keyword.fetch!(m, :pattern)
+            {as, Keyword.get(m, :guard), single_body(b)}
+          end)
 
-        {:error, _} = err ->
-          err
-      end
+        case compile_matrix(fresh, rows) do
+          {:ok, inner} ->
+            outer_pat = {:function_call, fmeta, Enum.map(fresh, &{:variable, [], &1})}
+            {:ok, [{:match_arm, [pattern: outer_pat], inner}]}
+
+          {:error, _} = err ->
+            err
+        end
     end
+  end
+
+  defp nested_pattern_shadow(arms, pattern_vars) do
+    Enum.find_value(arms, fn {:match_arm, meta, body} ->
+      pattern = Keyword.fetch!(meta, :pattern)
+      guard = Keyword.get(meta, :guard)
+
+      Enum.find_value(pattern_vars, fn name ->
+        cond do
+          binds_any?(single_body(body), [name]) ->
+            %{name: name, pattern: pattern, shadow_span: first_binding_span(body, name)}
+
+          guard && binds_any?(guard, [name]) ->
+            %{name: name, pattern: pattern, shadow_span: first_binding_span(guard, name)}
+
+          true ->
+            nil
+        end
+      end)
+    end)
   end
 
   defp pattern_vars_deep({:variable, _m, v}), do: [v]

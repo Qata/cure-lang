@@ -897,6 +897,13 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: shadowed_sub_union_pattern_failure(details, context, opts)
 
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :shadowed_nested, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: shadowed_sub_union_pattern_failure(details, context, opts)
+
   def from_error({:source_context, {:unsupported_pattern, shape}, context}, opts) when is_map(context) do
     from_error(
       %SyntaxProblem{
@@ -6902,6 +6909,12 @@ defmodule Cure.Diagnostic.Adapter do
 
     {body, type_message} =
       case reason do
+        :shadowed_nested ->
+          {
+            "This nested constructor pattern binds `#{name}`. A binder inside its branch uses the same name, so lowering the nested pattern could capture the inner value.",
+            "this nested pattern is lowered before its branch is checked"
+          }
+
         :shadowed_as ->
           {
             "The outer `#{name}` binds the complete value matched by this as-pattern. A nested binder uses the same name, so substituting the reconstructed value could capture the inner binding.",
