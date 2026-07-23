@@ -173,6 +173,12 @@ defmodule Cure.Diagnostic.RegistryTest do
            }
   end
 
+  test "E103 is owned by the exhaustive kernel family converter" do
+    entry = Registry.fetch!("E103")
+    assert entry.converter == Cure.Diagnostic.Adapter.Kernel
+    assert entry.producer_converters == %{kernel: {Cure.Diagnostic.Adapter.Kernel, :from_error}}
+  end
+
   test "producer catalog validation requires every code and producer branch independently" do
     entry = Registry.fetch!("E094")
     assert entry.producers |> Enum.sort() == [:lexer, :parser]

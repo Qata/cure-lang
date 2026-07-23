@@ -22,6 +22,7 @@ defmodule Cure.Diagnostic.Adapter do
   }
 
   alias Cure.Diagnostic.Adapter.Codegen
+  alias Cure.Diagnostic.Adapter.Kernel, as: KernelAdapter
   alias Cure.Diagnostic.Adapter.Name, as: NameAdapter
   alias Cure.Diagnostic.Adapter.Operational
   alias Cure.Diagnostic.Adapter.Type, as: TypeAdapter
@@ -71,9 +72,8 @@ defmodule Cure.Diagnostic.Adapter do
     erasure_failure(:erases_on_non_opaque, %{name: name}, opts)
   end
 
-  def from_error({:non_strictly_positive, family}, opts) do
-    positivity_failure(family, %{}, opts)
-  end
+  def from_error({:non_strictly_positive, _family} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
 
   def from_error({:erased_used_relevantly, details}, opts) when is_map(details) do
     relevance_failure(details, %{}, opts)
@@ -1561,19 +1561,9 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:missing_stdlib_source_dir, source}, _opts),
     do: Cure.Diagnostic.Operational.file_read(source, :enoent)
 
-  def from_error(
-        {:source_context, {:non_strictly_positive, constructor}, context},
-        opts
-      )
-      when is_map(context) do
-    opts =
-      case Map.get(context, :span) do
-        %Span{} = span -> Keyword.put_new(opts, :span, span)
-        _ -> opts
-      end
-
-    positivity_failure(constructor, context, opts)
-  end
+  def from_error({:source_context, {:non_strictly_positive, _constructor}, context} = error, opts)
+      when is_map(context),
+      do: KernelAdapter.from_error(error, opts)
 
   def from_error(
         {:source_context, {:erased_used_relevantly, details}, context},
@@ -10467,55 +10457,6 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp relevance_suggestion(_name),
     do: "Use a runtime parameter here, or keep the erased value out of runtime expressions"
-
-  defp positivity_failure(constructor, context, opts) do
-    family = Map.get(context, :family_name)
-    precise? = Map.get(context, :precise_occurrence, false)
-    constructor_name = surface_declaration_name(constructor)
-
-    {title, body, primary_message, hint} =
-      if precise? and is_binary(family) do
-        {
-          "Recursive type appears in a function input",
-          "`#{family}` appears in a function input stored by `#{constructor_name}`. A recursive type may appear in a stored function's result, but not in one of its inputs.",
-          "recursive `#{family}` is consumed here",
-          "Move `#{family}` to the function result, or make the input non-recursive"
-        }
-      else
-        {
-          "Non-strictly-positive type",
-          "The recursive occurrence in `#{constructor_name}` cannot be proven strictly positive, so this type cannot be accepted by the normalising kernel.",
-          "this constructor is not strictly positive",
-          "Move recursive types out of function-input and other negative positions in this constructor"
-        }
-      end
-
-    secondary =
-      if precise? do
-        case pickup_label(
-               Map.get(context, :constructor_span),
-               :secondary,
-               "this constructor stores the unsafe function type"
-             ) do
-          nil -> []
-          label -> [label]
-        end
-      else
-        []
-      end
-
-    Diagnostic.new(
-      code: "E103",
-      key: :non_strictly_positive_type,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(body),
-      primary: primary_label(opts, primary_message),
-      secondary: secondary,
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{family: family, constructor: constructor, precise_occurrence: precise?}
-    )
-  end
 
   defp usage_failure(details, context, opts) do
     declared = Map.get(details, :declared, :unknown)
