@@ -574,4 +574,48 @@ defmodule Cure.Diagnostic.Adapter.TypeTest do
     assert telescope_rendered =~ "TUPLE POSITION 9 IS OUT OF RANGE"
     assert telescope_rendered =~ "Hint: Use a tuple position from 1 through 3"
   end
+
+  test "annotation-boundary failures are owned by the type adapter" do
+    source = "x h = value typealias Bad = 1\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:annotations, source, "annotations.cure")
+    {:ok, parameter} = SourceRegistry.span(registry, :annotations, 0, 1)
+    {:ok, binding} = SourceRegistry.span(registry, :annotations, 2, 3)
+    {:ok, initializer} = SourceRegistry.span(registry, :annotations, 6, 11)
+    {:ok, alias_name} = SourceRegistry.span(registry, :annotations, 22, 25)
+    {:ok, alias_value} = SourceRegistry.span(registry, :annotations, 28, 29)
+
+    errors = [
+      {:untyped_parameter, %{name: "x", span: parameter}},
+      {:let_needs_annotation, %{name: "h", name_span: binding, initializer_span: initializer, use_count: 2}},
+      {:graded_let_needs_annotation, %{name: "h", grade: :linear, grade_span: binding, initializer_span: initializer}},
+      {:typealias_not_a_type,
+       %{
+         name: :Bad,
+         actual_type: {:data, :Int, [], []},
+         name_span: alias_name,
+         span: alias_value
+       }}
+    ]
+
+    for error <- errors do
+      direct = TypeAdapter.from_error(error)
+      assert Adapter.from_error(error) == direct
+      assert direct.code == "E093"
+      assert direct.primary
+      assert direct.suggestions != []
+    end
+
+    alias_rendered = Renderer.plain(TypeAdapter.from_error(List.last(errors)), registry, width: 80)
+    assert alias_rendered =~ "`BAD` ALIASES A VALUE, NOT A TYPE"
+    assert alias_rendered =~ "Hint: If `Bad` should alias the value's type"
+
+    for error <- [
+          {:untyped_parameter, :x},
+          {:let_needs_annotation, :h},
+          {:graded_let_needs_annotation, :h},
+          {:typealias_not_a_type, :Bad}
+        ] do
+      assert Adapter.from_error(error) == TypeAdapter.from_error(error)
+    end
+  end
 end

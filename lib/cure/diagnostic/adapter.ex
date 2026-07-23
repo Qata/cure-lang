@@ -2278,36 +2278,41 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unsolved_parameters, constructor}, opts),
     do: contextual_type_failure(:unsolved_parameters, %{constructor: constructor}, opts)
 
-  def from_error({:untyped_parameter, %{name: _name} = details}, opts),
-    do: untyped_parameter_failure(details, opts)
+  def from_error({:untyped_parameter, %{name: _name}} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:graded_let_needs_annotation, %{name: _name} = details}, opts),
-    do: local_binding_annotation_failure(:graded, details, opts)
+  def from_error({:graded_let_needs_annotation, %{name: _name}} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:let_needs_annotation, %{name: _name} = details}, opts),
-    do: local_binding_annotation_failure(:ungraded, details, opts)
+  def from_error({:let_needs_annotation, %{name: _name}} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:typealias_not_a_type, %{name: _name, actual_type: _actual} = details}, opts),
-    do: typealias_value_failure(details, opts)
+  def from_error({:typealias_not_a_type, %{name: _name, actual_type: _actual}} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:typealias_not_a_type, name, actual_type}, opts),
-    do: typealias_value_failure(%{name: name, actual_type: actual_type}, opts)
+  def from_error({:typealias_not_a_type, _name, _actual_type} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
+
+  def from_error({kind, _detail} = error, opts)
+      when kind in [
+             :untyped_parameter,
+             :let_needs_annotation,
+             :graded_let_needs_annotation,
+             :typealias_not_a_type
+           ],
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({kind, detail}, opts)
       when kind in [
              :unsupported_expression,
              :unsupported_pattern,
              :unsupported_guard,
-             :untyped_parameter,
-             :let_needs_annotation,
-             :graded_let_needs_annotation,
              :binary_match_needs_default,
              :map_match_needs_default,
              :nonlinear_pattern,
              :duplicate_default_pattern,
              :impossible_default_pattern,
              :unreachable_after_default_pattern,
-             :typealias_not_a_type,
              :result_type_not_family,
              :constructor_result_mismatch,
              :dependent_record_projection,
@@ -4450,167 +4455,6 @@ defmodule Cure.Diagnostic.Adapter do
     labels
     |> Enum.filter(fn {span, _message} -> match?(%Span{}, span) and span != primary_span end)
     |> Enum.map(fn {span, message} -> pickup_label(span, :secondary, message) end)
-  end
-
-  defp local_binding_annotation_failure(kind, details, opts) do
-    name = name_to_string(details.name)
-    use_count = Map.get(details, :use_count)
-
-    {title, body, primary_message, hint} =
-      case {kind, use_count, Map.get(details, :reason)} do
-        {:graded, _, _} ->
-          grade = Map.get(details, :grade, :graded) |> name_to_string()
-
-          {
-            "Graded binding needs a type",
-            "`#{name}` is declared `#{grade}`, but its initializer has no type Cure can synthesize without an expectation. Preserving the grade requires a real local binder, and Cure cannot construct that binder until its type is written.",
-            "this grade cannot be preserved without a binding type",
-            "Write the initializer's type after `:#{grade}`, before `=`"
-          }
-
-        {:ungraded, _, :shadowed_before_use} ->
-          {
-            "Shadowed binding needs a type",
-            "Cure cannot synthesize a type for `#{name}`'s initializer. A later binder also uses the name `#{name}`, so substituting this initializer would cross that binding boundary and could capture the wrong value.",
-            "this binding needs a type before it can cross a shadowing scope",
-            "Add a type between `#{name}` and `=` so this value is bound once before the inner `#{name}`"
-          }
-
-        {:ungraded, 0, _} ->
-          {
-            "Unused binding needs a type",
-            "Cure cannot synthesize a type for `#{name}`'s initializer. Because the binding is unused, substituting it would discard the initializer without checking or evaluating it.",
-            "this unused binding cannot safely discard its initializer",
-            "Add a type between `#{name}` and `=` so the initializer is checked exactly once"
-          }
-
-        {:ungraded, count, _} when is_integer(count) and count > 1 ->
-          {
-            "Repeated binding needs a type",
-            "Cure cannot synthesize a type for `#{name}`'s initializer. Substituting the initializer at its #{count} uses would duplicate the expression instead of evaluating and binding it once.",
-            "this binding would duplicate its initializer #{count} times",
-            "Add a type between `#{name}` and `=` so the initializer is bound once"
-          }
-
-        _ ->
-          {
-            "Binding needs a type",
-            "Cure cannot synthesize a type for `#{name}`'s initializer, so this local binding needs an explicit type.",
-            "this binding needs an explicit type",
-            "Add a type between `#{name}` and `=`"
-          }
-      end
-
-    primary_span =
-      case kind do
-        :graded -> Map.get(details, :grade_span) || Map.get(details, :span)
-        :ungraded -> Map.get(details, :name_span) || Map.get(details, :span)
-      end || Keyword.get(opts, :span)
-
-    secondary =
-      [
-        case Map.get(details, :initializer_span) do
-          %Span{} = span when span != primary_span ->
-            pickup_label(span, :secondary, "this initializer needs an expected type")
-
-          _ ->
-            nil
-        end,
-        case Map.get(details, :shadow_span) do
-          %Span{} = span when span != primary_span ->
-            pickup_label(span, :secondary, "this inner binder shadows `#{name}`")
-
-          _ ->
-            nil
-        end
-      ]
-      |> Enum.reject(&is_nil/1)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(body),
-      primary: pickup_label(primary_span, :primary, primary_message),
-      secondary: secondary,
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{
-        kind: if(kind == :graded, do: :graded_let_needs_annotation, else: :let_needs_annotation),
-        name: name,
-        grade: Map.get(details, :grade),
-        use_count: use_count,
-        reason: Map.get(details, :reason, :initializer_not_inferable)
-      }
-    )
-  end
-
-  defp typealias_value_failure(details, opts) do
-    name = name_to_string(details.name)
-    actual_surface = surface_type(details.actual_type)
-    primary_span = Map.get(details, :span) || Keyword.get(opts, :span)
-
-    secondary =
-      case Map.get(details, :name_span) do
-        %Span{} = span when span != primary_span ->
-          [pickup_label(span, :secondary, "this declaration promises a type alias")]
-
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "`#{name}` aliases a value, not a type",
-      body:
-        Doc.paragraph(
-          "The right side of a `typealias` must itself be a type, but this expression is a value whose type is `#{actual_surface}`. Type aliases give another name to a type; they cannot name one particular value."
-        ),
-      primary: pickup_label(primary_span, :primary, "this is a value of type `#{actual_surface}`"),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "If `#{name}` should alias the value's type, write `typealias #{name} = #{actual_surface}`",
-          applicability: :maybe_incorrect
-        }
-      ],
-      payload: %{
-        kind: :typealias_not_a_type,
-        name: name,
-        actual_surface: actual_surface,
-        rhs_shape: Map.get(details, :rhs_shape, :expression)
-      }
-    )
-  end
-
-  defp untyped_parameter_failure(details, opts) do
-    name = name_to_string(details.name)
-    primary_span = Map.get(details, :span) || Keyword.get(opts, :span)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "I need a type for `#{name}`",
-      body:
-        Doc.paragraph(
-          "Cure cannot tell what values `#{name}` may receive from its name alone. Every ordinary function parameter needs a type annotation."
-        ),
-      primary: pickup_label(primary_span, :primary, "this parameter needs a type after its name"),
-      suggestions: [
-        %Suggestion{
-          message:
-            "Add a type annotation, such as `#{name}: Int`; write `{#{name}}` only for an implicit type parameter",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :untyped_parameter,
-        name: name
-      }
-    )
   end
 
   defp argument_count(1), do: "1 argument"
