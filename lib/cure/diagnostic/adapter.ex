@@ -114,102 +114,17 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:overlapping_overload, %{name: _name, first: _first, second: _second}} = error, opts),
     do: NameAdapter.from_error(error, opts)
 
-  def from_error({:overlapping_instance, interface, head}, opts) do
-    declaration_conflict(:overlapping_instance, %{interface: interface, head: head}, opts)
-  end
+  def from_error({:overlapping_instance, _interface, _head} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:overlapping_instance, %{interface: interface, head: canonical_head} = details}, opts) do
-    interface = name_to_string(interface)
-    head = name_to_string(Map.get(details, :second_for) || Cure.Elab.Name.base(canonical_head))
-    primary_span = Map.get(details, :second_span) || Keyword.get(opts, :span)
+  def from_error({:overlapping_instance, %{interface: _interface, head: _head}} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-    secondary =
-      case Map.get(details, :first_span) do
-        %Span{} = span when span != primary_span ->
-          [pickup_label(span, :secondary, "the first `#{interface}` implementation for `#{head}` is here")]
+  def from_error({:overlapping_named_instance, _name, _interface, _head} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: "E105",
-      key: :declaration_conflict,
-      severity: :error,
-      title: "Implementations overlap",
-      body:
-        Doc.paragraph(
-          "There are two anonymous implementations of `#{interface}` for `#{head}`. Cure requires one globally coherent implementation so every call selects the same behavior."
-        ),
-      primary: pickup_label(primary_span, :primary, "this second implementation conflicts with the first"),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Remove one implementation, or give one an `as` name and select it explicitly",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :overlapping_instance,
-        interface: interface,
-        head: head,
-        head_id: name_to_string(canonical_head)
-      }
-    )
-  end
-
-  def from_error({:overlapping_named_instance, name, interface, head}, opts) do
-    declaration_conflict(
-      :overlapping_named_instance,
-      %{name: name, interface: interface, head: head},
-      opts
-    )
-  end
-
-  def from_error({:overlapping_named_instance, %{name: name} = details}, opts) do
-    name = name_to_string(name)
-    first_interface = name_to_string(Map.get(details, :first_interface, "an interface"))
-    second_interface = name_to_string(Map.get(details, :interface, "an interface"))
-    first_head = name_to_string(Map.get(details, :first_for, Cure.Elab.Name.base(Map.get(details, :first_head))))
-    second_head = name_to_string(Map.get(details, :second_for, Cure.Elab.Name.base(Map.get(details, :head))))
-    primary_span = Map.get(details, :second_span) || Keyword.get(opts, :span)
-
-    secondary =
-      case Map.get(details, :first_span) do
-        %Span{} = span when span != primary_span ->
-          [pickup_label(span, :secondary, "`#{name}` first names `#{first_interface}` for `#{first_head}` here")]
-
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: "E105",
-      key: :declaration_conflict,
-      severity: :error,
-      title: "Implementation name is already used",
-      body:
-        Doc.paragraph(
-          "The name `#{name}` already selects `#{first_interface}` for `#{first_head}`, so it cannot also select `#{second_interface}` for `#{second_head}`. Named implementations must have distinct names wherever they are in scope."
-        ),
-      primary: pickup_label(primary_span, :primary, "this second `#{name}` conflicts with the first"),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Choose a different name after `as` for one implementation",
-          applicability: :manual
-        }
-      ],
-      payload: %{
-        kind: :overlapping_named_instance,
-        name: name,
-        first_interface: first_interface,
-        first_head: first_head,
-        second_interface: second_interface,
-        second_head: second_head
-      }
-    )
-  end
+  def from_error({:overlapping_named_instance, %{name: _name}} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
   def from_error({:sibling_module_collision, _name, _owners} = error, opts),
     do: NameAdapter.from_error(error, opts)

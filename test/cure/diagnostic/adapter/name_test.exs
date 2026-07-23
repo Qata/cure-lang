@@ -122,6 +122,14 @@ defmodule Cure.Diagnostic.Adapter.NameTest do
     assert overload == Adapter.from_error({:overlapping_overload, :move, 1})
     assert overload.code == "E105"
 
+    instance = NameAdapter.from_error({:overlapping_instance, :Eqs, :Int})
+    assert instance == Adapter.from_error({:overlapping_instance, :Eqs, :Int})
+    assert instance.code == "E105"
+
+    named_instance = NameAdapter.from_error({:overlapping_named_instance, :fast, :Eqs, :Int})
+    assert named_instance == Adapter.from_error({:overlapping_named_instance, :fast, :Eqs, :Int})
+    assert named_instance.code == "E105"
+
     assert_raise Cure.Diagnostic.UnhandledError, fn ->
       NameAdapter.from_error({:ordinary_type_failure, :not_a_name_error})
     end

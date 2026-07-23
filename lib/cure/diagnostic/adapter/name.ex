@@ -165,6 +165,18 @@ defmodule Cure.Diagnostic.Adapter.Name do
   def from_error({:overlapping_overload, %{name: name, first: first, second: second} = details}, opts),
     do: overlapping_overload(name, first, second, details, opts)
 
+  def from_error({:overlapping_instance, interface, head}, opts),
+    do: overlapping_instance(interface, head, opts)
+
+  def from_error({:overlapping_instance, %{interface: interface, head: head} = details}, opts),
+    do: overlapping_instance(interface, head, details, opts)
+
+  def from_error({:overlapping_named_instance, name, interface, head}, opts),
+    do: overlapping_named_instance(name, interface, head, opts)
+
+  def from_error({:overlapping_named_instance, %{name: name} = details}, opts),
+    do: overlapping_named_instance(name, details, opts)
+
   def from_error(
         {:source_context, {:unsupported_guard, %{reason: :shadowed} = details}, context},
         opts
@@ -307,6 +319,136 @@ defmodule Cure.Diagnostic.Adapter.Name do
         second_signature: second_signature,
         first_id: name_to_string(Map.get(first, :id, name)),
         second_id: name_to_string(Map.get(second, :id, name))
+      }
+    )
+  end
+
+  @doc false
+  def overlapping_instance(interface, head, opts) do
+    interface = name_to_string(interface)
+    head = surface_name(head)
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Declaration conflict",
+      body:
+        Doc.paragraph(
+          "The declaration `declaration` conflicts with another visible declaration for interface `#{interface}` and head `#{head}`."
+        ),
+      primary: primary(opts, "rename this declaration or make its identity unique"),
+      suggestions: [],
+      payload: %{kind: :overlapping_instance, interface: interface, head: head}
+    )
+  end
+
+  def overlapping_instance(interface, head, details, opts) do
+    interface = name_to_string(interface)
+    canonical_head = Map.get(details, :head, head)
+    head = name_to_string(Map.get(details, :second_for) || Cure.Elab.Name.base(canonical_head) || canonical_head)
+    primary_span = Map.get(details, :second_span) || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(details, :first_span) do
+        %Span{} = span when span != primary_span ->
+          [
+            %Label{
+              span: span,
+              style: :secondary,
+              message: "the first `#{interface}` implementation for `#{head}` is here"
+            }
+          ]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Implementations overlap",
+      body:
+        Doc.paragraph(
+          "There are two anonymous implementations of `#{interface}` for `#{head}`. Cure requires one globally coherent implementation so every call selects the same behavior."
+        ),
+      primary: pickup_label(primary_span, :primary, "this second implementation conflicts with the first"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Remove one implementation, or give one an `as` name and select it explicitly",
+          applicability: :manual
+        }
+      ],
+      payload: %{kind: :overlapping_instance, interface: interface, head: head, head_id: name_to_string(canonical_head)}
+    )
+  end
+
+  def overlapping_named_instance(name, interface, head, opts) do
+    name = name_to_string(name)
+    interface = name_to_string(interface)
+    head = surface_name(head)
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Declaration conflict",
+      body:
+        Doc.paragraph(
+          "The declaration `#{name}` conflicts with another visible declaration for named interface instance `#{name}`."
+        ),
+      primary: primary(opts, "rename this declaration or make its identity unique"),
+      suggestions: [],
+      payload: %{kind: :overlapping_named_instance, name: name, interface: interface, head: head}
+    )
+  end
+
+  def overlapping_named_instance(name, details, opts) do
+    name = name_to_string(name)
+    first_interface = name_to_string(Map.get(details, :first_interface, "an interface"))
+    second_interface = name_to_string(Map.get(details, :interface, "an interface"))
+    first_head = surface_name(Map.get(details, :first_for, Map.get(details, :first_head)))
+    second_head = surface_name(Map.get(details, :second_for, Map.get(details, :head)))
+    primary_span = Map.get(details, :second_span) || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(details, :first_span) do
+        %Span{} = span when span != primary_span ->
+          [
+            %Label{
+              span: span,
+              style: :secondary,
+              message: "`#{name}` first names `#{first_interface}` for `#{first_head}` here"
+            }
+          ]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Implementation name is already used",
+      body:
+        Doc.paragraph(
+          "The name `#{name}` already selects `#{first_interface}` for `#{first_head}`, so it cannot also select `#{second_interface}` for `#{second_head}`. Named implementations must have distinct names wherever they are in scope."
+        ),
+      primary: pickup_label(primary_span, :primary, "this second `#{name}` conflicts with the first"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{message: "Choose a different name after `as` for one implementation", applicability: :manual}
+      ],
+      payload: %{
+        kind: :overlapping_named_instance,
+        name: name,
+        first_interface: first_interface,
+        first_head: first_head,
+        second_interface: second_interface,
+        second_head: second_head
       }
     )
   end
