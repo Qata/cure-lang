@@ -107,7 +107,8 @@ defmodule Cure.Compiler.Errors do
   def catalog_entries, do: Cure.Diagnostic.Registry.catalog_entries()
 
   @doc """
-  Suggest similar names for typos using Levenshtein distance.
+  Suggest similar names for typos using the shared, case-insensitive restricted
+  Damerau-Levenshtein distance.
 
   Both `name` and every entry in `candidates` are coerced to strings
   before comparison. Atoms are converted via `Atom.to_string/1`; any
@@ -127,9 +128,13 @@ defmodule Cure.Compiler.Errors do
         candidates
         |> Enum.map(&to_string_safe/1)
         |> Enum.filter(&is_binary/1)
-        |> Enum.map(fn c -> {c, levenshtein(name_str, c)} end)
+        |> Enum.map(fn candidate ->
+          {candidate, Cure.Diagnostic.Suggest.distance(name_str, candidate)}
+        end)
         |> Enum.filter(fn {_, d} -> d > 0 and d <= 2 end)
-        |> Enum.sort_by(fn {_, d} -> d end)
+        |> Enum.sort_by(fn {candidate, distance} ->
+          {distance, String.downcase(candidate), candidate}
+        end)
         |> case do
           [{best, _} | _] -> best
           _ -> nil
@@ -566,43 +571,4 @@ defmodule Cure.Compiler.Errors do
   end
 
   defp lex_error_location(_reason), do: {0, 0}
-
-  # Levenshtein distance for typo suggestions
-  defp levenshtein(s, t) do
-    s_len = String.length(s)
-    t_len = String.length(t)
-    s_chars = String.graphemes(s)
-    t_chars = String.graphemes(t)
-
-    if s_len == 0 do
-      t_len
-    else
-      if t_len == 0 do
-        s_len
-      else
-        prev_row = Enum.to_list(0..t_len)
-
-        Enum.reduce(Enum.with_index(s_chars, 1), prev_row, fn {s_ch, i}, row ->
-          first = [i]
-
-          rest =
-            Enum.reduce(Enum.with_index(t_chars, 1), {first, row}, fn {t_ch, j}, {new_row, old_row} ->
-              cost = if s_ch == t_ch, do: 0, else: 1
-
-              val =
-                Enum.min([
-                  Enum.at(old_row, j) + 1,
-                  List.last(new_row) + 1,
-                  Enum.at(old_row, j - 1) + cost
-                ])
-
-              {new_row ++ [val], old_row}
-            end)
-
-          elem(rest, 0)
-        end)
-        |> List.last()
-      end
-    end
-  end
 end
