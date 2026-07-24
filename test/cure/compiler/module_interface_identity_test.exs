@@ -24,7 +24,7 @@ defmodule Cure.Compiler.ModuleInterfaceIdentityTest do
     assert :ok = ModuleInterface.validate(right)
   end
 
-  test "source and dependency identity both invalidate an interface" do
+  test "source hashes invalidate caches while only semantic changes invalidate an interface" do
     base = %{
       module_name: "Canonical.Provider",
       source_path: "provider.cure",
@@ -38,7 +38,8 @@ defmodule Cure.Compiler.ModuleInterfaceIdentityTest do
     changed_dependency =
       ModuleInterface.new(%{base | dependency_interface_hashes: %{"Canonical.Base" => <<4>>}})
 
-    refute original.interface_hash == changed_source.interface_hash
+    refute original.source_hash == changed_source.source_hash
+    assert original.interface_hash == changed_source.interface_hash
     refute original.interface_hash == changed_dependency.interface_hash
   end
 end

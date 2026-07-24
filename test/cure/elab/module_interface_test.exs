@@ -1,13 +1,30 @@
 defmodule Cure.Elab.ModuleInterfaceTest do
   use ExUnit.Case, async: false
 
+  alias Cure.Compiler.ModuleInterface
   alias Cure.Elab.Program
 
   test "module_interface/2 returns the export_env and source_hash for a stdlib module" do
     path = "lib/std/core.cure"
-    assert {:ok, iface} = Program.module_interface("Std.Core", path)
+    assert {:ok, %ModuleInterface{} = iface} = Program.module_interface("Std.Core", path)
     assert is_map(iface.export_env)
     assert is_binary(iface.source_hash) and byte_size(iface.source_hash) == 32
+    assert is_binary(iface.interface_hash) and byte_size(iface.interface_hash) == 32
+    assert :ok = ModuleInterface.validate(iface)
+  end
+
+  test "dependency interface identities are canonical and complete" do
+    assert {:ok, %ModuleInterface{} = iface} =
+             Program.module_interface("Std.Regex", "lib/std/regex.cure")
+
+    assert iface.dependency_interface_hashes != %{}
+
+    assert Enum.all?(iface.dependency_interface_hashes, fn {module_name, hash} ->
+             is_binary(module_name) and is_binary(hash) and byte_size(hash) == 32
+           end)
+
+    assert Enum.sort(Map.keys(iface.dependency_interface_hashes)) ==
+             Enum.sort(iface.dependency_names)
   end
 
   test "module_interface/2 is a cache hit after priming (identical stored term)" do

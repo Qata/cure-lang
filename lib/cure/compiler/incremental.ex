@@ -23,7 +23,9 @@ defmodule Cure.Compiler.Incremental do
   merge in. If two versions of a module produce a byte-identical `export_env`,
   no consumer's compilation can differ, so its dependents need not recompile.
   """
-  @spec interface_hash(map()) :: binary()
+  @spec interface_hash(Cure.Compiler.ModuleInterface.t() | map()) :: binary()
+  def interface_hash(%Cure.Compiler.ModuleInterface{interface_hash: hash}), do: hash
+
   def interface_hash(export_env) do
     :crypto.hash(:sha256, :erlang.term_to_binary(export_env, [:deterministic]))
   end
@@ -325,7 +327,7 @@ defmodule Cure.Compiler.Incremental do
 
     try do
       case Program.module_interface(mod, path) do
-        {:ok, iface} -> interface_hash(iface.export_env)
+        {:ok, iface} -> interface_hash(iface)
         _ -> nil
       end
     after

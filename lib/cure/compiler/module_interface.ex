@@ -3,9 +3,11 @@ defmodule Cure.Compiler.ModuleInterface do
   Immutable semantic interface for one checked Cure module.
 
   Interface identity includes the compiler schema, canonical module identity,
-  source content, dependency-interface identities, exported declarations, and
-  extension payloads. Transitional callers may still retain an `export_env`,
-  but it is deliberately excluded from semantic identity.
+  dependency-interface identities, exported declarations, and extension
+  payloads. Source content has its own hash for cache invalidation, but does not
+  perturb semantic identity when an edit changes only comments or formatting.
+  Transitional callers may still retain an `export_env`, but it is deliberately
+  excluded from semantic identity.
   """
 
   @schema_version 1
@@ -20,8 +22,12 @@ defmodule Cure.Compiler.ModuleInterface do
   defstruct schema_version: @schema_version,
             module_name: nil,
             source_path: nil,
+            # Transitional compatibility aliases. New consumers use
+            # `source_path`, `direct_edges`, and dependency hashes.
+            path: nil,
             source_hash: nil,
             dependency_interface_hashes: %{},
+            dependency_names: [],
             interface_hash: nil,
             direct_edges: [],
             canonical_declarations: %{},
@@ -30,6 +36,8 @@ defmodule Cure.Compiler.ModuleInterface do
             runtime_artifact: nil,
             compiletime_artifact: nil,
             source_metadata: %{},
+            owned_env: nil,
+            direct_import_names: MapSet.new(),
             export_env: nil
 
   @type t :: %__MODULE__{}
@@ -53,7 +61,6 @@ defmodule Cure.Compiler.ModuleInterface do
     identity = %{
       schema_version: @schema_version,
       module_name: module_name,
-      source_hash: source_hash,
       dependency_interface_hashes: dependency_hashes,
       direct_edges: normalize_edges(direct_edges),
       canonical_declarations: declarations,
@@ -67,6 +74,7 @@ defmodule Cure.Compiler.ModuleInterface do
       |> Map.put(:schema_version, @schema_version)
       |> Map.put(:module_name, module_name)
       |> Map.put(:source_path, source_path)
+      |> Map.put(:path, source_path)
       |> Map.put(:source_hash, source_hash)
       |> Map.put(:dependency_interface_hashes, dependency_hashes)
       |> Map.put(:direct_edges, normalize_edges(direct_edges))

@@ -7,7 +7,7 @@ defmodule Cure.Elab.Program do
   totality-certified signature.
   """
 
-  alias Cure.Compiler.{Lexer, MacroFamily, MacroSyntax, MacroValidate, ModuleIndex, Parser}
+  alias Cure.Compiler.{Lexer, MacroFamily, MacroSyntax, MacroValidate, ModuleIndex, ModuleInterface, Parser}
   alias Cure.Compiler.Parser.FixityScan
   alias Cure.Core.{Env, Inductive, Validator}
   alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, TotalityClosure}
@@ -2070,6 +2070,7 @@ defmodule Cure.Elab.Program do
   end
 
   defp load_module_interface(module_name, path) do
+    path = Path.expand(path)
     state = Process.get(@loader_state_key)
 
     case Map.get(state.modules, module_name) do
@@ -2159,8 +2160,10 @@ defmodule Cure.Elab.Program do
   module can affect its dependents. Semantics match the internal loader cache:
   `:persistent_term`-cached for stdlib paths, recomputed otherwise.
   """
-  @spec module_interface(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  @spec module_interface(String.t(), String.t()) :: {:ok, ModuleInterface.t()} | {:error, term()}
   def module_interface(module_name, path) when is_binary(module_name) and is_binary(path) do
+    path = Path.expand(path)
+
     # Runs inside a loader session so a cold, standalone call (no enclosing
     # `elaborate/1`) still has the `@loader_state_key` generation its dependency
     # loading reads. `with_loader_session/1` reuses an existing generation when
@@ -2186,6 +2189,7 @@ defmodule Cure.Elab.Program do
   """
   @spec invalidate_module_interface(String.t()) :: :ok
   def invalidate_module_interface(path) when is_binary(path) do
+    path = Path.expand(path)
     :persistent_term.erase({__MODULE__, :module_interface, path})
     :persistent_term.erase({__MODULE__, :macro_home_env, path})
     :persistent_term.erase({__MODULE__, :macro_home_cache_fingerprint})
@@ -2276,23 +2280,36 @@ defmodule Cure.Elab.Program do
   defp cached_module_interface(module_name, path) do
     if stdlib_source_path?(path) do
       key = {__MODULE__, :module_interface, path}
+      source_hash = current_source_hash(path)
 
       case :persistent_term.get(key, :missing) do
-        :missing ->
-          case compile_module_interface(module_name, path) do
-            {:ok, _interface} = ok ->
-              :persistent_term.put(key, ok)
-              ok
-
-            {:error, _reason} = error ->
-              error
-          end
-
-        cached ->
+        {:cached, ^source_hash, {:ok, %ModuleInterface{}} = cached}
+        when not is_nil(source_hash) ->
           cached
+
+        _missing_or_stale ->
+          compile_and_cache_module_interface(key, source_hash, module_name, path)
       end
     else
       compile_module_interface(module_name, path)
+    end
+  end
+
+  defp compile_and_cache_module_interface(key, source_hash, module_name, path) do
+    case compile_module_interface(module_name, path) do
+      {:ok, %ModuleInterface{} = _interface} = ok ->
+        :persistent_term.put(key, {:cached, source_hash, ok})
+        ok
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp current_source_hash(path) do
+    case File.read(path) do
+      {:ok, source} -> :crypto.hash(:sha256, source)
+      {:error, _} -> nil
     end
   end
 
@@ -2357,18 +2374,121 @@ defmodule Cure.Elab.Program do
         |> install_module_visibility(ast)
         |> mark_inline_hints(find_module_name(ast))
 
+      dependency_names = dependency_module_names(dependencies)
+
       {:ok,
-       %{
+       ModuleInterface.new(%{
          module_name: requested_name,
-         path: path,
+         source_path: path,
          source_hash: :crypto.hash(:sha256, source),
-         dependency_names: dependency_module_names(dependencies),
+         dependency_interface_hashes: loaded_dependency_interface_hashes(dependency_names),
+         dependency_names: dependency_names,
+         direct_edges: module_interface_edges(ast),
+         canonical_declarations: owned_declarations(export_env, requested_name),
+         canonical_externs: owned_externs(export_env, requested_name),
+         extension_payloads: interface_extensions(export_env, requested_name),
+         source_metadata: %{dependency_source_hashes: dependency_source_hashes(dependency_names)},
          owned_env: export_env,
          export_env: export_env,
          direct_import_names: direct_ids
-       }}
+       })}
     end
   end
+
+  defp loaded_dependency_interface_hashes(dependency_names) do
+    state = Process.get(@loader_state_key)
+
+    Map.new(dependency_names, fn name ->
+      hash =
+        case state.modules[name] do
+          {:loaded, %ModuleInterface{interface_hash: interface_hash}} -> interface_hash
+          _ -> nil
+        end
+
+      {name, hash}
+    end)
+  end
+
+  defp dependency_source_hashes(dependency_names) do
+    Map.new(dependency_names, fn name ->
+      hash =
+        case resolved_module_path(name) do
+          nil ->
+            nil
+
+          path ->
+            case File.read(path) do
+              {:ok, source} -> :crypto.hash(:sha256, source)
+              {:error, _} -> nil
+            end
+        end
+
+      {name, hash}
+    end)
+  end
+
+  defp module_interface_edges(ast) do
+    owner = find_module_name(ast)
+
+    imported =
+      Enum.map(imports(ast), fn target ->
+        %{kind: :use_import, source_module: owner, target: target, line: 1}
+      end)
+
+    qualified =
+      Enum.map(qualified_module_names(ast), fn target ->
+        %{kind: :qualified_reference, source_module: owner, target: target, line: 1}
+      end)
+
+    Enum.uniq_by(imported ++ qualified, &{&1.kind, &1.target})
+  end
+
+  defp owned_declarations(%Env{} = env, owner) do
+    %{
+      defs: take_owned(env.defs, owner),
+      families: take_owned(env.families, owner),
+      ctors: take_owned(env.ctors, owner),
+      ctor_to_family:
+        Map.filter(env.ctor_to_family, fn {ctor, _family} ->
+          Cure.Elab.Name.owner(ctor) == owner
+        end),
+      equations: take_owned(env.equations, owner)
+    }
+  end
+
+  defp owned_externs(%Env{} = env, owner) do
+    env.defs
+    |> take_owned(owner)
+    |> Map.filter(fn {_key, definition} -> match?({:extern, _}, definition.body) end)
+  end
+
+  defp interface_extensions(%Env{} = env, owner) do
+    %{
+      interfaces:
+        Map.filter(env.interfaces, fn {name, _descriptor} ->
+          Map.has_key?(env.families, Cure.Elab.Name.qualify(owner, name))
+        end),
+      coherence: owned_coherence(env.coherence, owner),
+      primitives: env.primitives
+    }
+  end
+
+  defp owned_coherence(nil, _owner), do: nil
+
+  defp owned_coherence(%Coherence{} = coherence, owner) do
+    anon = Map.filter(coherence.anon, fn {_key, ref} -> instance_owned_by?(ref, owner) end)
+    named = Map.filter(coherence.named, fn {_key, ref} -> instance_owned_by?(ref, owner) end)
+
+    %Coherence{
+      anon: anon,
+      named: named,
+      anon_origins: Map.take(coherence.anon_origins, Map.keys(anon)),
+      named_origins: Map.take(coherence.named_origins, Map.keys(named))
+    }
+  end
+
+  defp take_owned(table, owner),
+    do: Map.filter(table, fn {key, _value} -> Cure.Elab.Name.owner(key) == owner end)
 
   defp validate_module_identity(ast, requested_name, path) do
     case find_module_name(ast) do
