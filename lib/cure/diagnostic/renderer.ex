@@ -107,6 +107,7 @@ defmodule Cure.Diagnostic.Renderer do
   @spec code_map(Diagnostic.t()) :: map()
   def code_map(%Diagnostic{} = diagnostic) do
     code_diagnostic(diagnostic)
+    |> Map.put(:code, diagnostic.code)
     |> Map.put(:details, to_map(diagnostic))
     |> stringify_keys()
   end
