@@ -8,6 +8,9 @@ defmodule Antigen.Generators.PrimitiveTest do
   defp ctx, do: SigMenu.rebuild_context(SigMenu.env_of(:v1), [])
 
   @sample 400
+  @sample_seed 20_260_724
+
+  defp sample, do: B.sample_seeded(Primitive.gen(), @sample, @sample_seed)
 
   # K2 (spec 2026-07-09): the generator emits builtin-op GLOBAL spines, not
   # {:prim} nodes. The op is the spine's head global name. A1 (spec 2026-07-09
@@ -25,7 +28,7 @@ defmodule Antigen.Generators.PrimitiveTest do
   defp op_of({:app, {:global, g}, _a}), do: g
 
   test "every sampled builtin-op challenge is a well-typed :typed_term over v1" do
-    for %Challenge{} = c <- B.interp(Primitive.gen()) |> Enum.take(@sample) do
+    for %Challenge{} = c <- sample() do
       assert c.kind == :typed_term
       assert c.assay in Antigen.Generators.Term.assay_ids()
       assert c.payload.sig == :v1
@@ -52,7 +55,7 @@ defmodule Antigen.Generators.PrimitiveTest do
   end
 
   test "the sample exercises every arithmetic op and both numeric types" do
-    sample = B.interp(Primitive.gen()) |> Enum.take(@sample)
+    sample = sample()
 
     ops = sample |> Enum.map(fn c -> op_of(c.payload.term) end) |> MapSet.new()
 
@@ -68,7 +71,7 @@ defmodule Antigen.Generators.PrimitiveTest do
   end
 
   test "the sample exercises Bool-returning numeric comparisons" do
-    sample = B.interp(Primitive.gen()) |> Enum.take(@sample)
+    sample = sample()
 
     ops = sample |> Enum.map(fn c -> op_of(c.payload.term) end) |> MapSet.new()
 
@@ -87,7 +90,7 @@ defmodule Antigen.Generators.PrimitiveTest do
   end
 
   test "the sample includes at least one stuck (zero-divisor) op spine" do
-    sample = B.interp(Primitive.gen()) |> Enum.take(@sample)
+    sample = sample()
 
     assert Enum.any?(sample, fn c ->
              match?(
