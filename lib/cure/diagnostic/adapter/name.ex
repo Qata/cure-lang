@@ -1228,7 +1228,8 @@ defmodule Cure.Diagnostic.Adapter.Name do
   defp declaration_labels(_, opts, primary_message),
     do: {primary(opts, primary_message), []}
 
-  defp operator_conflict(kind, details, opts) do
+  @doc false
+  def operator_conflict(kind, details, opts) do
     {title, body, primary_message, secondary_message} =
       case kind do
         :precedence_cycle ->
@@ -1248,7 +1249,8 @@ defmodule Cure.Diagnostic.Adapter.Name do
            "this declaration conflicts with the earlier group", "the incompatible group declaration is here"}
       end
 
-    {primary, secondary} = operator_labels(Map.get(details, :spans, []), opts, primary_message, secondary_message)
+    {primary, secondary} =
+      operator_conflict_labels(Map.get(details, :spans, []), opts, primary_message, secondary_message)
 
     Diagnostic.new(
       code: "E106",
@@ -1262,16 +1264,17 @@ defmodule Cure.Diagnostic.Adapter.Name do
     )
   end
 
-  defp operator_labels([first, second | rest], _opts, primary_message, secondary_message) do
+  @doc false
+  def operator_conflict_labels([first, second | rest], _opts, primary_message, secondary_message) do
     {%Label{span: second, style: :primary, message: primary_message},
      [%Label{span: first, style: :secondary, message: secondary_message}] ++
        Enum.map(rest, &%Label{span: &1, style: :secondary, message: secondary_message})}
   end
 
-  defp operator_labels([span], _opts, primary_message, _secondary_message),
+  def operator_conflict_labels([span], _opts, primary_message, _secondary_message),
     do: {%Label{span: span, style: :primary, message: primary_message}, []}
 
-  defp operator_labels([], opts, primary_message, _secondary_message),
+  def operator_conflict_labels([], opts, primary_message, _secondary_message),
     do: {primary(opts, primary_message), []}
 
   @doc false

@@ -2305,57 +2305,11 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   @doc false
-  def operator_conflict(kind, details, opts) do
-    {title, body, primary_message, secondary_message} =
-      case kind do
-        :precedence_cycle ->
-          {"Cyclic operator precedence",
-           "The precedence groups #{Enum.map_join(details.groups, ", ", &"`#{name_to_string(&1)}`")} form a cycle, so the compiler cannot decide which operators bind tighter. Remove or reverse one `higher_than`/`lower_than` relation to break the cycle.",
-           "this precedence group participates in the cycle", "this precedence group also participates in the cycle"}
-
-        :conflicting_operator_fixity ->
-          {"Conflicting operator fixity",
-           "The #{details.fixity} operator `#{details.operator}` is assigned to both `#{name_to_string(details.existing_group)}` and `#{name_to_string(details.new_group)}`. Keep one precedence group for this operator, or choose a different operator spelling.",
-           "this declaration assigns `#{details.operator}` to `#{name_to_string(details.new_group)}`",
-           "the conflicting assignment is here"}
-
-        :conflicting_precedence_group ->
-          {"Conflicting precedence group",
-           "The precedence group `#{name_to_string(details.name)}` is declared with incompatible associativity or ordering rules. Give the declarations identical bodies, or rename one group.",
-           "this declaration conflicts with the earlier group", "the incompatible group declaration is here"}
-      end
-
-    {primary, secondary} =
-      operator_conflict_labels(Map.get(details, :spans, []), opts, primary_message, secondary_message)
-
-    Diagnostic.new(
-      code: "E106",
-      key: :operator_declaration_conflict,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(body),
-      primary: primary,
-      secondary: secondary,
-      payload: Map.put(details, :kind, kind)
-    )
-  end
+  def operator_conflict(kind, details, opts), do: NameAdapter.operator_conflict(kind, details, opts)
 
   @doc false
-  def operator_conflict_labels([first, second | rest], _opts, primary_message, secondary_message) do
-    primary = %Label{span: second, style: :primary, message: primary_message}
-
-    secondary =
-      [%Label{span: first, style: :secondary, message: secondary_message}] ++
-        Enum.map(rest, &%Label{span: &1, style: :secondary, message: secondary_message})
-
-    {primary, secondary}
-  end
-
-  def operator_conflict_labels([span], _opts, primary_message, _secondary_message),
-    do: {%Label{span: span, style: :primary, message: primary_message}, []}
-
-  def operator_conflict_labels([], opts, primary_message, _secondary_message),
-    do: {primary_label(opts, primary_message), []}
+  def operator_conflict_labels(spans, opts, primary_message, secondary_message),
+    do: NameAdapter.operator_conflict_labels(spans, opts, primary_message, secondary_message)
 
   defp primitive_declaration_failure(kind, details, context, opts) do
     Declaration.primitive_declaration_failure(kind, details, context, opts)
