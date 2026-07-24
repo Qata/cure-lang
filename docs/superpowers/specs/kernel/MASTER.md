@@ -454,6 +454,21 @@ NOT create the formerly-planned parallel `Std.Integer.Zed` family; scalar
 order monotonicity alone is not enough to justify Farkas combination (the
 algebra/vector-semantics/shape/Boolean-inversion layers §3.5–3.9 are
 required).
+**2026-07-22 execution plan:**
+`2026-07-22-certificate-generator-integration-design.md` records the exact
+remaining checker proof, canonical producer boundary, elaborator integration,
+strict external protocol, diagnostics, IDE work, phases, and definition of
+done. It is authoritative for implementation details beyond this summary.
+**2026-07-22 OTP-first amendment:** the first vertical slice is B3 semantic
+inclusion for commutative-regex mailbox patterns, not generic QF-LIA. Patterns
+normalize to finite unions of linear sets over Parikh vectors; an untrusted
+producer supplies affine component embeddings, checked by ordinary Cure code
+and bridged back to `Std.Otp.MailboxPattern.Accepts`. The locked positive probe
+is `PStar(PTimes(TA,TA)) <= PStar(TA)` and the reversed negative control has
+Parikh counterexample `[1,0,0]`. This slice lands end to end before the general
+Farkas and cut/split pipeline. Full mailbox inclusion may require semilinear
+covering or quantified Presburger elimination; the affine-embedding checker
+returns honest `Unknown` outside its sufficient fragment.
 
 - **Seam (E, additive):** obligation the syntactic paths can't close →
   registered `(recognizer, producer, checker)` entry → untrusted producer
@@ -473,8 +488,9 @@ required).
   proven inversion bridge. `check_lia_sound : ... ->
   IsTrue(evalAtom(goal, env))` proven in Cure, Idris-mirrored — trust rests
   on the existing kernel checking it; TCB does not grow.
-- **P1 scope & honesty:** goals restricted to `LessEqual`/`Less` (negating
-  `Equal` is a disjunction no single Farkas combination certifies; `Equal`
+- **General-LIA scope & honesty (after the OTP slice):** goals restricted to
+  `LessEqual`/`Less` (negating `Equal` is a disjunction no single Farkas
+  combination certifies; `Equal`
   hypotheses fine). Farkas core is sound for ℤ, complete over ℚ; ℤ-only
   instances (`2n = 1`) need cutting planes (additive follow-on; producer
   reports `Unknown` meanwhile). Silent truncation of malformed certificates
@@ -808,3 +824,7 @@ infrastructure than it is of user programs."* Binding commitments:
 - `2026-07-18-mutual-recursion-reduction-spec.md` — certify the whole SCC on mutual-group success (§5.2).
 - `2026-07-18-open-elaborator-gaps-handoff.md` — scoped work list, unifying theme, priority order, discipline for open gaps (§9).
 - `2026-07-18-verified-lia-reflection-design.md` — verified Farkas/LIA checker via computational reflection; solver stays untrusted (§6.5).
+- `2026-07-22-certificate-generator-integration-design.md` — OTP-first
+  semilinear-inclusion slice followed by the general verified checker,
+  producer-neutral boundary, elaborator seam, strict external protocol,
+  diagnostics, and IDE support (§6.5).

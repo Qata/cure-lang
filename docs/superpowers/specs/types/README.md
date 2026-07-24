@@ -20,3 +20,15 @@ designs:
 The later documents refine the earlier ones; they do not introduce separate
 overload systems. When they disagree, the newest approved document and the
 implementation gate it names govern.
+
+`2026-07-22-type-directed-literal-interfaces-design.md` defines the ordinary
+`From`/`TryFrom` runtime conversion substrate and its
+`FromLiteral`/`TryFromLiteral` literal-aware tier. It is authoritative for tier
+precedence and fallback, exact String versus lossy Float initialization,
+proof-carrying literal descriptors such as `ListLiteral(a,n)`,
+multi-parameter instance identity, ambiguity diagnostics, and the standard
+`Bounded`/`Char`/`Float`/`Decimal`/Vector conversions. It adds no declaration
+syntax. Literal targets are inferred monomorphically from annotation and use;
+there are no canonical default target types, and unresolved constraints receive
+dedicated unused, underconstrained, conflicting-use, and public-boundary
+diagnostics.

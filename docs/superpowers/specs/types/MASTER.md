@@ -609,6 +609,38 @@ generalizes from the single `operators.cure` case to the whole prelude
 closure. Printer callers must thread `fixity(M)` or reprinted operators
 degrade to unknown precedence.
 
+### 7.5 General and literal-aware conversion
+
+*Source: 2026-07-22-type-directed-literal-interfaces-design.md (locked).*
+
+Ordinary `From(target,source)` and `TryFrom(target,source,error)` interfaces
+cover total and fallible runtime conversion. Authored literal syntax first
+searches the ordinary `FromLiteral`/`TryFromLiteral` tier; only when that tier
+has no applicable candidate does it materialize its normal value and fall back
+to `From`/`TryFrom`. Ambiguity, rejection, stuck evaluation, or kernel failure
+in a selected literal tier never falls through. There is no new declaration
+syntax and no order-based tie-break.
+
+Literal syntax has no canonical default target. Without an expected type it
+creates a deferred monomorphic constraint shared by every use; annotation or
+use fixes one type and the literal is elaborated once. Direct literal use and a
+single-use unannotated `let` are equivalent. Conflicting uses are an error, not
+per-use reinterpretation. Unused or underconstrained bindings require deletion
+or annotation, and unresolved inference never crosses a public separately
+compiled interface.
+
+Exact descriptors preserve decimal spelling and structural evidence:
+`ListLiteral(a,n)` derives Vector length from syntax even when its elements are
+runtime values; statically sized binary descriptors similarly support fixed
+byte/bit targets. Decimal selects exact String and never round-trips through
+Float; interpolated strings, variables, and dynamic binaries use the general
+tier. Runtime Nat-to-Bounded is fallible, while refined proof-carrying input is
+total; literals can discharge the check early. `Char = Bounded(1114112)` exactly
+matches Erlang `char()` including zero and surrogate integers. Produced terms
+are independently kernel-checked and conversion machinery erases. Rich
+diagnostics plus completion, hover, navigation, reflection, TCB, totality,
+erasure, and Antigen gates are mandatory.
+
 ## 8. Records and optics
 
 *Source: 2026-07-19-record-field-lens-deriving-design.md (approved;
@@ -661,3 +693,4 @@ guard: optic `AffineKind` (focus may be absent) and the QTT `:affine` grade
 - `2026-07-19-use-propagated-fixity-design.md` — transitive `use`-closure fixity tables, prelude providers, conflict detection replacing the builtin rebind list.
 - `2026-07-20-agda-style-universe-polymorphism-design.md` — authoritative replacement of the universe ceiling: canonical level algebra, sort indices, `TypeLimit`, phased migration.
 - `2026-07-20-algebraic-data-types-design.md` — consolidated language-level ADT reference: nominal families, GADT refinement, records, opacity, representation, trust boundaries.
+- `2026-07-22-type-directed-literal-interfaces-design.md` — `From`/`TryFrom` plus literal-aware `FromLiteral`/`TryFromLiteral`; strict tier fallback, exact descriptors, Vector length derivation, and `Bounded`/`Char`/`Decimal` laws.
