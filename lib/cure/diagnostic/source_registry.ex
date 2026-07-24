@@ -62,7 +62,7 @@ defmodule Cure.Diagnostic.SourceRegistry do
   def line(%__MODULE__{} = registry, %Span{source_id: source_id}, line_number) do
     with {:ok, source} <- fetch(registry, source_id),
          line when is_binary(line) <- Enum.at(String.split(source, "\n"), line_number - 1) do
-      {:ok, line}
+      {:ok, String.trim_trailing(line, "\r")}
     else
       _ -> :error
     end
