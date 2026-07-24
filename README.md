@@ -12,9 +12,10 @@ natively on the Erlang VM alongside Erlang and Elixir code.
 flowchart TD
     A[.cure source] -->|Cure.Compiler.Lexer| B[Token stream]
     B -->|Cure.Compiler.Parser| C[MetaAST — Metastatic 3-tuples]
-    C -->|Cure.Types.Checker| D[Typed MetaAST]
-    D -->|Cure.Compiler.Codegen| E[Erlang Abstract Forms]
-    E -->|:compile.forms/2| F[BEAM bytecode]
+    C -->|Cure.Elab.Program| D[Checked dependent Core]
+    D -->|Cure.Core.Kernel| E[Validated and erased Core]
+    E -->|Cure.Elab.Emit| F[Erlang Abstract Forms]
+    F -->|Cure.Compiler.BeamWriter| G[BEAM bytecode]
 ```
 
 Every pipeline stage emits structured events via `Cure.Pipeline.Events`,
@@ -137,9 +138,6 @@ From Elixir code:
 {:ok, module} = Cure.Compiler.compile_and_load(source)
 module.my_function(args)
 
-# Compile with type checking enabled
-{:ok, module} = Cure.Compiler.compile_and_load(source, check_types: true)
-
 # Compile to disk
 {:ok, module, warnings} = Cure.Compiler.compile_file("hello.cure")
 ```
@@ -149,7 +147,8 @@ module.my_function(args)
 - `Cure` -- root module, version
 - `Cure.Pipeline.Events` -- PubSub event system (Registry-backed); every
   pipeline stage emits structured events that external tools can subscribe to
-- `Cure.Compiler` -- orchestrator: source -> lex -> parse -> [check] -> codegen -> .beam
+- `Cure.Compiler` -- orchestrator: source -> lex -> parse -> elaborate ->
+  validate/erase -> emit -> .beam
 - `Cure.Compiler.Token` -- token struct (`type`, `value`, `line`, `col`)
 - `Cure.Compiler.Lexer` -- tokenizer for the full Cure syntax (keywords,
   operators, literals, indentation, string interpolation, FSM transitions)
@@ -158,55 +157,19 @@ module.my_function(args)
   forms (functions, modules, records, types, protocols, implementations,
   imports, FSMs)
 - `Cure.Compiler.Parser.Precedence` -- operator binding power table
-- `Cure.Compiler.Codegen` -- MetaAST to Erlang abstract forms; compiles
-  expressions, patterns, module assembly, `@extern` FFI wrappers, multi-clause
-  functions, ADT constructors (tagged tuples), records (maps)
+- `Cure.Compiler.ModuleIndex` and `Cure.Compiler.ModuleInterface` -- canonical
+  module identities, dependency ownership, and immutable checked exports used
+  by both authored and macro-generated references
+- `Cure.Elab.Program` -- module-level dependent elaboration, declaration
+  grouping, import/interface loading, totality checks, and canonical definition
+  identity
+- `Cure.Elab.Elaborator` -- bidirectional elaboration from surface MetaAST into
+  dependent `Cure.Core` terms
+- `Cure.Core.Kernel` -- trusted validation boundary for the dependent Core
+- `Cure.Elab.Erase` and `Cure.Elab.Emit` -- erase proof/index arguments and
+  lower the remaining Core program to Erlang abstract forms
 - `Cure.Compiler.BeamWriter` -- compiles Erlang abstract forms to BEAM
   bytecode via `:compile.forms/2` and writes `.beam` files
-- `Cure.Types.Type` -- canonical type representations (primitives, composites,
-  ADTs, `{:named, Name}` record references, function types, effects);
-  subtyping, join, type-expression resolution
-- `Cure.Types.Env` -- scoped typing environment with variable bindings and
-  named type definitions (`Env.extend_type/3`, `Env.lookup_type/2`)
-- `Cure.Types.Checker` -- bidirectional type checker; validates literals,
-  variables, operators, function definitions, calls, let bindings, conditionals,
-  pattern matching, blocks, collections, lambdas, records (construction,
-  field access, update), modules (two-pass with record schema registration);
-  emits `:type_checker` pipeline events
-- `Cure.FSM.Verifier` -- structural FSM verification: reachability (BFS),
-  deadlock freedom, terminal state validation, hard event validation,
-  ambiguous transition warnings; emits `:fsm_verifier` events
-- `Cure.FSM.Compiler` -- dual-mode FSM compiler: simple mode generates
-  `gen_statem` BEAM modules; callback mode (with `on_transition` block)
-  generates `GenServer`-based modules with embedded transition tables.
-  Supports `!` (hard/auto-fire) and `?` (soft/silent) event suffixes,
-  lifecycle callbacks (`on_enter`, `on_exit`, `on_failure`, `on_timer`),
-  and introspection (`transitions/0`, `allowed?/2`, `responds?/2`)
-- `Cure.Actor.Compiler` -- compiles `actor` containers into loaded
-  `GenServer` modules via `Code.compile_string/2`; returns
-  `{:ok, {:actor, module()}}`
-- `Cure.Actor.Runtime` -- ETS-backed actor registry supervised by
-  `Cure.Supervisor`; spawn / stop / lookup / list / monitor-driven
-  cleanup. `Cure.Actor.State` is the shared runtime struct carrying
-  `caller` / `meta` / `payload`
-- `Cure.Sup.Verifier` -- structural supervisor verification (strategy,
-  intensity, period, child-id uniqueness, restart / shutdown, self-
-  reference cycles); emits `:sup_verifier` events
-- `Cure.Sup.Compiler` -- compiles `sup` containers into loaded
-  `Supervisor`-behaviour modules; returns `{:ok, {:supervisor, module()}}`
-- `Cure.Sup.Runtime` -- lazy ETS-backed registry for running supervisor
-  trees (`start/1,2`, `stop/1`, `lookup/1`, `which_children/1`, `list/0`)
-- `Cure.Process.Builtins` / `Cure.Sup.Builtins` -- FFI bridges wiring
-  `Std.Process` and `Std.Supervisor` to the runtime
-- `Cure.App.Verifier` -- structural verification for `app` containers:
-  duplicate declaration check, single-`app`-per-project enforcement,
-  `app` vs `[application].name` name match, start-phase consistency,
-  root-supervisor resolvability (emits `:app_verifier` events,
-  surfaces `E051` / `E053` / `E054`)
-- `Cure.App.Compiler` -- compiles `app` containers into loaded
-  `Application`-behaviour modules via `Code.compile_string/2`;
-  generates `start/2`, `stop/1`, and (when declared)
-  `start_phase/3`; returns `{:ok, {:app, module()}}`
 - `Cure.App.Resource` -- emits the OTP `<name>.app` resource file
   into the output directory; threads metadata from the container
   and `[application]` (`vsn`, `applications`, `included_applications`,
@@ -218,21 +181,11 @@ module.my_function(args)
   assembly via `:systools`, `sys.config` / `vm.args` copying, and
   the POSIX `bin/<name>` runner script (emits `:release` events,
   surfaces `E052` / `E055`)
-- `Cure.Compiler.Errors` -- structured error formatter with source locations
-  for all pipeline stages (lex, parse, type, codegen, FSM verifier)
-- `Cure.Types.Protocol` -- protocol definition and implementation tracking;
-  type-to-guard mapping, dispatch clause generation
-- `Cure.Types.Refinement` -- refinement type operations; SMT-backed subtype
-  checking, satisfiability verification, construction from parser AST
+- `Cure.Diagnostic.Registry`, `Cure.Diagnostic.Adapter`, and
+  `Cure.Diagnostic.Sink` -- stable diagnostic ownership, conversion, and shared
+  terminal/JSON/editor presentation
 - `Cure.SMT.Process` -- Z3 solver process management via Erlang port;
   interactive query execution with timeout and sentinel-based response parsing
-- `Cure.SMT.Translator` -- MetaAST to SMT-LIB2 translation; operator mapping,
-  variable collection, logic inference, query generation
-- `Cure.SMT.Solver` -- high-level constraint API; satisfiability checking,
-  implication proving, refinement subtype verification; Z3 fallback
-- `Cure.Types.PatternChecker` -- pattern exhaustiveness and redundancy analysis;
-  coverage checking for Bool, Result/Option ADTs, List, infinite types;
-  integrated into type checker as warnings
 - `Mix.Tasks.Cure.Compile` -- `mix cure.compile` task with formatted error output
 - `Mix.Tasks.Cure.CompileStdlib` -- `mix cure.compile_stdlib` compiles the standard library
 - `Mix.Tasks.Cure.Release` -- `mix cure.release` builds a bootable BEAM
@@ -405,7 +358,7 @@ generator, formatter, stdlib, CLI, CI, and example programs.
 - **v0.27.0 -- See Your System Breathe**: observability and verification:
   `Cure.OTel`, `cure top`, `cure trace`, `Cure.Temporal` (LTL bounded model
   checker), `Cure.Protocol` (session-typed binary protocols),
-  `Cure.Types.Synth` (typed-hole suggestions); new stdlib modules `Std.Time`,
+  typed-hole suggestions; new stdlib modules `Std.Time`,
   `Std.Regex`, `Std.CRDT`; OSC 8 clickable error paths; LiveView Playground.
 - **v0.26.0 -- Applications and Releases**: `app` container, `[application]`
   / `[release]` sections in `Cure.toml`, `cure release` packaging, `Std.App`.

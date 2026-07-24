@@ -2,12 +2,13 @@ defmodule Cure.Compiler do
   @moduledoc """
   Compiler orchestrator for the Cure programming language.
 
-  Chains together the full compilation pipeline:
+  Chains together the full dependent compilation pipeline:
 
-      source -> Lexer -> Parser -> [Checker] -> Codegen -> BeamWriter -> .beam
+      source -> Lexer -> Parser -> Elab.Program -> Core.Kernel
+             -> Elab.Erase -> Elab.Emit -> BeamWriter -> .beam
 
-  The type checker runs before codegen by default; set `check_types: false`
-  (or pass `--no-type-check` to the CLI) to opt out.
+  Elaboration and trusted Core validation are mandatory. There is no
+  unchecked classic-codegen path.
 
   Emits pipeline events at each stage boundary.
 
@@ -35,8 +36,6 @@ defmodule Cure.Compiler do
 
   - `:output_dir` -- directory for `.beam` output (default: `"_build/cure/ebin"`)
   - `:emit_events` -- whether to emit pipeline events (default: `true`)
-  - `:check_types` -- whether to run the type checker (default: `true`).
-    Set to `false` to skip type checking.
   - `:source_roots` -- directories containing sibling `.cure` modules that may
     be imported with `use` (default: the source file's directory)
   """
@@ -567,8 +566,8 @@ defmodule Cure.Compiler do
   end
 
   defp codegen_modules_with_main(original_ast, main_ast, lifted_requests) do
-    # Single pipeline: every module is lowered by the kernel (dependent codegen).
-    # The classic `Cure.Compiler.Codegen` branch was deleted in the #18 rip-out.
+    # Single pipeline: every module is elaborated, checked, erased, and emitted
+    # through the dependent Core.
     result =
       with :ok <- Cure.Elab.Program.validate_stdlib_imports(main_ast) do
         case dependent_codegen(main_ast) do

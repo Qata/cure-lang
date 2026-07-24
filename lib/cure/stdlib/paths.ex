@@ -14,7 +14,7 @@ defmodule Cure.Stdlib.Paths do
       with an OTP release.
 
   This module provides resolution functions used by
-  `Cure.Types.Stdlib` (for `:t` signatures), `Cure.REPL.Docs` (for
+  the dependent module-interface loader, `Cure.REPL.Docs` (for
   `:doc` rendering), and `Cure.Stdlib.Preload` (for loading the BEAMs
   that back qualified calls like `Std.List.map`). Both sources and
   BEAMs fall through the same pattern of candidates:

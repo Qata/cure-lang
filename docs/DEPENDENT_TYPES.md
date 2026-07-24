@@ -1,10 +1,9 @@
 # Cure Dependent Types Guide
 
-This page describes the dependent features that are backed by the current
-trusted Core kernel. Older modules under `Cure.Types.*` still exist as
-compatibility APIs, but a Cure source feature should only be described as
-trusted dependent typing when it elaborates to `Cure.Core`, is checked by
-`Cure.Core.Kernel`, and is erased/emitted from that checked Core term.
+This page describes the dependent features backed by the current trusted Core
+kernel. All accepted Cure source follows this path: it elaborates to
+`Cure.Core`, is checked by `Cure.Core.Kernel`, and is erased/emitted from that
+checked Core term. The former `Cure.Types.*` pipeline has been removed.
 
 ## Trusted Surface Today
 
@@ -16,12 +15,7 @@ The dependent compiler path currently handles:
 - `Sigma(x: A, B)` dependent pairs, pair literals `%[a, b]`, and projections
   `p.1` / `p.2`;
 - holes inside dependent programs, which typecheck but block codegen;
-- type-level reduction through Core normalization, exposed to legacy callers by
-  `Cure.Types.Reduce`.
-
-The compiler routes modules using indexed types, typed erased parameters, or
-Sigma/projection surface forms through the dependent compiler even if they do
-not also declare an indexed family.
+- type-level reduction through `Cure.Core.Normalise`.
 
 ## Indexed Families
 
@@ -65,33 +59,13 @@ introduction, and `p.1` / `p.2` elaborate to projections. Runtime pairs emit as
 
 ## Type-Level Reduction
 
-`Cure.Types.Reduce` is now a compatibility facade over Core normalization.
-Before normalization it substitutes requested source-level bindings, then
-translates the supported expression fragment to Core, evaluates with
-normalization-by-evaluation, and reads the result back. Arithmetic, Boolean
-operations, comparisons, and literal tuple projection are covered by this bridge;
-irreducible source syntax is kept structurally and its children are normalized.
+Type-level computation is represented directly in Core and evaluated by
+normalization-by-evaluation. Arithmetic, Boolean operations, comparisons, and
+projections therefore participate in definitional equality without a separate
+surface-AST reduction bridge.
 
 ## Holes
 
 `?name` holes are real in dependent programs. The kernel accepts a hole at the
 declared goal type so tooling can report the goal and local context, but codegen
 rejects any definition that still contains a hole.
-
-## Not Trusted Kernel Surface Yet
-
-The following pieces remain compatibility or design surface, not completed
-trusted Cure dependent typing:
-
-- Public `Eq(T, a, b)`, `refl`, and `rewrite` syntax is not fully elaborated
-  from Cure source to Core yet. Core has equality/rewrite nodes and kernel tests,
-  but `Std.Equal` still returns runtime `Atom` witnesses.
-- `proof` containers are currently a legacy proof-shape gate. They require
-  proof-looking return types, but they do not validate the proposition in the
-  trusted Core kernel.
-- `Cure.Types.Pi`, `Cure.Types.Sigma`, `Cure.Types.Equality`, and
-  `Cure.Types.Holes` are compatibility helpers unless the source program
-  also routes through `Cure.Elab.Program`.
-
-The next dependency work should turn the unsupported items above into either
-Core-backed user features or explicit compile-time rejections.

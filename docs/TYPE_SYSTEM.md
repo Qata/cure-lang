@@ -163,9 +163,9 @@ Protocols provide ad-hoc polymorphism. The type checker:
 
 ## Typed Sends (v0.25.0)
 
-`Cure.Types.Checker.do_infer/2` grows a dedicated clause for
-`{:send, meta, [target, message]}` nodes emitted by the Melquiades
-Operator `<-|` (and the keyword form `send target, msg`):
+`Cure.Elab.Elaborator` handles `{:send, meta, [target, message]}` nodes
+emitted by the Melquiades Operator `<-|` (and the keyword form
+`send target, msg`) in the dependent pipeline:
 
 1. Infer the target's type. If it is `{:pid, inbox}`, unify the
    message type against `inbox`.
@@ -194,16 +194,12 @@ See `DEPENDENT_TYPES.md` for the full guide. Brief summary:
   remains a runtime-token compatibility API.
 - **Holes** -- `?name` and `??` placeholders. The checker emits a
   `:hole_goal` event with the goal type and local context.
-- **Totality** -- `Cure.Types.Totality.classify/1` returns `:total`,
-  `:partial`, or `:unknown`. The `@total true` decorator upgrades the
-  classification to a hard requirement.
-- **Type-level reduction** -- `Cure.Types.Reduce.normalize/2`
-  delegates supported expression fragments to Core normalization,
-  covering arithmetic, boolean, comparison, and literal projection
-  operations before legacy callers fall back to their existing checks.
-- **Unification** -- `Cure.Types.Unify` solves implicit arguments via
-  first-order unification with an occurs check; failures emit a
-  `:unification_trace` event.
-- **Path-sensitive refinement** -- `Cure.Types.PathRefinement` extracts
-  refinements from `if`/`match` guards and applies them to in-scope
-  variables along the matching branch.
+- **Totality** -- `Cure.Elab.TotalityClosure` validates the reachable
+  definition closure before trusted certification. The `@total true`
+  decorator makes that requirement explicit at the declaration.
+- **Type-level reduction** -- `Cure.Core.Normalise` evaluates dependent Core
+  terms for definitional equality.
+- **Unification** -- `Cure.Elab.Unify` solves implicit metavariables with an
+  occurs check and preserves source context for failures.
+- **Branch refinement** -- dependent pattern elaboration refines indices and
+  local types independently in each checked branch.

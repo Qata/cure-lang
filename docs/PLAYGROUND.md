@@ -14,10 +14,9 @@ The Cure Playground lives on `cure-lang.org/playground`.
 
 Both features from the v0.27.0 roadmap shipped in v0.28.0:
 
-- **Live type-check panel.** Every debounced keystroke runs the full
-  bidirectional checker (`Cure.Types.Checker`) on the source and
-  renders the result below the highlighted preview. Green on success,
-  red with formatted diagnostics on error.
+- **Live type-check panel.** Every debounced keystroke runs the normal
+  dependent elaborator and trusted Core checks through `Cure.Compiler`, then
+  renders the shared structured diagnostics below the highlighted preview.
 - **Sandboxed evaluator.** `CureSiteWeb.Eval` spawns an isolated BEAM
   process via `:erlang.spawn_opt/2` with a 64 MB heap cap and a
   2-second kill timer. The child compiles the source, loads the
@@ -52,6 +51,5 @@ Then open <http://localhost:4000/playground>.
 - HTML formatter: `Makeup.Formatters.HTML.HTMLFormatter`.
 - Lexer: `Makeup.Lexers.CureLexer` (from the `makeup_cure` Hex
   package).
-- Type checker: `Cure.Types.Checker.check_module/2` called directly
-  from the LiveView -- no extraction into a separate OTP app needed
-  because `:cure` is already a path dependency of `cure_site`.
+- Compiler: `Cure.Compiler` runs the same dependent elaboration path as the
+  command line; the site does not maintain a separate checker.

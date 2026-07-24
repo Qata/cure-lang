@@ -170,15 +170,10 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
 
     case Cure.Compiler.compile_file(src, opts) do
       {:ok, module, _warnings} ->
-        # Load the freshly-compiled beam into the VM so a *later* stdlib
-        # module can resolve cross-module calls against it. The classic
-        # import resolver (`Cure.Compiler.Codegen.module_exports?/3`) probes
-        # the *loaded* version of an imported module; without this the probe
-        # would hit the stale copy baked into `Cure.Stdlib.Preload` at the
-        # last `mix compile` (or none at all for a brand-new module), and a
-        # cross-module call — e.g. `Std.Comparable.compare` calling
-        # `Std.Char.code_point/1` — would fall back to an undefined local
-        # call and fail to compile.
+        # Keep the freshly compiled runtime module available to later
+        # definition-site macro execution. Ordinary name and type resolution
+        # uses canonical source-hash-keyed module interfaces and does not
+        # inspect loaded BEAM exports.
         refresh_loaded_beam(module, dest_dir)
         {:ok, %{counts | compiled: counts.compiled + 1}}
 

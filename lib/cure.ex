@@ -12,10 +12,12 @@ defmodule Cure do
         |  Cure.Compiler.Parser       (MetaAST generation)
         v
       MetaAST (Metastatic 3-tuples)
-        |  Cure.Types.Checker         (bidirectional type checking)
+        |  Cure.Elab.Program          (dependent elaboration)
         v
-      Typed MetaAST
-        |  Cure.Compiler.Codegen      (Erlang abstract forms)
+      Checked Cure.Core
+        |  Cure.Core.Kernel           (validation)
+        |  Cure.Elab.Erase            (proof/index erasure)
+        |  Cure.Elab.Emit             (Erlang abstract forms)
         v
       BEAM bytecode
 

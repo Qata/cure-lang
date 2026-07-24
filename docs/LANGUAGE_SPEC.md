@@ -258,8 +258,8 @@ fn append(xs: Vector(T, m), ys: Vector(T, n)) -> Vector(T, m + n)
 ```
 
 Return types may freely reference parameter names. The type checker
-substitutes the call-site arguments and normalises the resulting
-expression with `Cure.Types.Reduce` before comparing.
+substitutes the call-site arguments and compares the resulting Core terms by
+normalization and definitional equality.
 
 ### Equality types
 
@@ -294,8 +294,8 @@ same terminal, JSON, and LSP structured-diagnostic path.
 fn id({T: Type}, x: T) -> T = x
 ```
 
-Parameters in `{...}` braces are inferred from explicit-argument types
-at each call site via `Cure.Types.Unify`. They cost nothing at runtime.
+Parameters in `{...}` braces are solved by dependent elaboration from
+explicit-argument types at each call site. They cost nothing at runtime.
 
 ### Holes
 
@@ -315,9 +315,8 @@ fn factorial(n: Int) -> Int
   | n -> n * factorial(n - 1)
 ```
 
-`Cure.Types.Totality` classifies every function as `:total`,
-`:partial`, or `:unknown`. Add `@total true` to upgrade the
-classification to a compile-time error.
+The dependent totality closure classifies definitions before certification.
+Add `@total true` to require a successful totality proof at compile time.
 
 ## Records
 
