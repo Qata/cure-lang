@@ -30,6 +30,9 @@ defmodule Cure.Core.Env do
             constrained: %{},
             primitives: %{},
             import_modules: MapSet.new(),
+            bare_modules: nil,
+            bare_bindings: nil,
+            qualified_modules: nil,
             lemmas: %{},
             equations: %{},
             module_owner: nil,
@@ -56,6 +59,19 @@ defmodule Cure.Core.Env do
           # direct owner over a name reachable only via a module's transitive
           # re-export, matching must-import semantics (Haskell/Elm/Idris/Swift).
           import_modules: MapSet.t(String.t()),
+          # Modules whose declarations may be referenced by a bare spelling.
+          # `nil` is retained only for ownerless/synthetic compatibility
+          # environments; real module elaboration installs an explicit set.
+          bare_modules: MapSet.t(String.t()) | nil,
+          # Exact canonical declarations exposed by lexical imports, ambient
+          # prelude items, and the compiler seed. Unlike `bare_modules`, this
+          # can expose `Std.List#List`/`Std.List#Nil` without also exposing
+          # every function owned by Std.List.
+          bare_bindings: MapSet.t(atom()) | nil,
+          # Modules whose canonical declarations may be referenced through an
+          # authored qualified path. This is deliberately independent of
+          # `import_modules`: `M.f` makes M available without opening `f`.
+          qualified_modules: MapSet.t(String.t()) | nil,
           # Inert elaborator metadata (the kernel never reads it): `@lemma`-tagged
           # theorems keyed by their conclusion-head atom, for auto proof-search
           # (see `Cure.Elab.ProofSearch`). Same status as `interfaces`/`coherence`.
@@ -91,6 +107,39 @@ defmodule Cure.Core.Env do
   @doc "Return the source-module owner for the current elaboration environment."
   @spec owner(t()) :: String.t() | nil
   def owner(%__MODULE__{module_owner: owner}), do: owner
+
+  @doc "Install the lexical and qualified module visibility for this elaboration."
+  @spec with_module_visibility(t(), MapSet.t(String.t()), MapSet.t(String.t())) :: t()
+  def with_module_visibility(%__MODULE__{} = env, bare_modules, qualified_modules) do
+    %{
+      env
+      | bare_modules: bare_modules,
+        qualified_modules: qualified_modules
+    }
+  end
+
+  @doc "Whether an owner may supply a bare spelling in this environment."
+  @spec bare_module_available?(t(), String.t() | nil) :: boolean()
+  def bare_module_available?(%__MODULE__{bare_modules: nil}, _owner), do: true
+
+  def bare_module_available?(%__MODULE__{bare_modules: modules, module_owner: owner}, candidate),
+    do: candidate == owner or MapSet.member?(modules, candidate)
+
+  @doc "Whether one canonical declaration may supply a bare spelling."
+  @spec bare_key_available?(t(), atom()) :: boolean()
+  def bare_key_available?(%__MODULE__{bare_bindings: nil} = env, key),
+    do: bare_module_available?(env, Cure.Elab.Name.owner(key))
+
+  def bare_key_available?(%__MODULE__{bare_bindings: bindings, module_owner: owner}, key) do
+    Cure.Elab.Name.owner(key) == owner or MapSet.member?(bindings, key)
+  end
+
+  @doc "Whether an owner may be named by a qualified surface path."
+  @spec qualified_module_available?(t(), String.t() | nil) :: boolean()
+  def qualified_module_available?(%__MODULE__{qualified_modules: nil}, _owner), do: true
+
+  def qualified_module_available?(%__MODULE__{qualified_modules: modules, module_owner: owner}, candidate),
+    do: candidate == owner or MapSet.member?(modules, candidate)
 
   @doc """
   Attach the name of the def whose body is currently being elaborated (see the
@@ -194,7 +243,12 @@ defmodule Cure.Core.Env do
         # owner-qualified key whose base it is — via an index, because
         # rediscovering it by walking every key made this O(table) on every
         # unresolved lookup.
-        case Map.get(name_indexes(table).aliases, Atom.to_string(name), []) do
+        candidates =
+          name_indexes(table).aliases
+          |> Map.get(Atom.to_string(name), [])
+          |> Enum.filter(&bare_key_available?(env, &1))
+
+        case candidates do
           [key] -> key
           _ -> name
         end

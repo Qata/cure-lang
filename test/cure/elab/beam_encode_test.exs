@@ -40,6 +40,7 @@ defmodule Cure.Elab.BeamEncodeTest do
     source = """
     mod Cure.NoBeamDecoder
       use Std.Beam
+      use Std.Result
 
       type Message = Ping
 
@@ -54,6 +55,7 @@ defmodule Cure.Elab.BeamEncodeTest do
     source = """
     mod Cure.BeamDecoded
       use Std.Beam
+      use Std.Result
 
       type Message = Ping | Data(Int) | Pair(Int, Bool) deriving BeamDecode
 
@@ -83,6 +85,7 @@ defmodule Cure.Elab.BeamEncodeTest do
     source = """
     mod Cure.NestedBeamDecoded
       use Std.Beam
+      use Std.Result
 
       type Inner = Number(Int) deriving BeamDecode
       type Outer = Empty | Wrap(Inner) deriving BeamDecode
@@ -100,6 +103,7 @@ defmodule Cure.Elab.BeamEncodeTest do
     source = """
     mod Cure.RecursiveBeamDecoded
       use Std.Beam
+      use Std.Result
 
       type Tree = Leaf(Int) | Branch(Tree, Tree) deriving BeamDecode
 

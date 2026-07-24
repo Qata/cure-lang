@@ -8235,7 +8235,8 @@ defmodule Cure.Elab.Elaborator do
         name == "reflexive" ->
           elaborate_expr_checked(expr, expected, names, ctx, env)
 
-        is_binary(name) and Inductive.get_ctor(env, String.to_atom(name)) != nil ->
+        is_binary(name) and
+            Inductive.get_ctor(env, resolve_ctor_key(env, String.to_atom(name))) != nil ->
           # A constructor branch body. Infer FIRST — this preserves every case that
           # already worked, including a reconstruction whose indices the present
           # arguments determine and the carried-index-Eq transport (which wraps an

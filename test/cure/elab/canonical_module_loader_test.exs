@@ -31,7 +31,7 @@ defmodule Cure.Elab.CanonicalModuleLoaderTest do
              mod Loader.Main
                use Loader.Left
                use Loader.Right
-               fn result() -> Int = value()
+               fn result() -> Int = Loader.Base.value()
              end
              """)
 

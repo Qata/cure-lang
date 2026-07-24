@@ -43,6 +43,14 @@ defmodule Cure.Compiler.ModuleIndex do
   @spec module_names(t()) :: [String.t()]
   def module_names(%__MODULE__{entries: entries}), do: entries |> Map.keys() |> Enum.sort()
 
+  @doc "Whether a canonical module interface is supplied by the compiler itself."
+  @spec compiler_owned?(String.t()) :: boolean()
+  def compiler_owned?(module_name), do: MapSet.member?(@compiler_modules, module_name)
+
+  @doc "Canonical module interfaces available in every compiler environment."
+  @spec compiler_modules() :: MapSet.t(String.t())
+  def compiler_modules, do: @compiler_modules
+
   @type t :: %__MODULE__{
           entries: %{String.t() => Entry.t()},
           paths: %{Path.t() => String.t()},

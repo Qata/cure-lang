@@ -565,9 +565,9 @@ defmodule Cure.Elab.Equation do
     end)
   end
 
-  defp equality_terms(env, {:type, 0}, left, right) do
-    family = Env.resolve_key(env, env.families, :TypeEquivalent)
-    constructor = Env.resolve_key(env, env.ctors, :type_reflexive)
+  defp equality_terms(_env, {:type, 0}, left, right) do
+    family = Name.qualify("Std.Equivalent", :TypeEquivalent)
+    constructor = Name.qualify("Std.Equivalent", :type_reflexive)
     {{:data, family, [], [left, right]}, {:ctor, constructor, [right]}}
   end
 

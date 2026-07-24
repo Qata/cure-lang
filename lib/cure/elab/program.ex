@@ -7,7 +7,8 @@ defmodule Cure.Elab.Program do
   totality-certified signature.
   """
 
-  alias Cure.Compiler.{Lexer, MacroFamily, MacroSyntax, MacroValidate, Parser}
+  alias Cure.Compiler.{Lexer, MacroFamily, MacroSyntax, MacroValidate, ModuleIndex, Parser}
+  alias Cure.Compiler.Parser.FixityScan
   alias Cure.Core.{Env, Inductive, Validator}
   alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, TotalityClosure}
   alias Cure.Stdlib.Paths
@@ -690,10 +691,13 @@ defmodule Cure.Elab.Program do
 
   defp check_ast_elixir_core_in_session(ast) do
     with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
+         {:ok, qualified} <- qualified_resolved_imports(ast),
          {:ok, prelude} <- prelude_slice_env(ast),
          seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
          {:ok, base} <- merge_env(seeded, prelude),
-         {:ok, env0} <- merge_env(base, imported),
+         {:ok, opened} <- merge_env(base, imported),
+         {:ok, merged} <- merge_env(opened, qualified),
+         env0 = install_module_visibility(merged, ast),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          :ok <- MacroValidate.check_program(ast, env),
          {:ok, certified} <- certify_type_level_with_source(ast, env),
@@ -1877,6 +1881,14 @@ defmodule Cure.Elab.Program do
 
   defp imports(ast), do: ast |> import_entries() |> Enum.flat_map(fn {sources, _meta} -> sources end)
 
+  defp qualified_module_names(ast) do
+    ast
+    |> FixityScan.collect_qualified_targets()
+    |> Enum.map(& &1.target)
+    |> Enum.reject(&(&1 == find_module_name(ast)))
+    |> Enum.uniq()
+  end
+
   # Same walk as `imports/1`, but each import's sources are paired with the import
   # node's meta so a caller can tell an author-written `use` from a compiler-injected
   # ambient `@prelude` one (`Cure.Compiler.inject_prelude_uses/2` tags those
@@ -2329,10 +2341,12 @@ defmodule Cure.Elab.Program do
          dependencies = module_dependency_sources(ast),
          {:ok, prelude} <- module_prelude_env(ast),
          {:ok, imported} <- load_dependency_env(imports(ast)),
+         {:ok, qualified} <- qualified_resolved_imports(ast),
          seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
          {:ok, base} <- merge_env(seeded, prelude),
-         {:ok, env0_base} <- merge_env(base, imported),
-         env0 = Map.put(env0_base, :import_modules, direct_import_ids(dependencies)),
+         {:ok, opened} <- merge_env(base, imported),
+         {:ok, merged} <- merge_env(opened, qualified),
+         env0 = install_module_visibility(merged, ast),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- certify_type_level_with_source(ast, env, source: source, file: path),
          {:ok, certified} <- Cure.Elab.Equation.generate_all(certified, ast) do
@@ -2340,7 +2354,7 @@ defmodule Cure.Elab.Program do
 
       export_env =
         certified
-        |> Map.put(:import_modules, direct_ids)
+        |> install_module_visibility(ast)
         |> mark_inline_hints(find_module_name(ast))
 
       {:ok,
@@ -2365,7 +2379,12 @@ defmodule Cure.Elab.Program do
   end
 
   defp module_dependency_sources(ast) do
-    Enum.uniq(prelude_sources_for(ast) ++ imports(ast))
+    qualified =
+      ast
+      |> qualified_module_names()
+      |> Enum.reject(&ModuleIndex.compiler_owned?/1)
+
+    Enum.uniq(prelude_sources_for(ast) ++ imports(ast) ++ qualified)
   end
 
   defp module_prelude_env(ast) do
@@ -2515,6 +2534,113 @@ defmodule Cure.Elab.Program do
     end
   end
 
+  # Qualified availability is not a lexical import. We load the same canonical
+  # module interface so `M.f` and an imported `f` refer to one identity, but
+  # install no `import_modules` directness and therefore expose no bare names.
+  defp qualified_resolved_imports(ast) do
+    names = qualified_module_names(ast)
+    source_modules = Enum.reject(names, &ModuleIndex.compiler_owned?/1)
+
+    with {:ok, env} <- load_dependency_env(source_modules) do
+      {:ok,
+       %{
+         env
+         | import_modules: MapSet.new(),
+           bare_modules: MapSet.new(),
+           bare_bindings: MapSet.new(),
+           qualified_modules: MapSet.new(names)
+       }}
+    end
+  end
+
+  defp install_module_visibility(%Env{} = env, ast) do
+    explicit = direct_import_ids(imports(ast))
+
+    ambient =
+      if prelude_bootstrap?(find_module_name(ast)),
+        do: MapSet.new(),
+        else: MapSet.new(prelude_manifest(), & &1.source)
+
+    bare = MapSet.union(explicit, ambient)
+
+    qualified =
+      bare
+      |> MapSet.union(MapSet.new(qualified_module_names(ast)))
+      |> MapSet.union(ModuleIndex.compiler_modules())
+      |> MapSet.union(
+        env
+        |> all_global_keys()
+        |> Enum.map(&Cure.Elab.Name.owner/1)
+        |> Enum.reject(&is_nil/1)
+        |> MapSet.new()
+      )
+
+    env
+    |> Map.put(:import_modules, explicit)
+    |> Env.with_module_visibility(bare, qualified)
+    |> Map.put(:bare_bindings, visible_bare_bindings(env, ast, explicit))
+  end
+
+  defp visible_bare_bindings(%Env{} = env, ast, explicit_modules) do
+    owner = find_module_name(ast)
+
+    local_and_explicit =
+      all_global_keys(env)
+      |> Enum.filter(fn key ->
+        key_owner = Cure.Elab.Name.owner(key)
+        key_owner == owner or MapSet.member?(explicit_modules, key_owner)
+      end)
+
+    builtin_families =
+      env.builtins
+      |> Map.values()
+      |> MapSet.new()
+      |> MapSet.put(:"Std.Unit#Unit")
+
+    builtin_surface =
+      MapSet.to_list(builtin_families) ++
+        for(
+          {ctor, family} <- env.ctor_to_family,
+          MapSet.member?(builtin_families, family),
+          do: ctor
+        ) ++
+        Enum.filter(Map.keys(env.defs), &(Cure.Elab.Name.owner(&1) == "Std.Builtin"))
+
+    prelude_surface =
+      Enum.flat_map(prelude_manifest(), fn
+        %{source: source, names: :all} ->
+          Enum.filter(all_global_keys(env), &(Cure.Elab.Name.owner(&1) == source))
+
+        %{source: source, names: names} ->
+          selected_families =
+            env.families
+            |> Map.keys()
+            |> Enum.filter(fn key ->
+              Cure.Elab.Name.owner(key) == source and MapSet.member?(names, bare_name_atom(key))
+            end)
+            |> MapSet.new()
+
+          selected_values =
+            [env.defs, env.families]
+            |> Enum.flat_map(&Map.keys/1)
+            |> Enum.filter(fn key ->
+              Cure.Elab.Name.owner(key) == source and MapSet.member?(names, bare_name_atom(key))
+            end)
+
+          selected_values ++
+            for {ctor, family} <- env.ctor_to_family,
+                MapSet.member?(selected_families, family),
+                do: ctor
+      end)
+
+    MapSet.new(local_and_explicit ++ builtin_surface ++ prelude_surface)
+  end
+
+  defp all_global_keys(%Env{} = env),
+    do: Enum.uniq(Map.keys(env.defs) ++ Map.keys(env.families) ++ Map.keys(env.ctors))
+
+  defp bare_name_atom(key), do: key |> Cure.Elab.Name.base() |> String.to_atom()
+
   defp resolve_import_modules(sources) do
     Enum.reduce_while(sources, {:ok, []}, fn source, {:ok, acc} ->
       case import_source_path(source) do
@@ -2662,8 +2788,8 @@ defmodule Cure.Elab.Program do
   # and quietly breaking global coherence. The assertion below turns the next such
   # omission into a compile error rather than a runtime mystery.
   @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
-                      primitives interfaces coherence constrained import_modules lemmas equations module_owner
-                      current_def)a
+                      primitives interfaces coherence constrained import_modules bare_modules bare_bindings
+                      qualified_modules lemmas equations module_owner current_def)a
 
   @env_keys Map.keys(Map.from_struct(%Env{}))
   missing = @env_keys -- @merged_env_keys
@@ -2691,6 +2817,9 @@ defmodule Cure.Elab.Program do
          coherence: coherence,
          constrained: Map.merge(left.constrained, right.constrained),
          import_modules: MapSet.union(left.import_modules, right.import_modules),
+         bare_modules: merge_module_visibility(left.bare_modules, right.bare_modules),
+         bare_bindings: merge_module_visibility(left.bare_bindings, right.bare_bindings),
+         qualified_modules: merge_module_visibility(left.qualified_modules, right.qualified_modules),
          lemmas: Map.merge(left.lemmas, right.lemmas, fn _head, ls, rs -> Enum.uniq(ls ++ rs) end),
          equations: Map.merge(left.equations, right.equations, fn _owner, ls, rs -> Enum.uniq(ls ++ rs) end),
          module_owner: left.module_owner || right.module_owner,
@@ -2701,6 +2830,11 @@ defmodule Cure.Elab.Program do
        }}
     end
   end
+
+  defp merge_module_visibility(nil, nil), do: nil
+  defp merge_module_visibility(nil, %MapSet{} = right), do: right
+  defp merge_module_visibility(%MapSet{} = left, nil), do: left
+  defp merge_module_visibility(%MapSet{} = left, %MapSet{} = right), do: MapSet.union(left, right)
 
   defp merge_coherence(nil, right), do: {:ok, right}
   defp merge_coherence(left, nil), do: {:ok, left}

@@ -245,7 +245,7 @@ defmodule Cure.Elab.Deriving do
     tag_name = "decoded_constructor_tag"
 
     match(call("Std.Beam.adt_tag", [var(term_name)]), [
-      arm(call("Some", [var(tag_name)]), decode_tag_choices(term_name, tag_name, specs, env)),
+      arm(call("Std.Option.Some", [var(tag_name)]), decode_tag_choices(term_name, tag_name, specs, env)),
       arm(wildcard(), decode_error())
     ])
   end
@@ -266,7 +266,7 @@ defmodule Cure.Elab.Deriving do
 
     match(call("Std.Beam.adt_arity", [var(term_name)]), [
       arm(
-        call("Some", [var(actual)]),
+        call("Std.Option.Some", [var(actual)]),
         match(call("==", [var(actual), int_lit(arity)]), [
           arm(bool(true), valid),
           arm(bool(false), decode_error())
@@ -277,7 +277,7 @@ defmodule Cure.Elab.Deriving do
   end
 
   defp decode_fields(_term_name, ctor, [], _index, values, _env),
-    do: call("Ok", [call(ctor, Enum.map(Enum.reverse(values), &var/1))])
+    do: call("Std.Result.Ok", [call(ctor, Enum.map(Enum.reverse(values), &var/1))])
 
   defp decode_fields(term_name, ctor, [field_type | rest], index, values, env) do
     field_name = "decoded_field_#{index}"
@@ -287,14 +287,14 @@ defmodule Cure.Elab.Deriving do
     decoded =
       match(call(decoder, [var(raw_name)]), [
         arm(
-          call("Ok", [var(field_name)]),
+          call("Std.Result.Ok", [var(field_name)]),
           decode_fields(term_name, ctor, rest, index + 1, [field_name | values], env)
         ),
         arm(wildcard(), decode_error())
       ])
 
     match(call("Std.Beam.tuple_element", [var(term_name), int_lit(index + 1)]), [
-      arm(call("Some", [var(raw_name)]), decoded),
+      arm(call("Std.Option.Some", [var(raw_name)]), decoded),
       arm(wildcard(), decode_error())
     ])
   end
@@ -333,7 +333,8 @@ defmodule Cure.Elab.Deriving do
     end
   end
 
-  defp decode_error(), do: call("Error", [call("InvalidBeamTerm", [])])
+  defp decode_error(),
+    do: call("Std.Result.Error", [call("Std.Beam.InvalidBeamTerm", [])])
 
   defp constructor_specs(body) do
     Enum.flat_map(body, fn
