@@ -22,6 +22,27 @@ defmodule Cure.Diagnostic.Adapter.Macro do
   @spec from_error(term(), keyword()) :: Diagnostic.t()
   def from_error(error, opts \\ [])
 
+  def from_error({:expected_literal_capture, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+    article = article_for_kind(details.shape)
+
+    Diagnostic.new(
+      code: "E094",
+      key: :macro_literal_capture,
+      severity: :error,
+      title: "Macro field needs a literal",
+      body:
+        Doc.paragraph(
+          "This syntax-family field accepts #{article} `#{details.shape}` literal, not an expression of another shape."
+        ),
+      primary: label(span, :primary, "this is not #{article} `#{details.shape}` literal"),
+      suggestions: [
+        %Suggestion{message: "Replace this value with #{article} `#{details.shape}` literal", applicability: :manual}
+      ],
+      payload: details
+    )
+  end
+
   def from_error({:splice_outside_quote, tag, meta}, opts) when is_list(meta) do
     form = if tag == :splice_group, do: "$(e ...)", else: "$(e)"
 
@@ -1807,4 +1828,7 @@ defmodule Cure.Diagnostic.Adapter.Macro do
     do: %Label{span: span, style: style, message: message}
 
   defp label(_span, _style, _message), do: nil
+
+  defp article_for_kind(<<c, _::binary>>) when c in ~c"AEIOUaeiou", do: "an"
+  defp article_for_kind(_kind), do: "a"
 end

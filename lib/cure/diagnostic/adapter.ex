@@ -1631,29 +1631,7 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:expected_literal_capture, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
-    article = article_for_kind(details.shape)
-
-    Diagnostic.new(
-      code: "E094",
-      key: :macro_literal_capture,
-      severity: :error,
-      title: "Macro field needs a literal",
-      body:
-        Doc.paragraph(
-          "This syntax-family field accepts #{article} `#{details.shape}` literal, not an expression of another shape."
-        ),
-      primary: pickup_label(span, :primary, "this is not #{article} `#{details.shape}` literal"),
-      suggestions: [
-        %Suggestion{
-          message: "Replace this value with #{article} `#{details.shape}` literal",
-          applicability: :manual
-        }
-      ],
-      payload: details
-    )
-  end
+  def from_error({:expected_literal_capture, _details} = error, opts), do: MacroAdapter.from_error(error, opts)
 
   def from_error({:unknown_syntax_family_field, details} = error, opts)
       when is_map(details),
