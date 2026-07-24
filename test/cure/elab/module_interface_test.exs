@@ -43,6 +43,25 @@ defmodule Cure.Elab.ModuleInterfaceTest do
     assert :erts_debug.same(a, b)
   end
 
+  test "concurrent cold prelude-manifest readers share one completed value" do
+    Program.invalidate_prelude_manifest()
+
+    manifests =
+      1..32
+      |> Task.async_stream(
+        fn _ -> Program.prelude_manifest() end,
+        max_concurrency: 32,
+        timeout: 30_000,
+        ordered: false
+      )
+      |> Enum.map(fn {:ok, manifest} -> manifest end)
+
+    assert [first | rest] = manifests
+    assert first != []
+    assert Enum.all?(rest, &(&1 == first))
+    assert Program.prelude_manifest() == first
+  end
+
   test "a fresh in-memory loader reuses the fingerprinted interface artifact" do
     path = Path.expand("lib/std/core.cure")
     cache_key = {Program, :module_interface, path}

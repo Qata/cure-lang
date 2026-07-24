@@ -1241,9 +1241,23 @@ defmodule Cure.Elab.Program do
 
         case :persistent_term.get(key, :miss) do
           :miss ->
-            manifest = scan_prelude_manifest(dir)
-            :persistent_term.put(key, manifest)
-            manifest
+            # `persistent_term` makes hits cheap, but its get/scan/put sequence
+            # is not atomic. A broad async test run used to send many elaborator
+            # processes through the full stdlib parse simultaneously, saturating
+            # the file server long enough for unrelated 8-second tests to time
+            # out. Serialize only the cold miss and recheck after acquiring the
+            # lock; steady-state reads remain one `persistent_term.get/2`.
+            :global.trans({key, self()}, fn ->
+              case :persistent_term.get(key, :miss) do
+                :miss ->
+                  manifest = scan_prelude_manifest(dir)
+                  :persistent_term.put(key, manifest)
+                  manifest
+
+                cached ->
+                  cached
+              end
+            end)
 
           cached ->
             cached
@@ -1266,8 +1280,12 @@ defmodule Cure.Elab.Program do
   @spec invalidate_prelude_manifest() :: :ok
   def invalidate_prelude_manifest do
     case Paths.source_dir() do
-      nil -> :ok
-      dir -> :persistent_term.erase({__MODULE__, :prelude_manifest, dir})
+      nil ->
+        :ok
+
+      dir ->
+        key = {__MODULE__, :prelude_manifest, dir}
+        :global.trans({key, self()}, fn -> :persistent_term.erase(key) end)
     end
 
     :ok
