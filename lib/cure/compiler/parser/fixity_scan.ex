@@ -12,11 +12,12 @@ defmodule Cure.Compiler.Parser.FixityScan do
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Compiler.Parser.FixityTable
 
-  @empty %{fixity: [], uses: [], prelude?: false, module: nil}
+  @empty %{fixity: [], uses: [], qualified_targets: [], prelude?: false, module: nil}
 
   @spec harvest_source(String.t(), String.t(), FixityTable.t()) :: %{
           fixity: [tuple()],
           uses: [%{target: String.t(), line: pos_integer()}],
+          qualified_targets: [%{target: String.t(), line: pos_integer()}],
           prelude?: boolean(),
           module: String.t() | nil
         }
@@ -29,6 +30,7 @@ defmodule Cure.Compiler.Parser.FixityScan do
         %{
           fixity: facts.fixity,
           uses: facts.uses,
+          qualified_targets: collect_qualified_targets(exprs),
           prelude?: prelude?(exprs),
           module: module_name(exprs)
         }
@@ -142,6 +144,32 @@ defmodule Cure.Compiler.Parser.FixityScan do
 
   @spec collect_use_targets(term()) :: [String.t()]
   def collect_use_targets(ast), do: ast |> collect_uses() |> Enum.map(& &1.target)
+
+  @doc "Collect modules named by qualified function calls without opening them lexically."
+  @spec collect_qualified_targets(term()) :: [%{target: String.t(), line: pos_integer()}]
+  def collect_qualified_targets(ast) do
+    ast
+    |> deep_collect(fn
+      {:function_call, meta, _args} when is_list(meta) ->
+        case qualified_owner(Keyword.get(meta, :name)) do
+          nil -> []
+          owner -> [%{target: owner, line: Keyword.get(meta, :line, 1)}]
+        end
+
+      _ ->
+        []
+    end)
+    |> Enum.uniq_by(&{&1.target, &1.line})
+  end
+
+  defp qualified_owner(name) when is_binary(name) do
+    case String.split(name, ".") do
+      [_bare] -> nil
+      parts -> parts |> Enum.drop(-1) |> Enum.join(".")
+    end
+  end
+
+  defp qualified_owner(_name), do: nil
 
   @spec prelude?(term()) :: boolean()
   def prelude?(ast) do

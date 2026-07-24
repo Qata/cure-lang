@@ -38,6 +38,13 @@ defmodule Cure.Compiler.Parser.FixityScanTest do
 
   test "a lexer error yields the empty scan rather than raising" do
     s = FixityScan.harvest_source(~s|mod M\n  fn f() = "unterminated|, "m.cure", FixityTable.new())
-    assert s == %{fixity: [], uses: [], prelude?: false, module: nil}
+
+    assert s == %{
+             fixity: [],
+             uses: [],
+             qualified_targets: [],
+             prelude?: false,
+             module: nil
+           }
   end
 end

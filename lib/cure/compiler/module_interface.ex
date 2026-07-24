@@ -1,0 +1,109 @@
+defmodule Cure.Compiler.ModuleInterface do
+  @moduledoc """
+  Immutable semantic interface for one checked Cure module.
+
+  Interface identity includes the compiler schema, canonical module identity,
+  source content, dependency-interface identities, exported declarations, and
+  extension payloads. Transitional callers may still retain an `export_env`,
+  but it is deliberately excluded from semantic identity.
+  """
+
+  @schema_version 1
+
+  @enforce_keys [
+    :module_name,
+    :source_path,
+    :source_hash,
+    :dependency_interface_hashes,
+    :interface_hash
+  ]
+  defstruct schema_version: @schema_version,
+            module_name: nil,
+            source_path: nil,
+            source_hash: nil,
+            dependency_interface_hashes: %{},
+            interface_hash: nil,
+            direct_edges: [],
+            canonical_declarations: %{},
+            canonical_externs: %{},
+            extension_payloads: %{},
+            runtime_artifact: nil,
+            compiletime_artifact: nil,
+            source_metadata: %{},
+            export_env: nil
+
+  @type t :: %__MODULE__{}
+
+  @spec schema_version() :: pos_integer()
+  def schema_version, do: @schema_version
+
+  @spec new(keyword() | map()) :: t()
+  def new(attrs) when is_list(attrs), do: attrs |> Map.new() |> new()
+
+  def new(attrs) when is_map(attrs) do
+    module_name = Map.fetch!(attrs, :module_name)
+    source_path = attrs |> Map.fetch!(:source_path) |> Path.expand()
+    source_hash = Map.fetch!(attrs, :source_hash)
+    dependency_hashes = normalize_hashes(Map.get(attrs, :dependency_interface_hashes, %{}))
+    declarations = Map.get(attrs, :canonical_declarations, %{})
+    externs = Map.get(attrs, :canonical_externs, %{})
+    extensions = Map.get(attrs, :extension_payloads, %{})
+    direct_edges = Map.get(attrs, :direct_edges, [])
+
+    identity = %{
+      schema_version: @schema_version,
+      module_name: module_name,
+      source_hash: source_hash,
+      dependency_interface_hashes: dependency_hashes,
+      direct_edges: normalize_edges(direct_edges),
+      canonical_declarations: declarations,
+      canonical_externs: externs,
+      extension_payloads: extensions
+    }
+
+    struct!(
+      __MODULE__,
+      attrs
+      |> Map.put(:schema_version, @schema_version)
+      |> Map.put(:module_name, module_name)
+      |> Map.put(:source_path, source_path)
+      |> Map.put(:source_hash, source_hash)
+      |> Map.put(:dependency_interface_hashes, dependency_hashes)
+      |> Map.put(:direct_edges, normalize_edges(direct_edges))
+      |> Map.put(:canonical_declarations, declarations)
+      |> Map.put(:canonical_externs, externs)
+      |> Map.put(:extension_payloads, extensions)
+      |> Map.put(:interface_hash, semantic_hash(identity))
+    )
+  end
+
+  @spec validate(t()) :: :ok | {:error, term()}
+  def validate(%__MODULE__{schema_version: version}) when version != @schema_version,
+    do: {:error, {:module_interface_schema_incompatible, version, @schema_version}}
+
+  def validate(%__MODULE__{} = interface) do
+    rebuilt =
+      interface
+      |> Map.from_struct()
+      |> Map.delete(:interface_hash)
+      |> new()
+
+    if rebuilt.interface_hash == interface.interface_hash,
+      do: :ok,
+      else: {:error, {:module_interface_hash_mismatch, interface.module_name, interface.source_path}}
+  end
+
+  def validate(other), do: {:error, {:module_interface_corrupt, other}}
+
+  @spec semantic_hash(term()) :: binary()
+  def semantic_hash(term),
+    do: :crypto.hash(:sha256, :erlang.term_to_binary(term, [:deterministic]))
+
+  defp normalize_hashes(hashes), do: hashes |> Enum.sort_by(&elem(&1, 0)) |> Map.new()
+
+  defp normalize_edges(edges) do
+    Enum.sort_by(edges, fn edge ->
+      {Map.fetch!(edge, :target), Map.fetch!(edge, :kind), Map.get(edge, :line, 1)}
+    end)
+  end
+end
