@@ -99,13 +99,27 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
       true ->
         File.mkdir_p!(dest_dir)
 
-        source_dir
-        |> Path.join("*.cure")
-        |> Path.wildcard()
-        |> Enum.sort()
-        |> Enum.reduce({:ok, %{compiled: 0, skipped: 0, errors: 0}}, fn src, {:ok, counts} ->
-          compile_one(src, dest_dir, counts)
-        end)
+        files = source_dir |> Path.join("*.cure") |> Path.wildcard()
+
+        case Cure.Compiler.prepare_files(files) do
+          {:ok, plan} ->
+            compile_opts = [
+              source_roots: [source_dir],
+              prelude_providers: plan.providers,
+              module_index: plan.module_index
+            ]
+
+            Enum.reduce(plan.ordered, {:ok, %{compiled: 0, skipped: 0, errors: 0}}, fn src, {:ok, counts} ->
+              compile_one(src, dest_dir, counts, compile_opts)
+            end)
+
+          {:error, reason} ->
+            if Code.ensure_loaded?(Mix) and function_exported?(Mix, :shell, 0) do
+              Mix.shell().error(render_host_diagnostic(reason, source_dir))
+            end
+
+            {:ok, %{compiled: 0, skipped: 0, errors: 1}}
+        end
     end
   end
 
@@ -124,11 +138,13 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
 
   @doc false
   @spec compile_one(String.t(), String.t(), map()) :: {:ok, map()}
-  def compile_one(src, dest_dir, counts) do
+  def compile_one(src, dest_dir, counts), do: compile_one(src, dest_dir, counts, [])
+
+  defp compile_one(src, dest_dir, counts, compile_opts) do
     case expected_beam_path(src, dest_dir) do
       {:ok, beam_path} ->
         if should_compile?(src, beam_path) do
-          do_compile(src, dest_dir, counts)
+          do_compile(src, dest_dir, counts, compile_opts)
         else
           {:ok, %{counts | skipped: counts.skipped + 1}}
         end
@@ -137,16 +153,22 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
         # Could not classify the module name from the source. Compile
         # unconditionally and let `Cure.Compiler` place the BEAM under
         # the canonical name.
-        do_compile(src, dest_dir, counts)
+        do_compile(src, dest_dir, counts, compile_opts)
     end
   end
 
-  defp do_compile(src, dest_dir, counts) do
-    case Cure.Compiler.compile_file(src,
-           output_dir: dest_dir,
-           emit_events: false,
-           source_roots: [Path.dirname(src)]
-         ) do
+  defp do_compile(src, dest_dir, counts, compile_opts) do
+    opts =
+      Keyword.merge(
+        [
+          output_dir: dest_dir,
+          emit_events: false,
+          source_roots: [Path.dirname(src)]
+        ],
+        compile_opts
+      )
+
+    case Cure.Compiler.compile_file(src, opts) do
       {:ok, module, _warnings} ->
         # Load the freshly-compiled beam into the VM so a *later* stdlib
         # module can resolve cross-module calls against it. The classic

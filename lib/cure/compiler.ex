@@ -138,6 +138,93 @@ defmodule Cure.Compiler do
     end
   end
 
+  @doc """
+  Compile a complete source universe through the canonical module graph.
+
+  Every bulk driver should use this entry point (or `Incremental.compile_dir/3`)
+  instead of sorting filenames and invoking `compile_file/2` independently.
+  The graph supplies one dependency order, prelude-provider set, module index,
+  and source-root universe to every file in the run.
+  """
+  @spec compile_files([Path.t()], keyword()) ::
+          {:ok,
+           %{
+             compiled: [{Path.t(), module(), list()}],
+             errors: [{Path.t(), term()}],
+             cycles: [list()],
+             module_index: Cure.Compiler.ModuleIndex.t()
+           }}
+          | {:error, {Path.t(), term()} | term()}
+  def compile_files(files, opts \\ []) when is_list(files) do
+    files = files |> Enum.map(&Path.expand/1) |> Enum.uniq()
+
+    with {:ok, plan} <- prepare_files(files) do
+      roots =
+        opts
+        |> Keyword.get(:source_roots, Enum.map(files, &Path.dirname/1))
+        |> List.wrap()
+        |> Enum.map(&Path.expand/1)
+        |> Enum.uniq()
+
+      compile_opts =
+        opts
+        |> Keyword.delete(:load_emitted)
+        |> Keyword.delete(:file_options)
+        |> Keyword.delete(:continue_on_error)
+        |> Keyword.put(:source_roots, roots)
+        |> Keyword.put(:prelude_providers, plan.providers)
+        |> Keyword.put(:module_index, plan.module_index)
+
+      load? = Keyword.get(opts, :load_emitted, true)
+      continue? = Keyword.get(opts, :continue_on_error, false)
+      file_options = Keyword.get(opts, :file_options, fn _path -> [] end)
+      output_dir = Keyword.get(compile_opts, :output_dir, "_build/cure/ebin")
+
+      Enum.reduce_while(plan.ordered, {:ok, [], []}, fn path, {:ok, compiled, errors} ->
+        path_opts = Keyword.merge(compile_opts, file_options.(path))
+
+        case compile_file(path, path_opts) do
+          {:ok, module, warnings} ->
+            case if(load?, do: load_emitted(module, output_dir), else: :ok) do
+              :ok ->
+                {:cont, {:ok, [{path, module, warnings} | compiled], errors}}
+
+              {:error, reason} ->
+                bulk_compile_error(
+                  path,
+                  {:beam_load_error, module, reason},
+                  compiled,
+                  errors,
+                  continue?
+                )
+            end
+
+          {:error, reason} ->
+            bulk_compile_error(path, reason, compiled, errors, continue?)
+        end
+      end)
+      |> case do
+        {:ok, compiled, errors} ->
+          {:ok,
+           %{
+             compiled: Enum.reverse(compiled),
+             errors: Enum.reverse(errors),
+             cycles: plan.cycles,
+             module_index: plan.module_index
+           }}
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
+
+  defp bulk_compile_error(path, reason, compiled, errors, true),
+    do: {:cont, {:ok, compiled, [{path, reason} | errors]}}
+
+  defp bulk_compile_error(path, reason, _compiled, _errors, false),
+    do: {:halt, {:error, {path, reason}}}
+
   # `BeamWriter.compile_forms/2` returns `{:error, errors, warnings}` (3-tuple)
   # on lint/compile failures, but the public `compile_string/2`,
   # `compile_file/2`, and `compile_and_load/2` contracts are `{:ok, ...}` or

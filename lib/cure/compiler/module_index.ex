@@ -32,7 +32,7 @@ defmodule Cure.Compiler.ModuleIndex do
 
   @compiler_modules MapSet.new(["Std.Builtin"])
 
-  defstruct entries: %{}, paths: %{}, prelude_providers: MapSet.new()
+  defstruct entries: %{}, paths: %{}, providers: %{}, prelude_providers: MapSet.new()
 
   @type edge :: %{
           required(:kind) => :use_import | :qualified_reference | :prelude_provider,
@@ -43,7 +43,7 @@ defmodule Cure.Compiler.ModuleIndex do
         }
 
   @spec module_names(t()) :: [String.t()]
-  def module_names(%__MODULE__{entries: entries}), do: entries |> Map.keys() |> Enum.sort()
+  def module_names(%__MODULE__{providers: providers}), do: providers |> Map.keys() |> Enum.sort()
 
   @doc "Whether a canonical module interface is supplied by the compiler itself."
   @spec compiler_owned?(String.t()) :: boolean()
@@ -56,6 +56,7 @@ defmodule Cure.Compiler.ModuleIndex do
   @type t :: %__MODULE__{
           entries: %{String.t() => Entry.t()},
           paths: %{Path.t() => String.t()},
+          providers: %{String.t() => String.t()},
           prelude_providers: MapSet.t(String.t())
         }
 
@@ -64,7 +65,8 @@ defmodule Cure.Compiler.ModuleIndex do
     paths = paths |> Enum.map(&Path.expand/1) |> Enum.uniq() |> Enum.sort()
 
     with {:ok, entries} <- scan_entries(paths, opts),
-         :ok <- reject_duplicates(entries) do
+         :ok <- reject_duplicates(entries),
+         :ok <- reject_provider_duplicates(entries) do
       index = assemble(entries)
 
       if Keyword.get(opts, :validate_dependencies, true),
@@ -81,7 +83,8 @@ defmodule Cure.Compiler.ModuleIndex do
       |> Enum.map(fn entry -> %{entry | source_path: Path.expand(entry.source_path)} end)
       |> Enum.sort_by(&{&1.module_name, &1.source_path})
 
-    with :ok <- reject_duplicates(entries) do
+    with :ok <- reject_duplicates(entries),
+         :ok <- reject_provider_duplicates(entries) do
       index = assemble(entries)
 
       if Keyword.get(opts, :validate_dependencies, true),
@@ -91,15 +94,22 @@ defmodule Cure.Compiler.ModuleIndex do
   end
 
   @spec fetch(t(), String.t()) :: {:ok, Entry.t()} | {:error, term()}
-  def fetch(%__MODULE__{entries: entries}, module_name) do
-    case Map.fetch(entries, module_name) do
+  def fetch(%__MODULE__{entries: entries, providers: providers}, module_name) do
+    owner = Map.get(providers, module_name, module_name)
+
+    case Map.fetch(entries, owner) do
       {:ok, entry} ->
         {:ok, entry}
 
       :error ->
-        {:error, {:module_unavailable, module_name, %{available_modules: entries |> Map.keys() |> Enum.sort()}}}
+        {:error, {:module_unavailable, module_name, %{available_modules: providers |> Map.keys() |> Enum.sort()}}}
     end
   end
+
+  @doc "Return the source module whose compilation unit provides `module_name`."
+  @spec provider_owner(t(), String.t()) :: String.t() | nil
+  def provider_owner(%__MODULE__{providers: providers}, module_name),
+    do: Map.get(providers, module_name)
 
   @spec fetch_by_path(t(), Path.t()) :: {:ok, Entry.t()} | {:error, term()}
   def fetch_by_path(%__MODULE__{paths: paths} = index, path) do
@@ -144,7 +154,10 @@ defmodule Cure.Compiler.ModuleIndex do
           index
           |> edges(name)
           |> Enum.map(& &1.target)
+          |> Enum.map(&(provider_owner(index, &1) || &1))
           |> Enum.filter(&Map.has_key?(index.entries, &1))
+          |> Enum.reject(&(&1 == name))
+          |> Enum.uniq()
 
         {name, deps}
       end)
@@ -212,10 +225,37 @@ defmodule Cure.Compiler.ModuleIndex do
     end)
   end
 
+  defp reject_provider_duplicates(entries) do
+    entries
+    |> Enum.flat_map(fn entry ->
+      Enum.map(entry.provided_modules, &{&1, entry.module_name, entry.source_path})
+    end)
+    |> Enum.group_by(&elem(&1, 0))
+    |> Enum.find_value(:ok, fn
+      {_provided, [{_name, _owner, _path}]} ->
+        nil
+
+      {provided, duplicates} ->
+        paths = duplicates |> Enum.map(&elem(&1, 2)) |> Enum.uniq() |> Enum.sort()
+
+        if length(paths) == 1,
+          do: nil,
+          else: {:error, {:duplicate_module, provided, paths}}
+    end)
+  end
+
   defp assemble(entries) do
+    providers =
+      entries
+      |> Enum.flat_map(fn entry ->
+        Enum.map(entry.provided_modules, &{&1, entry.module_name})
+      end)
+      |> Enum.into(%{})
+
     %__MODULE__{
       entries: Map.new(entries, &{&1.module_name, &1}),
       paths: Map.new(entries, &{&1.source_path, &1.module_name}),
+      providers: providers,
       prelude_providers:
         entries
         |> Enum.filter(& &1.prelude_provider?)
@@ -225,7 +265,7 @@ defmodule Cure.Compiler.ModuleIndex do
 
   defp validate_dependencies(index, known_modules) do
     universe =
-      index.entries
+      index.providers
       |> Map.keys()
       |> MapSet.new()
       |> MapSet.union(@compiler_modules)

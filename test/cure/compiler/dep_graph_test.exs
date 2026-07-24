@@ -24,6 +24,32 @@ defmodule Cure.Compiler.DepGraphTest do
       assert graph.module_index.entries["UserB"].source_path == b
     end
 
+    test "bulk compilation uses the graph when filenames oppose dependency order", %{tmp_dir: dir} do
+      output = Path.join(dir, "ebin")
+      provider = write!(dir, "zz_provider.cure", "mod Bulk.Provider\n  fn value() -> Int = 41\n")
+
+      consumer =
+        write!(
+          dir,
+          "aa_consumer.cure",
+          "mod Bulk.Consumer\n  use Bulk.Provider\n  fn run() -> Int = value() + 1\n"
+        )
+
+      assert {:ok, result} =
+               Cure.Compiler.compile_files([consumer, provider],
+                 output_dir: output,
+                 emit_events: false
+               )
+
+      assert Enum.map(result.compiled, &elem(&1, 0)) == [provider, consumer]
+      assert apply(:"Cure.Bulk.Consumer", :run, []) == 42
+    after
+      :code.purge(:"Cure.Bulk.Consumer")
+      :code.delete(:"Cure.Bulk.Consumer")
+      :code.purge(:"Cure.Bulk.Provider")
+      :code.delete(:"Cure.Bulk.Provider")
+    end
+
     test "deterministic: shuffled input, identical output", %{tmp_dir: dir} do
       paths =
         for n <- ["m1", "m2", "m3", "m4"] do
@@ -137,6 +163,13 @@ defmodule Cure.Compiler.DepGraphTest do
 
       assert {:ok, graph} = DepGraph.scan([source], validate_dependencies: true)
       assert "Cure.Generated.Worker" in graph.module_index.entries["GeneratedProvider"].provided_modules
+
+      assert {:ok, owner_entry} =
+               Cure.Compiler.ModuleIndex.fetch(graph.module_index, "Cure.Generated.Worker")
+
+      assert owner_entry.module_name == "GeneratedProvider"
+      assert owner_entry.source_path == source
+      assert graph.modules["Cure.Generated.Worker"] == source
     end
 
     test "blank placeholders sort last; parse failures are isolated nodes", %{tmp_dir: dir} do

@@ -325,19 +325,25 @@ defmodule Cure.Project do
   # dep edition must brick the build, not silently emit no beams and surface later
   # as opaque missing-module errors.
   defp compile_dep_files(cure_files, name, dep_ebin, base) do
-    Enum.reduce_while(cure_files, :ok, fn file, :ok ->
-      case Cure.Compiler.compile_file(file,
-             output_dir: dep_ebin,
-             emit_events: false,
-             project_dir: dep_project_dir(file, base)
-           ) do
-        {:error, {:edition_error, reason}} ->
-          {:halt, {:error, {:dependency_edition_error, name, reason}}}
+    case Cure.Compiler.compile_files(cure_files,
+           output_dir: dep_ebin,
+           emit_events: false,
+           source_roots: [Path.join(base, "lib")],
+           continue_on_error: true,
+           file_options: fn file -> [project_dir: dep_project_dir(file, base)] end
+         ) do
+      {:ok, %{errors: errors}} ->
+        case Enum.find_value(errors, fn
+               {_file, {:edition_error, reason}} -> reason
+               _ -> nil
+             end) do
+          nil -> :ok
+          reason -> {:error, {:dependency_edition_error, name, reason}}
+        end
 
-        _ ->
-          {:cont, :ok}
-      end
-    end)
+      {:error, reason} ->
+        {:error, {:dependency_compile_graph_error, name, reason}}
+    end
   end
 
   defp resolve_registry_dep(name, constraint, root, reuse_lock?) do

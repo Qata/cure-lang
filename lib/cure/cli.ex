@@ -653,27 +653,29 @@ defmodule Cure.CLI do
     else
       info("Compiling Cure standard library (#{length(cure_files)} modules)")
 
-      outcomes =
-        Enum.map(cure_files, fn path ->
-          name = Path.basename(path, ".cure")
+      case Cure.Compiler.compile_files(cure_files,
+             output_dir: output_dir,
+             emit_events: false,
+             source_roots: [stdlib_dir],
+             continue_on_error: true
+           ) do
+        {:ok, result} ->
+          Enum.each(result.compiled, fn {path, module, _warnings} ->
+            info("  #{Path.basename(path, ".cure")} -> #{module}")
+          end)
 
-          case Cure.Compiler.compile_file(path, output_dir: output_dir, emit_events: false) do
-            {:ok, module, _} ->
-              info("  #{name} -> #{module}")
-              :ok
+          Enum.each(result.errors, fn {path, reason} ->
+            info("  #{Path.basename(path, ".cure")}: compilation failed")
+            emit_host_diagnostic(reason, path)
+          end)
 
-            {:error, reason} ->
-              info("  #{name}: compilation failed")
-              emit_host_diagnostic(reason, path)
-              :error
-          end
-        end)
+          info("Output: #{output_dir}")
+          if result.errors != [], do: exit({:shutdown, 1})
 
-      info("Output: #{output_dir}")
-
-      # A module that failed to compile must make the command fail — otherwise a
-      # broken stdlib build reports success and a CI wrapper reads exit 0.
-      if Enum.any?(outcomes, &(&1 == :error)), do: exit({:shutdown, 1})
+        {:error, reason} ->
+          emit_host_diagnostic(reason, stdlib_dir)
+          exit({:shutdown, 1})
+      end
     end
   end
 
@@ -890,18 +892,21 @@ defmodule Cure.CLI do
   # that depends on it, which is more actionable than a single
   # "compilation error" line.
   defp load_project_lib do
-    "lib/**/*.cure"
-    |> Path.wildcard()
-    |> Enum.sort()
-    |> Enum.each(fn file ->
-      case Cure.Compiler.compile_and_load(File.read!(file), file: file, emit_events: false) do
-        {:ok, _module} ->
-          :ok
+    files = Path.wildcard("lib/**/*.cure")
 
-        {:error, reason} ->
+    case Cure.Compiler.compile_files(files,
+           emit_events: false,
+           source_roots: ["lib"],
+           continue_on_error: true
+         ) do
+      {:ok, result} ->
+        Enum.each(result.errors, fn {file, reason} ->
           emit_host_diagnostic(reason, file)
-      end
-    end)
+        end)
+
+      {:error, reason} ->
+        emit_host_diagnostic(reason, "lib")
+    end
   end
 
   defp run_doctests(filter) do

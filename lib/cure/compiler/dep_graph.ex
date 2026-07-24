@@ -62,8 +62,8 @@ defmodule Cure.Compiler.DepGraph do
            ),
          :ok <- maybe_validate_dependencies(module_index, opts) do
       modules =
-        Map.new(module_index.entries, fn {module_name, entry} ->
-          {module_name, entry.source_path}
+        Map.new(module_index.providers, fn {provided_name, owner} ->
+          {provided_name, module_index.entries[owner].source_path}
         end)
 
       universe = MapSet.union(known, MapSet.new(Map.keys(modules)))
@@ -183,12 +183,14 @@ defmodule Cure.Compiler.DepGraph do
 
   @doc "In-set `use` deps by module name (values sorted). Baking input for Preload."
   @spec order_deps_map(t()) :: %{String.t() => [String.t()]}
-  def order_deps_map(%__MODULE__{nodes: nodes, modules: modules}) do
+  def order_deps_map(%__MODULE__{nodes: nodes, modules: modules, module_index: module_index}) do
     for {_path, %{module: m} = node} <- nodes, is_binary(m), into: %{} do
       deps =
         node.order_deps
         |> Enum.map(& &1.target)
         |> Enum.filter(&(Map.has_key?(modules, &1) and &1 != m))
+        |> Enum.map(&(Cure.Compiler.ModuleIndex.provider_owner(module_index, &1) || &1))
+        |> Enum.reject(&(&1 == m))
         |> Enum.uniq()
         |> Enum.sort()
 
@@ -232,9 +234,16 @@ defmodule Cure.Compiler.DepGraph do
 
   @doc "Per-module closure deps (in-universe filtered, sorted). Baking input for Preload."
   @spec closure_deps_map(t()) :: %{String.t() => [String.t()]}
-  def closure_deps_map(%__MODULE__{nodes: nodes}) do
+  def closure_deps_map(%__MODULE__{nodes: nodes, module_index: module_index}) do
     for {_path, %{module: m} = node} <- nodes, is_binary(m), into: %{} do
-      {m, node.closure_deps}
+      deps =
+        node.closure_deps
+        |> Enum.map(&(Cure.Compiler.ModuleIndex.provider_owner(module_index, &1) || &1))
+        |> Enum.reject(&(&1 == m))
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      {m, deps}
     end
   end
 

@@ -124,13 +124,13 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
       src = make_tmp!()
       dst = make_tmp!()
 
-      write_cure!(src, "a_helper.cure", """
+      write_cure!(src, "z_helper.cure", """
       mod Std.TcaHelper
         @extern(:erlang, :abs, 1)
         fn ext_helper(x: Int) -> Int
       """)
 
-      write_cure!(src, "b_user.cure", """
+      write_cure!(src, "a_user.cure", """
       mod Std.TcaUser
         use Std.TcaHelper
         fn use_it(x: Int) -> Int = ext_helper(x)
