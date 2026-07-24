@@ -186,6 +186,59 @@ defmodule Cure.Diagnostic.Adapter.Arity do
     )
   end
 
+  @doc false
+  def typed_pattern_arity_failure(context, opts) do
+    constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
+    binder = name_to_string(Map.get(context, :binder, "field"))
+    supplied = Map.get(context, :supplied_arity, 0)
+    accepted = Map.get(context, :visible_arity, 0)
+    argument_index = Map.get(context, :argument_index, accepted)
+    primary_span = Map.get(context, :typed_pattern_span) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(context, :constructor_name_span) do
+        %Span{} = span when span != primary_span ->
+          [
+            %Label{
+              span: span,
+              style: :secondary,
+              message: "`#{constructor}` accepts #{count_phrase(accepted, "visible field")}"
+            }
+          ]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "`#{constructor}` pattern has #{count_phrase(supplied, "field")}, but the constructor has #{accepted}",
+      body:
+        Doc.paragraph(
+          "`#{binder}` is field #{argument_index + 1} in this pattern, but `#{constructor}` exposes only #{count_phrase(accepted, "field")} to match. The pattern cannot bind a field that the constructor does not contain."
+        ),
+      primary: label(primary_span, :primary, "this extra field has no matching position in `#{constructor}`"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Remove the extra field, or use a constructor with #{count_phrase(supplied, "visible field")}",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :typed_pattern_arity,
+        constructor: constructor,
+        binder: binder,
+        argument_index: argument_index,
+        supplied_arity: supplied,
+        visible_arity: accepted,
+        checking: Map.get(context, :checking, :pattern)
+      }
+    )
+  end
+
   defp primary_label(opts, default_message) do
     case Keyword.get(opts, :span) do
       %Span{} = span -> %Label{span: span, style: :primary, message: Keyword.get(opts, :label, default_message)}
@@ -204,6 +257,15 @@ defmodule Cure.Diagnostic.Adapter.Arity do
     do: "remove #{argument_count(actual - expected)} from this constructor call"
 
   defp constructor_arity_label(_expected, _actual), do: "provide the arguments required by this constructor"
+
+  defp surface_declaration_name(name), do: name |> name_to_string() |> String.split("#") |> List.last()
+
+  defp plural(1, singular), do: singular
+  defp plural(_count, singular), do: singular <> "s"
+  defp count_phrase(count, singular), do: "#{count} #{plural(count, singular)}"
+
+  defp label(%Span{} = span, style, message), do: %Label{span: span, style: style, message: message}
+  defp label(_span, _style, _message), do: nil
 
   defp name_to_string(name) when is_atom(name), do: Atom.to_string(name)
   defp name_to_string(name) when is_binary(name), do: name
