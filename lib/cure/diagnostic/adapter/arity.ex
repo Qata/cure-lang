@@ -186,6 +186,9 @@ defmodule Cure.Diagnostic.Adapter.Arity do
     )
   end
 
+  def from_error({:typed_pattern_arity, position}, opts),
+    do: typed_pattern_arity_legacy_failure(position, opts)
+
   @doc false
   def typed_pattern_arity_failure(context, opts) do
     constructor = surface_declaration_name(Map.get(context, :constructor, :constructor))
@@ -236,6 +239,18 @@ defmodule Cure.Diagnostic.Adapter.Arity do
         visible_arity: accepted,
         checking: Map.get(context, :checking, :pattern)
       }
+    )
+  end
+
+  defp typed_pattern_arity_legacy_failure(position, opts) do
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "Pattern arity mismatch",
+      body: Doc.paragraph("This typed pattern has the wrong number of elements at position #{position}."),
+      primary: primary_label(opts, "make the pattern arity match the value"),
+      payload: %{kind: :typed_pattern, position: position}
     )
   end
 

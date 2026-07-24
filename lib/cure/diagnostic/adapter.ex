@@ -1388,7 +1388,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: TypeAdapter.from_error({:bad_projection, details}, opts)
 
   def from_error({:typed_pattern_arity, position}, opts),
-    do: arity_failure(:typed_pattern, %{position: position}, opts)
+    do: Arity.from_error({:typed_pattern_arity, position}, opts)
 
   def from_error({:typed_pattern_type_error, reason}, opts),
     do: TypeAdapter.from_error({:typed_pattern_type_error, reason}, opts)
@@ -2807,18 +2807,6 @@ defmodule Cure.Diagnostic.Adapter do
       end
 
     {title, message, label}
-  end
-
-  defp arity_failure(kind, details, opts) do
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Pattern arity mismatch",
-      body: Doc.paragraph("This typed pattern has the wrong number of elements at position #{details.position}."),
-      primary: primary_label(opts, "make the pattern arity match the value"),
-      payload: Map.put(details, :kind, kind)
-    )
   end
 
   defp expansion_proof_failure(details, context, opts) do
