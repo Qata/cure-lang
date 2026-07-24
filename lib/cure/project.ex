@@ -767,17 +767,17 @@ defmodule Cure.Project do
         if File.dir?(dir), do: Path.wildcard(Path.join(dir, "**/*.cure")), else: []
       end)
 
-    {cure_files_result, providers, module_index} =
+    {cure_files_result, compile_plan} =
       case Cure.Compiler.prepare_files(discovered) do
-        {:ok, %{ordered: ordered, providers: providers, cycles: cycles, module_index: module_index}} ->
+        {:ok, %{ordered: ordered, cycles: cycles} = plan} ->
           Enum.each(cycles, fn walk ->
             Logger.warning(render_host_diagnostic({:import_cycle, walk}, project.root))
           end)
 
-          {{:ok, ordered}, providers, module_index}
+          {{:ok, ordered}, plan}
 
         {:error, _} = err ->
-          {err, [], nil}
+          {err, nil}
       end
 
     with {:ok, cure_files} <- cure_files_result,
@@ -791,8 +791,7 @@ defmodule Cure.Project do
              check?,
              declared_phases(project),
              extra_paths,
-             providers,
-             module_index
+             compile_plan
            ),
          :ok <- maybe_write_app_resource(app_info, modules, project, output_dir) do
       {:ok, %{modules: modules, app_module: app_module(app_info)}}
@@ -957,8 +956,7 @@ defmodule Cure.Project do
          check?,
          declared_phases,
          source_roots,
-         prelude_providers,
-         module_index
+         compile_plan
        ) do
     base_opts = [
       output_dir: output_dir,
@@ -971,30 +969,20 @@ defmodule Cure.Project do
         do: Keyword.put(base_opts, :declared_phases, declared_phases),
         else: base_opts
 
-    opts = Keyword.put(opts, :source_roots, source_roots)
+    opts =
+      opts
+      |> Keyword.put(:source_roots, source_roots)
+      |> Keyword.put(:plan, compile_plan)
 
-    # A user `@prelude` module reached by the project scan contributes its
-    # operators to every file compiled in this run (see `:prelude_providers`).
-    opts = Keyword.put(opts, :prelude_providers, prelude_providers)
-    opts = Keyword.put(opts, :module_index, module_index)
+    case Cure.Compiler.compile_files(files, opts) do
+      {:ok, %{compiled: compiled}} ->
+        {:ok, Enum.map(compiled, fn {_path, module, _warnings} -> module end)}
 
-    result =
-      Enum.reduce_while(files, {:ok, []}, fn file, {:ok, acc} ->
-        case Cure.Compiler.compile_file(file, opts) do
-          {:ok, module, _warnings} ->
-            # Best-effort: lifted behavior modules load themselves during
-            # codegen and may have no beam on disk.
-            _ = Cure.Compiler.load_emitted(module, output_dir)
-            {:cont, {:ok, [module | acc]}}
+      {:error, {_path, reason}} ->
+        {:error, {:compile_failed, reason}}
 
-          {:error, _} = err ->
-            {:halt, err}
-        end
-      end)
-
-    case result do
-      {:ok, modules} -> {:ok, Enum.reverse(modules)}
-      {:error, reason} -> {:error, {:compile_failed, reason}}
+      {:error, reason} ->
+        {:error, {:compile_failed, reason}}
     end
   end
 

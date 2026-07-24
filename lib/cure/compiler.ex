@@ -158,7 +158,7 @@ defmodule Cure.Compiler do
   def compile_files(files, opts \\ []) when is_list(files) do
     files = files |> Enum.map(&Path.expand/1) |> Enum.uniq()
 
-    with {:ok, plan} <- prepare_files(files) do
+    with {:ok, plan} <- bulk_plan(files, Keyword.get(opts, :plan)) do
       roots =
         opts
         |> Keyword.get(:source_roots, Enum.map(files, &Path.dirname/1))
@@ -168,6 +168,7 @@ defmodule Cure.Compiler do
 
       compile_opts =
         opts
+        |> Keyword.delete(:plan)
         |> Keyword.delete(:load_emitted)
         |> Keyword.delete(:file_options)
         |> Keyword.delete(:continue_on_error)
@@ -218,6 +219,25 @@ defmodule Cure.Compiler do
       end
     end
   end
+
+  defp bulk_plan(files, nil), do: prepare_files(files)
+
+  defp bulk_plan(files, %{ordered: ordered, providers: providers, cycles: cycles, module_index: module_index})
+       when is_list(ordered) and is_list(providers) and is_list(cycles) do
+    if MapSet.new(Enum.map(ordered, &Path.expand/1)) == MapSet.new(files) do
+      {:ok,
+       %{
+         ordered: Enum.map(ordered, &Path.expand/1),
+         providers: providers,
+         cycles: cycles,
+         module_index: module_index
+       }}
+    else
+      {:error, :bulk_compile_plan_mismatch}
+    end
+  end
+
+  defp bulk_plan(_files, _invalid), do: {:error, :invalid_bulk_compile_plan}
 
   defp bulk_compile_error(path, reason, compiled, errors, true),
     do: {:cont, {:ok, compiled, [{path, reason} | errors]}}

@@ -50,6 +50,36 @@ defmodule Cure.Compiler.DepGraphTest do
       :code.delete(:"Cure.Bulk.Provider")
     end
 
+    test "bulk drivers can reuse one validated graph plan", %{tmp_dir: dir} do
+      output = Path.join(dir, "planned_ebin")
+      provider = write!(dir, "zz_planned.cure", "mod Planned.Provider\n  fn value() -> Int = 8\n")
+
+      consumer =
+        write!(
+          dir,
+          "aa_planned.cure",
+          "mod Planned.Consumer\n  use Planned.Provider\n  fn run() -> Int = value()\n"
+        )
+
+      assert {:ok, plan} = Cure.Compiler.prepare_files([consumer, provider])
+
+      assert {:ok, result} =
+               Cure.Compiler.compile_files([consumer, provider],
+                 plan: plan,
+                 output_dir: output,
+                 emit_events: false
+               )
+
+      assert Enum.map(result.compiled, &elem(&1, 0)) == [provider, consumer]
+      assert apply(:"Cure.Planned.Consumer", :run, []) == 8
+      assert {:error, :bulk_compile_plan_mismatch} = Cure.Compiler.compile_files([consumer], plan: plan)
+    after
+      :code.purge(:"Cure.Planned.Consumer")
+      :code.delete(:"Cure.Planned.Consumer")
+      :code.purge(:"Cure.Planned.Provider")
+      :code.delete(:"Cure.Planned.Provider")
+    end
+
     test "deterministic: shuffled input, identical output", %{tmp_dir: dir} do
       paths =
         for n <- ["m1", "m2", "m3", "m4"] do
