@@ -1046,7 +1046,7 @@ defmodule Cure.Elab.Elaborator do
       :not ->
         result =
           with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
-               term = {:app, {:global, :not}, o_core},
+               term = {:app, {:global, Cure.Elab.Name.qualify("Std.Bool", :not)}, o_core},
                {:ok, type} <- Kernel.infer(ctx, term) do
             {:ok, term, type}
           end
@@ -1827,13 +1827,17 @@ defmodule Cure.Elab.Elaborator do
     ge: :float_ge
   }
 
-  defp build_binop(:and, l, r, _l_type, _ctx), do: {:ok, app2(:and, l, r)}
-  defp build_binop(:or, l, r, _l_type, _ctx), do: {:ok, app2(:or, l, r)}
+  defp build_binop(:and, l, r, _l_type, _ctx),
+    do: {:ok, app2(Cure.Elab.Name.qualify("Std.Bool", :and), l, r)}
+
+  defp build_binop(:or, l, r, _l_type, _ctx),
+    do: {:ok, app2(Cure.Elab.Name.qualify("Std.Bool", :or), l, r)}
 
   defp build_binop(op_sym, l, r, l_type, ctx) when op_sym in [:==, :!=] do
     case primitive_scrut_kind(l_type, Context.signature(ctx)) do
       {:ok, :bool} ->
-        {:ok, app2(if(op_sym == :==, do: :eq, else: :ne), l, r)}
+        name = if(op_sym == :==, do: :eq, else: :ne)
+        {:ok, app2(Cure.Elab.Name.qualify("Std.Bool", name), l, r)}
 
       {:ok, :int} ->
         {:ok, app2(builtin_op_global(if(op_sym == :==, do: :int_eq, else: :int_ne)), l, r)}

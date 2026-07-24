@@ -52,6 +52,9 @@ defmodule Cure.Elab.CanonicalDefinitionIdentityTest do
       |> Cure.Core.Env.add_def(:run, {:int_type}, {:global, :same})
 
     assert Program.reachable_def_names(env, [:run]) == [:"Fixture#run"]
+
+    assert {:error, {:emission_closure_missing, %{definition: :same, referenced_by: :"Fixture#run", module: "Fixture"}}} =
+             Emit.compile_forms(env, :Fixture, [:"Fixture#run"])
   end
 
   defp contains_term?(term, wanted) when term == wanted, do: true

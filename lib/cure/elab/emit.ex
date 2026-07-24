@@ -40,7 +40,8 @@ defmodule Cure.Elab.Emit do
     origins = Keyword.get(opts, :origins, %{})
     emit_opts = Keyword.take(opts, [:prefix, :local_owners])
 
-    with :ok <- reject_holes(env, names) do
+    with :ok <- validate_emission_closure(env, names),
+         :ok <- reject_holes(env, names) do
       BeamWriter.compile_and_load(module_forms(env, module, names, origins, emit_opts))
     end
   end
@@ -99,7 +100,8 @@ defmodule Cure.Elab.Emit do
     # Hole-check the FULL name set first — an unfilled obligation in a type-level
     # def is still refused (#102 firewall) — then drop the type-level defs from the
     # set that actually reaches emission.
-    with :ok <- reject_holes(env, names) do
+    with :ok <- validate_emission_closure(env, names),
+         :ok <- reject_holes(env, names) do
       emit_names = Enum.reject(names, &type_level_def?(env, &1))
 
       try do
@@ -109,6 +111,86 @@ defmodule Cure.Elab.Emit do
       end
     end
   end
+
+  @doc """
+  Validate that every selected definition and every Core global reachable from
+  it resolves to a real definition, compiler primitive, or extern boundary.
+
+  This runs before Erlang lowering so a malformed closure is a structured
+  compiler diagnostic rather than an `ArgumentError` from `function_form/2`.
+  """
+  @spec validate_emission_closure(Env.t(), [atom()]) :: :ok | {:error, term()}
+  def validate_emission_closure(%Env{} = env, names) do
+    Enum.reduce_while(names, {:ok, MapSet.new()}, fn name, {:ok, seen} ->
+      key = Env.resolve_key(env, env.defs, name)
+
+      case validate_reachable_definition(env, key, seen, nil) do
+        {:ok, next} -> {:cont, {:ok, next}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, _seen} -> :ok
+      {:error, _} = error -> error
+    end
+  end
+
+  defp validate_reachable_definition(env, key, seen, referenced_by) do
+    if MapSet.member?(seen, key) do
+      {:ok, seen}
+    else
+      case Map.get(env.defs, key) do
+        nil ->
+          {:error,
+           {:emission_closure_missing, %{definition: key, referenced_by: referenced_by, module: env.module_owner}}}
+
+        %{body: nil, builtin_op: builtin_op} when not is_nil(builtin_op) ->
+          {:ok, MapSet.put(seen, key)}
+
+        %{body: {:extern, {_module, _function, arity}}} when is_integer(arity) and arity >= 0 ->
+          {:ok, MapSet.put(seen, key)}
+
+        %{body: body} ->
+          seen = MapSet.put(seen, key)
+
+          body
+          |> core_global_refs()
+          |> Enum.uniq()
+          |> Enum.reduce_while({:ok, seen}, fn reference, {:ok, current} ->
+            case validate_reachable_definition(env, reference, current, key) do
+              {:ok, next} -> {:cont, {:ok, next}}
+              {:error, _} = error -> {:halt, error}
+            end
+          end)
+
+        definition ->
+          {:error, {:emission_closure_invalid, %{definition: key, referenced_by: referenced_by, value: definition}}}
+      end
+    end
+  end
+
+  defp core_global_refs({:global, name}), do: [name]
+
+  defp core_global_refs({:case, scrutinee, _motive, branches}) do
+    core_global_refs(scrutinee) ++
+      Enum.flat_map(branches, fn {_constructor, _arity, body} -> core_global_refs(body) end)
+  end
+
+  defp core_global_refs({:pi, _grade, _domain, _codomain}), do: []
+  defp core_global_refs({:lam, _grade, _domain, body}), do: core_global_refs(body)
+
+  defp core_global_refs({:let, _grade, _type, value, body}),
+    do: core_global_refs(value) ++ core_global_refs(body)
+
+  defp core_global_refs({:effect_type, _inner}), do: []
+
+  defp core_global_refs(term) when is_tuple(term),
+    do: term |> Tuple.to_list() |> Enum.flat_map(&core_global_refs/1)
+
+  defp core_global_refs(terms) when is_list(terms),
+    do: Enum.flat_map(terms, &core_global_refs/1)
+
+  defp core_global_refs(_leaf), do: []
 
   # A definition is TYPE-LEVEL when its type's ultimate codomain (after peeling the
   # parameter Π telescope) is a universe `{:type, _}` — i.e. it RETURNS a type. A
