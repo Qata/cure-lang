@@ -93,6 +93,21 @@ defmodule Cure.Elab.ResolutionTest do
     assert Enum.sort(Resolution.ambiguous_modules(env, :Nat)) == ["Std.Bar", "Std.Foo"]
   end
 
+  test "a direct import wins over an ambient prelude provider without changing either identity" do
+    env =
+      %{
+        Env.empty()
+        | import_modules: MapSet.new(["Direct"]),
+          bare_modules: MapSet.new(["Direct", "Prelude"]),
+          qualified_modules: MapSet.new(["Direct", "Prelude"])
+      }
+      |> Env.add_def(:"Direct#same", {:type, 0}, {:type, 0})
+      |> Env.add_def(:"Prelude#same", {:type, 0}, {:type, 0})
+
+    assert Resolution.resolve_bare(env, :same) == {:ok, :"Direct#same"}
+    assert Resolution.resolve_qualified(env, "Prelude.same", :value) == {:ok, :"Prelude#same"}
+  end
+
   test "the current module's canonical declaration wins a bare lookup" do
     env =
       Env.with_owner(Env.empty(), "Main")
