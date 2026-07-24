@@ -24,7 +24,7 @@ defmodule Cure.Compiler.DepGraph do
   emit the W086 warning. Duplicate module names remain a hard error.
   """
 
-  defstruct nodes: %{}, modules: %{}
+  defstruct nodes: %{}, modules: %{}, module_index: nil
 
   @type node_info :: %{
           path: Path.t(),
@@ -38,7 +38,8 @@ defmodule Cure.Compiler.DepGraph do
 
   @type t :: %__MODULE__{
           nodes: %{Path.t() => node_info()},
-          modules: %{String.t() => Path.t()}
+          modules: %{String.t() => Path.t()},
+          module_index: Cure.Compiler.ModuleIndex.t() | nil
         }
 
   # Behavior-shaped declarations are standard-library syntax macros and arrive
@@ -49,31 +50,59 @@ defmodule Cure.Compiler.DepGraph do
           {:ok, t()} | {:error, {:duplicate_module, String.t(), [Path.t()]}}
   def scan(paths, opts \\ []) do
     known = MapSet.new(Keyword.get(opts, :known_modules, []))
-    nodes = paths |> Enum.sort() |> Map.new(fn path -> {path, scan_file(path)} end)
+    expanded_paths = paths |> Enum.map(&Path.expand/1) |> Enum.uniq() |> Enum.sort()
 
-    case duplicate_module(nodes) do
-      {name, dup_paths} ->
-        {:error, {:duplicate_module, name, Enum.sort(dup_paths)}}
+    with {:ok, module_index} <-
+           Cure.Compiler.ModuleIndex.build(expanded_paths,
+             validate_dependencies: false,
+             ignore_unidentified: true
+           ) do
+      nodes =
+        expanded_paths
+        |> Map.new(fn path -> {path, scan_file(path)} end)
+        |> attach_canonical_module_facts(module_index)
 
-      nil ->
-        modules =
-          for {path, %{module: m}} <- nodes, is_binary(m), into: %{}, do: {m, path}
+      modules =
+        Map.new(module_index.entries, fn {module_name, entry} ->
+          {module_name, entry.source_path}
+        end)
 
-        universe = MapSet.union(known, MapSet.new(Map.keys(modules)))
+      universe = MapSet.union(known, MapSet.new(Map.keys(modules)))
 
-        prelude_modules =
-          nodes
-          |> Map.values()
-          |> Enum.filter(&Map.get(&1, :prelude_provider?, false))
-          |> MapSet.new(& &1.module)
+      prelude_modules = module_index.prelude_providers
 
-        nodes =
-          Map.new(nodes, fn {path, node} ->
-            {path, finalize_node(node, modules, universe, prelude_modules)}
-          end)
+      nodes =
+        Map.new(nodes, fn {path, node} ->
+          {path, finalize_node(node, modules, universe, prelude_modules)}
+        end)
 
-        {:ok, %__MODULE__{nodes: nodes, modules: modules}}
+      {:ok, %__MODULE__{nodes: nodes, modules: modules, module_index: module_index}}
     end
+  end
+
+  defp attach_canonical_module_facts(nodes, module_index) do
+    Map.new(nodes, fn {path, node} ->
+      case Cure.Compiler.ModuleIndex.fetch_by_path(module_index, path) do
+        {:ok, entry} ->
+          order_deps =
+            for %{kind: :use_import, target: target, line: line} <- entry.direct_edges,
+                do: %{target: target, line: line}
+
+          closure_deps = Enum.map(entry.direct_edges, & &1.target)
+
+          {path,
+           %{
+             node
+             | module: entry.module_name,
+               order_deps: order_deps,
+               closure_deps: closure_deps
+           }
+           |> Map.put(:prelude_provider?, entry.prelude_provider?)}
+
+        {:error, _} ->
+          {path, node}
+      end
+    end)
   end
 
   @type cycle_hop :: %{module: String.t(), path: Path.t(), line: pos_integer()}
@@ -176,21 +205,6 @@ defmodule Cure.Compiler.DepGraph do
   end
 
   # -- scanning ---------------------------------------------------------------
-
-  defp duplicate_module(nodes) do
-    nodes
-    |> Enum.reduce_while(%{}, fn {path, %{module: m}}, acc ->
-      cond do
-        not is_binary(m) -> {:cont, acc}
-        Map.has_key?(acc, m) -> {:halt, {m, [Map.fetch!(acc, m), path]}}
-        true -> {:cont, Map.put(acc, m, path)}
-      end
-    end)
-    |> case do
-      {name, dup_paths} -> {name, dup_paths}
-      _map -> nil
-    end
-  end
 
   defp scan_file(path) do
     base = %{

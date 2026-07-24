@@ -20,6 +20,8 @@ defmodule Cure.Compiler.DepGraphTest do
       {:ok, order, []} = DepGraph.order(graph)
 
       assert order == [a, b]
+      assert graph.module_index.entries["LibA"].source_path == a
+      assert graph.module_index.entries["UserB"].source_path == b
     end
 
     test "deterministic: shuffled input, identical output", %{tmp_dir: dir} do

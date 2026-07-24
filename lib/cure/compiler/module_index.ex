@@ -61,7 +61,7 @@ defmodule Cure.Compiler.ModuleIndex do
   def build(paths, opts \\ []) do
     paths = paths |> Enum.map(&Path.expand/1) |> Enum.uniq() |> Enum.sort()
 
-    with {:ok, entries} <- scan_entries(paths),
+    with {:ok, entries} <- scan_entries(paths, opts),
          :ok <- reject_duplicates(entries) do
       index = assemble(entries)
 
@@ -133,9 +133,9 @@ defmodule Cure.Compiler.ModuleIndex do
     Cure.Compiler.DepGraph.toposort(dependencies, names)
   end
 
-  defp scan_entries(paths) do
+  defp scan_entries(paths, opts) do
     Enum.reduce_while(paths, {:ok, []}, fn path, {:ok, entries} ->
-      case scan_entry(path) do
+      case scan_entry(path, opts) do
         {:ok, nil} -> {:cont, {:ok, entries}}
         {:ok, entry} -> {:cont, {:ok, [entry | entries]}}
         {:error, _reason} = error -> {:halt, error}
@@ -143,7 +143,7 @@ defmodule Cure.Compiler.ModuleIndex do
     end)
   end
 
-  defp scan_entry(path) do
+  defp scan_entry(path, opts) do
     with {:ok, source} <- File.read(path) do
       if String.trim(source) == "" do
         {:ok, nil}
@@ -170,7 +170,9 @@ defmodule Cure.Compiler.ModuleIndex do
              }}
 
           _ ->
-            {:error, {:module_identity_missing, path}}
+            if Keyword.get(opts, :ignore_unidentified, false),
+              do: {:ok, nil},
+              else: {:error, {:module_identity_missing, path}}
         end
       end
     else
