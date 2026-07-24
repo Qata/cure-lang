@@ -9,7 +9,6 @@ defmodule Cure.Diagnostic.Adapter do
     ExpectationOrigin,
     InductionProblem,
     Label,
-    ProvenanceFrame,
     ProofChainMismatchProblem,
     ProofChainSyntaxProblem,
     RewriteProblem,
@@ -2114,37 +2113,8 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:inconsistent_head_kind, name}, opts),
     do: NameAdapter.from_error({:inconsistent_head_kind, name}, opts)
 
-  def from_error({:lift_module_error, details}, opts) when is_map(details) do
-    macro = get_in(details, [:source_provenance, :macro]) || :macro
-    cause = Map.get(details, :cause)
-
-    case TypeAdapter.from_family_error(cause, details, opts) do
-      {:ok, diagnostic} ->
-        diagnostic
-
-      :error ->
-        cause_diagnostic = from_error(cause)
-
-        Diagnostic.new(
-          code: "E092",
-          key: :macro_expansion_failed,
-          severity: :error,
-          title: "#{macro_title(macro)} expansion failed",
-          message: macro_failure_message(macro, details.module, cause_diagnostic),
-          primary: primary_label(opts, "this `#{macro}` declaration generated the failing module"),
-          notes: [
-            "The generated module is an implementation detail; edit the authored `#{macro}` declaration instead."
-          ],
-          provenance: provenance_frames(details, opts),
-          payload: %{
-            macro: name_to_string(macro),
-            module: name_to_string(details.module),
-            behaviour: Map.get(details, :behaviour),
-            cause: %{code: cause_diagnostic.code, key: cause_diagnostic.key, payload: cause_diagnostic.payload}
-          }
-        )
-    end
-  end
+  def from_error({:lift_module_error, details}, opts) when is_map(details),
+    do: MacroAdapter.lift_module_error(details, opts)
 
   def from_error({kind, detail}, opts)
       when kind in [
@@ -7118,36 +7088,6 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp surface_type(type) when is_binary(type), do: type
   defp surface_type(type), do: print_core(type)
-
-  defp macro_title(macro), do: macro |> name_to_string() |> String.capitalize()
-
-  defp macro_failure_message(macro, module, %Diagnostic{} = cause) do
-    "The `#{macro}` declaration could not generate `#{module}`. #{Diagnostic.message(cause)}"
-  end
-
-  defp provenance_frames(details, opts) do
-    source = Map.get(details, :source_provenance) || %{}
-    chain = Map.get(details, :expansion_provenance, [])
-    invocation = Keyword.get(opts, :span)
-
-    frames =
-      Enum.map(chain, fn frame ->
-        %ProvenanceFrame{
-          kind: :macro_expansion,
-          name: Map.get(frame, :keyword) || "macro",
-          invocation: invocation
-        }
-      end)
-
-    source_frame =
-      case Map.get(source, :macro) do
-        nil -> []
-        macro -> [%ProvenanceFrame{kind: :macro_expansion, name: macro, invocation: invocation}]
-      end
-
-    (frames ++ source_frame)
-    |> Enum.uniq_by(& &1.name)
-  end
 
   defp surface_declaration_name(name) do
     name

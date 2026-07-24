@@ -18,6 +18,7 @@ defmodule Cure.Diagnostic.Adapter.Macro do
   }
 
   alias Cure.Diagnostic.Suggest
+  alias Cure.Diagnostic.Adapter.Type, as: TypeAdapter
   alias Cure.MetaAST.Metadata
 
   @spec from_error(term(), keyword()) :: Diagnostic.t()
@@ -639,6 +640,43 @@ defmodule Cure.Diagnostic.Adapter.Macro do
 
   def computed_macro_error(meta, reason, opts) when is_list(meta),
     do: computed_macro_failure(meta, reason, opts)
+
+  def lift_module_error(details, opts) when is_map(details) do
+    macro = get_in(details, [:source_provenance, :macro]) || :macro
+    cause = Map.get(details, :cause)
+
+    case TypeAdapter.from_family_error(cause, details, opts) do
+      {:ok, diagnostic} ->
+        diagnostic
+
+      :error ->
+        cause_diagnostic = Cure.Diagnostic.Adapter.from_error(cause)
+
+        Diagnostic.new(
+          code: "E092",
+          key: :macro_expansion_failed,
+          severity: :error,
+          title: "#{macro_title(macro)} expansion failed",
+          message: macro_failure_message(macro, details.module, cause_diagnostic),
+          primary:
+            label(
+              Keyword.get(opts, :span),
+              :primary,
+              "this `#{macro}` declaration generated the failing module"
+            ),
+          notes: [
+            "The generated module is an implementation detail; edit the authored `#{macro}` declaration instead."
+          ],
+          provenance: provenance_frames(details, opts),
+          payload: %{
+            macro: name_to_string(macro),
+            module: name_to_string(details.module),
+            behaviour: Map.get(details, :behaviour),
+            cause: %{code: cause_diagnostic.code, key: cause_diagnostic.key, payload: cause_diagnostic.payload}
+          }
+        )
+    end
+  end
 
   defp driver_content(:invalid_driver_base, %{base: base}) do
     {"Driver base address is invalid",
@@ -1988,6 +2026,36 @@ defmodule Cure.Diagnostic.Adapter.Macro do
       {line, _column} when is_integer(line) -> Map.put(payload, :line, line)
       _ -> payload
     end
+  end
+
+  defp macro_title(macro), do: macro |> name_to_string() |> String.capitalize()
+
+  defp macro_failure_message(macro, module, %Diagnostic{} = cause) do
+    "The `#{macro}` declaration could not generate `#{module}`. #{Diagnostic.message(cause)}"
+  end
+
+  defp provenance_frames(details, opts) do
+    source = Map.get(details, :source_provenance) || %{}
+    chain = Map.get(details, :expansion_provenance, [])
+    invocation = Keyword.get(opts, :span)
+
+    frames =
+      Enum.map(chain, fn frame ->
+        %ProvenanceFrame{
+          kind: :macro_expansion,
+          name: Map.get(frame, :keyword) || "macro",
+          invocation: invocation
+        }
+      end)
+
+    source_frame =
+      case Map.get(source, :macro) do
+        nil -> []
+        macro -> [%ProvenanceFrame{kind: :macro_expansion, name: macro, invocation: invocation}]
+      end
+
+    (frames ++ source_frame)
+    |> Enum.uniq_by(& &1.name)
   end
 
   defp ranked_repair(spelling, candidates, span, unique_message, fallback_message) do
