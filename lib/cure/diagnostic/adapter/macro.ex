@@ -678,6 +678,98 @@ defmodule Cure.Diagnostic.Adapter.Macro do
     end
   end
 
+  def expansion_proof_failure(details, context, opts) do
+    keyword = Map.get(details, :keyword, Map.get(context, :keyword, "computed"))
+    rule_kind = Map.get(context, :rule_kind)
+    source = if rule_kind == :computed, do: "computed expander", else: "expansion template"
+
+    payload = %{
+      keyword: keyword,
+      macro: Map.get(context, :macro),
+      rule_kind: rule_kind,
+      shrunk_hole: Map.get(details, :shrunk_hole)
+    }
+
+    payload =
+      if Keyword.get(opts, :debug, false) do
+        Map.merge(payload, %{
+          generated_input: Map.get(details, :input),
+          generated_bindings: Map.get(details, :generated_bindings),
+          expansion: Map.get(details, :expansion),
+          internal_reason: Map.get(details, :kernel_error) || Map.get(details, :reason)
+        })
+      else
+        payload
+      end
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_expansion_failed,
+      severity: :error,
+      title: "Macro rule can generate ill-typed code",
+      body:
+        Doc.paragraph("The `#{keyword}` rule has a generated counterexample that the dependent elaborator rejects."),
+      primary: label(Map.get(context, :span), :primary, "this #{source} produces the invalid expansion"),
+      suggestions: [
+        %Suggestion{
+          message: "Fix the `#{keyword}` rule so every accepted input produces well-typed Cure code",
+          applicability: :manual
+        }
+      ],
+      notes: ["The generated counterexample and internal elaboration reason are available in debug output."],
+      provenance: Keyword.get(opts, :provenance, []),
+      payload: payload
+    )
+  end
+
+  def generated_hole_invariant_failure(details, context, opts) do
+    category = Map.get(details, :category, Map.get(context, :category, "unknown"))
+    hole = Map.get(details, :hole, Map.get(context, :hole))
+    fingerprint = diagnostic_fingerprint({:generated_hole_not_well_typed, category, hole, Map.get(details, :term)})
+
+    payload = %{
+      kind: :generated_hole_not_well_typed,
+      macro: Map.get(context, :macro),
+      category: category,
+      hole: hole,
+      fingerprint: fingerprint
+    }
+
+    payload =
+      if Keyword.get(opts, :debug, false),
+        do: Map.put(payload, :generated_term, Map.get(details, :term)),
+        else: payload
+
+    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      context
+      |> Map.get(:hole_spans, [])
+      |> Enum.map(&label(&1, :secondary, "this hole is affected by the same generator failure"))
+      |> Enum.reject(&(&1.span == primary_span))
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_validation_failed,
+      severity: :error,
+      title: "Macro proof generator produced an invalid value",
+      body:
+        Doc.paragraph(
+          "The compiler's `#{name_to_string(category)}` proof generator produced a value that failed its own type check. This is not an error in the macro declaration."
+        ),
+      primary: label(primary_span, :primary, "proof generation failed while checking this hole"),
+      secondary: secondary,
+      notes: ["Internal diagnostic fingerprint: #{fingerprint}."],
+      suggestions: [
+        %Suggestion{
+          message: "Report this compiler defect with fingerprint `#{fingerprint}`",
+          applicability: :manual
+        }
+      ],
+      payload: payload
+    )
+  end
+
   defp driver_content(:invalid_driver_base, %{base: base}) do
     {"Driver base address is invalid",
      "A driver base address must be a non-negative integer, but this definition uses `#{name_to_string(base)}`.",

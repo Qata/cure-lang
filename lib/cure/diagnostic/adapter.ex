@@ -199,14 +199,14 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:source_context, {:expansion_ill_typed, details}, context}, opts)
       when is_map(details) and is_map(context),
-      do: expansion_proof_failure(details, context, opts)
+      do: MacroAdapter.expansion_proof_failure(details, context, opts)
 
   def from_error({:source_context, {:unsupported_hole_type, category}, context}, opts) when is_map(context),
     do: MacroAdapter.validation_failure(:unsupported_hole_type, %{detail: category}, opts, context)
 
   def from_error({:source_context, {:generated_hole_not_well_typed, details}, context}, opts)
       when is_map(details) and is_map(context),
-      do: generated_hole_invariant_failure(details, context, opts)
+      do: MacroAdapter.generated_hole_invariant_failure(details, context, opts)
 
   def from_error({:example_mismatch, mismatches}, opts),
     do: MacroAdapter.validation_failure(:example_mismatch, mismatches, opts)
@@ -1003,7 +1003,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: TypeAdapter.from_error({:cannot_infer_dependent_match, branch}, opts)
 
   def from_error({:generated_hole_not_well_typed, term}, opts),
-    do: generated_hole_invariant_failure(%{term: term}, %{}, opts)
+    do: MacroAdapter.generated_hole_invariant_failure(%{term: term}, %{}, opts)
 
   def from_error({:example_use_site_not_fully_consumed, _unused, _ast}, opts),
     do: MacroAdapter.validation_failure(:example_use_site_not_fully_consumed, %{}, opts)
@@ -2699,103 +2699,6 @@ defmodule Cure.Diagnostic.Adapter do
       end
 
     {title, message, label}
-  end
-
-  defp expansion_proof_failure(details, context, opts) do
-    keyword = Map.get(details, :keyword, Map.get(context, :keyword, "computed"))
-    rule_kind = Map.get(context, :rule_kind)
-
-    source =
-      case rule_kind do
-        :computed -> "computed expander"
-        _ -> "expansion template"
-      end
-
-    payload = %{
-      keyword: keyword,
-      macro: Map.get(context, :macro),
-      rule_kind: rule_kind,
-      shrunk_hole: Map.get(details, :shrunk_hole)
-    }
-
-    payload =
-      if Keyword.get(opts, :debug, false) do
-        Map.merge(payload, %{
-          generated_input: Map.get(details, :input),
-          generated_bindings: Map.get(details, :generated_bindings),
-          expansion: Map.get(details, :expansion),
-          internal_reason: Map.get(details, :kernel_error) || Map.get(details, :reason)
-        })
-      else
-        payload
-      end
-
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_expansion_failed,
-      severity: :error,
-      title: "Macro rule can generate ill-typed code",
-      body:
-        Doc.paragraph("The `#{keyword}` rule has a generated counterexample that the dependent elaborator rejects."),
-      primary: pickup_label(Map.get(context, :span), :primary, "this #{source} produces the invalid expansion"),
-      suggestions: [
-        %Suggestion{
-          message: "Fix the `#{keyword}` rule so every accepted input produces well-typed Cure code",
-          applicability: :manual
-        }
-      ],
-      notes: ["The generated counterexample and internal elaboration reason are available in debug output."],
-      provenance: Keyword.get(opts, :provenance, []),
-      payload: payload
-    )
-  end
-
-  defp generated_hole_invariant_failure(details, context, opts) do
-    category = Map.get(details, :category, Map.get(context, :category, "unknown"))
-    hole = Map.get(details, :hole, Map.get(context, :hole))
-    fingerprint = diagnostic_fingerprint({:generated_hole_not_well_typed, category, hole, Map.get(details, :term)})
-
-    payload = %{
-      kind: :generated_hole_not_well_typed,
-      macro: Map.get(context, :macro),
-      category: category,
-      hole: hole,
-      fingerprint: fingerprint
-    }
-
-    payload =
-      if Keyword.get(opts, :debug, false),
-        do: Map.put(payload, :generated_term, Map.get(details, :term)),
-        else: payload
-
-    primary_span = Map.get(context, :span) || Keyword.get(opts, :span)
-
-    secondary =
-      context
-      |> Map.get(:hole_spans, [])
-      |> Enum.map(&pickup_label(&1, :secondary, "this hole is affected by the same generator failure"))
-      |> Enum.reject(&(&1.span == primary_span))
-
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_validation_failed,
-      severity: :error,
-      title: "Macro proof generator produced an invalid value",
-      body:
-        Doc.paragraph(
-          "The compiler's `#{name_to_string(category)}` proof generator produced a value that failed its own type check. This is not an error in the macro declaration."
-        ),
-      primary: pickup_label(primary_span, :primary, "proof generation failed while checking this hole"),
-      secondary: secondary,
-      notes: ["Internal diagnostic fingerprint: #{fingerprint}."],
-      suggestions: [
-        %Suggestion{
-          message: "Report this compiler defect with fingerprint `#{fingerprint}`",
-          applicability: :manual
-        }
-      ],
-      payload: payload
-    )
   end
 
   defp lift_module_failure(kind, details, opts) do
@@ -6911,14 +6814,6 @@ defmodule Cure.Diagnostic.Adapter do
   defp name_to_string(name) when is_atom(name), do: Atom.to_string(name)
   defp name_to_string(name) when is_binary(name), do: name
   defp name_to_string(name), do: inspect(name)
-
-  defp diagnostic_fingerprint(term) do
-    term
-    |> :erlang.term_to_binary()
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.encode16(case: :lower)
-    |> binary_part(0, 12)
-  end
 
   defp print_core(term) do
     term
