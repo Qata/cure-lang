@@ -342,7 +342,7 @@ defmodule Cure.Core.Builtins do
   defp nat_ctors(env),
     do: [
       Inductive.ctor(Env.owned_name(env, :Z), [], []),
-      Inductive.ctor(Env.owned_name(env, :S), [{:n, {:data, Env.owned_name(env, :Nat), [], []}}], [])
+      Inductive.ctor(Env.owned_name(env, :S), [{:_a0, {:data, Env.owned_name(env, :Nat), [], []}}], [])
     ]
 
   # Int : Type0 = FromNat(Nat) | NegativeSuccessor(Nat). Both fields reference the
@@ -360,8 +360,8 @@ defmodule Cure.Core.Builtins do
     nat = {:data, Inductive.builtin(env, :nat), [], []}
 
     [
-      Inductive.ctor(Env.owned_name(env, :FromNat), [{:n, nat}], []),
-      Inductive.ctor(Env.owned_name(env, :NegativeSuccessor), [{:n, nat}], [])
+      Inductive.ctor(Env.owned_name(env, :FromNat), [{:_a0, nat}], []),
+      Inductive.ctor(Env.owned_name(env, :NegativeSuccessor), [{:_a0, nat}], [])
     ]
   end
 
