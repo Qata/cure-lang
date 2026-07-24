@@ -271,7 +271,8 @@ defmodule Cure.DiagnosticExerciserTest do
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))
     compiler_fixture_ids = Enum.flat_map(compiler_cases, &compiler_case_fixture_ids/1)
 
-    Enum.each(compiler_cases, fn compiler_case ->
+    Enum.with_index(compiler_cases, 1)
+    |> Enum.each(fn {compiler_case, audit_index} ->
       {label, expected_code, source, fixture_id} = compiler_case_parts(compiler_case)
 
       case Cure.Compiler.compile_string(source, emit_events: false) do
@@ -303,7 +304,12 @@ defmodule Cure.DiagnosticExerciserTest do
             )
 
           assert Enum.any?(String.split(source, "\n"), &(&1 != "" and String.contains?(terminal, &1)))
-          IO.puts(:stderr, "[#{label}]\n" <> terminal)
+
+          if audit?() do
+            print_audit_case(audit_index, label, expected_code, fixture_id, diagnostic, registry)
+          else
+            IO.puts(:stderr, "[#{label}]\n" <> terminal)
+          end
       end
     end)
 
@@ -355,8 +361,9 @@ defmodule Cure.DiagnosticExerciserTest do
                only_producers: [:pattern_checker, :proof_checker]
              )
 
-    Enum.each(boundary_cases, fn {label, expected_code, reason} ->
-      {diagnostic, _registry} =
+    Enum.with_index(boundary_cases, length(compiler_cases) + 1)
+    |> Enum.each(fn {{label, expected_code, reason}, audit_index} ->
+      {diagnostic, registry} =
         Cure.Compiler.Errors.to_diagnostic(reason, "#{label}.cure", "fn run() -> Int = 1\n")
 
       assert diagnostic.code == expected_code
@@ -365,6 +372,9 @@ defmodule Cure.DiagnosticExerciserTest do
       assert Cure.Compiler.Errors.format_with_source(reason, "#{label}.cure", "fn run() -> Int = 1\n") =~
                expected_code,
              "#{label} still uses the legacy source formatter path"
+
+      if audit?(),
+        do: print_audit_case(audit_index, label, expected_code, nil, diagnostic, registry)
     end)
 
     diagnostics = [
@@ -397,18 +407,25 @@ defmodule Cure.DiagnosticExerciserTest do
 
     fixture_inventory = Cure.Diagnostic.Registry.producer_fixture_inventory()
 
-    Enum.each(diagnostics, fn {fixture_id, diagnostic} ->
+    operational_offset = length(compiler_cases) + length(boundary_cases) + 1
+
+    Enum.with_index(diagnostics, operational_offset)
+    |> Enum.each(fn {{fixture_id, diagnostic}, audit_index} ->
       assert {expected_code, _producer} = Map.fetch!(fixture_inventory, fixture_id)
       assert diagnostic.code == expected_code
 
-      IO.puts(
-        :stderr,
-        Renderer.terminal(
-          diagnostic,
-          nil,
-          Keyword.merge(render_options(), output_device: :standard_error)
+      if audit?() do
+        print_audit_case(audit_index, Atom.to_string(fixture_id), expected_code, fixture_id, diagnostic, nil)
+      else
+        IO.puts(
+          :stderr,
+          Renderer.terminal(
+            diagnostic,
+            nil,
+            Keyword.merge(render_options(), output_device: :standard_error)
+          )
         )
-      )
+      end
     end)
 
     operational_codes = Enum.map(diagnostics, fn {_fixture_id, diagnostic} -> diagnostic.code end)
@@ -434,8 +451,18 @@ defmodule Cure.DiagnosticExerciserTest do
     IO.puts(:stderr, "UNCOVERED REGISTERED CODES: " <> Enum.join(missing_codes, ", "))
     assert MapSet.subset?(covered_codes, registered_codes)
 
-    if Keyword.get(Application.get_env(:cure, :diagnostics_exerciser, []), :coverage, false) do
+    config = Application.get_env(:cure, :diagnostics_exerciser, [])
+
+    if Keyword.get(config, :coverage, false) or audit?() do
       assert missing_codes == [], "diagnostic coverage is incomplete"
+    end
+
+    if audit?() do
+      IO.puts(
+        :stderr,
+        "DIAGNOSTIC AUDIT COMPLETE: #{length(compiler_cases) + length(boundary_cases) + length(diagnostics)} cases; " <>
+          "#{MapSet.size(registered_codes)} registered codes covered"
+      )
     end
   end
 
@@ -447,6 +474,34 @@ defmodule Cure.DiagnosticExerciserTest do
     refute plain =~ "** ("
     refute plain =~ "lib/cure/"
     refute plain =~ "#Function<"
+  end
+
+  defp audit? do
+    Keyword.get(Application.get_env(:cure, :diagnostics_exerciser, []), :audit, false)
+  end
+
+  defp print_audit_case(index, label, expected_code, fixture_id, diagnostic, registry) do
+    entry = Cure.Diagnostic.Registry.fetch!(expected_code)
+
+    fixture =
+      case fixture_id do
+        nil -> "-"
+        fixture_id -> Atom.to_string(fixture_id)
+      end
+
+    IO.puts(
+      :stderr,
+      "\n=== DIAGNOSTIC AUDIT #{index} ===\n" <>
+        "label=#{label} code=#{diagnostic.code} key=#{diagnostic.key} " <>
+        "subsystem=#{entry.subsystem} fixture=#{fixture} " <>
+        "producers=#{Enum.join(Enum.map(entry.producers, &Atom.to_string/1), ",")}\n" <>
+        "payload_keys=#{diagnostic.payload |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort() |> Enum.join(",")}\n" <>
+        Renderer.terminal(
+          diagnostic,
+          registry,
+          Keyword.merge(render_options(), output_device: :standard_error)
+        )
+    )
   end
 
   defp compiler_case_parts({label, code, source}), do: {label, code, source, nil}
