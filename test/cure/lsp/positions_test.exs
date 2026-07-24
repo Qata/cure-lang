@@ -41,6 +41,25 @@ defmodule Cure.LSP.PositionsTest do
     assert Positions.line_range(2, "mod M\n  fn main() = 1", :utf16)["end"] == %{"line" => 1, "character" => 15}
   end
 
+  test "CRLF terminators are not counted as line characters" do
+    source = "mod M\r\n  fn main() = 1\r\n"
+
+    span =
+      Span.new(
+        source_id: :crlf,
+        start_byte: byte_size("mod M\r\n"),
+        end_byte: byte_size("mod M\r\n  fn main() = 1"),
+        start_line: 2,
+        start_column: 1,
+        end_line: 2,
+        end_column: 16
+      )
+
+    assert Positions.line_range(2, source, :utf8)["end"] == %{"line" => 1, "character" => 15}
+    assert Positions.line_range(2, source, :utf16)["end"] == %{"line" => 1, "character" => 15}
+    assert Positions.range(span, source, :utf8)["end"] == %{"line" => 1, "character" => 15}
+  end
+
   test "document symbols use authored spans" do
     source = "mod M\n  fn main() -> Int = 1\n"
     {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, emit_events: false)
