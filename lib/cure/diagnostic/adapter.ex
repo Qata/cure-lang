@@ -1536,113 +1536,15 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:compile_time_totality, _name, _reason} = error, opts),
     do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:pickup_no_else, details}, opts) when is_map(details) do
-    clauses = pickup_spans(details.clauses)
-    span = List.last(clauses) || details.pickup || Keyword.get(opts, :span)
+  def from_error({:pickup_no_else, _details} = error, opts), do: StaticAnalysis.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E076",
-      key: :pickup_missing_else,
-      severity: :error,
-      title: "Pickup needs a fallback",
-      body:
-        Doc.paragraph(
-          "A `pickup` must finish with a fallback branch so it has a result when no earlier condition is true."
-        ),
-      primary: pickup_label(span, :primary, "this is the final branch, but it is not a fallback"),
-      suggestions: [
-        %Suggestion{
-          message: "Add `else -> ...` after this branch, or change the final condition to `true`",
-          applicability: :manual
-        }
-      ],
-      payload: Map.put(details, :repair_alternatives, [:append_else_branch, :use_trailing_true])
-    )
-  end
+  def from_error({:pickup_else_not_last, _details} = error, opts), do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:pickup_else_not_last, details}, opts) when is_map(details) do
-    clauses = pickup_spans(details.clauses)
-    index = details.terminator_index
-    else_span = details.else_clauses |> Enum.find_value(fn {idx, span} -> if idx == index, do: span end)
-    primary_span = else_span || Enum.at(clauses, index) || Keyword.get(opts, :span)
+  def from_error({:pickup_multiple_else, _details} = error, opts), do: StaticAnalysis.from_error(error, opts)
 
-    secondary =
-      clauses
-      |> Enum.drop(index + 1)
-      |> Enum.map(&pickup_label(&1, :secondary, "this branch can never be reached after `else`"))
-      |> Enum.reject(&is_nil/1)
-
-    Diagnostic.new(
-      code: "E077",
-      key: :pickup_else_not_last,
-      severity: :error,
-      title: "Fallback branch is not last",
-      body: Doc.paragraph("An `else` branch matches every remaining case, so no branch may follow it."),
-      primary: pickup_label(primary_span, :primary, "this fallback matches everything that reaches it"),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{message: "Move the `else` branch after every conditional branch", applicability: :manual}
-      ],
-      payload: details
-    )
-  end
-
-  def from_error({:pickup_multiple_else, details}, opts) when is_map(details) do
-    else_spans = details.else_clauses |> Enum.map(&elem(&1, 1)) |> pickup_spans()
-    primary_span = Enum.at(else_spans, 1) || List.first(else_spans) || Keyword.get(opts, :span)
-
-    secondary =
-      else_spans
-      |> List.delete_at(1)
-      |> Enum.map(&pickup_label(&1, :secondary, "another fallback branch is here"))
-      |> Enum.reject(&is_nil/1)
-
-    Diagnostic.new(
-      code: "E078",
-      key: :pickup_multiple_else,
-      severity: :error,
-      title: "Pickup has more than one fallback",
-      body:
-        Doc.paragraph(
-          "Only one `else` branch is allowed because the first fallback already matches every remaining case."
-        ),
-      primary: pickup_label(primary_span, :primary, "this second fallback is redundant"),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Keep one `else` branch and remove or give conditions to the others",
-          applicability: :manual
-        }
-      ],
-      payload: details
-    )
-  end
-
-  def from_error({kind, message, meta}, opts)
-      when kind in [:pickup_no_else, :pickup_else_not_last, :pickup_multiple_else] and
-             is_binary(message) and is_list(meta) do
-    {code, key, title, hint} =
-      case kind do
-        :pickup_no_else ->
-          {"E076", :pickup_missing_else, "pickup without else", "add a final `else -> ...` clause"}
-
-        :pickup_else_not_last ->
-          {"E077", :pickup_else_not_last, "pickup else is not last", "move `else -> ...` to the final clause"}
-
-        :pickup_multiple_else ->
-          {"E078", :pickup_multiple_else, "pickup has multiple else clauses", "keep exactly one `else -> ...` clause"}
-      end
-
-    Diagnostic.new(
-      code: code,
-      key: key,
-      severity: :error,
-      title: title,
-      message: message,
-      primary: primary_label(opts, hint),
-      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
-    )
-  end
+  def from_error({kind, _, _} = error, opts)
+      when kind in [:pickup_no_else, :pickup_else_not_last, :pickup_multiple_else],
+      do: StaticAnalysis.from_error(error, opts)
 
   def from_error({:ambiguous_name, _name, _modules} = error, opts),
     do: NameAdapter.from_error(error, opts)
@@ -3525,8 +3427,6 @@ defmodule Cure.Diagnostic.Adapter do
         nil
     end
   end
-
-  defp pickup_spans(spans), do: Enum.filter(spans, &match?(%Span{}, &1))
 
   defp pickup_label(%Span{} = span, style, message), do: %Label{span: span, style: style, message: message}
   defp pickup_label(_, _style, _message), do: nil
