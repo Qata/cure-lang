@@ -819,6 +819,141 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
+  @doc """
+  Decode the erased BEAM representation of `Std.Syntax`.
+
+  This is the runtime twin of `from_core/1`. Computed macros normally use the
+  bounded Core normalizer, while an already-compiled macro may be executed as
+  an optimization. Both paths cross the same mirror representation before
+  generated syntax is accepted.
+  """
+  @spec from_runtime(term()) :: repr() | {:error, term()}
+  def from_runtime({:Node, tag, attrs, kids}) when is_atom(tag) and is_list(kids) do
+    with {:ok, attrs} <- from_runtime_attrs(attrs),
+         {:ok, kids} <- map_results(kids, &from_runtime/1),
+         true <- Enum.all?(kids, &syntax_repr?/1) do
+      {:syn_node, tag, attrs, kids}
+    else
+      _ -> {:error, {:invalid_runtime_syntax_node, attrs, kids}}
+    end
+  end
+
+  def from_runtime({:Leaf, tag, attrs, lit}) when is_atom(tag) do
+    with {:ok, attrs} <- from_runtime_attrs(attrs),
+         {:ok, lit} <- from_runtime_synlit(lit) do
+      {:syn_leaf, tag, attrs, lit}
+    else
+      _ -> {:error, {:invalid_runtime_syntax_leaf, tag}}
+    end
+  end
+
+  def from_runtime({:Raw, lit}) do
+    case from_runtime_synlit(lit) do
+      {:ok, decoded} -> {:syn_raw, decoded}
+      error -> error
+    end
+  end
+
+  def from_runtime({:Quoted, syntax}) do
+    case from_runtime(syntax) do
+      {:error, _} = error -> error
+      decoded -> {:syn_quoted, decoded}
+    end
+  end
+
+  def from_runtime({:Failure, name, args}) when is_atom(name) and is_list(args) do
+    with {:ok, args} <- map_results(args, &from_runtime/1),
+         true <- Enum.all?(args, &syntax_repr?/1) do
+      {:syn_failure, name, args}
+    else
+      _ -> {:error, {:invalid_runtime_syntax_failure, name}}
+    end
+  end
+
+  def from_runtime(other), do: {:error, {:unsupported_runtime_syntax, other}}
+
+  @doc "Decode the erased BEAM representation of a source-level `MacroResult`."
+  @spec from_runtime_macro_result(term()) ::
+          {:expanded, repr()}
+          | {:rejected, [repr()]}
+          | :not_macro_result
+          | {:error, term()}
+  def from_runtime_macro_result({:Expanded, syntax}) do
+    case from_runtime(syntax) do
+      {:error, _} = error -> error
+      repr -> {:expanded, repr}
+    end
+  end
+
+  def from_runtime_macro_result({:Rejected, diagnostics}) when is_list(diagnostics) do
+    with {:ok, diagnostics} <- map_results(diagnostics, &from_runtime/1),
+         true <- Enum.all?(diagnostics, &syntax_repr?/1) do
+      {:rejected, diagnostics}
+    else
+      _ -> {:error, :invalid_runtime_macro_diagnostics}
+    end
+  end
+
+  def from_runtime_macro_result(_), do: :not_macro_result
+
+  defp from_runtime_attrs(attrs) when is_list(attrs) do
+    map_results(attrs, fn
+      {:KV, key, lit} when is_atom(key) ->
+        with {:ok, lit} <- from_runtime_synlit(lit), do: {key, lit}
+
+      _ ->
+        {:error, :invalid_runtime_syntax_attr}
+    end)
+  end
+
+  defp from_runtime_attrs(_), do: {:error, :invalid_runtime_syntax_attrs}
+
+  defp from_runtime_synlit({:SInt, n}) when is_integer(n), do: {:ok, {:s_int, n}}
+  defp from_runtime_synlit({:SFloat, f}) when is_float(f), do: {:ok, {:s_float, f}}
+
+  defp from_runtime_synlit({:SStr, chars}) when is_list(chars) do
+    if Enum.all?(chars, &(is_integer(&1) and &1 >= 0)) do
+      try do
+        {:ok, {:s_str, List.to_string(chars)}}
+      rescue
+        ArgumentError -> {:error, :invalid_runtime_syntax_string}
+      end
+    else
+      {:error, :invalid_runtime_syntax_string}
+    end
+  end
+
+  defp from_runtime_synlit({:SBool, value}) when is_boolean(value), do: {:ok, {:s_bool, value}}
+  defp from_runtime_synlit({:SAtom, value}) when is_atom(value), do: {:ok, {:s_atom, value}}
+
+  defp from_runtime_synlit({:SList, values}) when is_list(values) do
+    with {:ok, values} <- map_results(values, &from_runtime_synlit/1),
+         do: {:ok, {:s_list, values}}
+  end
+
+  defp from_runtime_synlit({:SSyntax, syntax}) do
+    case from_runtime(syntax) do
+      {:error, _} = error -> error
+      decoded -> {:ok, {:s_syntax, decoded}}
+    end
+  end
+
+  defp from_runtime_synlit({:SMap, pairs}) when is_list(pairs) do
+    with {:ok, pairs} <- map_results(pairs, &from_runtime_pair/1),
+         do: {:ok, {:s_map, pairs}}
+  end
+
+  defp from_runtime_synlit(:SOpaque), do: {:ok, :s_opaque}
+  defp from_runtime_synlit(_), do: {:error, :invalid_runtime_syntax_literal}
+
+  defp from_runtime_pair({:SPair, key, value}) do
+    with {:ok, key} <- from_runtime_synlit(key),
+         {:ok, value} <- from_runtime_synlit(value),
+         do: {key, value}
+  end
+
+  defp from_runtime_pair(_), do: {:error, :invalid_runtime_syntax_pair}
+
   defp decode_macro_diagnostics(value) do
     case from_core(value) do
       {:error, _} ->

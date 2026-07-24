@@ -1,11 +1,10 @@
 defmodule Cure.Elab.MacroRecursiveExpansionTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Errors, Lexer, Parser}
-  alias Cure.Core.Env
+  alias Cure.Compiler.{Errors, Lexer, MacroSyntax, Parser}
+  alias Cure.Core.{Context, Env, Normalise}
   alias Cure.Diagnostic.Renderer
-  alias Cure.Elab.MacroExpand
-  alias Cure.Elab.Program
+  alias Cure.Elab.{MacroExpand, Name, Program}
 
   test "nested computed macros normalize inside out before the outer macro runs" do
     source = """
@@ -142,6 +141,71 @@ defmodule Cure.Elab.MacroRecursiveExpansionTest do
   after
     :code.purge(:"Cure.MacroEscapes")
     :code.delete(:"Cure.MacroEscapes")
+  end
+
+  test "compiled macro values and the Core fallback decode to identical syntax" do
+    source = ~S'''
+    mod MacroBackendParity
+      use Std.Syntax
+
+      fn build() -> MacroResult =
+        Expanded(
+          Node(
+            :function_call,
+            [
+              KV(:name, SStr("same\nquote:\" slash:\\ λ")),
+              KV(:payload, SList([SInt(1), SBool(true), SAtom(:ok)]))
+            ],
+            [Leaf(:literal, [], SInt(7))]
+          )
+        )
+    '''
+
+    assert {:ok, env} = Program.elaborate(source)
+
+    core_result =
+      Normalise.nf(
+        Context.empty(env),
+        {:global, Name.qualify("MacroBackendParity", "build")}
+      )
+
+    assert {:expanded, core_syntax} = MacroSyntax.from_core_macro_result(core_result)
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert {:expanded, compiled_syntax} =
+             module
+             |> apply(:build, [])
+             |> MacroSyntax.from_runtime_macro_result()
+
+    assert compiled_syntax == core_syntax
+  after
+    :code.purge(:"Cure.MacroBackendParity")
+    :code.delete(:"Cure.MacroBackendParity")
+  end
+
+  test "sibling computed expansions freshen independently without cross-binding" do
+    source = """
+    mod MacroSiblingFreshness
+      use Std.Syntax
+
+      macro AddFresh
+        syntax addfresh <value: Code> computed by build
+
+      fn build(input: AddfreshSyntax) -> Syntax =
+        block([
+          Node(:assignment, [attr_value(:let, syntax_bool(true))], [fresh("tmp"), integer(100)]),
+          tuple([input.value, fresh("tmp")])
+        ])
+
+      fn run() -> Tuple(Tuple(Int, Int), Tuple(Int, Int)) =
+        %[addfresh 7, addfresh 8]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :run, []) == {{7, 100}, {8, 100}}
+  after
+    :code.purge(:"Cure.MacroSiblingFreshness")
+    :code.delete(:"Cure.MacroSiblingFreshness")
   end
 
   defp find_computed_use({:computed_use, _meta, _children} = node), do: node

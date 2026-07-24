@@ -173,6 +173,41 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:rejected, [^repr]} = MacroSyntax.from_core_macro_result(rejected)
   end
 
+  test "the erased BEAM codec agrees with the Core codec for every reflected literal shape" do
+    repr =
+      {:syn_node, :function_call,
+       [
+         name: {:s_str, "same\n\"slash\\λ"},
+         enabled: {:s_bool, true},
+         count: {:s_int, 2},
+         ratio: {:s_float, 1.5},
+         mode: {:s_atom, :safe},
+         values: {:s_list, [{:s_int, 1}, {:s_atom, :two}]},
+         lookup: {:s_map, [{{:s_atom, :key}, {:s_str, "value"}}]},
+         nested: {:s_syntax, {:syn_leaf, :literal, [], {:s_int, 7}}},
+         opaque: :s_opaque
+       ], [{:syn_raw, {:s_atom, :child}}]}
+
+    runtime =
+      {:Node, :function_call,
+       [
+         {:KV, :name, {:SStr, ~c"same\n\"slash\\λ"}},
+         {:KV, :enabled, {:SBool, true}},
+         {:KV, :count, {:SInt, 2}},
+         {:KV, :ratio, {:SFloat, 1.5}},
+         {:KV, :mode, {:SAtom, :safe}},
+         {:KV, :values, {:SList, [{:SInt, 1}, {:SAtom, :two}]}},
+         {:KV, :lookup, {:SMap, [{:SPair, {:SAtom, :key}, {:SStr, ~c"value"}}]}},
+         {:KV, :nested, {:SSyntax, {:Leaf, :literal, [], {:SInt, 7}}}},
+         {:KV, :opaque, :SOpaque}
+       ], [{:Raw, {:SAtom, :child}}]}
+
+    assert MacroSyntax.from_runtime(runtime) == MacroSyntax.from_core(MacroSyntax.to_core(repr))
+    assert MacroSyntax.from_runtime(runtime) == repr
+    assert {:expanded, ^repr} = MacroSyntax.from_runtime_macro_result({:Expanded, runtime})
+    assert {:rejected, [^repr]} = MacroSyntax.from_runtime_macro_result({:Rejected, [runtime]})
+  end
+
   test "Std.Result wrappers decode as macro results" do
     repr = {:syn_leaf, :literal, [], {:s_int, 1}}
     ok = {:ctor, :"Std.Result#Ok", [MacroSyntax.to_core(repr)]}
