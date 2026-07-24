@@ -4,6 +4,8 @@ defmodule Cure.Elab.ModuleInterfaceTest do
   alias Cure.Compiler.ModuleInterface
   alias Cure.Elab.Program
 
+  @moduletag :tmp_dir
+
   test "module_interface/2 returns the export_env and source_hash for a stdlib module" do
     path = "lib/std/core.cure"
     assert {:ok, %ModuleInterface{} = iface} = Program.module_interface("Std.Core", path)
@@ -43,5 +45,23 @@ defmodule Cure.Elab.ModuleInterfaceTest do
 
   test "module_interface/2 surfaces an error for a missing file" do
     assert {:error, _} = Program.module_interface("Nope", "lib/std/does_not_exist.cure")
+  end
+
+  test "interface dependency edges retain their authored kind and source line", %{tmp_dir: dir} do
+    path = Path.join(dir, "interface_edges.cure")
+
+    File.write!(path, """
+    mod InterfaceEdges
+
+      use Std.Nat
+      fn count() -> Int = Std.Int.negate(1)
+    """)
+
+    assert {:ok, interface} = Program.module_interface("InterfaceEdges", path)
+
+    assert Enum.map(interface.direct_edges, &{&1.kind, &1.target, &1.line}) == [
+             {:qualified_reference, "Std.Int", 4},
+             {:use_import, "Std.Nat", 3}
+           ]
   end
 end

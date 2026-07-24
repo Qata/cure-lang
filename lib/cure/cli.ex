@@ -449,14 +449,14 @@ defmodule Cure.CLI do
       end)
       |> Enum.uniq()
 
-    {ordered, providers} =
+    {ordered, providers, module_index} =
       case Cure.Compiler.prepare_files(files) do
-        {:ok, %{ordered: ordered, providers: providers, cycles: cycles}} ->
+        {:ok, %{ordered: ordered, providers: providers, cycles: cycles, module_index: module_index}} ->
           Enum.each(cycles, fn walk ->
             emit_host_diagnostic({:import_cycle, walk}, hd(paths))
           end)
 
-          {ordered, providers}
+          {ordered, providers, module_index}
 
         {:error, reason} ->
           emit_host_diagnostic(reason, hd(paths))
@@ -465,7 +465,11 @@ defmodule Cure.CLI do
 
     # A user `@prelude` module reached by the scan contributes its operators to
     # every file compiled in this run — even siblings that do not `use` it.
-    compile_opts = Keyword.put(compile_opts, :prelude_providers, providers)
+    compile_opts =
+      compile_opts
+      |> Keyword.put(:prelude_providers, providers)
+      |> Keyword.put(:module_index, module_index)
+
     Enum.each(ordered, &compile_one(&1, compile_opts, verbose?))
   end
 

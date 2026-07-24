@@ -62,7 +62,10 @@ defmodule Cure.Compiler.ModuleInterface do
       schema_version: @schema_version,
       module_name: module_name,
       dependency_interface_hashes: dependency_hashes,
-      direct_edges: normalize_edges(direct_edges),
+      # Locations belong to the diagnostic projection, not semantic identity:
+      # inserting a comment before an unchanged dependency must not force every
+      # dependent module to rebuild.
+      direct_edges: semantic_edges(direct_edges),
       canonical_declarations: declarations,
       canonical_externs: externs,
       extension_payloads: extensions
@@ -113,5 +116,12 @@ defmodule Cure.Compiler.ModuleInterface do
     Enum.sort_by(edges, fn edge ->
       {Map.fetch!(edge, :target), Map.fetch!(edge, :kind), Map.get(edge, :line, 1)}
     end)
+  end
+
+  defp semantic_edges(edges) do
+    edges
+    |> Enum.map(&Map.take(&1, [:kind, :target]))
+    |> Enum.uniq()
+    |> Enum.sort_by(&{&1.target, &1.kind})
   end
 end

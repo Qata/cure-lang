@@ -33,6 +33,7 @@ defmodule Cure.Compiler.DepGraph do
           blank?: boolean(),
           parse_error: term() | nil,
           source_hash: binary(),
+          provided_modules: [String.t()],
           order_deps: [%{target: String.t(), line: pos_integer()}],
           qualified_deps: [%{target: String.t(), line: pos_integer()}],
           closure_deps: [String.t()]
@@ -58,7 +59,8 @@ defmodule Cure.Compiler.DepGraph do
     with {:ok, module_index} <-
            Cure.Compiler.ModuleIndex.from_entries(module_index_entries(nodes),
              validate_dependencies: false
-           ) do
+           ),
+         :ok <- maybe_validate_dependencies(module_index, opts) do
       modules =
         Map.new(module_index.entries, fn {module_name, entry} ->
           {module_name, entry.source_path}
@@ -74,6 +76,40 @@ defmodule Cure.Compiler.DepGraph do
         end)
 
       {:ok, %__MODULE__{nodes: nodes, modules: modules, module_index: module_index}}
+    end
+  end
+
+  defp maybe_validate_dependencies(module_index, opts) do
+    if Keyword.get(opts, :validate_dependencies, false) do
+      known =
+        opts
+        |> Keyword.get(:known_modules, [])
+        |> MapSet.new()
+        |> MapSet.union(Cure.Compiler.ModuleIndex.compiler_modules())
+        |> MapSet.union(MapSet.new(Map.keys(module_index.entries)))
+        |> MapSet.union(
+          module_index.entries
+          |> Map.values()
+          |> Enum.flat_map(& &1.provided_modules)
+          |> MapSet.new()
+        )
+
+      missing =
+        module_index.entries
+        |> Map.keys()
+        |> Enum.sort()
+        |> Enum.find_value(fn module_name ->
+          module_index
+          |> Cure.Compiler.ModuleIndex.edges(module_name)
+          |> Enum.find(fn edge ->
+            not MapSet.member?(known, edge.target) and
+              Cure.Compiler.SourceResolver.module_path(edge.target) == :not_found
+          end)
+        end)
+
+      if missing, do: {:error, {:module_dependency_missing, missing}}, else: :ok
+    else
+      :ok
     end
   end
 
@@ -111,6 +147,7 @@ defmodule Cure.Compiler.DepGraph do
         source_path: path,
         source_hash: node.source_hash,
         direct_edges: use_edges ++ qualified_edges,
+        provided_modules: node.provided_modules,
         prelude_provider?: Map.get(node, :prelude_provider?, false)
       }
     end
@@ -225,6 +262,7 @@ defmodule Cure.Compiler.DepGraph do
       blank?: false,
       parse_error: nil,
       source_hash: <<>>,
+      provided_modules: [],
       order_deps: [],
       qualified_deps: [],
       closure_deps: []
@@ -263,6 +301,7 @@ defmodule Cure.Compiler.DepGraph do
                 | parse_error: reason,
                   module: scan.module,
                   line: base.line,
+                  provided_modules: List.wrap(scan.module),
                   order_deps: Enum.map(scan.uses, fn u -> %{target: u.target, line: u.line} end),
                   qualified_deps:
                     Enum.map(scan.qualified_targets, fn reference ->
@@ -281,6 +320,7 @@ defmodule Cure.Compiler.DepGraph do
               |> Map.merge(%{
                 module: module,
                 line: line,
+                provided_modules: collect_declared_modules(ast),
                 order_deps: uses,
                 qualified_deps: qualified,
                 closure_deps: Enum.map(uses ++ qualified, & &1.target)
@@ -351,6 +391,23 @@ defmodule Cure.Compiler.DepGraph do
   defp find_module({:block, _meta, items}) when is_list(items), do: find_module(items)
 
   defp find_module(_other), do: {nil, nil}
+
+  defp collect_declared_modules(ast) do
+    walk(ast, [], fn
+      {:container, meta, _body}, acc when is_list(meta) ->
+        if Keyword.get(meta, :container_type) in @module_container_types,
+          do: [Keyword.get(meta, :name) | acc],
+          else: acc
+
+      {:lift_module, meta, _body}, acc when is_list(meta) ->
+        [Keyword.get(meta, :module) | acc]
+
+      _node, acc ->
+        acc
+    end)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+  end
 
   defp collect_uses(ast), do: walk(ast, [], &use_collector/2) |> Enum.reverse()
 

@@ -125,6 +125,25 @@ defmodule Cure.Elab.MacroRecursiveExpansionTest do
     refute MacroExpand.contains_computed_use?(quoted)
   end
 
+  test "computed expansion preserves escaped input exactly through reflection and re-elaboration" do
+    source = ~S'''
+    mod MacroEscapes
+      use Std.Syntax
+
+      macro Echo
+        syntax echo <value: Code> computed by build_echo
+
+      fn build_echo(input: EchoSyntax) -> Syntax = input.value
+      fn run() -> String = echo "line\nquote:\" slash:\\"
+    '''
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :run, []) == ~c"line\nquote:\" slash:\\"
+  after
+    :code.purge(:"Cure.MacroEscapes")
+    :code.delete(:"Cure.MacroEscapes")
+  end
+
   defp find_computed_use({:computed_use, _meta, _children} = node), do: node
 
   defp find_computed_use({_tag, _meta, children}) when is_list(children),

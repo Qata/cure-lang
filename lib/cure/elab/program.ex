@@ -2431,16 +2431,33 @@ defmodule Cure.Elab.Program do
     owner = find_module_name(ast)
 
     imported =
-      Enum.map(imports(ast), fn target ->
-        %{kind: :use_import, source_module: owner, target: target, line: 1}
+      Enum.flat_map(import_entries(ast), fn {targets, meta} ->
+        Enum.map(targets, fn target ->
+          %{kind: :use_import, source_module: owner, target: target, line: metadata_line(meta)}
+        end)
       end)
 
     qualified =
-      Enum.map(qualified_module_names(ast), fn target ->
-        %{kind: :qualified_reference, source_module: owner, target: target, line: 1}
+      ast
+      |> FixityScan.collect_qualified_targets()
+      |> Enum.reject(&(&1.target == owner))
+      |> Enum.map(fn reference ->
+        %{
+          kind: :qualified_reference,
+          source_module: owner,
+          target: reference.target,
+          line: reference.line
+        }
       end)
 
     Enum.uniq_by(imported ++ qualified, &{&1.kind, &1.target})
+  end
+
+  defp metadata_line(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{start_line: line}} -> line
+      _ -> Keyword.get(meta, :line, 1)
+    end
   end
 
   defp owned_declarations(%Env{} = env, owner) do
@@ -4152,7 +4169,7 @@ defmodule Cure.Elab.Program do
     {plain, computed} = Enum.split_with(fn_decls, &(not MacroExpand.contains_computed_use?(&1)))
 
     Enum.reduce_while(plain ++ computed, {:ok, env}, fn decl, {:ok, acc} ->
-      case Declarations.elaborate_function_body(decl, acc) do
+      case elaborate_body_with_canonical_modules(decl, acc) do
         {:ok, acc2} ->
           {:cont, {:ok, acc2}}
 
@@ -4160,5 +4177,98 @@ defmodule Cure.Elab.Program do
           {:halt, err}
       end
     end)
+  end
+
+  # A computed macro can construct `M.f(...)` even when that spelling was not
+  # present in the authored AST. Resolve that failure exactly once through the
+  # canonical compile-universe index, merge M's checked interface as qualified
+  # (never lexical) availability, and retry the ordinary body elaborator. This
+  # is demand-driven module resolution, not a generated-AST dependency scan.
+  defp elaborate_body_with_canonical_modules(decl, env) do
+    case Declarations.elaborate_function_body(decl, env) do
+      {:error, reason} = error ->
+        with {:ok, module_name} <- missing_qualified_module(reason),
+             {:ok, enriched} <- load_indexed_qualified_module(env, module_name) do
+          elaborate_body_with_canonical_modules(decl, enriched)
+        else
+          _ -> error
+        end
+
+      success ->
+        success
+    end
+  end
+
+  defp missing_qualified_module({:source_context, reason, _context}),
+    do: missing_qualified_module(reason)
+
+  defp missing_qualified_module({:unknown_global, name}),
+    do: module_owner_from_dotted(name)
+
+  defp missing_qualified_module({:unknown_global, name, _details}),
+    do: module_owner_from_dotted(name)
+
+  defp missing_qualified_module(_reason), do: :error
+
+  defp module_owner_from_dotted(name) when is_atom(name) or is_binary(name) do
+    parts = name |> to_string() |> String.split(".")
+
+    case Enum.split(parts, length(parts) - 1) do
+      {[_ | _] = owner, [_name]} -> {:ok, Enum.join(owner, ".")}
+      _ -> :error
+    end
+  end
+
+  defp module_owner_from_dotted(_name), do: :error
+
+  defp load_indexed_qualified_module(env, module_name) do
+    with {:ok, source_path} <- canonical_module_path(module_name),
+         false <- module_loaded_in_env?(env, module_name),
+         {:ok, interface_env} <- load_module_interface(module_name, source_path),
+         {:ok, merged} <- merge_env(env, qualified_surface(interface_env)) do
+      qualified =
+        merge_module_visibility(
+          env.qualified_modules,
+          MapSet.new([module_name])
+        )
+
+      {:ok,
+       %{
+         merged
+         | import_modules: env.import_modules,
+           bare_modules: env.bare_modules,
+           bare_bindings: env.bare_bindings,
+           qualified_modules: qualified
+       }}
+    else
+      _ -> :error
+    end
+  end
+
+  defp canonical_module_path(module_name) do
+    case Process.get(:cure_module_index) do
+      %ModuleIndex{} = index ->
+        case ModuleIndex.fetch(index, module_name) do
+          {:ok, entry} -> {:ok, entry.source_path}
+          {:error, _} -> Cure.Compiler.SourceResolver.module_path(module_name)
+        end
+
+      _ ->
+        Cure.Compiler.SourceResolver.module_path(module_name)
+    end
+  end
+
+  defp qualified_surface(%Env{} = env) do
+    %{
+      env
+      | coherence: nil,
+        import_modules: MapSet.new(),
+        bare_modules: MapSet.new(),
+        bare_bindings: MapSet.new()
+    }
+  end
+
+  defp module_loaded_in_env?(env, owner) do
+    Enum.any?(all_global_keys(env), &(Cure.Elab.Name.owner(&1) == owner))
   end
 end

@@ -117,16 +117,23 @@ defmodule Cure.Compiler do
   disagree about user `@prelude` modules.
   """
   @spec prepare_files([Path.t()]) ::
-          {:ok, %{ordered: [Path.t()], providers: [String.t()], cycles: [list()]}}
+          {:ok,
+           %{
+             ordered: [Path.t()],
+             providers: [String.t()],
+             cycles: [list()],
+             module_index: Cure.Compiler.ModuleIndex.t()
+           }}
           | {:error, term()}
   def prepare_files(files) when is_list(files) do
-    with {:ok, graph} <- Cure.Compiler.DepGraph.scan(files),
+    with {:ok, graph} <- Cure.Compiler.DepGraph.scan(files, validate_dependencies: true),
          {:ok, ordered, cycles} <- Cure.Compiler.DepGraph.order(graph) do
       {:ok,
        %{
          ordered: ordered,
          providers: Cure.Compiler.DepGraph.prelude_provider_names(graph),
-         cycles: cycles
+         cycles: cycles,
+         module_index: graph.module_index
        }}
     end
   end
@@ -275,7 +282,13 @@ defmodule Cure.Compiler do
       |> Enum.uniq()
 
     previous = Process.get(:cure_source_roots)
+    previous_index = Process.get(:cure_module_index)
     Process.put(:cure_source_roots, roots)
+
+    case Keyword.get(opts, :module_index) do
+      %Cure.Compiler.ModuleIndex{} = index -> Process.put(:cure_module_index, index)
+      _ -> Process.delete(:cure_module_index)
+    end
 
     try do
       fun.()
@@ -283,6 +296,10 @@ defmodule Cure.Compiler do
       if previous == nil,
         do: Process.delete(:cure_source_roots),
         else: Process.put(:cure_source_roots, previous)
+
+      if previous_index == nil,
+        do: Process.delete(:cure_module_index),
+        else: Process.put(:cure_module_index, previous_index)
     end
   end
 

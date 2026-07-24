@@ -761,17 +761,17 @@ defmodule Cure.Project do
         if File.dir?(dir), do: Path.wildcard(Path.join(dir, "**/*.cure")), else: []
       end)
 
-    {cure_files_result, providers} =
+    {cure_files_result, providers, module_index} =
       case Cure.Compiler.prepare_files(discovered) do
-        {:ok, %{ordered: ordered, providers: providers, cycles: cycles}} ->
+        {:ok, %{ordered: ordered, providers: providers, cycles: cycles, module_index: module_index}} ->
           Enum.each(cycles, fn walk ->
             Logger.warning(render_host_diagnostic({:import_cycle, walk}, project.root))
           end)
 
-          {{:ok, ordered}, providers}
+          {{:ok, ordered}, providers, module_index}
 
         {:error, _} = err ->
-          {err, []}
+          {err, [], nil}
       end
 
     with {:ok, cure_files} <- cure_files_result,
@@ -785,7 +785,8 @@ defmodule Cure.Project do
              check?,
              declared_phases(project),
              extra_paths,
-             providers
+             providers,
+             module_index
            ),
          :ok <- maybe_write_app_resource(app_info, modules, project, output_dir) do
       {:ok, %{modules: modules, app_module: app_module(app_info)}}
@@ -943,7 +944,16 @@ defmodule Cure.Project do
 
   defp declared_phases(_), do: nil
 
-  defp compile_all_files(files, output_dir, emit?, check?, declared_phases, source_roots, prelude_providers) do
+  defp compile_all_files(
+         files,
+         output_dir,
+         emit?,
+         check?,
+         declared_phases,
+         source_roots,
+         prelude_providers,
+         module_index
+       ) do
     base_opts = [
       output_dir: output_dir,
       emit_events: emit?,
@@ -960,6 +970,7 @@ defmodule Cure.Project do
     # A user `@prelude` module reached by the project scan contributes its
     # operators to every file compiled in this run (see `:prelude_providers`).
     opts = Keyword.put(opts, :prelude_providers, prelude_providers)
+    opts = Keyword.put(opts, :module_index, module_index)
 
     result =
       Enum.reduce_while(files, {:ok, []}, fn file, {:ok, acc} ->

@@ -43,7 +43,7 @@ defmodule Cure.Compiler.Incremental do
       :code.add_patha(String.to_charlist(abs_out))
     end
 
-    case DepGraph.scan(source_paths) do
+    case DepGraph.scan(source_paths, validate_dependencies: true) do
       {:error, reason} -> {:error, reason}
       {:ok, graph} -> run(graph, source_paths, output_dir, opts)
     end
@@ -210,7 +210,9 @@ defmodule Cure.Compiler.Incremental do
       compile_opts:
         opts
         |> Keyword.get(:compile_opts, [])
-        |> Keyword.put(:prelude_providers, prelude_providers),
+        |> Keyword.put(:prelude_providers, prelude_providers)
+        |> Keyword.put(:module_index, graph.module_index),
+      module_index: graph.module_index,
       # `roots` drives BOTH deletion scoping (above) and the standalone
       # interface-hash recomputation below. `Program.module_interface/2` resolves
       # a module's `use`-dependencies through `:cure_source_roots`; without it,
@@ -287,7 +289,7 @@ defmodule Cure.Compiler.Incremental do
         # two `compile_dir` calls, sharing a VM) is never compared against a
         # first-run interface that no longer matches the source on disk.
         Program.invalidate_module_interface(path)
-        new_hash = interface_hash_for(mod, path, state.roots)
+        new_hash = interface_hash_for(mod, path, state.roots, state.module_index)
 
         stored = get_in(state.old, [mod, Access.key(:interface_hash, nil)])
         changed? = is_nil(new_hash) or is_nil(stored) or new_hash != stored
@@ -321,9 +323,11 @@ defmodule Cure.Compiler.Incremental do
   # `use`-dependencies resolve, restoring the prior value afterward (mirrors
   # `Cure.Compiler`'s own `with_source_roots`). Returns nil if the interface
   # cannot be computed, which conservatively marks the module interface-changed.
-  defp interface_hash_for(mod, path, roots) do
+  defp interface_hash_for(mod, path, roots, module_index) do
     previous = Process.get(:cure_source_roots)
+    previous_index = Process.get(:cure_module_index)
     Process.put(:cure_source_roots, roots)
+    Process.put(:cure_module_index, module_index)
 
     try do
       case Program.module_interface(mod, path) do
@@ -334,6 +338,10 @@ defmodule Cure.Compiler.Incremental do
       if previous == nil,
         do: Process.delete(:cure_source_roots),
         else: Process.put(:cure_source_roots, previous)
+
+      if previous_index == nil,
+        do: Process.delete(:cure_module_index),
+        else: Process.put(:cure_module_index, previous_index)
     end
   end
 

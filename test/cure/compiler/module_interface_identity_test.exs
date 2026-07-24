@@ -42,4 +42,25 @@ defmodule Cure.Compiler.ModuleInterfaceIdentityTest do
     assert original.interface_hash == changed_source.interface_hash
     refute original.interface_hash == changed_dependency.interface_hash
   end
+
+  test "diagnostic edge locations do not perturb semantic identity" do
+    base = %{
+      module_name: "Canonical.Provider",
+      source_path: "provider.cure",
+      source_hash: <<1>>,
+      dependency_interface_hashes: %{"Canonical.Base" => <<2>>},
+      direct_edges: [%{kind: :use_import, target: "Canonical.Base", line: 2}]
+    }
+
+    shifted =
+      base
+      |> Map.put(:source_hash, <<3>>)
+      |> Map.put(:direct_edges, [%{kind: :use_import, target: "Canonical.Base", line: 20}])
+
+    left = ModuleInterface.new(base)
+    right = ModuleInterface.new(shifted)
+
+    assert left.interface_hash == right.interface_hash
+    refute left.direct_edges == right.direct_edges
+  end
 end

@@ -6,6 +6,7 @@ defmodule Cure.Compiler.ModuleIndex.Entry do
             source_path: nil,
             source_hash: nil,
             direct_edges: [],
+            provided_modules: [],
             prelude_provider?: false
 
   @type t :: %__MODULE__{
@@ -13,6 +14,7 @@ defmodule Cure.Compiler.ModuleIndex.Entry do
           source_path: Path.t(),
           source_hash: binary(),
           direct_edges: [Cure.Compiler.ModuleIndex.edge()],
+          provided_modules: [String.t()],
           prelude_provider?: boolean()
         }
 end
@@ -183,6 +185,7 @@ defmodule Cure.Compiler.ModuleIndex do
                source_path: path,
                source_hash: :crypto.hash(:sha256, source),
                direct_edges: direct_edges,
+               provided_modules: [module_name],
                prelude_provider?: facts.prelude?
              }}
 

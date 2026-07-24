@@ -72,6 +72,48 @@ defmodule Cure.Elab.ModuleVisibilityTest do
     assert inspect(Program.semantic_error(reason)) =~ "unknown"
   end
 
+  test "a computed macro's generated qualified call resolves through the canonical module universe", %{tmp_dir: dir} do
+    write!(
+      dir,
+      "provider.cure",
+      """
+      mod Canon.Provider
+        fn same(n: Int) -> Int = n
+      """
+    )
+
+    source = """
+    mod Canon.Consumer
+      use Std.Syntax
+
+      macro Probe
+        syntax probe <value: Code> computed by build_probe
+
+      fn build_probe(input: ProbeSyntax) -> Syntax =
+        call("Canon.Provider.same", [input.value])
+
+      fn run(n: Int) -> Int = probe n
+    """
+
+    assert {:ok, graph} =
+             Cure.Compiler.DepGraph.scan(
+               [Path.join(dir, "provider.cure"), write!(dir, "consumer.cure", source)],
+               validate_dependencies: true
+             )
+
+    previous_index = Process.get(:cure_module_index)
+    Process.put(:cure_module_index, graph.module_index)
+
+    try do
+      assert {:ok, env} = Program.elaborate(source)
+      assert contains_global?(env.defs[:"Canon.Consumer#run"].body, :"Canon.Provider#same")
+    after
+      if previous_index,
+        do: Process.put(:cure_module_index, previous_index),
+        else: Process.delete(:cure_module_index)
+    end
+  end
+
   defp contains_global?({:global, expected}, expected), do: true
 
   defp contains_global?(term, expected) when is_tuple(term),

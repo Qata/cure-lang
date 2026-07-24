@@ -105,6 +105,40 @@ defmodule Cure.Compiler.DepGraphTest do
                Enum.all?(graph.nodes[a].order_deps, &(&1.target in ["Std.List", "NotInSet"]))
     end
 
+    test "strict bulk scans reject an unavailable dependency before body elaboration", %{tmp_dir: dir} do
+      source =
+        write!(
+          dir,
+          "missing.cure",
+          "mod MissingConsumer\n  fn value() -> Int = Definitely.Missing.value()\n"
+        )
+
+      assert {:error, {:module_dependency_missing, edge}} =
+               DepGraph.scan([source], validate_dependencies: true)
+
+      assert edge.kind == :qualified_reference
+      assert edge.source_module == "MissingConsumer"
+      assert edge.target == "Definitely.Missing"
+      assert edge.line == 2
+    end
+
+    test "strict scans recognize generated modules provided by the same source", %{tmp_dir: dir} do
+      source =
+        write!(
+          dir,
+          "generated_provider.cure",
+          """
+          mod GeneratedProvider
+            lift module Cure.Generated.Worker
+              fn value() -> Int = 1
+            fn run() -> Int = Cure.Generated.Worker.value()
+          """
+        )
+
+      assert {:ok, graph} = DepGraph.scan([source], validate_dependencies: true)
+      assert "Cure.Generated.Worker" in graph.module_index.entries["GeneratedProvider"].provided_modules
+    end
+
     test "blank placeholders sort last; parse failures are isolated nodes", %{tmp_dir: dir} do
       blank = write!(dir, "a_blank.cure", "   \n")
       bad = write!(dir, "b_bad.cure", "mod ((((\n")
