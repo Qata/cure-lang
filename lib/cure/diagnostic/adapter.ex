@@ -1133,7 +1133,7 @@ defmodule Cure.Diagnostic.Adapter do
              :lifted_module_dependency_cycle,
              :duplicate_lifted_module
            ],
-      do: lift_module_failure(kind, %{detail: detail}, opts)
+      do: MacroAdapter.lift_module_validation(kind, %{detail: detail}, opts)
 
   def from_error({:unknown_reducer_constructor, constructors}, opts),
     do: MacroAdapter.from_error({:unknown_reducer_constructor, constructors}, opts)
@@ -1267,7 +1267,7 @@ defmodule Cure.Diagnostic.Adapter do
              :invalid_lift_import,
              :invalid_lift_inheritance
            ],
-      do: lift_module_failure(kind, %{}, opts)
+      do: MacroAdapter.lift_module_validation(kind, %{}, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -2700,84 +2700,6 @@ defmodule Cure.Diagnostic.Adapter do
 
     {title, message, label}
   end
-
-  defp lift_module_failure(kind, details, opts) do
-    {title, message, label, hint} = lift_module_content(kind, details)
-
-    Diagnostic.new(
-      code: "E092",
-      key: :lift_module_validation,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
-  defp lift_module_content(:invalid_lift_module, _details),
-    do:
-      {"Lifted module request is malformed", "BEAM emission expected a validated lifted-module request.",
-       "rewrite this lifted module request", "Build the request from a valid `lift module` declaration"}
-
-  defp lift_module_content(:invalid_lift_module_ast, _details),
-    do:
-      {"Lifted module syntax is malformed",
-       "A lifted module must be represented by one well-formed `lift_module` syntax node.",
-       "rewrite this lifted module", "Use a `lift module` declaration with a name and body"}
-
-  defp lift_module_content(:invalid_lift_module_name, %{detail: name}),
-    do:
-      {"Lifted module name is outside Cure",
-       "The generated module `#{name_to_string(name)}` is not beneath the `Cure` namespace required for lifted code.",
-       "move this module beneath `Cure`", "Use a module name beginning with `Cure.`"}
-
-  defp lift_module_content(:invalid_module_name, %{detail: name}),
-    do:
-      {"Lifted module name is invalid",
-       "`#{name_to_string(name)}` is not a valid qualified module name; every segment must begin with an uppercase letter.",
-       "replace this lifted module name", "Use a name such as `Cure.Generated.Worker`"}
-
-  defp lift_module_content(:invalid_behaviour, %{detail: behaviour}),
-    do:
-      {"Lifted module behaviour is invalid",
-       "A lifted module needs a non-empty atom naming its BEAM behaviour, but this declaration uses `#{name_to_string(behaviour)}`.",
-       "replace this behaviour", "Use the atom naming the implemented BEAM behaviour"}
-
-  defp lift_module_content(:invalid_lift_callback, _details),
-    do:
-      {"Lifted module callback is malformed",
-       "Every lifted callback needs an atom name, a non-negative arity, parameters, return type, body, and source line.",
-       "rewrite this lifted callback", "Provide a complete callback declaration matching the behaviour"}
-
-  defp lift_module_content(:invalid_lift_declaration, _details),
-    do:
-      {"Lifted module declaration is malformed",
-       "Every declaration copied into a lifted module must be quoted Cure syntax.", "rewrite this lifted declaration",
-       "Provide quoted declaration nodes in the lifted module body"}
-
-  defp lift_module_content(:invalid_lift_import, _details),
-    do:
-      {"Lifted module import is malformed", "Every lifted-module dependency must be a textual qualified module name.",
-       "rewrite this lifted import", "Use qualified import names such as `Std.Actor`"}
-
-  defp lift_module_content(:invalid_lift_inheritance, _details),
-    do:
-      {"Lifted module inheritance option is invalid", "The `inherit_imports` option must be either `true` or `false`.",
-       "replace this inheritance option", "Use `true` to inherit enclosing imports or `false` to isolate them"}
-
-  defp lift_module_content(:lifted_module_dependency_cycle, %{detail: name}),
-    do:
-      {"Lifted modules form a dependency cycle",
-       "The generated module `#{name_to_string(name)}` is reached again while ordering lifted-module dependencies.",
-       "break this lifted-module cycle", "Remove or redirect one dependency in the cycle"}
-
-  defp lift_module_content(:duplicate_lifted_module, %{detail: name}),
-    do:
-      {"Lifted module name is repeated",
-       "More than one generated declaration produces `#{name_to_string(name)}`, so the compiler cannot choose one module body.",
-       "rename one lifted module", "Give every lifted module a unique qualified name"}
 
   @spec unknown_name(atom(), term(), keyword()) :: Diagnostic.t()
   def unknown_name(namespace, name, opts \\ []),
