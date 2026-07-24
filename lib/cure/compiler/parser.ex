@@ -10004,7 +10004,7 @@ defmodule Cure.Compiler.Parser do
             fields: maybe_put_source_field(%{}, :separator, colon_token)
           })
 
-        parse_gadt_ctors(state, [{:gadt_ctor, meta, sig} | acc], family)
+        parse_gadt_ctors(state, [{:gadt_ctor, meta, [sig]} | acc], family)
     end
   end
 
@@ -10042,8 +10042,8 @@ defmodule Cure.Compiler.Parser do
   # general `parse_type_expr` is unusable here: its `maybe_parse_function_type`
   # splices a domain application's *arguments* into the arrow's parameter list
   # and discards the head (so `SF(as, bs, d1) -> …` loses `SF`). This dedicated
-  # parser keeps each application intact and yields `{:arrow_chain, [atoms]}`
-  # with the last atom as the result type.
+  # parser keeps each application intact and yields a canonical `:arrow_chain`
+  # node with the last atom as the result type.
   defp parse_ctor_signature(state) do
     {first, first_span, state} = parse_ctor_dom(state)
     collect_arrow_chain(state, [first], first_span, first_span)
@@ -10058,7 +10058,15 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         signature_span = through_spans(first_span, last_span) || first_span || last_span
-        {{:arrow_chain, Enum.reverse(acc)}, signature_span, state}
+
+        chain_meta =
+          if signature_span do
+            Metadata.put_source_info([], %SourceInfo{whole: signature_span})
+          else
+            []
+          end
+
+        {{:arrow_chain, chain_meta, Enum.reverse(acc)}, signature_span, state}
     end
   end
 
@@ -10066,7 +10074,7 @@ defmodule Cure.Compiler.Parser do
   # application (`SNat(k)`), but a DOMAIN position may carry a NAMED dependent
   # binder `(name: Type)` — needed when a later argument type or the result
   # index depends on this explicit argument (`(k: Nat) -> SNat(k) -> NVv(S(k))`).
-  # The named form yields `{:named_dom, name, inner_type_atom}`; everything else
+  # The named form yields a canonical `:named_dom` node; everything else
   # falls through to `parse_type_atom` byte-for-byte (unnamed args unchanged).
   defp parse_ctor_dom(state) do
     la2 = peek_at(state, 2)
@@ -10087,7 +10095,16 @@ defmodule Cure.Compiler.Parser do
           })
 
         span = through_spans(open_token.span, close_token && close_token.span) || open_token.span
-        {{:named_dom, name, inner}, span, state}
+
+        meta =
+          Metadata.put_source_info([name: name, line: open_token.line, col: open_token.col], %SourceInfo{
+            whole: span,
+            name: name_token.span,
+            opener: open_token.span,
+            closer: close_token && close_token.span
+          })
+
+        {{:named_dom, meta, [inner]}, span, state}
 
       # A RELEVANT IMPLICIT domain `{k: Type}` (Idris `{k : Nat}`): implicit at
       # application/pattern (solved by unification, never positional) but
@@ -10113,7 +10130,16 @@ defmodule Cure.Compiler.Parser do
             })
 
           span = through_spans(open_token.span, close_token && close_token.span) || open_token.span
-          {{:implicit_dom, name, inner}, span, state}
+
+          meta =
+            Metadata.put_source_info([name: name, line: open_token.line, col: open_token.col], %SourceInfo{
+              whole: span,
+              name: name_token.span,
+              opener: open_token.span,
+              closer: close_token && close_token.span
+            })
+
+          {{:implicit_dom, meta, [inner]}, span, state}
         else
           {atom, state} = parse_type_atom(state)
           {atom, ast_source_span(atom), state}
@@ -10229,13 +10255,13 @@ defmodule Cure.Compiler.Parser do
     if Enum.any?(domains, &match?({:named_dom, _, _}, &1)) do
       binders =
         Enum.map(domains, fn
-          {:named_dom, name, _} -> name
+          {:named_dom, meta, _} -> Keyword.fetch!(meta, :name)
           _ -> nil
         end)
 
       doms =
         Enum.map(domains, fn
-          {:named_dom, _, inner} -> inner
+          {:named_dom, _meta, [inner]} -> inner
           other -> other
         end)
 

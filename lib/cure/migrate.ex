@@ -475,7 +475,7 @@ defmodule Cure.Migrate do
   #   * `{:variable, [variant: true], name}` — nullary enum variant (`LensKind`)
   #   * `{:function_def, [variant: true, name: n], _}` — field-carrying variant
   #     (`MkLensRep(a, (a) -> s)`), a constructor decl reusing the fn-def node
-  #   * `{:gadt_ctor, [name: n], _}` — an `indices`-form GADT constructor
+  #   * `{:gadt_ctor, [name: n], [_arrow_chain]}` — an `indices`-form GADT constructor
   defp declared_ctor_names(ast) do
     ast |> collect_ctor_names([]) |> MapSet.new()
   end

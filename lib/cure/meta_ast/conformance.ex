@@ -26,19 +26,16 @@ defmodule Cure.MetaAST.Conformance do
     * **INV-A — canonicity.** Every node, in meta OR children, is the canonical
       3-tuple. A node hidden inside a non-canonical atom-headed tuple is a
       `:bad_shape` violation: the walker cannot recognise it, so its subterms are
-      lost (completeness failure). The last remaining corpus shape is `:named_dom`
-      (`{tag, name, inner}` — a 3-tuple whose middle slot is a name, not a keyword
-      list). (`:named_implicit_pat`, `:group`, `:builtin`, `:forced_pattern` have
-      been normalized to canonical nodes; `:arrow_chain` re-attributed to the
-      `:node_child :gadt_ctor` bucket.)
+      lost (completeness failure). The first-party corpus currently satisfies this
+      invariant, including dependent constructor domains and arrow chains.
 
     * **INV-B — composite children are lists.** A composite node's children slot is
       a LIST of child nodes; only the fixed leaf tags (`:variable`, `:literal`,
       `:comment`) carry a bare scalar there. A bare node in a children slot is a
       `:node_child` violation — the walker's `traverse_children` recurses only an
       `is_list` slot, so the subtree is dropped (completeness failure).
-      `:gadt_ctor` (bare `:arrow_chain` child) and `:forced_pattern` are the corpus
-      examples.
+      A bare node in a composite children slot is therefore always a violation;
+      the first-party corpus currently satisfies this invariant.
 
     * **INV-C — meta predicate soundness.** Within every meta value, every
       atom-headed tuple is EITHER a canonical node whose tag is in the known
@@ -50,9 +47,9 @@ defmodule Cure.MetaAST.Conformance do
       `meta_nonnodes/1` (guard-matching non-nodes — must be empty) and
       `meta_node_tags/1` (the node-tag vocabulary — pinned by the corpus tripwire).
 
-  INV-A and INV-B are *completeness* obligations Cure discharges by normalising the
-  ~265 bad_shape / node_child sites; `violations/1` reports them and the corpus
-  tripwire drives them to zero. INV-C is a *soundness* obligation the corpus already
+  INV-A and INV-B are *completeness* obligations; `violations/1` reports any
+  regression and the corpus tripwire drives them to zero. INV-C is a *soundness*
+  obligation the corpus already
   satisfies (measured: the danger set is empty) and the tripwire pins as a hard
   invariant. Note a node placed in meta is NOT itself a violation any more — that is
   the whole point of Option D.

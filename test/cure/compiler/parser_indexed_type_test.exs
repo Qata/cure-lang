@@ -71,11 +71,11 @@ defmodule Cure.Compiler.ParserIndexedTypeTest do
   end
 
   # The chain of a constructor signature: the list of type atoms inside its
-  # `{:arrow_chain, atoms}`, keyed by constructor name.
+  # canonical `:arrow_chain` node, keyed by constructor name.
   defp ctor_chain(ast, ctor_name) do
     collect(ast, [])
     |> Enum.find_value(fn
-      {:gadt_ctor, meta, {:arrow_chain, atoms}} ->
+      {:gadt_ctor, meta, [{:arrow_chain, _chain_meta, atoms}]} ->
         if Keyword.get(meta, :name) == ctor_name, do: atoms, else: nil
 
       _ ->
@@ -97,7 +97,8 @@ defmodule Cure.Compiler.ParserIndexedTypeTest do
     # First atom is the NAMED binder `(k: Nat)`; its name is retained and its
     # type is the ordinary `Nat` type atom.
     assert [first, second, result] = chain
-    assert {:named_dom, "k", {:variable, [scope: :local], "Nat"}} = first
+    assert {:named_dom, dom_meta, [{:variable, [scope: :local], "Nat"}]} = first
+    assert Keyword.get(dom_meta, :name) == "k"
 
     # A later argument type resolves the bound `k` as a plain variable, and the
     # result index `NVv(S(k))` likewise references it — proving the binder is in
@@ -134,7 +135,8 @@ defmodule Cure.Compiler.ParserIndexedTypeTest do
     {:ok, ast} = parse_decl(src)
     [field, _result] = ctor_chain(ast, "MkAcc")
 
-    assert {:named_dom, "descend", {:pi_type, [binders: ["ys", nil]], [ys_type, smaller, acc]}} = field
+    assert {:named_dom, dom_meta, [{:pi_type, [binders: ["ys", nil]], [ys_type, smaller, acc]}]} = field
+    assert Keyword.get(dom_meta, :name) == "descend"
     assert {:function_call, [name: "List"], _} = ys_type
     assert {:function_call, [name: "Smaller"], _} = smaller
     assert {:function_call, [name: "Acc"], _} = acc

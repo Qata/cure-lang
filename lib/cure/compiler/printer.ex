@@ -1113,18 +1113,17 @@ defmodule Cure.Compiler.Printer do
 
   # -- GADT constructor signature --------------------------------------------
   #
-  # `Name : Dom -> ... -> Result`. The third slot is a single `{:arrow_chain,
-  # [...]}` tuple (NOT a children list). A `:named_dom` element carries a
-  # dependent binder `(name: Type)` where the 2nd position is a bare string;
-  # both `:arrow_chain` and `:named_dom` are rendered here, never as their own
-  # dispatch targets.
+  # `Name : Dom -> ... -> Result`. The third slot contains one canonical
+  # `:arrow_chain` node. A `:named_dom` child carries a dependent binder
+  # `(name: Type)` in its own metadata and child list.
 
-  defp to_string({:gadt_ctor, meta, {:arrow_chain, elems}}, depth, indent) do
+  defp to_string({:gadt_ctor, meta, [{:arrow_chain, _chain_meta, elems}]}, depth, indent) do
     name = Keyword.get(meta, :name)
 
     chain =
       Enum.map_join(elems, " -> ", fn
-        {:named_dom, dname, inner} ->
+        {:named_dom, dom_meta, [inner]} ->
+          dname = Keyword.fetch!(dom_meta, :name)
           inner_rendered = render_ctor_function_type(inner, depth, indent)
 
           inner_rendered =
@@ -1145,7 +1144,8 @@ defmodule Cure.Compiler.Printer do
 
         # A RELEVANT IMPLICIT binder `{name: Type}` — implicit (solved, omitted at
         # the call site) yet retained (ω). Parallel to `:named_dom` but braced.
-        {:implicit_dom, dname, inner} ->
+        {:implicit_dom, dom_meta, [inner]} ->
+          dname = Keyword.fetch!(dom_meta, :name)
           inner_rendered = render_ctor_function_type(inner, depth, indent)
 
           inner_rendered =

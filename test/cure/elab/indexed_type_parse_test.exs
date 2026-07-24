@@ -26,11 +26,11 @@ defmodule Cure.Elab.IndexedTypeParseTest do
     assert Keyword.get(m2, :name) == "seq"
 
     # prim: a single-element chain; the SF head is preserved (not mangled).
-    assert {:arrow_chain, [{:function_call, [name: "SF"], _}]} = t1
+    assert [{:arrow_chain, _chain_meta, [{:function_call, [name: "SF"], _}]}] = t1
 
     # seq: two domains + a result, every SF application head intact, and the
     # computed result index `and(d1, d2)` preserved as a nested application.
-    assert {:arrow_chain, [dom1, dom2, result]} = t2
+    assert [{:arrow_chain, _chain_meta, [dom1, dom2, result]}] = t2
     assert {:function_call, [name: "SF"], _} = dom1
     assert {:function_call, [name: "SF"], _} = dom2
     assert {:function_call, [name: "SF"], [_, _, {:function_call, [name: "and"], [_, _]}]} = result

@@ -155,7 +155,7 @@ defmodule Cure.Elab.Declarations do
   # Indexed (GADT) family: `type NAME(params) indices (idx) <ctor sigs>`. Head
   # `(params)` are uniform parameters (restated, never matched); the `indices`
   # clause lists the refined indices. Each constructor signature is an
-  # `{:arrow_chain, [dom…, result]}`; the implicit index-variable telescope is
+  # `{:arrow_chain, meta, [dom…, result]}`; the implicit index-variable telescope is
   # inferred from the signature (§5.2). A parameter-free family omits `(params)`.
   # `type X = Y` with a single bare right-hand side is ambiguous, and the parser cannot
   # resolve it — it tags the RHS `variant: true` and defers:
@@ -1592,10 +1592,10 @@ defmodule Cure.Elab.Declarations do
   defp struct_ctor_sig(name, type_params, fields) do
     named_doms =
       Enum.map(fields, fn {:param, m, fname} ->
-        {:named_dom, fname, Keyword.fetch!(m, :type)}
+        {:named_dom, [name: fname], [Keyword.fetch!(m, :type)]}
       end)
 
-    {:gadt_ctor, [name: Atom.to_string(name)], {:arrow_chain, named_doms ++ [family_app(name, type_params)]}}
+    {:gadt_ctor, [name: Atom.to_string(name)], [{:arrow_chain, [], named_doms ++ [family_app(name, type_params)]}]}
   end
 
   # A record field may declare a default (`name: String = "Anonymous"`), carried in
@@ -1652,13 +1652,13 @@ defmodule Cure.Elab.Declarations do
   # the family applied to its own parameters. `Nil` → `Nil : List(a)`;
   # `Cons(a, List(a))` → `Cons : a -> List(a) -> List(a)`.
   defp variant_to_gadt_sig({:variable, _meta, vname}, fam, type_params) do
-    {:gadt_ctor, [name: vname], {:arrow_chain, [family_app(fam, type_params)]}}
+    {:gadt_ctor, [name: vname], [{:arrow_chain, [], [family_app(fam, type_params)]}]}
   end
 
   defp variant_to_gadt_sig({:function_def, cmeta, _body}, fam, type_params) do
     cname = Keyword.fetch!(cmeta, :name)
     field_asts = Keyword.fetch!(cmeta, :params)
-    {:gadt_ctor, [name: cname], {:arrow_chain, field_asts ++ [family_app(fam, type_params)]}}
+    {:gadt_ctor, [name: cname], [{:arrow_chain, [], field_asts ++ [family_app(fam, type_params)]}]}
   end
 
   defp family_app(fam, type_params) do
@@ -2413,7 +2413,7 @@ defmodule Cure.Elab.Declarations do
     end)
   end
 
-  defp elaborate_gadt_ctor({:gadt_ctor, cmeta, {:arrow_chain, atoms}}, fam, param_tele, index_tele, env) do
+  defp elaborate_gadt_ctor({:gadt_ctor, cmeta, [{:arrow_chain, _chain_meta, atoms}]}, fam, param_tele, index_tele, env) do
     cname = cmeta |> Keyword.fetch!(:name) |> String.to_atom()
     {dom_exprs, result_expr} = split_last(atoms)
 
@@ -2555,14 +2555,14 @@ defmodule Cure.Elab.Declarations do
   # For implicit-variable inference we scan a named `(k: Nat)` or relevant-
   # implicit `{k: Nat}` binder by its inner type (`Nat`); the binder name itself
   # is handled as a source-position arg, not an inferred index.
-  defp strip_named_dom({:named_dom, _name, inner}), do: inner
-  defp strip_named_dom({:implicit_dom, _name, inner}), do: inner
+  defp strip_named_dom({:named_dom, _meta, [inner]}), do: inner
+  defp strip_named_dom({:implicit_dom, _meta, [inner]}), do: inner
   defp strip_named_dom(other), do: other
 
   # The name a domain binds into the constructor's local scope, or `nil` for an
   # anonymous positional argument. Both `(k: T)` and `{k: T}` bind `k`.
-  defp bound_dom_name({:named_dom, name, _inner}), do: name
-  defp bound_dom_name({:implicit_dom, name, _inner}), do: name
+  defp bound_dom_name({:named_dom, meta, _children}), do: Keyword.get(meta, :name)
+  defp bound_dom_name({:implicit_dom, meta, _children}), do: Keyword.get(meta, :name)
   defp bound_dom_name(_other), do: nil
 
   # A constructor's named/implicit dependent domains must be linear: a repeated
@@ -2608,8 +2608,8 @@ defmodule Cure.Elab.Declarations do
       # the next domain's de Bruijn indices resolve this binder.
       {argname, type_expr, plicity} =
         case dom do
-          {:named_dom, name, inner} -> {name, inner, :explicit}
-          {:implicit_dom, name, inner} -> {name, inner, :implicit}
+          {:named_dom, meta, [inner]} -> {Keyword.fetch!(meta, :name), inner, :explicit}
+          {:implicit_dom, meta, [inner]} -> {Keyword.fetch!(meta, :name), inner, :implicit}
           _ -> {"_a#{i}", dom, :explicit}
         end
 
