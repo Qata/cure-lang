@@ -207,8 +207,8 @@ defmodule Cure.Compiler.Parser do
     # fixity of every module in M's transitive `use`-closure ∪ user `@prelude`
     # providers. A same-lexeme/different-group (or same-group/different-body)
     # clash is a hard PARSE error, raised here before the authoritative pass.
-    own_fixity = FixityScan.collect_fixity(harvest_exprs)
-    own_uses = FixityScan.collect_use_targets(harvest_exprs)
+    %{fixity: own_fixity, uses: uses} = FixityScan.collect_module_facts(harvest_exprs)
+    own_uses = Enum.map(uses, & &1.target)
 
     module_fixity =
       case FixityResolver.assemble(builtin_fixity, own_fixity, own_uses, prelude_providers) do

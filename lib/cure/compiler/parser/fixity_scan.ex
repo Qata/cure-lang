@@ -24,10 +24,11 @@ defmodule Cure.Compiler.Parser.FixityScan do
     case Lexer.tokenize(source, file: file, emit_events: false) do
       {:ok, tokens} ->
         exprs = Parser.harvest(tokens, file, base, Cure.Edition.current())
+        facts = collect_module_facts(exprs)
 
         %{
-          fixity: collect_fixity(exprs),
-          uses: collect_uses(exprs),
+          fixity: facts.fixity,
+          uses: facts.uses,
           prelude?: prelude?(exprs),
           module: module_name(exprs)
         }
@@ -45,6 +46,13 @@ defmodule Cure.Compiler.Parser.FixityScan do
         {:precedencegroup, _, _} = n -> [n]
         _ -> []
       end)
+
+  @doc "Collect a harvested module's fixity declarations and imports in one walk."
+  @spec collect_module_facts(term()) :: %{fixity: [tuple()], uses: [%{target: String.t(), line: pos_integer()}]}
+  def collect_module_facts(ast) do
+    {fixity, uses} = deep_scan(ast, [], [])
+    %{fixity: Enum.reverse(fixity), uses: Enum.reverse(uses)}
+  end
 
   @doc "Return exact authored name ranges for the selected precedence groups."
   @spec group_spans(term(), [atom()]) :: [Cure.Diagnostic.Span.t()]
@@ -167,12 +175,57 @@ defmodule Cure.Compiler.Parser.FixityScan do
 
   # -- deep walkers (mirror BuiltinFixity.collect_fixity_nodes shape) --------
 
-  defp deep_collect(node, f) when is_tuple(node) do
-    f.(node) ++ (node |> Tuple.to_list() |> deep_collect(f))
+  defp deep_collect(node, f) do
+    node
+    |> deep_collect(f, [])
+    |> Enum.reverse()
   end
 
-  defp deep_collect(list, f) when is_list(list), do: Enum.flat_map(list, &deep_collect(&1, f))
-  defp deep_collect(_other, _f), do: []
+  # Build the result backwards so a scanner never repeatedly copies the
+  # already-visited prefix with `++`. The visitor is applied before children,
+  # matching the old pre-order result; reversing the accumulated list restores
+  # the same order at the boundary.
+  defp deep_collect(node, f, acc) when is_tuple(node) do
+    acc = Enum.reduce(f.(node), acc, &[&1 | &2])
+    Enum.reduce(Tuple.to_list(node), acc, &deep_collect(&1, f, &2))
+  end
+
+  defp deep_collect(list, f, acc) when is_list(list),
+    do: Enum.reduce(list, acc, &deep_collect(&1, f, &2))
+
+  defp deep_collect(_other, _f, acc), do: acc
+
+  defp deep_scan(node, fixity, uses) when is_tuple(node) do
+    {fixity, uses} =
+      case node do
+        {:fixity, _, _} = value ->
+          {[value | fixity], uses}
+
+        {:precedencegroup, _, _} = value ->
+          {[value | fixity], uses}
+
+        {:import, meta, _} when is_list(meta) ->
+          case Keyword.get(meta, :source) do
+            source when is_binary(source) ->
+              {fixity, [%{target: source, line: Keyword.get(meta, :line, 1)} | uses]}
+
+            _ ->
+              {fixity, uses}
+          end
+
+        _ ->
+          {fixity, uses}
+      end
+
+    Enum.reduce(Tuple.to_list(node), {fixity, uses}, fn child, acc ->
+      deep_scan(child, elem(acc, 0), elem(acc, 1))
+    end)
+  end
+
+  defp deep_scan(list, fixity, uses) when is_list(list),
+    do: Enum.reduce(list, {fixity, uses}, fn child, {f, u} -> deep_scan(child, f, u) end)
+
+  defp deep_scan(_other, fixity, uses), do: {fixity, uses}
 
   defp deep_reduce(node, acc, f) when is_tuple(node) do
     acc = f.(node, acc)
