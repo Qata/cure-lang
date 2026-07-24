@@ -37,7 +37,7 @@ defmodule Cure.Audit.ShimConformance do
     * `C(a, b)` → `{:C, a, b}`; a nullary `C()` → the bare atom `:C`
     * `rec R` → `{:R, field1, …}` in declaration order
 
-  So `Ok(v)` is `{:Ok, v}`, `None()` is `:None`, `Null()` is `:Null`, and
+  So `Ok(v)` is `{:ok, v}`, `None()` is `:none`, `Null()` is `:Null`, and
   `rec Matched(whole, groups)` is `{:Matched, whole, groups}`. The erasure rule
   was measured directly (`Std.Result`/`Std.Option` elaborate; a standalone ADT
   and record confirmed the nullary-atom and tuple-in-declaration-order rules).
@@ -404,13 +404,13 @@ defmodule Cure.Audit.ShimConformance do
   defp shape?(:binary, v), do: is_binary(v)
   defp shape?({:struct, tag}, v), do: is_map(v) and Map.get(v, :__struct__) == tag
   defp shape?({:list, s}, v), do: is_list(v) and Enum.all?(v, &shape?(s, &1))
-  defp shape?({:result, ok, _err}, {:Ok, v}), do: shape?(ok, v)
-  defp shape?({:result, _ok, err}, {:Error, e}), do: shape?(err, e)
+  defp shape?({:result, ok, _err}, {:ok, v}), do: shape?(ok, v)
+  defp shape?({:result, _ok, err}, {:error, e}), do: shape?(err, e)
   defp shape?({:result, _, _}, _), do: false
 
-  # Dependent erasure: `Some(v)` → `{:Some, v}`; nullary `None()` → `:None`.
-  defp shape?({:option, _s}, :None), do: true
-  defp shape?({:option, s}, {:Some, v}), do: shape?(s, v)
+  # OTP-compatible dependent erasure: `Some(v)` → `{:some, v}`; `None()` → `:none`.
+  defp shape?({:option, _s}, :none), do: true
+  defp shape?({:option, s}, {:some, v}), do: shape?(s, v)
   defp shape?({:option, _}, _), do: false
 
   # `rec Matched(whole, groups)` → `{:Matched, whole, groups}`; every captured

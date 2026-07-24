@@ -8,7 +8,7 @@ defmodule :cure_std_test_test do
   # does not have, and asserted totality of a function that raises.
   #
   # It is now `-> Result(Atom, t)`, erasing (dependent pipeline) to
-  # `{:Ok, :ok}` on success and `{:Error, counterexample}` on failure. Total,
+  # `{:ok, :unit}` on success and `{:error, counterexample}` on failure. Total,
   # and true of its type.
   #
   # The two tests this file used to hold asserted the old contract (`:ok`, and
@@ -18,7 +18,7 @@ defmodule :cure_std_test_test do
   test "forall_shrunk returns Ok when the property holds" do
     gen = fn _ -> 1 end
     property = fn n -> n > 0 end
-    assert {:Ok, :unit} = :cure_std_test.forall_shrunk(gen, property, 10)
+    assert {:ok, :unit} = :cure_std_test.forall_shrunk(gen, property, 10)
   end
 
   test "forall_shrunk returns Error carrying the shrunk counterexample" do
@@ -26,7 +26,7 @@ defmodule :cure_std_test_test do
     # Property: "n is less than 50" -- fails for 100, shrinks toward 50.
     property = fn n -> n < 50 end
 
-    assert {:Error, value} = :cure_std_test.forall_shrunk(gen, property, 5)
+    assert {:error, value} = :cure_std_test.forall_shrunk(gen, property, 5)
     # Shrinker must converge to a value at least as small as the original.
     assert value <= 100
   end
@@ -36,7 +36,7 @@ defmodule :cure_std_test_test do
     property = fn n -> n < 50 end
 
     # The old contract raised here. Totality is the point of the repair.
-    assert {:Error, _} = :cure_std_test.forall_shrunk(gen, property, 5)
+    assert {:error, _} = :cure_std_test.forall_shrunk(gen, property, 5)
   end
 
   test "forall_shrunk inhabits Result(Atom, t) at t = Int" do
@@ -46,15 +46,15 @@ defmodule :cure_std_test_test do
     fail = :cure_std_test.forall_shrunk(fn _ -> 7 end, fn _ -> false end, 3)
 
     for r <- [pass, fail] do
-      assert match?({:Ok, _}, r) or match?({:Error, _}, r), "not a Result: #{inspect(r)}"
+      assert match?({:ok, _}, r) or match?({:error, _}, r), "not a Result: #{inspect(r)}"
     end
 
-    assert {:Error, cx} = fail
+    assert {:error, cx} = fail
     assert is_integer(cx), "counterexample must be a `t` (Int here), got #{inspect(cx)}"
   end
 
   test "zero runs vacuously passes" do
-    assert {:Ok, :unit} = :cure_std_test.forall_shrunk(fn _ -> 1 end, fn _ -> false end, 0)
+    assert {:ok, :unit} = :cure_std_test.forall_shrunk(fn _ -> 1 end, fn _ -> false end, 0)
   end
 
   test "shrinking agrees with detection: a non-true property still minimises" do
@@ -63,7 +63,7 @@ defmodule :cure_std_test_test do
     # property returning a non-boolean reported the raw first draw unshrunk. The
     # two must agree. Here the property is never `true`, so the counterexample
     # must shrink toward the minimum, not stay at the initial 100.
-    assert {:Error, value} =
+    assert {:error, value} =
              :cure_std_test.forall_shrunk(fn _ -> 100 end, fn _ -> :not_a_bool end, 5)
 
     # Not merely "< 100" (which a single shrink step would satisfy): the property
@@ -73,7 +73,7 @@ defmodule :cure_std_test_test do
 
   test "a negative run count is vacuously Ok, not a FunctionClauseError" do
     # `runs: Int` admits negatives; `find_counterexample` only claused 0 and n>0.
-    assert {:Ok, :unit} = :cure_std_test.forall_shrunk(fn _ -> 1 end, fn _ -> false end, -1)
+    assert {:ok, :unit} = :cure_std_test.forall_shrunk(fn _ -> 1 end, fn _ -> false end, -1)
   end
 
   test "a property that RAISES is a failure, not a propagated exception" do
@@ -84,6 +84,6 @@ defmodule :cure_std_test_test do
     gen = fn _ -> 100 end
     property = fn n -> if n == 100, do: raise("boom"), else: n < 50 end
 
-    assert {:Error, _value} = :cure_std_test.forall_shrunk(gen, property, 5)
+    assert {:error, _value} = :cure_std_test.forall_shrunk(gen, property, 5)
   end
 end

@@ -5,8 +5,8 @@ defmodule :cure_std_test do
   When a property fails, walk the shrink candidates in aggressive-first order
   and pick the smallest value that still makes the property return `false`.
 
-  Returns a `Std.Result`: `{:Ok, :unit}` when every sample satisfied the property,
-  `{:Error, minimal}` carrying the minimised counterexample when one did not.
+  Returns a `Std.Result`: `{:ok, :unit}` when every sample satisfied the property,
+  `{:error, minimal}` carrying the minimised counterexample when one did not.
 
   It used to return the bare atom `:ok` and raise
   `{:property_failed_with_shrunk, minimal}`, under an `@extern` postulating
@@ -14,17 +14,17 @@ defmodule :cure_std_test do
   and the raise made the postulated totality false. The type is now
   `Result(Unit, t)` and both branches produce a value.
 
-  The tags are the DEPENDENT-pipeline erasure: `Ok(v)` → `{:Ok, v}`,
-  `Error(e)` → `{:Error, e}`.
+  The tags are the OTP-compatible dependent-pipeline erasure:
+  `Ok(v)` → `{:ok, v}`, `Error(e)` → `{:error, e}`.
   """
 
   def forall_shrunk(gen, property, runs) when is_function(gen) and is_function(property) do
     case find_counterexample(gen, property, runs) do
       :all_pass ->
-        {:Ok, :unit}
+        {:ok, :unit}
 
       {:failed, value} ->
-        {:Error, shrink_loop(value, property)}
+        {:error, shrink_loop(value, property)}
     end
   end
 

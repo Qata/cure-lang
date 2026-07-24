@@ -13,7 +13,7 @@ defmodule :cure_std_json do
 
     * `:Null`, `{:Bool, b}`, `{:Num, f}`, `{:Str, s}`
     * `{:Arr, values}`, `{:Obj, [{:JsonPair, key, value}, …]}`
-    * `decode` returns `Result(Value, String)` → `{:Ok, value}` / `{:Error, msg}`
+    * `decode` returns `Result(Value, String)` → `{:ok, value}` / `{:error, msg}`
   """
 
   # -- Encoder -----------------------------------------------------------------
@@ -48,8 +48,8 @@ defmodule :cure_std_json do
   def decode(src) when is_binary(src) do
     # `{:ok, …}` / `{:error, …}` here are `Cure.Project.Json`'s own results.
     case Cure.Project.Json.decode(src) do
-      {:ok, term} -> {:Ok, to_value(term)}
-      {:error, {reason, pos}} -> {:Error, :erlang.iolist_to_binary(~c"#{reason} at offset #{pos}")}
+      {:ok, term} -> {:ok, to_value(term)}
+      {:error, {reason, pos}} -> {:error, :erlang.iolist_to_binary(~c"#{reason} at offset #{pos}")}
     end
   end
 

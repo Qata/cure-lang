@@ -22,7 +22,7 @@ defmodule :cure_std_time do
 
   The values Cure DOES match carry the constructor's own name:
 
-    * `parse_iso8601`, `zone` → `Result(_, ParseError)` → `{:Ok, _}` / `{:Error, _}`
+    * `parse_iso8601`, `zone` → `Result(_, ParseError)` → `{:ok, _}` / `{:error, _}`
     * `ParseError = InvalidFormat(String) | OutOfRange(String)`
       → `{:InvalidFormat, msg}` / `{:OutOfRange, msg}`
   """
@@ -41,23 +41,23 @@ defmodule :cure_std_time do
     # own results; the outer tuples are the Cure `Result`.
     case DateTime.from_iso8601(s) do
       {:ok, %DateTime{} = dt, _offset} ->
-        {:Ok, new_instant(DateTime.to_unix(dt, :microsecond))}
+        {:ok, new_instant(DateTime.to_unix(dt, :microsecond))}
 
       {:error, :invalid_format} ->
-        {:Error, parse_error(:invalid_format, "cannot parse ISO 8601 timestamp: #{inspect(s)}")}
+        {:error, parse_error(:invalid_format, "cannot parse ISO 8601 timestamp: #{inspect(s)}")}
 
       {:error, :invalid_date} ->
-        {:Error, parse_error(:out_of_range, "calendar date is out of range: #{inspect(s)}")}
+        {:error, parse_error(:out_of_range, "calendar date is out of range: #{inspect(s)}")}
 
       {:error, :invalid_time} ->
-        {:Error, parse_error(:out_of_range, "wall-clock time is out of range: #{inspect(s)}")}
+        {:error, parse_error(:out_of_range, "wall-clock time is out of range: #{inspect(s)}")}
 
       {:error, reason} ->
-        {:Error, parse_error(:invalid_format, "ISO 8601 parse failed: #{inspect(reason)}")}
+        {:error, parse_error(:invalid_format, "ISO 8601 parse failed: #{inspect(reason)}")}
     end
   end
 
-  def parse_iso8601(_), do: {:Error, parse_error(:invalid_format, "expected a string")}
+  def parse_iso8601(_), do: {:error, parse_error(:invalid_format, "expected a string")}
 
   def format_iso8601(%{@struct_key => :instant, micros: micros}) when is_integer(micros) do
     iso =
@@ -110,11 +110,11 @@ defmodule :cure_std_time do
         # `DateTime.to_iso8601/1` emits `Z` because we normalised to UTC;
         # replace the trailing `Z` with the real offset suffix.
         iso = String.replace_suffix(base, "Z", suffix)
-        {:Ok, iso}
+        {:ok, iso}
 
       # `canonical_zone/1`'s `:error` is internal; the outer tuple is the Result.
       :error ->
-        {:Error, parse_error(:invalid_format, "unknown time zone: #{inspect(name)}")}
+        {:error, parse_error(:invalid_format, "unknown time zone: #{inspect(name)}")}
     end
   end
 
