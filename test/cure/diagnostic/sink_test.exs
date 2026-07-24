@@ -49,6 +49,22 @@ defmodule Cure.Diagnostic.SinkTest do
     assert [%{"code" => "E099"}] = Jason.decode!(output)
   end
 
+  test "Code flush preserves the compiler envelope fields" do
+    diagnostic = Operational.file_read("demo.cure", :enoent)
+    {:ok, device} = StringIO.open("")
+    sink = Sink.new(format: :code, output_device: device) |> Sink.emit(diagnostic)
+
+    assert {:ok, _flushed} = Sink.flush(sink)
+    {_input, output} = StringIO.contents(device)
+    [rendered] = Jason.decode!(output)
+
+    assert rendered["code"] == "E095"
+    assert rendered["severity"] == "error"
+    assert rendered["file"] == "demo.cure"
+    assert rendered["message"] =~ "E095"
+    assert rendered["details"]["code"] == "E095"
+  end
+
   test "LSP rendering honors the configured position encoding" do
     source = "😀 value\n"
     registry = Cure.Diagnostic.SourceRegistry.new() |> Cure.Diagnostic.SourceRegistry.register(:source, source)

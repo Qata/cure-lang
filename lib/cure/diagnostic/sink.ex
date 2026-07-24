@@ -81,7 +81,7 @@ defmodule Cure.Diagnostic.Sink do
     do: flush_serialized(sink, Jason.encode!(render_all(sink)))
 
   def flush(%__MODULE__{format: :code} = sink),
-    do: flush_serialized(sink, Jason.encode!(Enum.map(sink.diagnostics, &Renderer.to_map/1)))
+    do: flush_serialized(sink, Jason.encode!(Enum.map(sink.diagnostics, &Renderer.code_map/1)))
 
   defp flush_serialized(sink, output) do
     case IO.write(sink.output_device, output <> "\n") do
