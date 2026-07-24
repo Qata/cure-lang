@@ -608,6 +608,9 @@ defmodule Cure.Elab.Program do
     if Keyword.get(rmeta, :variant, false), do: variant_constructor_binding(rhs), else: []
   end
 
+  defp constructor_bindings({:indexed_type, _meta, ctor_sigs}) when is_list(ctor_sigs),
+    do: Enum.flat_map(ctor_sigs, &gadt_constructor_binding/1)
+
   defp constructor_bindings(_decl), do: []
 
   defp variant_constructor_binding({:variable, meta, name}) when is_list(meta) and is_binary(name),
@@ -617,6 +620,16 @@ defmodule Cure.Elab.Program do
     do: [{meta |> Keyword.fetch!(:name) |> String.to_atom(), metadata_name_span(meta)}]
 
   defp variant_constructor_binding(_variant), do: []
+
+  defp gadt_constructor_binding({:gadt_ctor, meta, _body}) when is_list(meta) do
+    case Keyword.get(meta, :name) do
+      name when is_binary(name) -> [{String.to_atom(name), metadata_name_span(meta)}]
+      name when is_atom(name) and not is_nil(name) -> [{name, metadata_name_span(meta)}]
+      _ -> []
+    end
+  end
+
+  defp gadt_constructor_binding(_ctor), do: []
 
   defp metadata_name_span(meta) do
     case Cure.MetaAST.Metadata.source_info(meta) do
