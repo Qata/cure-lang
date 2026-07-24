@@ -112,8 +112,9 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
     # already cover end-to-end. Keeping this test module focused on
     # the pure helpers keeps it fast and isolated.
 
-    test "a later module can cross-call an @extern fn of an earlier module" do
-      # Regression: `bundle/2` compiles files in sorted order and each
+    test "dependency order wins over filename order for cross-module calls" do
+      # Regression: `bundle/2` must compile in dependency order, not filename
+      # order, and each
       # module's import resolver (`module_exports?`) probes the *loaded*
       # version of an imported module. If a freshly-compiled beam is not
       # loaded into the VM before the next module compiles, the probe hits

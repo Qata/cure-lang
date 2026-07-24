@@ -169,7 +169,8 @@ defmodule Cure.Compiler.MacroFamily do
 
   @doc "Build the ordinary record declarations needed by a structured rule."
   @spec generated_record_declarations(keyword(), map()) :: [tuple()]
-  def generated_record_declarations(meta, rule) when is_list(meta) and is_map(rule) do
+  def generated_record_declarations(meta, rule)
+      when is_list(meta) and is_map(rule) and is_map_key(rule, :syntax_type) do
     family_declarations =
       case Map.get(rule, :syntax_family) do
         %{name: name, fields: fields} ->

@@ -1,21 +1,10 @@
 defmodule Cure.Stdlib.RegexSourceTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Elab.Program
 
-  @regex_source Path.expand("../../../lib/std/regex.cure", __DIR__)
-
-  test "the Regex standard library is a pure Cure implementation" do
-    source = File.read!(@regex_source)
-
-    refute source =~ "@extern"
-    refute source =~ "cure_std_regex"
-
-    {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
-    assert {:ok, _ast} = Parser.parse(tokens, emit_events: false)
-  end
-
-  test "the legacy OTP regex runtime wrapper is absent" do
+  test "the legacy regex engines and OTP runtime wrapper are absent" do
     legacy = Path.expand("../../../lib/cure/stdlib/cure_std_regex.ex", __DIR__)
 
     refute File.exists?(legacy)
@@ -23,23 +12,75 @@ defmodule Cure.Stdlib.RegexSourceTest do
     refute Enum.any?(Path.wildcard("lib/**/*.ex"), fn file ->
              File.read!(file) =~ ":re."
            end)
+
+    regex_sources = Path.wildcard("lib/std/regex*.cure")
+
+    refute Enum.any?(regex_sources, fn file ->
+             source = File.read!(file)
+
+             Enum.any?(
+               ["type Regex =", "fn run_with", "fn repeat_all", "RawOptions", "ParseFailure"],
+               &String.contains?(source, &1)
+             )
+           end)
   end
 
-  test "slash literals expand to the typed pure Regex constructor" do
-    {:ok, tokens} = Lexer.tokenize("fn f() -> Regex = /[A-z]*/", emit_events: false)
+  test "slash literals retain the staged computed expansion entry" do
+    {:ok, tokens} = Lexer.tokenize("fn f() = /[A-z]*/", emit_events: false)
     {:ok, ast} = Parser.parse(tokens, emit_events: false)
 
     assert {:function_def, _meta,
             [
-              {:function_call, call_meta,
+              {:computed_use, use_meta,
                [
-                 {:literal, pattern_meta, "[A-z]*"},
-                 {:literal, flags_meta, ""}
+                 {:variable, _, "expand_literal"},
+                 {:macro_input, _,
+                  [
+                    {:literal, pattern_meta, "[A-z]*"},
+                    {:literal, flags_meta, ""}
+                  ]}
                ]}
             ]} = ast
 
-    assert call_meta[:name] == "Std.Regex.literal"
+    assert use_meta[:keyword] == "regex"
+    assert use_meta[:home_source] =~ "lib/std/regex_syntax.cure"
     assert pattern_meta[:subtype] == :string
     assert flags_meta[:subtype] == :string
+  end
+
+  @tag timeout: 600_000
+  test "a slash literal expands and elaborates without importing Std.Regex" do
+    source = """
+    mod RegexLiteralWithoutUse
+      fn literal() = /a/
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
+
+  @tag timeout: 600_000
+  test "a slash literal does not leak Std.Regex bare names into caller scope" do
+    source = """
+    mod RegexLiteralScope
+      fn literal() = /a/
+      fn leaked() -> RegexOptions = default_options()
+    end
+    """
+
+    assert {:error, _diagnostic} = Program.elaborate(source)
+  end
+
+  @tag timeout: 600_000
+  test "word-boundary and class-backspace syntax expand during elaboration" do
+    source = """
+    mod RegexBoundaryLiteralExpansion
+      fn word_start() = /\\bcat\\B/
+      fn unicode_word() = /\\bé\\b/u
+      fn class_backspace() = /[\\b]/
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
   end
 end

@@ -285,7 +285,13 @@ defmodule Cure.Elab.Emit do
 
     try do
       fn_forms = Enum.map(names, &function_form(env, &1))
-      exports = Enum.map(fn_forms, fn {:function, _l, name, arity, _cls} -> {name, arity} end)
+
+      exports =
+        fn_forms
+        |> Enum.reject(fn {:function, _line, name, _arity, _clauses} ->
+          String.match?(Atom.to_string(name), ~r/\$[^$]+\$\d+$/)
+        end)
+        |> Enum.map(fn {:function, _l, name, arity, _cls} -> {name, arity} end)
 
       [
         {:attribute, @line, :module, module},

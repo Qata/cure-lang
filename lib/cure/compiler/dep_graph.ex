@@ -221,14 +221,21 @@ defmodule Cure.Compiler.DepGraph do
   """
   @spec toposort(%{k => [k]}, [k]) :: [k] when k: term()
   def toposort(dep_map, keys) do
+    toposort(dep_map, keys, [])
+  end
+
+  @doc "Deterministic topological sort, preferring ready keys in `priority_keys`."
+  @spec toposort(%{k => [k]}, [k], [k]) :: [k] when k: term()
+  def toposort(dep_map, keys, priority_keys) do
     keyset = MapSet.new(keys)
+    priority = closure(dep_map, priority_keys) |> MapSet.new()
 
     edges =
       Map.new(keys, fn k ->
         {k, dep_map |> Map.get(k, []) |> Enum.filter(&(MapSet.member?(keyset, &1) and &1 != k))}
       end)
 
-    {ordered, _sccs} = kahn(edges)
+    {ordered, _sccs} = kahn(edges, priority)
     ordered
   end
 
@@ -455,17 +462,18 @@ defmodule Cure.Compiler.DepGraph do
   # deadlock), the source SCC of the remaining subgraph is emitted as a
   # group (alphabetical within it) and its internal edge map is collected
   # so order/1 can report the closed cycle walk. Never errors.
-  defp kahn(edges), do: do_kahn(edges, [], [])
+  defp kahn(edges), do: kahn(edges, MapSet.new())
+  defp kahn(edges, priority), do: do_kahn(edges, [], [], priority)
 
-  defp do_kahn(edges, acc, sccs) when map_size(edges) == 0,
+  defp do_kahn(edges, acc, sccs, _priority) when map_size(edges) == 0,
     do: {Enum.reverse(acc), Enum.reverse(sccs)}
 
-  defp do_kahn(edges, acc, sccs) do
+  defp do_kahn(edges, acc, sccs, priority) do
     ready =
       edges
       |> Enum.filter(fn {_path, deps} -> deps == [] end)
       |> Enum.map(&elem(&1, 0))
-      |> Enum.sort()
+      |> Enum.sort_by(fn key -> {not MapSet.member?(priority, key), key} end)
 
     case ready do
       [] ->
@@ -479,7 +487,7 @@ defmodule Cure.Compiler.DepGraph do
           |> Map.drop(members)
           |> Map.new(fn {p, deps} -> {p, deps -- members} end)
 
-        do_kahn(edges, Enum.reverse(members) ++ acc, [scc_edges | sccs])
+        do_kahn(edges, Enum.reverse(members) ++ acc, [scc_edges | sccs], priority)
 
       [next | _] ->
         edges =
@@ -487,7 +495,7 @@ defmodule Cure.Compiler.DepGraph do
           |> Map.delete(next)
           |> Map.new(fn {p, deps} -> {p, List.delete(deps, next)} end)
 
-        do_kahn(edges, [next | acc], sccs)
+        do_kahn(edges, [next | acc], sccs, priority)
     end
   end
 

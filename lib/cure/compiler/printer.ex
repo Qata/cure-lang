@@ -1125,7 +1125,10 @@ defmodule Cure.Compiler.Printer do
                 inner_rendered
             end
 
-          "(#{dname}: #{inner_rendered})"
+          case Keyword.get(dom_meta, :grade) do
+            nil -> "(#{dname}: #{inner_rendered})"
+            grade -> "(#{dname} :#{grade} #{inner_rendered})"
+          end
 
         # A RELEVANT IMPLICIT binder `{name: Type}` — implicit (solved, omitted at
         # the call site) yet retained (ω). Parallel to `:named_dom` but braced.

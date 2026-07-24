@@ -280,7 +280,7 @@ defmodule Cure.Core.Normalise do
                Eval.bounded_to_ctor_if(Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts)))
              ) do
           {:vctor, cname, cargs} ->
-            case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
+            case Enum.find(branches, fn {c, _ar, _b} -> Eval.constructor_name_matches?(c, cname) end) do
               {_c, ar, {:closure, env, body}} ->
                 {:ok, reapply(args, spend_fuel(Eval.reduce_branch_body(body, env, cargs, ar)))}
 
@@ -376,7 +376,8 @@ defmodule Cure.Core.Normalise do
     vals = Enum.map([l, r], &whnf_value(&1, sig, opts))
 
     if Enum.all?(vals, fn value ->
-         match?({:vint, _}, value) or match?({:vfloat, _}, value) or match?({:vatom, _}, value)
+         match?({:vint, _}, value) or match?({:vfloat, _}, value) or
+           match?({:vatom, _}, value) or match?({:vbounded, _}, value)
        end) do
       Eval.fold(if(op == :struct_eq, do: :eq, else: :ne), vals)
     else

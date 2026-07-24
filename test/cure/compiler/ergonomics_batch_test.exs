@@ -56,6 +56,46 @@ defmodule Cure.Compiler.ErgonomicsBatchTest do
     assert {:ok, _, _warnings} = Cure.Compiler.compile_string(source)
   end
 
+  test "where functions capture enclosing parameters" do
+    source = """
+    mod LocalCapture
+      fn add_to(base: Int, value: Int) -> Int = helper(value)
+      where
+        fn helper(next: Int) -> Int = base + next
+
+      fn result() -> Int = add_to(40, 2)
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == 42
+
+    refute Enum.any?(module.module_info(:exports), fn {name, _arity} ->
+             String.contains?(Atom.to_string(name), "$helper$")
+           end)
+  end
+
+  test "where clause functions prepend captured parameters to every clause" do
+    source = """
+    mod LocalClauseCapture
+      fn choose(fallback: Int, values: List(Int)) -> Int = helper(values)
+      where
+        fn helper(items: List(Int)) -> Int
+          | [] -> fallback
+          | [head | _] -> head
+
+      fn empty_result() -> Int = choose(42, [])
+      fn present_result() -> Int = choose(42, [7])
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :empty_result, []) == 42
+    assert apply(module, :present_result, []) == 7
+
+    refute Enum.any?(module.module_info(:exports), fn {name, _arity} ->
+             String.contains?(Atom.to_string(name), "$helper$")
+           end)
+  end
+
   test "ordinary annotation-free bindings remain accepted" do
     source = """
     mod BindingInference

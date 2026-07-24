@@ -1,0 +1,134 @@
+@group(:text)
+mod Std.Regex.Syntax.Emitter
+  use Std.Regex.Syntax.Model
+  use Std.Syntax
+
+  fn literal_shape(pattern: LiteralPattern) -> LiteralShapeCode = match pattern
+    LiteralEmpty -> UnitC
+    LiteralExact(_) -> UnitC
+    LiteralAny -> CharC
+    LiteralClass(_, _, _, _) -> CharC
+    LiteralDigit(_) -> CharC
+    LiteralWord(_) -> CharC
+    LiteralSpace(_) -> CharC
+    LiteralHorizontal(_) -> CharC
+    LiteralVertical(_) -> CharC
+    LiteralSequence(left, right) -> PairC(literal_shape(left), literal_shape(right))
+    LiteralAlternate(left, right) -> ChoiceC(literal_shape(left), literal_shape(right))
+    LiteralRepeat(inner, _) -> ListC(literal_shape(inner))
+    LiteralPlus(inner, _) -> ListC(literal_shape(inner))
+    LiteralOptional(inner, _) -> ChoiceC(literal_shape(inner), UnitC)
+    LiteralCapture(_) -> StringC
+    LiteralStart -> UnitC
+    LiteralEnd -> UnitC
+    LiteralAbsoluteStart -> UnitC
+    LiteralStrictEnd -> UnitC
+    LiteralFinalEnd -> UnitC
+    LiteralWordBoundary(_) -> UnitC
+
+  fn emit_shape(shape: LiteralShapeCode) -> Syntax = match shape
+    UnitC -> call("Std.Regex.UnitC", [])
+    CharC -> call("Std.Regex.CharC", [])
+    StringC -> call("Std.Regex.StringC", [])
+    BoolC -> call("Std.Regex.BoolC", [])
+    NatC -> call("Std.Regex.NatC", [])
+    IntC -> call("Std.Regex.IntC", [])
+    PairC(left, right) -> call("Std.Regex.PairC", [emit_shape(left), emit_shape(right)])
+    ChoiceC(left, right) -> call("Std.Regex.ChoiceC", [emit_shape(left), emit_shape(right)])
+    OptionC(inner) -> call("Std.Regex.OptionC", [emit_shape(inner)])
+    ListC(inner) -> call("Std.Regex.ListC", [emit_shape(inner)])
+
+  fn emit_literal(pattern: LiteralPattern) -> Syntax = match pattern
+    LiteralEmpty -> call("Std.Regex.empty", [])
+    LiteralExact(char) -> call("Std.Regex.exactly", [char_literal(char)])
+    LiteralAny -> call("Std.Regex.any_char", [])
+    LiteralClass(chars, ranges, kinds, negated) ->
+      call("Std.Regex.extended_character_class", [emit_chars(chars), emit_ranges(ranges), emit_class_kinds(kinds), bool_literal(negated), bool_literal(false), bool_literal(false)])
+    LiteralDigit(negated) -> call("Std.Regex.digit_class", [bool_literal(negated)])
+    LiteralWord(negated) -> call("Std.Regex.word_class", [bool_literal(negated)])
+    LiteralSpace(negated) -> call("Std.Regex.space_class", [bool_literal(negated)])
+    LiteralHorizontal(negated) -> call("Std.Regex.horizontal_class", [bool_literal(negated)])
+    LiteralVertical(negated) -> call("Std.Regex.vertical_class", [bool_literal(negated)])
+    LiteralSequence(left, right) -> call("Std.Regex.concatenate", [emit_literal(left), emit_literal(right)])
+    LiteralAlternate(left, right) -> call("Std.Regex.alternate", [emit_literal(left), emit_literal(right)])
+    LiteralRepeat(inner, lazy) -> call("Std.Regex.repeated_pattern", [emit_literal(inner), bool_literal(lazy)])
+    LiteralPlus(inner, lazy) -> call("Std.Regex.one_or_more_pattern", [emit_literal(inner), bool_literal(lazy)])
+    LiteralOptional(inner, lazy) -> call("Std.Regex.optional_literal", [emit_literal(inner), bool_literal(lazy)])
+    LiteralCapture(inner) -> call("Std.Regex.captured", [emit_literal(inner)])
+    LiteralStart -> call("Std.Regex.start_anchor", [])
+    LiteralEnd -> call("Std.Regex.end_anchor", [])
+    LiteralAbsoluteStart -> call("Std.Regex.start_anchor", [])
+    LiteralStrictEnd -> call("Std.Regex.strict_end_anchor", [])
+    LiteralFinalEnd -> call("Std.Regex.end_anchor", [])
+    LiteralWordBoundary(negated) -> call("Std.Regex.word_boundary", [bool_literal(false), bool_literal(negated)])
+
+  fn emit_literal_with_options(pattern: LiteralPattern, options: LiteralRegexOptions) -> Syntax =
+    let caseless = has_modifier(options, CaselessModifier)
+    let multiline = has_modifier(options, MultilineModifier)
+    let dotall = has_modifier(options, DotallModifier)
+    let unicode = has_modifier(options, UnicodeModifier)
+    let ungreedy = has_modifier(options, UngreedyModifier)
+    match pattern
+      LiteralEmpty -> call("Std.Regex.empty", [])
+      LiteralExact(char) -> call("Std.Regex.exactly_with_options", [char_literal(char), bool_literal(caseless), bool_literal(unicode)])
+      LiteralAny -> call("Std.Regex.dot_with_options", [bool_literal(dotall)])
+      LiteralClass(chars, ranges, kinds, negated) ->
+        call("Std.Regex.extended_character_class", [emit_chars(chars), emit_ranges(ranges), emit_class_kinds(kinds), bool_literal(negated), bool_literal(caseless), bool_literal(unicode)])
+      LiteralDigit(negated) -> call("Std.Regex.digit_class_with_options", [bool_literal(negated), bool_literal(unicode)])
+      LiteralWord(negated) -> call("Std.Regex.word_class_with_options", [bool_literal(negated), bool_literal(unicode)])
+      LiteralSpace(negated) -> call("Std.Regex.space_class_with_options", [bool_literal(negated), bool_literal(unicode)])
+      LiteralHorizontal(negated) -> call("Std.Regex.horizontal_class", [bool_literal(negated)])
+      LiteralVertical(negated) -> call("Std.Regex.vertical_class", [bool_literal(negated)])
+      LiteralSequence(left, right) -> call("Std.Regex.concatenate", [emit_literal_with_options(left, options), emit_literal_with_options(right, options)])
+      LiteralAlternate(left, right) -> call("Std.Regex.alternate", [emit_literal_with_options(left, options), emit_literal_with_options(right, options)])
+      LiteralRepeat(inner, lazy) -> call("Std.Regex.repeated_pattern", [emit_literal_with_options(inner, options), bool_literal(lazy != ungreedy)])
+      LiteralPlus(inner, lazy) -> call("Std.Regex.one_or_more_pattern", [emit_literal_with_options(inner, options), bool_literal(lazy != ungreedy)])
+      LiteralOptional(inner, lazy) -> call("Std.Regex.optional_literal", [emit_literal_with_options(inner, options), bool_literal(lazy != ungreedy)])
+      LiteralCapture(inner) -> call("Std.Regex.captured", [emit_literal_with_options(inner, options)])
+      LiteralStart -> call("Std.Regex.start_anchor_with_options", [bool_literal(multiline)])
+      LiteralEnd -> call("Std.Regex.end_anchor_with_options", [bool_literal(multiline)])
+      LiteralAbsoluteStart -> call("Std.Regex.start_anchor", [])
+      LiteralStrictEnd -> call("Std.Regex.strict_end_anchor", [])
+      LiteralFinalEnd -> call("Std.Regex.end_anchor", [])
+      LiteralWordBoundary(negated) -> call("Std.Regex.word_boundary", [bool_literal(unicode), bool_literal(negated)])
+
+  fn emit_chars(chars: List(Char)) -> Syntax = match chars
+    [] -> list([])
+    [head | rest] -> prepend_syntax(char_literal(head), emit_chars(rest))
+
+  fn emit_ranges(ranges: List(LiteralCharacterRange)) -> Syntax = match ranges
+    [] -> list([])
+    [LiteralCharacterRange(first, last) | rest] ->
+      prepend_syntax(call("Std.Regex.CharacterRange", [char_literal(first), char_literal(last)]), emit_ranges(rest))
+
+  fn emit_class_kinds(kinds: LiteralClassKinds) -> Syntax =
+    call("Std.Regex.ClassKinds", [
+      bool_literal(has_class_kind(kinds, DigitKind)),
+      bool_literal(has_class_kind(kinds, NotDigitKind)),
+      bool_literal(has_class_kind(kinds, WordKind)),
+      bool_literal(has_class_kind(kinds, NotWordKind)),
+      bool_literal(has_class_kind(kinds, SpaceKind)),
+      bool_literal(has_class_kind(kinds, NotSpaceKind)),
+      bool_literal(has_class_kind(kinds, HorizontalKind)),
+      bool_literal(has_class_kind(kinds, NotHorizontalKind)),
+      bool_literal(has_class_kind(kinds, VerticalKind)),
+      bool_literal(has_class_kind(kinds, NotVerticalKind))
+    ])
+
+  fn emit_options(options: LiteralRegexOptions) -> Syntax =
+    call("Std.Regex.RegexOptions", [
+      bool_literal(has_modifier(options, CaselessModifier)),
+      bool_literal(has_modifier(options, MultilineModifier)),
+      bool_literal(has_modifier(options, DotallModifier)),
+      bool_literal(has_modifier(options, ExtendedModifier)),
+      bool_literal(has_modifier(options, UnicodeModifier)),
+      bool_literal(has_modifier(options, FirstlineModifier)),
+      bool_literal(has_modifier(options, UngreedyModifier)),
+      bool_literal(has_modifier(options, ExportModifier))
+    ])
+
+  fn prepend_syntax(head: Syntax, tail: Syntax) -> Syntax = match tail
+    Node(tag, attrs, children) -> pickup
+      tag == :list -> Node(tag, attrs, [head | children])
+      else -> list([head])
+    _ -> list([head])

@@ -1,0 +1,59 @@
+@group(:text)
+mod Std.Regex.Syntax.Class
+  use Std.Regex.Syntax.Model
+
+  fn parse_literal_class(input: String) -> LiteralParse = match input
+    ['^' | rest] -> finish_literal_class(parse_literal_class_items_fuel(rest, [], [], no_class_kinds(), literal_fuel(input)), true)
+    _ -> finish_literal_class(parse_literal_class_items_fuel(input, [], [], no_class_kinds(), literal_fuel(input)), false)
+
+  fn finish_literal_class(result: LiteralClassParse, negated: Bool) -> LiteralParse = match result
+    LiteralClassParsed(chars, ranges, kinds, rest) -> LiteralParsed(LiteralClass(reverse_chars(chars), reverse_ranges(ranges), kinds, negated), rest)
+    LiteralClassInvalid(reason) -> LiteralInvalid(reason)
+
+  fn parse_literal_class_items_fuel(input: String, chars: List(Char), ranges: List(LiteralCharacterRange), kinds: LiteralClassKinds, fuel: Nat) -> LiteralClassParse = match fuel
+    Z() -> LiteralClassInvalid(:RegexParseLimit)
+    S(next_fuel) -> parse_literal_class_items_step(input, chars, ranges, kinds, next_fuel)
+
+  fn parse_literal_class_items_step(input: String, chars: List(Char), ranges: List(LiteralCharacterRange), kinds: LiteralClassKinds, fuel: Nat) -> LiteralClassParse = match input
+    [] -> LiteralClassInvalid(:UnclosedRegexClass)
+    ['\\', 'd' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(DigitKind, kinds), fuel)
+    ['\\', 'D' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotDigitKind, kinds), fuel)
+    ['\\', 'w' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(WordKind, kinds), fuel)
+    ['\\', 'W' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotWordKind, kinds), fuel)
+    ['\\', 's' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(SpaceKind, kinds), fuel)
+    ['\\', 'S' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotSpaceKind, kinds), fuel)
+    ['\\', 'h' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(HorizontalKind, kinds), fuel)
+    ['\\', 'H' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotHorizontalKind, kinds), fuel)
+    ['\\', 'v' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(VerticalKind, kinds), fuel)
+    ['\\', 'V' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotVerticalKind, kinds), fuel)
+    ['\\', 'b' | rest] -> parse_literal_class_items_fuel(rest, [8 | chars], ranges, kinds, fuel)
+    ['\\', 'a' | rest] -> parse_literal_class_items_fuel(rest, [7 | chars], ranges, kinds, fuel)
+    ['\\', 'e' | rest] -> parse_literal_class_items_fuel(rest, [27 | chars], ranges, kinds, fuel)
+    ['\\', 'f' | rest] -> parse_literal_class_items_fuel(rest, [12 | chars], ranges, kinds, fuel)
+    ['\\', 'n' | rest] -> parse_literal_class_items_fuel(rest, ['\n' | chars], ranges, kinds, fuel)
+    ['\\', 'r' | rest] -> parse_literal_class_items_fuel(rest, ['\r' | chars], ranges, kinds, fuel)
+    ['\\', 't' | rest] -> parse_literal_class_items_fuel(rest, ['\t' | chars], ranges, kinds, fuel)
+    [first | rest] -> parse_literal_class_character(first, rest, chars, ranges, kinds, fuel)
+
+  fn parse_literal_class_character(first: Char, rest: String, chars: List(Char), ranges: List(LiteralCharacterRange), kinds: LiteralClassKinds, fuel: Nat) -> LiteralClassParse = pickup
+    first == ']' -> LiteralClassParsed(chars, ranges, kinds, rest)
+    first == '\\' -> match rest
+      [] -> LiteralClassInvalid(:TrailingRegexClassEscape)
+      [escaped | tail] -> parse_literal_class_items_fuel(tail, [escaped | chars], ranges, kinds, fuel)
+    else -> parse_literal_class_range(first, rest, chars, ranges, kinds, fuel)
+
+  fn parse_literal_class_range(first: Char, rest: String, chars: List(Char), ranges: List(LiteralCharacterRange), kinds: LiteralClassKinds, fuel: Nat) -> LiteralClassParse = match rest
+    [] -> parse_literal_class_items_fuel(empty_regex_input(), [first | chars], ranges, kinds, fuel)
+    [dash | after_dash] -> pickup
+      dash == '-' -> parse_literal_class_range_end(first, rest, after_dash, chars, ranges, kinds, fuel)
+      else -> parse_literal_class_items_fuel(rest, [first | chars], ranges, kinds, fuel)
+
+  fn parse_literal_class_range_end(first: Char, original_rest: String, after_dash: String, chars: List(Char), ranges: List(LiteralCharacterRange), kinds: LiteralClassKinds, fuel: Nat) -> LiteralClassParse = match after_dash
+    [] -> parse_literal_class_items_fuel(original_rest, [first | chars], ranges, kinds, fuel)
+    [last | tail] -> pickup
+      last == ']' -> LiteralClassParsed(prepend_literal_dash(first, chars), ranges, kinds, tail)
+      literal_bounded_less(last, first) -> LiteralClassInvalid(:ReversedRegexRange)
+      else -> parse_literal_class_items_fuel(tail, chars, [LiteralCharacterRange(first, last) | ranges], kinds, fuel)
+
+  fn prepend_literal_dash(first: Char, chars: List(Char)) -> List(Char) =
+    ['-' | [first | chars]]

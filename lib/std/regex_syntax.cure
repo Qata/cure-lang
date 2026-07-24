@@ -1,0 +1,33 @@
+@group(:text)
+mod Std.Regex.Syntax
+  use Std.Regex.Syntax.Model
+  use Std.Regex.Syntax.Flags
+  use Std.Regex.Syntax.Parser
+  use Std.Regex.Syntax.Emitter
+  use Std.Syntax
+
+  macro RegexLiterals
+    literal regex <pattern: String> <flags: String> computed by expand_literal
+
+  fn expand_literal(input: Syntax) -> MacroResult = match children(input)
+    [pattern_syntax, flags_syntax] -> match leaf_value(pattern_syntax)
+      SStr(pattern) -> match leaf_value(flags_syntax)
+        SStr(flags) -> expand_literal_strings(pattern, flags)
+        _ -> reject(Failure(:InvalidRegexFlagsInput, []))
+      _ -> reject(Failure(:InvalidRegexPatternInput, []))
+    _ -> reject(Failure(:InvalidRegexLiteralInput, []))
+
+  fn expand_literal_strings(pattern: String, flags: String) -> MacroResult = match parse_literal_flags(flags, literal_default_options())
+    LiteralFlagsParsed(options) ->
+      match parse_literal(prepare_literal(pattern, options))
+        LiteralParsed(parsed, rest) -> match rest
+          [] ->
+            expand(
+              call("Std.Regex.configured", [
+                emit_options(options),
+                call("Std.Regex.simplified", [emit_shape(literal_shape(parsed)), emit_literal_with_options(parsed, options)])
+              ])
+            )
+          _ -> reject(Failure(:UnexpectedRegexSuffix, []))
+        LiteralInvalid(reason) -> reject(Failure(reason, []))
+    LiteralFlagsInvalid(reason) -> reject(Failure(reason, []))

@@ -97,21 +97,17 @@ defmodule Cure.Compiler.Incremental do
   of its `use`-dependencies (`order_deps`). This is the only sound compile order —
   a module's codegen links its use-deps' beams, so those must be built first.
 
-  Ordering follows the acyclic `order_deps` graph, NOT `closure_deps`. The closure
-  superset adds ambient `@prelude`/qualified edges that make the primitive modules
-  a single cycle (`Std.Atom`, `Std.Binary`, `Std.Char`, ...); a cyclic graph has
-  no dependency-respecting order, and `toposort` would emit the cycle
-  alphabetically — scheduling `Std.Binary` before `Std.Char` despite
-  `Binary use Char`, which breaks a cold build. `order_deps` is also the *complete*
-  compile dependency: the only cross-module beam a module links is a `use`-dep
-  (a qualified call without `use` does not compile), so nothing load-bearing is
-  lost by ignoring the closure-only edges here. Change propagation still uses the
-  conservative closure superset — see `dep_changed?/2`.
+  Ordering follows the explicit `use` graph. Among modules whose explicit
+  dependencies are already satisfied, ambient prelude providers are selected
+  first. This gives new providers a BEAM before ordinary implicit consumers
+  without adding synthetic edges or manufacturing prelude cycles. Qualified-call
+  closure edges remain order-free. Change propagation still uses the conservative
+  closure superset — see `dep_changed?/2`.
   """
   @spec compile_order(DepGraph.t()) :: [String.t()]
   def compile_order(graph) do
     order = DepGraph.order_deps_map(graph)
-    DepGraph.toposort(order, Map.keys(order))
+    DepGraph.toposort(order, Map.keys(order), DepGraph.prelude_provider_names(graph))
   end
 
   defp run(graph, source_paths, output_dir, opts) do

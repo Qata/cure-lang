@@ -1,0 +1,44 @@
+@group(:core)
+@prelude
+mod Std.Literal
+  ## User-defined contextual integer literals.
+  ##
+  ## A bare numeral still defaults to `Int`. In a checking position the
+  ## elaborator asks these interfaces to construct the expected type. The
+  ## result wrapper keeps conversion total: finite domains such as `Bounded(n)`
+  ## reject an out-of-range literal during compilation rather than trapping or
+  ## silently wrapping at runtime.
+
+  use Std.Int
+  use Std.Char
+
+  type LiteralResult(t: Type) = LiteralValue(t) | InvalidLiteral
+
+  interface ExpressibleByNaturalLiteral(t)
+    fn from_natural_literal(value: Nat) -> LiteralResult(t)
+
+  interface ExpressibleByIntegerLiteral(t)
+    fn from_integer_literal(value: Int) -> LiteralResult(t)
+
+  fn bounded_from_natural(bound: Nat, value: Nat) -> LiteralResult(Bounded(bound)) =
+    match bound
+      Z() -> assert_type InvalidLiteral() : LiteralResult(Bounded(Z()))
+      S(smaller_bound) ->
+        match value
+          Z() -> assert_type LiteralValue(First()) : LiteralResult(Bounded(S(smaller_bound)))
+          S(smaller_value) ->
+            match bounded_from_natural(smaller_bound, smaller_value)
+              LiteralValue(result) ->
+                assert_type LiteralValue(Next(result)) : LiteralResult(Bounded(S(smaller_bound)))
+              InvalidLiteral() ->
+                assert_type InvalidLiteral() : LiteralResult(Bounded(S(smaller_bound)))
+
+  implementation ExpressibleByNaturalLiteral for Nat
+    fn from_natural_literal(value: Nat) -> LiteralResult(Nat) = LiteralValue(value)
+
+  implementation ExpressibleByIntegerLiteral for Int
+    fn from_integer_literal(value: Int) -> LiteralResult(Int) = LiteralValue(value)
+
+  implementation ExpressibleByNaturalLiteral for Char
+    fn from_natural_literal(value: Nat) -> LiteralResult(Char) =
+      bounded_from_natural(1114112, value)

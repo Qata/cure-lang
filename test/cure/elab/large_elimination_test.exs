@@ -93,4 +93,50 @@ defmodule Cure.Elab.LargeEliminationTest do
 
     assert {:ok, _env} = Program.elaborate(src)
   end
+
+  test "a tuple type is first-class in a Type-returning function body" do
+    src = """
+    mod LETupleBody
+      type Choice = PairChoice
+
+      fn Selected(choice: Choice) -> Type = match choice
+        PairChoice -> Tuple(Int, Bool)
+
+      fn witness() -> Selected(PairChoice) = %[1, true]
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "a tuple type lowers when nested as a dependent family index" do
+    src = """
+    mod LETupleIndex
+      type Box indices (content: Type)
+        boxed : Box(content)
+
+      fn witness() -> Box(Tuple(Int, Bool)) = boxed()
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "a dependent match expands a wildcard across uncovered constructors" do
+    src = """
+    mod LEDependentDefault
+      type Kind = Number | Truth
+
+      fn Selected(kind: Kind) -> Type = match kind
+        Number -> Int
+        Truth -> Bool
+
+      fn keep(kind: Kind, value: Selected(kind)) -> Selected(kind) = match kind
+        Number -> value
+        _ -> value
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
 end

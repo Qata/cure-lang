@@ -427,20 +427,34 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert :ok = MacroSyntax.validate_expansion(reflected)
   end
 
-  test "a regex literal reflects as its typed pure Cure constructor call" do
+  test "a regex literal reflects as its computed expansion with typed inputs" do
     ast = expr!("/foo/")
     repr = MacroSyntax.to_syntax(ast)
 
-    assert {:syn_node, :function_call, attrs,
+    assert {:syn_node, :computed_use, attrs,
             [
-              {:syn_leaf, :literal, pattern_attrs, {:s_str, "foo"}},
-              {:syn_leaf, :literal, flags_attrs, {:s_str, ""}}
+              {:syn_leaf, :variable, _elaborator_attrs, {:s_str, "expand_literal"}},
+              {:syn_node, :macro_input, input_attrs,
+               [
+                 {:syn_leaf, :literal, pattern_attrs, {:s_str, "foo"}},
+                 {:syn_leaf, :literal, flags_attrs, {:s_str, ""}}
+               ]}
             ]} = repr
 
-    assert {:name, {:s_str, "Std.Regex.literal"}} in attrs
+    assert {:keyword, {:s_str, "regex"}} in attrs
+    assert {:keyword, {:s_str, "regex"}} in input_attrs
     assert {:subtype, {:s_atom, :string}} in pattern_attrs
     assert {:subtype, {:s_atom, :string}} in flags_attrs
     assert MacroSyntax.from_syntax(repr) == ast
+  end
+
+  test "a character SynLit round-trips without exposing code-point conversion to Cure macros" do
+    syntax = {:syn_leaf, :literal, [{:subtype, {:s_atom, :char}}], {:s_char, ?é}}
+
+    assert {:literal, meta, ?é} = MacroSyntax.from_syntax(syntax)
+    assert meta[:subtype] == :char
+    assert MacroSyntax.to_syntax({:literal, [subtype: :char], ?é}) != syntax
+    assert :ok = MacroSyntax.validate_expansion(syntax)
   end
 
   test "a binary-segment size expression (an AST, not a scalar) round-trips faithfully" do

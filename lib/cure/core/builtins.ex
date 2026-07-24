@@ -205,6 +205,15 @@ defmodule Cure.Core.Builtins do
   defp int_family_id(env),
     do: Inductive.builtin(env, :int) || int_family(Env.with_owner(env, "Std.Int")).name
 
+  # `Std.Nat` excludes its own family while its source declaration is being
+  # elaborated. Int is nevertheless seeded into that working environment, so
+  # its constructors must use Nat's canonical identity even before the builtin
+  # registry can contain the source-declared family. Baking the raw lookup here
+  # produced `{:data, nil, ...}` in FromNat/NegativeSuccessor and poisoned every
+  # transitive interface compiled through the Nat bootstrap.
+  defp nat_family_id(env),
+    do: Inductive.builtin(env, :nat) || nat_family(Env.with_owner(env, "Std.Nat")).name
+
   # struct_eq/struct_ne : Pi(a: Type0). Pi(_: a). Pi(_: a). Bool — under the
   # second binder the type param a is {:var, 0}; under the third it is {:var, 1}.
   # The type argument is computationally irrelevant (BEAM `==` is polymorphic and
@@ -357,7 +366,7 @@ defmodule Cure.Core.Builtins do
   # to unify n's Nat against the prelude Nat. Nat is seeded before Int, so the
   # builtin lookup resolves here.
   defp int_ctors(env) do
-    nat = {:data, Inductive.builtin(env, :nat), [], []}
+    nat = {:data, nat_family_id(env), [], []}
 
     [
       Inductive.ctor(Env.owned_name(env, :FromNat), [{:_a0, nat}], []),

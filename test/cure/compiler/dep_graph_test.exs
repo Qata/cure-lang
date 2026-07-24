@@ -285,6 +285,44 @@ defmodule Cure.Compiler.DepGraphTest do
     end
   end
 
+  describe "priority-aware toposort/3" do
+    test "sorts an ambient prelude provider before an implicit consumer", %{tmp_dir: dir} do
+      provider = write!(dir, "z_provider.cure", "@prelude\nmod LiteralProvider\n  fn make() -> Int = 1\n")
+      consumer = write!(dir, "a_consumer.cure", "mod Consumer\n  fn value() -> Int = 2\n")
+
+      {:ok, graph} = DepGraph.scan([consumer, provider])
+      deps = DepGraph.order_deps_map(graph)
+
+      assert deps["Consumer"] == []
+      assert DepGraph.toposort(deps, Map.keys(deps), ["LiteralProvider"]) == ["LiteralProvider", "Consumer"]
+    end
+
+    test "does not add a prelude back-edge into its bootstrap dependencies", %{tmp_dir: dir} do
+      dependency = write!(dir, "z_dependency.cure", "mod Dependency\n  fn base() -> Int = 1\n")
+
+      provider =
+        write!(
+          dir,
+          "a_provider.cure",
+          "@prelude\nmod Provider\n  use Dependency\n  fn make() -> Int = base()\n"
+        )
+
+      consumer = write!(dir, "b_consumer.cure", "mod Consumer\n  fn value() -> Int = 2\n")
+
+      {:ok, graph} = DepGraph.scan([consumer, provider, dependency])
+      deps = DepGraph.order_deps_map(graph)
+
+      assert deps["Provider"] == ["Dependency"]
+      refute "Provider" in deps["Dependency"]
+
+      assert DepGraph.toposort(deps, Map.keys(deps), ["Provider"]) == [
+               "Dependency",
+               "Provider",
+               "Consumer"
+             ]
+    end
+  end
+
   describe "closure edges" do
     test "qualified-call targets become closure deps when in the known universe", %{tmp_dir: dir} do
       lib = write!(dir, "libm.cure", "mod LibM\n  fn get(x: Int) -> Int = x\n")

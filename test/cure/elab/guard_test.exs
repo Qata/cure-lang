@@ -84,6 +84,84 @@ defmodule Cure.Elab.GuardTest do
     assert apply(mod, :miss, []) == ?x
   end
 
+  test "where helpers support one structural parameter column across arities 2 through 6" do
+    src = """
+    mod M
+      use Std.List
+
+      fn arity2(values: List(Int), a: Int) -> Int = classify2(values, a)
+      where
+        fn classify2(values: List(Int), a: Int) -> Int
+          | [], a -> a
+          | _, _ -> 20
+
+      fn arity3(a: Int, values: List(Int), b: Int) -> Int = classify3(a, values, b)
+      where
+        fn classify3(a: Int, values: List(Int), b: Int) -> Int
+          | a, [], b -> a + b
+          | _, _, _ -> 30
+
+      fn arity4(a: Int, b: Int, c: Int, values: List(Int)) -> Int = classify4(a, b, c, values)
+      where
+        fn classify4(a: Int, b: Int, c: Int, values: List(Int)) -> Int
+          | a, b, c, [] -> a + b + c
+          | _, _, _, _ -> 40
+
+      fn arity5(a: Int, values: List(Int), b: Int, c: Int, d: Int) -> Int = classify5(a, values, b, c, d)
+      where
+        fn classify5(a: Int, values: List(Int), b: Int, c: Int, d: Int) -> Int
+          | a, [], b, c, d -> a + b + c + d
+          | _, _, _, _, _ -> 50
+
+      fn arity6(values: List(Int), a: Int, b: Int, c: Int, d: Int, e: Int) -> Int = classify6(values, a, b, c, d, e)
+      where
+        fn classify6(values: List(Int), a: Int, b: Int, c: Int, d: Int, e: Int) -> Int
+          | [], a, b, c, d, e -> a + b + c + d + e
+          | _, _, _, _, _, _ -> 60
+
+      fn a2_empty() -> Int = arity2([], 7)
+      fn a2_present() -> Int = arity2([1], 7)
+      fn a3_empty() -> Int = arity3(2, [], 3)
+      fn a3_present() -> Int = arity3(2, [1], 3)
+      fn a4_empty() -> Int = arity4(1, 2, 3, [])
+      fn a4_present() -> Int = arity4(1, 2, 3, [1])
+      fn a5_empty() -> Int = arity5(1, [], 2, 3, 4)
+      fn a5_present() -> Int = arity5(1, [1], 2, 3, 4)
+      fn a6_empty() -> Int = arity6([], 1, 2, 3, 4, 5)
+      fn a6_present() -> Int = arity6([1], 1, 2, 3, 4, 5)
+    end
+    """
+
+    {:ok, env} = Program.elaborate(src)
+
+    roots = [
+      :a2_empty,
+      :a2_present,
+      :a3_empty,
+      :a3_present,
+      :a4_empty,
+      :a4_present,
+      :a5_empty,
+      :a5_present,
+      :a6_empty,
+      :a6_present
+    ]
+
+    functions = Program.reachable_def_names(env, roots)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.WhereStructuralColumn", functions: functions)
+
+    assert apply(mod, :a2_empty, []) == 7
+    assert apply(mod, :a2_present, []) == 20
+    assert apply(mod, :a3_empty, []) == 5
+    assert apply(mod, :a3_present, []) == 30
+    assert apply(mod, :a4_empty, []) == 6
+    assert apply(mod, :a4_present, []) == 40
+    assert apply(mod, :a5_empty, []) == 10
+    assert apply(mod, :a5_present, []) == 50
+    assert apply(mod, :a6_empty, []) == 15
+    assert apply(mod, :a6_present, []) == 60
+  end
+
   test "a guard whose test is false and has no fallback is rejected (non-exhaustive)" do
     src =
       @nat <>
