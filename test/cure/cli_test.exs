@@ -214,20 +214,29 @@ defmodule Cure.CLITest do
   end
 
   describe "cure stdlib" do
-    # :slow — asserts CLI wiring only, but pays a full 81-module stdlib compile
-    # (~21s) to do it. This is the only test of `cure stdlib`, and `cmd_stdlib`
+    # :slow — asserts CLI wiring but pays a full 126-module dependent stdlib
+    # compile to do it. This is the only test of `cure stdlib`, and `cmd_stdlib`
     # shares no code with the `mix cure.compile_stdlib` task the rest of the
-    # suite leans on, so it must keep running on CI.
+    # suite leans on, so it must keep running on CI. Its cold public-path build
+    # legitimately exceeds ExUnit's default 60-second wall budget; retain a
+    # finite test-local ceiling without weakening the rest of the suite.
     @tag :slow
+    @tag timeout: 600_000
     test "compiles stdlib" do
-      output =
-        capture_io(fn ->
-          Cure.CLI.main(["stdlib", "-o", "_build/test_stdlib_ebin"])
-        end)
+      output_dir =
+        Path.join(System.tmp_dir!(), "cure_cli_stdlib_#{System.unique_integer([:positive])}")
 
+      on_exit(fn -> File.rm_rf!(output_dir) end)
+
+      # The suite deliberately keeps the canonical Std modules loaded and
+      # sticky. Exercise the built CLI in its own VM so this public-path test
+      # cannot mistake that test-only protection for a compiler load failure.
+      {output, status} =
+        System.cmd(Path.expand("cure"), ["stdlib", "-o", output_dir], stderr_to_stdout: true)
+
+      assert status == 0, output
       assert output =~ "Compiling Cure standard library"
       assert output =~ "Output:"
-      File.rm_rf!("_build/test_stdlib_ebin")
     end
   end
 
