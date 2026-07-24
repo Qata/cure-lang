@@ -1411,6 +1411,13 @@ defmodule Cure.Elab.Program do
       # module must still host them.
       self_owner = ast |> module_atom() |> Atom.to_string() |> String.replace_prefix("Cure.", "")
 
+      canonical_locals =
+        Enum.map(local_defs, fn name ->
+          if Cure.Elab.Name.qualified?(name),
+            do: name,
+            else: Cure.Elab.Name.qualify(self_owner, name)
+        end)
+
       own_impls =
         Enum.filter(impl_def_names(env), fn key ->
           case Cure.Elab.Name.owner(key) do
@@ -1420,7 +1427,7 @@ defmodule Cure.Elab.Program do
           end
         end)
 
-      {:ok, env, local_defs ++ own_impls}
+      {:ok, env, Enum.uniq(canonical_locals ++ own_impls)}
     end
   end
 
@@ -1510,14 +1517,16 @@ defmodule Cure.Elab.Program do
   @spec reachable_def_names(Env.t(), [atom()]) :: [atom()]
   def reachable_def_names(%Env{defs: defs} = env, roots) do
     Enum.reduce(roots, MapSet.new(), fn root, seen ->
-      collect_reachable(env, defs, root, seen)
+      case reachable_root_key(env, defs, root) do
+        nil -> seen
+        key -> collect_reachable(defs, key, seen)
+      end
     end)
     |> MapSet.to_list()
+    |> Enum.sort()
   end
 
-  defp collect_reachable(env, defs, name, seen) do
-    name = Env.resolve_key(env, defs, name)
-
+  defp collect_reachable(defs, name, seen) do
     cond do
       MapSet.member?(seen, name) ->
         seen
@@ -1543,8 +1552,30 @@ defmodule Cure.Elab.Program do
 
             [d.type, d.body]
             |> Enum.flat_map(&global_refs/1)
-            |> Enum.reduce(seen, &collect_reachable(env, defs, &1, &2))
+            |> Enum.reduce(seen, fn reference, acc ->
+              if Map.has_key?(defs, reference),
+                do: collect_reachable(defs, reference, acc),
+                else: acc
+            end)
         end
+    end
+  end
+
+  # Callers may select a local root by its authored spelling at this public
+  # boundary. Convert that spelling once through the current module owner.
+  # Recursive closure edges are already Core identities and are never guessed.
+  defp reachable_root_key(%Env{module_owner: owner}, defs, root) when is_atom(root) do
+    canonical = if is_binary(owner), do: Cure.Elab.Name.qualify(owner, root)
+
+    cond do
+      Map.has_key?(defs, root) ->
+        root
+
+      not is_nil(canonical) and Map.has_key?(defs, canonical) ->
+        canonical
+
+      true ->
+        nil
     end
   end
 

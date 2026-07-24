@@ -27,16 +27,18 @@ defmodule Cure.Stdlib.OtpRawTest do
   defp effect_result?(_), do: false
 
   test "the module elaborates on the dependent pipeline", %{locals: locals} do
-    assert :raw_self in locals
-    assert :raw_spawn in locals
-    assert :raw_spawn_link in locals
-    assert :raw_start_link in locals
-    assert :raw_start_link_unnamed in locals
-    assert :raw_statem_start_link in locals
-    assert :raw_statem_start_link_unnamed in locals
-    assert :raw_supervisor_start_link in locals
-    assert :raw_send in locals
-    assert :raw_call in locals
+    local_bases = MapSet.new(locals, &Cure.Elab.Name.base/1)
+
+    assert "raw_self" in local_bases
+    assert "raw_spawn" in local_bases
+    assert "raw_spawn_link" in local_bases
+    assert "raw_start_link" in local_bases
+    assert "raw_start_link_unnamed" in local_bases
+    assert "raw_statem_start_link" in local_bases
+    assert "raw_statem_start_link_unnamed" in local_bases
+    assert "raw_supervisor_start_link" in local_bases
+    assert "raw_send" in local_bases
+    assert "raw_call" in local_bases
   end
 
   # The `Plain` tag is `RawPid`'s third argument: the process the VM hands us speaks no
