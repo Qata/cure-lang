@@ -810,7 +810,9 @@ defmodule Cure.Elab.Elaborator do
       # elaboration, never a runtime crash. `t.i` is sugar for this (both share
       # `positional_projection`). `i` must be a static positive integer literal —
       # the bounds check is only meaningful for a statically-known index.
-      Keyword.get(meta, :name) == "element" and element_projection?(args) ->
+      Keyword.get(meta, :name) == "element" and
+        is_nil(Env.get_def(env, :element)) and
+          element_projection?(args) ->
         [t_arg, {:literal, _, i} = index_arg] = args
 
         positional_projection(i, t_arg, names, ctx, env)
@@ -1970,8 +1972,9 @@ defmodule Cure.Elab.Elaborator do
 
   # `element(t, i)` is the dependent n-ary projection form iff called with exactly
   # two arguments and a STATIC positive-integer literal index — the only shape for
-  # which the compile-time bounds check is meaningful. Any other `element(…)` call
-  # falls through to ordinary name resolution.
+  # which the compile-time bounds check is meaningful. Any other `element(…)`
+  # call falls through to ordinary name resolution. A visible definition named
+  # `element` also wins, preserving ordinary local/import shadowing.
   defp element_projection?([_t_arg, {:literal, _meta, i}]) when is_integer(i) and i >= 1, do: true
   defp element_projection?(_), do: false
 
