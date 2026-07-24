@@ -121,52 +121,89 @@ defmodule Cure.Elab.Emit do
   """
   @spec validate_emission_closure(Env.t(), [atom()]) :: :ok | {:error, term()}
   def validate_emission_closure(%Env{} = env, names) do
-    Enum.reduce_while(names, {:ok, MapSet.new()}, fn name, {:ok, seen} ->
-      key = Env.resolve_key(env, env.defs, name)
+    selected =
+      names
+      |> Enum.map(&Env.resolve_key(env, env.defs, &1))
+      |> MapSet.new()
 
-      case validate_reachable_definition(env, key, seen, nil) do
-        {:ok, next} -> {:cont, {:ok, next}}
+    selected_owners =
+      selected
+      |> Enum.map(&Name.owner/1)
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new()
+
+    Enum.reduce_while(selected, :ok, fn key, :ok ->
+      case validate_selected_definition(env, key, selected, selected_owners) do
+        :ok -> {:cont, :ok}
         {:error, _} = error -> {:halt, error}
       end
     end)
-    |> case do
-      {:ok, _seen} -> :ok
-      {:error, _} = error -> error
+  end
+
+  defp validate_selected_definition(env, key, selected, selected_owners) do
+    case Map.get(env.defs, key) do
+      nil ->
+        closure_error(:emission_closure_missing, env, key, nil)
+
+      %{body: nil, builtin_op: builtin_op} when not is_nil(builtin_op) ->
+        :ok
+
+      %{body: {:extern, {_module, _function, arity}}} when is_integer(arity) and arity >= 0 ->
+        :ok
+
+      %{body: body} ->
+        body
+        |> core_global_refs()
+        |> MapSet.new()
+        |> Enum.reduce_while(:ok, fn reference, :ok ->
+          case validate_emission_reference(env, reference, key, selected, selected_owners) do
+            :ok -> {:cont, :ok}
+            {:error, _} = error -> {:halt, error}
+          end
+        end)
+
+      definition ->
+        closure_error(:emission_closure_invalid, env, key, nil, value: definition)
     end
   end
 
-  defp validate_reachable_definition(env, key, seen, referenced_by) do
-    if MapSet.member?(seen, key) do
-      {:ok, seen}
-    else
-      case Map.get(env.defs, key) do
-        nil ->
-          {:error,
-           {:emission_closure_missing, %{definition: key, referenced_by: referenced_by, module: env.module_owner}}}
+  defp validate_emission_reference(env, reference, referenced_by, selected, selected_owners) do
+    case Map.get(env.defs, reference) do
+      nil ->
+        closure_error(:emission_closure_missing, env, reference, referenced_by)
 
-        %{body: nil, builtin_op: builtin_op} when not is_nil(builtin_op) ->
-          {:ok, MapSet.put(seen, key)}
+      %{body: nil, builtin_op: builtin_op} when not is_nil(builtin_op) ->
+        :ok
 
-        %{body: {:extern, {_module, _function, arity}}} when is_integer(arity) and arity >= 0 ->
-          {:ok, MapSet.put(seen, key)}
+      %{body: {:extern, {_module, _function, arity}}} when is_integer(arity) and arity >= 0 ->
+        :ok
 
-        %{body: body} ->
-          seen = MapSet.put(seen, key)
+      %{body: _body} ->
+        owner = Name.owner(reference)
 
-          body
-          |> core_global_refs()
-          |> Enum.uniq()
-          |> Enum.reduce_while({:ok, seen}, fn reference, {:ok, current} ->
-            case validate_reachable_definition(env, reference, current, key) do
-              {:ok, next} -> {:cont, {:ok, next}}
-              {:error, _} = error -> {:halt, error}
-            end
-          end)
+        if not is_nil(owner) and MapSet.member?(selected_owners, owner) and
+             not MapSet.member?(selected, reference) do
+          closure_error(:emission_closure_incomplete, env, reference, referenced_by)
+        else
+          :ok
+        end
 
-        definition ->
-          {:error, {:emission_closure_invalid, %{definition: key, referenced_by: referenced_by, value: definition}}}
-      end
+      definition ->
+        closure_error(:emission_closure_invalid, env, reference, referenced_by, value: definition)
     end
+  end
+
+  defp closure_error(kind, env, definition, referenced_by, extra \\ []) do
+    details =
+      extra
+      |> Map.new()
+      |> Map.merge(%{
+        definition: definition,
+        referenced_by: referenced_by,
+        module: env.module_owner
+      })
+
+    {:error, {kind, details}}
   end
 
   defp core_global_refs({:global, name}), do: [name]
