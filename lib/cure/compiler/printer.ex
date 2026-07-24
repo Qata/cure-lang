@@ -14,21 +14,6 @@ defmodule Cure.Compiler.Printer do
 
   @default_indent "  "
 
-  # Reserved words (keywords + operator words) that lex as non-identifier
-  # tokens. A definition or reference that uses one of these as an ordinary
-  # name must be re-emitted backtick-quoted (`` `not` ``) to round-trip, since
-  # the lexer only yields them as an `:identifier` inside backticks.
-  @reserved_words ~w(
-    mod fn let type typealias indexed indices rec proto impl local use as
-    interface implementation deriving
-    match pickup if elif else then for do end
-    in try catch finally throw return yield
-    spawn send receive after
-    when where and or not
-    true false nil
-    extern proof
-  )
-
   # Spec-defined formatting parameters (PICKUP §8.7 / MATCH §9.7).
   # Aligned form is dropped if the longest clause head exceeds the
   # alignment limit, falling back to the unaligned form. Wrapping is
@@ -2214,7 +2199,7 @@ defmodule Cure.Compiler.Printer do
   # round-trips as an ordinary identifier (e.g. the `Std.Bool` connectives
   # `` `not` ``/`` `and` ``/`` `or` ``).
   defp quote_if_reserved(name) when is_binary(name) do
-    if name in @reserved_words or pure_operator_name?(name),
+    if Cure.Compiler.Lexer.reserved_word?(name) or pure_operator_name?(name),
       do: "`#{name}`",
       else: name
   end

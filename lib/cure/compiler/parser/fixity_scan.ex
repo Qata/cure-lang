@@ -163,6 +163,12 @@ defmodule Cure.Compiler.Parser.FixityScan do
   @spec module_name(term()) :: String.t() | nil
   def module_name(ast) do
     deep_reduce(ast, nil, fn
+      {:lift_module, meta, _}, nil when is_list(meta) ->
+        case Keyword.get(meta, :module) do
+          name when is_binary(name) -> name
+          _macro_hole_or_missing -> nil
+        end
+
       {:container, meta, _}, nil when is_list(meta) ->
         if Keyword.get(meta, :container_type) in @module_container_types,
           do: Keyword.get(meta, :name),

@@ -70,6 +70,11 @@ defmodule Cure.Compiler.Lexer do
   @doc "Words lexed as identifiers and promoted contextually by the parser."
   def contextual_keywords, do: @contextual_keywords
 
+  @doc "True when a bare word is tokenized as a keyword/operator rather than an identifier."
+  @spec reserved_word?(String.t()) :: boolean()
+  def reserved_word?(word) when is_binary(word), do: MapSet.member?(@keyword_string_set, word)
+  def reserved_word?(_word), do: false
+
   # -- Lexer state -----------------------------------------------------------
 
   defstruct [
