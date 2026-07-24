@@ -22,6 +22,7 @@ defmodule Cure.Stdlib.OtpRecursiveTransferTest do
     mod RtInst
       use Std.Otp.FiniteFixpoint
       use Std.Otp.RecursiveTransfer
+      use Std.Otp.InterfaceBridge
       fn loop_body() -> RBody = RSend(TA, RRecv(TB, RVar()))
       fn ex() -> Sub(tset(loop_body(), rec_infer(loop_body())), rec_infer(loop_body())) =
         rec_fixed(loop_body())
@@ -39,6 +40,7 @@ defmodule Cure.Stdlib.OtpRecursiveTransferTest do
     mod RlInst
       use Std.Otp.FiniteFixpoint
       use Std.Otp.RecursiveTransfer
+      use Std.Otp.InterfaceBridge
       fn loop_body() -> RBody = RSend(TA, RRecv(TB, RVar()))
       fn least() -> Sub(rec_infer(loop_body()), MkIF(T, T, F)) =
         rec_is_least(loop_body(), MkIF(T, T, F), sub_refl(MkIF(T, T, F)))

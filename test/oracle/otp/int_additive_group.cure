@@ -6,6 +6,7 @@ mod IntAdditiveGroup
   use Std.Nat
   use Std.Int
   use Std.Equivalent
+  use Std.Proof.IntMath
   use Std.Proof.IntOrder
 
   fn zero_scale_negative() -> Equivalent(Int,

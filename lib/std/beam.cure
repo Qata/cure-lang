@@ -7,6 +7,7 @@ mod Std.Beam
   ## primitives, but ordinary Cure code cannot inspect it or claim a type for it.
   typealias BeamTerm = RawTerm
   typealias EncodedTerm = RawTerm
+  typealias BarePid = Std.Otp.Raw.BarePid
 
   ## Why an inbound BEAM term could not be validated as the requested Cure type.
   ## Decoding is deliberately separate from encoding: outbound conversion is

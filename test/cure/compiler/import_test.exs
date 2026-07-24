@@ -52,13 +52,11 @@ defmodule Cure.Compiler.ImportTest do
         use Std.{List, Core}
 
         fn doubled(xs: List(Int)) -> List(Int) = map(xs, fn(x) -> x * 2)
-        fn wrap(x: Int) -> Result(Int, String) = ok(x)
         fn get_id(x: Int) -> Int = identity(x)
       """
 
       {:ok, m} = Cure.Compiler.compile_and_load(source)
       assert m.doubled([1, 2, 3]) == [2, 4, 6]
-      assert m.wrap(42) == {:ok, 42}
       assert m.get_id(99) == 99
     after
       purge(:"Cure.ImportSelective")

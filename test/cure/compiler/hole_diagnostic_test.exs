@@ -19,7 +19,7 @@ defmodule Cure.Compiler.HoleDiagnosticTest do
                emit_events: false
              )
 
-    assert details.definition == :broken
+    assert details.definition == :"HoleDiagnostic#broken"
     assert details.hole_id == "HoleDiagnostic.broken#todo"
     assert details.span.start_byte == byte_offset!(@source, "?todo")
     assert details.span.end_byte - details.span.start_byte == byte_size("?todo")

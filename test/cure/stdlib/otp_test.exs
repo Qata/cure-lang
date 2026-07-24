@@ -27,7 +27,7 @@ defmodule Cure.Stdlib.OtpTest do
 
   # A program in module `App` that `use`s Std.Otp and declares a request ADT.
   defp app(body) do
-    Program.elaborate("mod App\n  use Std.Otp\n  type Cmd = Inc | Dec\n#{body}end\n")
+    Program.elaborate("mod App\n  use Std.Otp\n  use Std.ExitReason\n  type Cmd = Inc | Dec\n#{body}end\n")
   end
 
   defp effect_result?({:pi, _g, _d, cod}), do: effect_result?(cod)
@@ -289,6 +289,7 @@ defmodule Cure.Stdlib.OtpTest do
     mod BeamObservationProof
       use Std.Beam
       use Std.Option
+      use Std.Result
 
       fn atom_view() -> Option(Atom) = atom(forget(:ready))
       fn tuple_size_view() -> Option(Int) = tuple_arity(forget(%[:ok, 3]))

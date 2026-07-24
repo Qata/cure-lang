@@ -43,6 +43,23 @@ defmodule Cure.Elab.ModuleInterfaceTest do
     assert :erts_debug.same(a, b)
   end
 
+  test "a fresh in-memory loader reuses the fingerprinted interface artifact" do
+    path = Path.expand("lib/std/core.cure")
+    cache_key = {Program, :module_interface, path}
+
+    assert {:ok, primed} = Program.module_interface("Std.Core", path)
+    :persistent_term.erase(cache_key)
+    Process.put(:cure_module_loader_observer, self())
+
+    on_exit(fn ->
+      Process.delete(:cure_module_loader_observer)
+    end)
+
+    assert {:ok, cached} = Program.module_interface("Std.Core", path)
+    assert cached == primed
+    refute_received {:cure_module_loader, {:compiling, "Std.Core", ^path}}
+  end
+
   test "module_interface/2 surfaces an error for a missing file" do
     assert {:error, _} = Program.module_interface("Nope", "lib/std/does_not_exist.cure")
   end

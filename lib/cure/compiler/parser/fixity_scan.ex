@@ -26,11 +26,12 @@ defmodule Cure.Compiler.Parser.FixityScan do
       {:ok, tokens} ->
         exprs = Parser.harvest(tokens, file, base, Cure.Edition.current())
         facts = collect_module_facts(exprs)
+        qualified_targets = normalize_qualified_targets(collect_qualified_targets(exprs), facts.uses)
 
         %{
           fixity: facts.fixity,
           uses: facts.uses,
-          qualified_targets: collect_qualified_targets(exprs),
+          qualified_targets: qualified_targets,
           prelude?: prelude?(exprs),
           module: module_name(exprs)
         }
@@ -149,18 +150,44 @@ defmodule Cure.Compiler.Parser.FixityScan do
   @spec collect_qualified_targets(term()) :: [%{target: String.t(), line: pos_integer()}]
   def collect_qualified_targets(ast) do
     ast
-    |> deep_collect(fn
-      {:function_call, meta, _args} when is_list(meta) ->
-        case qualified_owner(Keyword.get(meta, :name)) do
-          nil -> []
-          owner -> [%{target: owner, line: Keyword.get(meta, :line, 1)}]
-        end
-
-      _ ->
-        []
-    end)
+    |> collect_qualified_targets(nil, [])
+    |> Enum.reverse()
     |> Enum.uniq_by(&{&1.target, &1.line})
   end
+
+  defp collect_qualified_targets(node, inherited_line, acc) when is_tuple(node) do
+    meta =
+      if tuple_size(node) >= 2 and is_list(elem(node, 1)),
+        do: elem(node, 1),
+        else: []
+
+    line = source_line(meta) || inherited_line
+
+    acc =
+      case node do
+        {:function_call, call_meta, _args} when is_list(call_meta) ->
+          case qualified_owner(Keyword.get(call_meta, :name)) do
+            nil -> acc
+            owner -> [%{target: owner, line: line || 1} | acc]
+          end
+
+        _ ->
+          acc
+      end
+
+    Enum.reduce(Tuple.to_list(node), acc, &collect_qualified_targets(&1, line, &2))
+  end
+
+  defp collect_qualified_targets(nodes, inherited_line, acc) when is_list(nodes),
+    do: Enum.reduce(nodes, acc, &collect_qualified_targets(&1, inherited_line, &2))
+
+  defp collect_qualified_targets(_leaf, _inherited_line, acc), do: acc
+
+  @doc "Collect qualified targets and canonicalize applied-type owners against explicit imports."
+  @spec collect_qualified_targets(term(), [%{target: String.t(), line: pos_integer()}]) ::
+          [%{target: String.t(), line: pos_integer()}]
+  def collect_qualified_targets(ast, uses),
+    do: ast |> collect_qualified_targets() |> normalize_qualified_targets(uses)
 
   defp qualified_owner(name) when is_binary(name) do
     case String.split(name, ".") do
@@ -170,6 +197,35 @@ defmodule Cure.Compiler.Parser.FixityScan do
   end
 
   defp qualified_owner(_name), do: nil
+
+  defp source_line(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{start_line: line}} -> line
+      _ -> Keyword.get(meta, :line)
+    end
+  end
+
+  # Applied qualified types are harvested from their nested attribute-access
+  # representation. That representation's call node omits the leading segment
+  # (`Std.Otp.Raw.Selector(p)` reports `Otp.Raw`), while ordinary qualified calls
+  # retain it. If the shortened owner uniquely names the suffix of an explicit
+  # `use`, restore that canonical module identity. This removes a false dependency
+  # without guessing among unrelated modules.
+  defp normalize_qualified_targets(targets, uses) do
+    used_modules = Enum.map(uses, & &1.target)
+
+    Enum.map(targets, fn reference ->
+      matches =
+        Enum.filter(used_modules, fn used ->
+          used == reference.target or String.ends_with?(used, "." <> reference.target)
+        end)
+
+      case matches do
+        [canonical] -> %{reference | target: canonical}
+        _ -> reference
+      end
+    end)
+  end
 
   @spec prelude?(term()) :: boolean()
   def prelude?(ast) do

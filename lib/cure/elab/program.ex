@@ -1431,7 +1431,14 @@ defmodule Cure.Elab.Program do
           end
         end)
 
-      {:ok, env, Enum.uniq(canonical_locals ++ own_impls)}
+      roots = Enum.uniq(canonical_locals ++ own_impls)
+
+      # Local `where` functions and other lifted runtime helpers are synthesized
+      # during elaboration and therefore do not appear in the authored AST scan.
+      # Derive the final emission set from canonical Core edges so those helpers
+      # are emitted regardless of declaration order. Qualified dependencies owned
+      # by another module stay remote and are not copied into this module.
+      {:ok, env, Enum.uniq(roots ++ reachable_def_names(env, roots))}
     end
   end
 
@@ -1520,17 +1527,17 @@ defmodule Cure.Elab.Program do
   """
   @spec reachable_def_names(Env.t(), [atom()]) :: [atom()]
   def reachable_def_names(%Env{defs: defs} = env, roots) do
-    Enum.reduce(roots, MapSet.new(), fn root, seen ->
-      case reachable_root_key(env, defs, root) do
-        nil -> seen
-        key -> collect_reachable(defs, key, seen)
-      end
+    root_keys = roots |> Enum.map(&reachable_root_key(env, defs, &1)) |> Enum.reject(&is_nil/1)
+    local_owners = root_keys |> Enum.map(&Cure.Elab.Name.owner/1) |> MapSet.new()
+
+    Enum.reduce(root_keys, MapSet.new(), fn root, seen ->
+      collect_reachable(env, root, local_owners, seen)
     end)
     |> MapSet.to_list()
     |> Enum.sort()
   end
 
-  defp collect_reachable(defs, name, seen) do
+  defp collect_reachable(%Env{defs: defs} = env, name, local_owners, seen) do
     cond do
       MapSet.member?(seen, name) ->
         seen
@@ -1546,6 +1553,12 @@ defmodule Cure.Elab.Program do
         # its type-level references entirely.
         seen
 
+      match?(%{generated_equation: true}, Map.get(defs, name)) ->
+        # Certified defining equations are proof artifacts. Surface functions
+        # may mention them while constructing evidence, but the theorem itself
+        # has no runtime definition and must not enter the BEAM closure.
+        seen
+
       true ->
         case Map.get(defs, name) do
           nil ->
@@ -1554,12 +1567,14 @@ defmodule Cure.Elab.Program do
           d ->
             seen = MapSet.put(seen, name)
 
-            [d.type, d.body]
-            |> Enum.flat_map(&global_refs/1)
+            d.body
+            |> then(&Cure.Elab.Erase.erase(env, &1))
+            |> Cure.Core.RuntimeRefs.globals()
             |> Enum.reduce(seen, fn reference, acc ->
-              if Map.has_key?(defs, reference),
-                do: collect_reachable(defs, reference, acc),
-                else: acc
+              if Map.has_key?(defs, reference) and
+                   MapSet.member?(local_owners, Cure.Elab.Name.owner(reference)),
+                 do: collect_reachable(env, reference, local_owners, acc),
+                 else: acc
             end)
         end
     end
@@ -1583,31 +1598,14 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  # Every `{:global, name}` atom referenced anywhere in a Core term.
+  # Semantic dependency scans (currently type-alias ordering) need globals from
+  # every Core position, unlike runtime reachability above.
   defp global_refs({:global, name}), do: [name]
-  defp global_refs({:data, _n, ps, is}), do: Enum.flat_map(ps ++ is, &global_refs/1)
-  defp global_refs({:ctor, _n, args}), do: Enum.flat_map(args, &global_refs/1)
 
-  defp global_refs({:case, s, mo, brs}),
-    do: global_refs(s) ++ global_refs(mo) ++ Enum.flat_map(brs, fn {_c, _a, b} -> global_refs(b) end)
+  defp global_refs(term) when is_tuple(term),
+    do: term |> Tuple.to_list() |> Enum.flat_map(&global_refs/1)
 
-  defp global_refs({:pi, _g, dom, cod}), do: global_refs(dom) ++ global_refs(cod)
-  defp global_refs({:lam, _g, dom, body}), do: global_refs(dom) ++ global_refs(body)
-  defp global_refs({:app, f, a}), do: global_refs(f) ++ global_refs(a)
-
-  # The `:let` binder is the seventh Core former. Without this clause it fell
-  # through to the catch-all below, and every global referenced only inside a
-  # `let` vanished from `reachable_def_names/2` — co-emitting such a closure
-  # produced a module that called a function it never defined.
-  defp global_refs({:let, _g, ty, val, body}),
-    do: global_refs(ty) ++ global_refs(val) ++ global_refs(body)
-
-  defp global_refs({:effect_type, inner}), do: global_refs(inner)
-  defp global_refs({:effect_pure, value}), do: global_refs(value)
-
-  defp global_refs({:effect_bind, effect, continuation}),
-    do: global_refs(effect) ++ global_refs(continuation)
-
+  defp global_refs(terms) when is_list(terms), do: Enum.flat_map(terms, &global_refs/1)
   defp global_refs(_leaf), do: []
 
   @doc """
@@ -2193,8 +2191,67 @@ defmodule Cure.Elab.Program do
     :persistent_term.erase({__MODULE__, :module_interface, path})
     :persistent_term.erase({__MODULE__, :macro_home_env, path})
     :persistent_term.erase({__MODULE__, :macro_home_cache_fingerprint})
+    File.rm(module_interface_cache_path(path))
     File.rm(macro_home_cache_path(path))
     :ok
+  end
+
+  # Canonical module interfaces are immutable functions of the compiler and the
+  # source closure. Persisting successful interfaces avoids rebuilding the whole
+  # stdlib graph in every short-lived Mix VM. The fingerprint covers compiler
+  # BEAMs and every discovered stdlib source, while `source_hash` and the
+  # validated identity guard the individual entry.
+  defp read_module_interface_cache(path, module_name, source_hash) do
+    with true <- not is_nil(source_hash),
+         {:ok, binary} <- File.read(module_interface_cache_path(path)),
+         {:cure_module_interface, 1, fingerprint, expanded_path, ^module_name, ^source_hash,
+          {:ok, %ModuleInterface{} = interface} = result} <- :erlang.binary_to_term(binary),
+         true <- fingerprint == macro_home_cache_fingerprint(),
+         true <- expanded_path == Path.expand(path),
+         :ok <- ModuleInterface.validate(interface) do
+      result
+    else
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp write_module_interface_cache(
+         path,
+         module_name,
+         source_hash,
+         {:ok, %ModuleInterface{}} = result
+       )
+       when not is_nil(source_hash) do
+    destination = module_interface_cache_path(path)
+    directory = Path.dirname(destination)
+    temporary = destination <> ".#{System.unique_integer([:positive])}.tmp"
+
+    payload =
+      {:cure_module_interface, 1, macro_home_cache_fingerprint(), Path.expand(path), module_name, source_hash, result}
+      |> :erlang.term_to_binary(compressed: 6)
+
+    with :ok <- File.mkdir_p(directory),
+         :ok <- File.chmod(directory, 0o700),
+         :ok <- File.write(temporary, payload),
+         :ok <- File.chmod(temporary, 0o600),
+         :ok <- File.rename(temporary, destination) do
+      :ok
+    else
+      _ ->
+        File.rm(temporary)
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp write_module_interface_cache(_path, _module_name, _source_hash, _result), do: :ok
+
+  defp module_interface_cache_path(path) do
+    basename = :crypto.hash(:sha256, Path.expand(path)) |> Base.url_encode64(padding: false)
+    Path.join([System.tmp_dir!(), "cure-module-interface-cache", basename <> ".etf"])
   end
 
   # A definition-site macro environment is expensive to reconstruct from a
@@ -2288,7 +2345,14 @@ defmodule Cure.Elab.Program do
           cached
 
         _missing_or_stale ->
-          compile_and_cache_module_interface(key, source_hash, module_name, path)
+          case read_module_interface_cache(path, module_name, source_hash) do
+            {:ok, %ModuleInterface{}} = cached ->
+              :persistent_term.put(key, {:cached, source_hash, cached})
+              cached
+
+            nil ->
+              compile_and_cache_module_interface(key, source_hash, module_name, path)
+          end
       end
     else
       compile_module_interface(module_name, path)
@@ -2299,6 +2363,7 @@ defmodule Cure.Elab.Program do
     case compile_module_interface(module_name, path) do
       {:ok, %ModuleInterface{} = _interface} = ok ->
         :persistent_term.put(key, {:cached, source_hash, ok})
+        write_module_interface_cache(path, module_name, source_hash, ok)
         ok
 
       {:error, _reason} = error ->

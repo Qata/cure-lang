@@ -62,6 +62,7 @@ defmodule Cure.Stdlib.Paths do
 
   @legacy_cwd_source Path.join(["lib", "std"])
   @legacy_cwd_beam Path.join(["_build", "cure", "ebin"])
+  @checkout_source Path.expand("../../std", __DIR__)
 
   @cure_home_env_var "CURE_HOME"
   @cure_lib_env_var "CURE_LIB"
@@ -77,7 +78,7 @@ defmodule Cure.Stdlib.Paths do
        cure_lib_source_dirs() ++
        [bundled_source_dir()] ++
        cure_home_source_dirs() ++
-       [@legacy_cwd_source])
+       [@checkout_source, @legacy_cwd_source])
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
     |> Enum.filter(&File.dir?/1)

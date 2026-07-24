@@ -151,7 +151,7 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
       path =
         write_cure!(src, "broken.cure", """
         mod Std.Broken
-          fn broken() -> Int = Std.String.length("missing import")
+          fn broken() -> Int = missing_value
         """)
 
       output =
@@ -160,9 +160,9 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
         end)
 
       assert output =~ "UNKNOWN VALUE [E091]"
-      assert output =~ "`Std.String.length` is not available"
+      assert output =~ "`missing_value` is not available"
       assert output =~ path
-      assert output =~ "Std.String.length(\"missing import\")"
+      assert output =~ "fn broken() -> Int = missing_value"
       assert output =~ "^^^^^^"
     after
       cleanup_tmps()

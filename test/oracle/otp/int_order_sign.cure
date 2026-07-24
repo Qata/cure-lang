@@ -10,6 +10,8 @@ mod IntOrderSign
   use Std.Bool
   use Std.Nat
   use Std.Int
+  use Std.Decision
+  use Std.Proof.IntMath
   use Std.Proof.IntOrder
 
   ## 0 ≤ 3 for the nonnegative integer 3.

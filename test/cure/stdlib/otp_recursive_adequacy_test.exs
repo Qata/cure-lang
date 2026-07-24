@@ -21,6 +21,7 @@ defmodule Cure.Stdlib.OtpRecursiveAdequacyTest do
       use Std.Otp.FiniteFixpoint
       use Std.Otp.RecursiveTransfer
       use Std.Otp.RecursiveAdequacy
+      use Std.Otp.InterfaceBridge
       fn loop_body() -> RBody = RSend(TA, RRecv(TB, RVar()))
       fn covered() -> Equivalent(B, getb(rec_infer(loop_body()), TA), T) =
         brec_covers(loop_body(), TA, RSHere())

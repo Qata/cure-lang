@@ -52,7 +52,7 @@ defmodule Cure.Compiler.DependentCodegenTest do
     assert {:error, {:codegen_error, {:unfilled_hole, details}}} =
              Cure.Compiler.compile_and_load(@holed, emit_events: false)
 
-    assert details.definition == :sketch
+    assert details.definition == :"Slice1Hole#sketch"
 
     assert binary_part(@holed, details.span.start_byte, details.span.end_byte - details.span.start_byte) ==
              "?todo"

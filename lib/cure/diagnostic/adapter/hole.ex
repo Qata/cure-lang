@@ -3,6 +3,7 @@ defmodule Cure.Diagnostic.Adapter.Hole do
 
   alias Cure.Diagnostic
   alias Cure.Diagnostic.{Doc, Label, Span, Suggestion}
+  alias Cure.Elab.Name
 
   @spec from_error(term(), keyword()) :: Diagnostic.t()
   def from_error(error, opts \\ [])
@@ -88,7 +89,7 @@ defmodule Cure.Diagnostic.Adapter.Hole do
     end
   end
 
-  defp name_to_string(name) when is_atom(name), do: Atom.to_string(name)
+  defp name_to_string(name) when is_atom(name), do: Name.base(name) || Atom.to_string(name)
   defp name_to_string(name) when is_binary(name), do: name
   defp name_to_string(name), do: inspect(name)
 end

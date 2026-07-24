@@ -7,6 +7,7 @@ mod IntOrderMono
   use Std.Bool
   use Std.Nat
   use Std.Int
+  use Std.Proof.IntMath
   use Std.Proof.IntOrder
 
   ## -1 ≤ 0 : any negative is ≤ any nonnegative, so le_int computes to True.

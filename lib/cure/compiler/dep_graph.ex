@@ -313,7 +313,7 @@ defmodule Cure.Compiler.DepGraph do
             {:ok, ast} ->
               {module, line} = find_module(ast)
               uses = collect_uses(ast)
-              qualified = collect_qualified_targets(ast)
+              qualified = Cure.Compiler.Parser.FixityScan.collect_qualified_targets(ast, uses)
 
               base
               |> Map.put(:prelude_provider?, prelude_decorated?(ast))
@@ -422,32 +422,6 @@ defmodule Cure.Compiler.DepGraph do
   end
 
   defp use_collector(_node, acc), do: acc
-
-  defp collect_qualified_targets(ast) do
-    walk(ast, [], fn
-      {:function_call, meta, _args}, acc when is_list(meta) ->
-        name = Keyword.get(meta, :name, "")
-
-        case String.split(name, ".") do
-          parts when length(parts) > 1 ->
-            [%{target: Enum.join(Enum.drop(parts, -1), "."), line: source_line(meta)} | acc]
-
-          _ ->
-            acc
-        end
-
-      _node, acc ->
-        acc
-    end)
-    |> Enum.uniq_by(& &1.target)
-  end
-
-  defp source_line(meta) do
-    case Cure.MetaAST.Metadata.source_info(meta) do
-      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{start_line: line}} -> line
-      _ -> Keyword.get(meta, :line, 1)
-    end
-  end
 
   defp walk({_tag, _meta, children} = node, acc, fun) do
     acc = fun.(node, acc)

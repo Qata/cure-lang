@@ -21,7 +21,7 @@ defmodule Cure.Elab.Emit do
   """
 
   alias Cure.Compiler.BeamWriter
-  alias Cure.Core.{Grade, Env, Inductive, Validator}
+  alias Cure.Core.{Grade, Env, Inductive, RuntimeRefs, Validator}
   alias Cure.Elab.{Erase, Name}
 
   @line 1
@@ -141,36 +141,50 @@ defmodule Cure.Elab.Emit do
   end
 
   defp validate_selected_definition(env, key, selected, selected_owners) do
-    case Map.get(env.defs, key) do
-      nil ->
+    definition = Map.get(env.defs, key)
+
+    cond do
+      is_nil(definition) ->
         closure_error(:emission_closure_missing, env, key, nil)
 
-      %{body: nil, builtin_op: builtin_op} when not is_nil(builtin_op) ->
+      is_map(definition) and type_level_def?(env, key) ->
         :ok
 
-      %{body: {:extern, {_module, _function, arity}}} when is_integer(arity) and arity >= 0 ->
-        :ok
+      true ->
+        case definition do
+          %{body: nil, builtin_op: builtin_op} when not is_nil(builtin_op) ->
+            :ok
 
-      %{body: body} ->
-        body
-        |> core_global_refs()
-        |> MapSet.new()
-        |> Enum.reduce_while(:ok, fn reference, :ok ->
-          case validate_emission_reference(env, reference, key, selected, selected_owners) do
-            :ok -> {:cont, :ok}
-            {:error, _} = error -> {:halt, error}
-          end
-        end)
+          %{body: {:extern, {_module, _function, arity}}} when is_integer(arity) and arity >= 0 ->
+            :ok
 
-      definition ->
-        closure_error(:emission_closure_invalid, env, key, nil, value: definition)
+          %{body: body} ->
+            body
+            |> then(&Erase.erase(env, &1))
+            |> RuntimeRefs.globals()
+            |> MapSet.new()
+            |> Enum.reduce_while(:ok, fn reference, :ok ->
+              case validate_emission_reference(env, reference, key, selected, selected_owners) do
+                :ok -> {:cont, :ok}
+                {:error, _} = error -> {:halt, error}
+              end
+            end)
+
+          invalid ->
+            closure_error(:emission_closure_invalid, env, key, nil, value: invalid)
+        end
     end
   end
 
   defp validate_emission_reference(env, reference, referenced_by, selected, selected_owners) do
     case Map.get(env.defs, reference) do
       nil ->
-        closure_error(:emission_closure_missing, env, reference, referenced_by)
+        if not is_nil(Env.builtin_op(env, reference)) or
+             not is_nil(Env.inline_hint(env, reference)) do
+          :ok
+        else
+          closure_error(:emission_closure_missing, env, reference, referenced_by)
+        end
 
       %{body: nil, builtin_op: builtin_op} when not is_nil(builtin_op) ->
         :ok
@@ -181,7 +195,7 @@ defmodule Cure.Elab.Emit do
       %{body: _body} ->
         owner = Name.owner(reference)
 
-        if not is_nil(owner) and MapSet.member?(selected_owners, owner) and
+        if owner == env.module_owner and MapSet.member?(selected_owners, owner) and
              not MapSet.member?(selected, reference) do
           closure_error(:emission_closure_incomplete, env, reference, referenced_by)
         else
@@ -205,29 +219,6 @@ defmodule Cure.Elab.Emit do
 
     {:error, {kind, details}}
   end
-
-  defp core_global_refs({:global, name}), do: [name]
-
-  defp core_global_refs({:case, scrutinee, _motive, branches}) do
-    core_global_refs(scrutinee) ++
-      Enum.flat_map(branches, fn {_constructor, _arity, body} -> core_global_refs(body) end)
-  end
-
-  defp core_global_refs({:pi, _grade, _domain, _codomain}), do: []
-  defp core_global_refs({:lam, _grade, _domain, body}), do: core_global_refs(body)
-
-  defp core_global_refs({:let, _grade, _type, value, body}),
-    do: core_global_refs(value) ++ core_global_refs(body)
-
-  defp core_global_refs({:effect_type, _inner}), do: []
-
-  defp core_global_refs(term) when is_tuple(term),
-    do: term |> Tuple.to_list() |> Enum.flat_map(&core_global_refs/1)
-
-  defp core_global_refs(terms) when is_list(terms),
-    do: Enum.flat_map(terms, &core_global_refs/1)
-
-  defp core_global_refs(_leaf), do: []
 
   # A definition is TYPE-LEVEL when its type's ultimate codomain (after peeling the
   # parameter Π telescope) is a universe `{:type, _}` — i.e. it RETURNS a type. A
