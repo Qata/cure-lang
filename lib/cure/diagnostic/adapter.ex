@@ -2049,45 +2049,7 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:malformed_hole, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
-
-    secondary =
-      case pickup_label(Map.get(details, :opener_span), :secondary, "the macro hole starts here") do
-        nil -> []
-        label -> [label]
-      end
-
-    suggestions =
-      case insertion_before(span) do
-        %Span{} = insertion ->
-          [
-            %Suggestion{
-              message: "Insert `>` to close the macro hole",
-              applicability: :machine_applicable,
-              edits: [%TextEdit{span: insertion, replacement: ">"}]
-            }
-          ]
-
-        _ ->
-          [%Suggestion{message: "Write the hole as `<name: Kind>`", applicability: :manual}]
-      end
-
-    Diagnostic.new(
-      code: "E094",
-      key: :malformed_macro_hole,
-      severity: :error,
-      title: "Macro hole is not closed",
-      body:
-        Doc.paragraph(
-          "A typed macro hole has the form `<name: Kind>`. The closing `>` is missing before #{syntax_name(details.observed)}."
-        ),
-      primary: pickup_label(span, :primary, "expected `>` before this token"),
-      secondary: secondary,
-      suggestions: suggestions,
-      payload: details
-    )
-  end
+  def from_error({:malformed_hole, _details} = error, opts), do: SyntaxAdapter.from_error(error, opts)
 
   def from_error({:edition_pragma_placement, _details} = error, opts), do: SyntaxAdapter.from_error(error, opts)
 
@@ -3346,17 +3308,6 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp pickup_label(%Span{} = span, style, message), do: %Label{span: span, style: style, message: message}
   defp pickup_label(_, _style, _message), do: nil
-
-  defp insertion_before(%Span{} = span) do
-    %{
-      span
-      | end_byte: span.start_byte,
-        end_line: span.start_line,
-        end_column: span.start_column
-    }
-  end
-
-  defp insertion_before(_span), do: nil
 
   defp syntax_problem_code(:unterminated_lambda), do: "E035"
   defp syntax_problem_code(:unrecognized_pattern), do: "E090"
