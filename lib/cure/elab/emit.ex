@@ -1064,7 +1064,10 @@ defmodule Cure.Elab.Emit do
     fields =
       for i <- indices(arity) do
         q = Enum.at(quantities, i, :unrestricted)
-        if q == :unrestricted, do: {:unrestricted, fresh_var("V")}, else: {:erased, fresh_var("_f")}
+
+        if Grade.present?(q),
+          do: {:present, fresh_var("V")},
+          else: {:erased, fresh_var("_f")}
       end
 
     field_names = Enum.map(fields, fn {_q, n} -> n end)
@@ -1072,7 +1075,7 @@ defmodule Cure.Elab.Emit do
     body_form = lower(env, body, new_ctx)
 
     present =
-      for {:unrestricted, n} <- fields,
+      for {:present, n} <- fields,
           do: underscore_if_unused({:var, @line, n}, body_form)
 
     pattern =
@@ -1176,7 +1179,9 @@ defmodule Cure.Elab.Emit do
   defp bounded_present_args(env, name, args) do
     case Inductive.ctor_quantities(env, name) do
       qs when is_list(qs) and length(qs) == length(args) ->
-        for {a, :unrestricted} <- Enum.zip(args, qs), do: a
+        for {arg, quantity} <- Enum.zip(args, qs),
+            Grade.present?(quantity),
+            do: arg
 
       _ ->
         args
