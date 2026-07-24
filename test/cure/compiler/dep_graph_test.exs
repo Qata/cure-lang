@@ -193,13 +193,16 @@ defmodule Cure.Compiler.DepGraphTest do
       lib = write!(dir, "libm.cure", "mod LibM\n  fn get(x: Int) -> Int = x\n")
 
       user =
-        write!(dir, "userq.cure", "mod UserQ\n  fn f(x: Int) -> Int = LibM.get(x)\n")
+        write!(dir, "userq.cure", "mod UserQ\n\n  fn f(x: Int) -> Int = LibM.get(x)\n")
 
       {:ok, graph} = DepGraph.scan([lib, user])
 
       assert "LibM" in graph.nodes[user].closure_deps
       # qualified call is NOT an order edge (spec fact 2)
       assert graph.nodes[user].order_deps == []
+
+      assert [%{kind: :qualified_reference, target: "LibM", line: 3}] =
+               graph.module_index.entries["UserQ"].direct_edges
     end
 
     test "out-of-universe qualified targets are dropped", %{tmp_dir: dir} do

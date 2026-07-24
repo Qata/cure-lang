@@ -32,7 +32,9 @@ defmodule Cure.Compiler.DepGraph do
           line: pos_integer() | nil,
           blank?: boolean(),
           parse_error: term() | nil,
+          source_hash: binary(),
           order_deps: [%{target: String.t(), line: pos_integer()}],
+          qualified_deps: [%{target: String.t(), line: pos_integer()}],
           closure_deps: [String.t()]
         }
 
@@ -51,17 +53,12 @@ defmodule Cure.Compiler.DepGraph do
   def scan(paths, opts \\ []) do
     known = MapSet.new(Keyword.get(opts, :known_modules, []))
     expanded_paths = paths |> Enum.map(&Path.expand/1) |> Enum.uniq() |> Enum.sort()
+    nodes = expanded_paths |> Map.new(fn path -> {path, scan_file(path)} end)
 
     with {:ok, module_index} <-
-           Cure.Compiler.ModuleIndex.build(expanded_paths,
-             validate_dependencies: false,
-             ignore_unidentified: true
+           Cure.Compiler.ModuleIndex.from_entries(module_index_entries(nodes),
+             validate_dependencies: false
            ) do
-      nodes =
-        expanded_paths
-        |> Map.new(fn path -> {path, scan_file(path)} end)
-        |> attach_canonical_module_facts(module_index)
-
       modules =
         Map.new(module_index.entries, fn {module_name, entry} ->
           {module_name, entry.source_path}
@@ -80,29 +77,43 @@ defmodule Cure.Compiler.DepGraph do
     end
   end
 
-  defp attach_canonical_module_facts(nodes, module_index) do
-    Map.new(nodes, fn {path, node} ->
-      case Cure.Compiler.ModuleIndex.fetch_by_path(module_index, path) do
-        {:ok, entry} ->
-          order_deps =
-            for %{kind: :use_import, target: target, line: line} <- entry.direct_edges,
-                do: %{target: target, line: line}
+  defp module_index_entries(nodes) do
+    for {path, %{module: module_name} = node} <- nodes,
+        is_binary(module_name) do
+      use_targets = MapSet.new(node.order_deps, & &1.target)
 
-          closure_deps = Enum.map(entry.direct_edges, & &1.target)
+      use_edges =
+        Enum.map(node.order_deps, fn dependency ->
+          %{
+            kind: :use_import,
+            source_module: module_name,
+            target: dependency.target,
+            source_path: path,
+            line: dependency.line
+          }
+        end)
 
-          {path,
-           %{
-             node
-             | module: entry.module_name,
-               order_deps: order_deps,
-               closure_deps: closure_deps
-           }
-           |> Map.put(:prelude_provider?, entry.prelude_provider?)}
+      qualified_edges =
+        node.qualified_deps
+        |> Enum.reject(&MapSet.member?(use_targets, &1.target))
+        |> Enum.map(fn reference ->
+          %{
+            kind: :qualified_reference,
+            source_module: module_name,
+            target: reference.target,
+            source_path: path,
+            line: reference.line
+          }
+        end)
 
-        {:error, _} ->
-          {path, node}
-      end
-    end)
+      %Cure.Compiler.ModuleIndex.Entry{
+        module_name: module_name,
+        source_path: path,
+        source_hash: node.source_hash,
+        direct_edges: use_edges ++ qualified_edges,
+        prelude_provider?: Map.get(node, :prelude_provider?, false)
+      }
+    end
   end
 
   @type cycle_hop :: %{module: String.t(), path: Path.t(), line: pos_integer()}
@@ -213,7 +224,9 @@ defmodule Cure.Compiler.DepGraph do
       line: nil,
       blank?: false,
       parse_error: nil,
+      source_hash: <<>>,
       order_deps: [],
+      qualified_deps: [],
       closure_deps: []
     }
 
@@ -222,6 +235,8 @@ defmodule Cure.Compiler.DepGraph do
         %{base | parse_error: {:file_error, posix}}
 
       {:ok, source} ->
+        base = %{base | source_hash: :crypto.hash(:sha256, source)}
+
         if String.trim(source) == "" do
           %{base | blank?: true}
         else
@@ -248,7 +263,11 @@ defmodule Cure.Compiler.DepGraph do
                 | parse_error: reason,
                   module: scan.module,
                   line: base.line,
-                  order_deps: Enum.map(scan.uses, fn u -> %{target: u.target, line: u.line} end)
+                  order_deps: Enum.map(scan.uses, fn u -> %{target: u.target, line: u.line} end),
+                  qualified_deps:
+                    Enum.map(scan.qualified_targets, fn reference ->
+                      %{target: reference.target, line: reference.line}
+                    end)
               }
               |> Map.put(:prelude_provider?, scan.prelude?)
 
@@ -263,7 +282,8 @@ defmodule Cure.Compiler.DepGraph do
                 module: module,
                 line: line,
                 order_deps: uses,
-                closure_deps: Enum.map(uses, & &1.target) ++ qualified
+                qualified_deps: qualified,
+                closure_deps: Enum.map(uses ++ qualified, & &1.target)
               })
           end
         end
@@ -352,14 +372,24 @@ defmodule Cure.Compiler.DepGraph do
         name = Keyword.get(meta, :name, "")
 
         case String.split(name, ".") do
-          parts when length(parts) > 1 -> [Enum.join(Enum.drop(parts, -1), ".") | acc]
-          _ -> acc
+          parts when length(parts) > 1 ->
+            [%{target: Enum.join(Enum.drop(parts, -1), "."), line: source_line(meta)} | acc]
+
+          _ ->
+            acc
         end
 
       _node, acc ->
         acc
     end)
-    |> Enum.uniq()
+    |> Enum.uniq_by(& &1.target)
+  end
+
+  defp source_line(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{start_line: line}} -> line
+      _ -> Keyword.get(meta, :line, 1)
+    end
   end
 
   defp walk({_tag, _meta, children} = node, acc, fun) do

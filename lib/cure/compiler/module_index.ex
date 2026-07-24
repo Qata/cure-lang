@@ -71,6 +71,23 @@ defmodule Cure.Compiler.ModuleIndex do
     end
   end
 
+  @doc "Build an index from already-scanned canonical entries."
+  @spec from_entries([Entry.t()], keyword()) :: {:ok, t()} | {:error, term()}
+  def from_entries(entries, opts \\ []) do
+    entries =
+      entries
+      |> Enum.map(fn entry -> %{entry | source_path: Path.expand(entry.source_path)} end)
+      |> Enum.sort_by(&{&1.module_name, &1.source_path})
+
+    with :ok <- reject_duplicates(entries) do
+      index = assemble(entries)
+
+      if Keyword.get(opts, :validate_dependencies, true),
+        do: validate_dependencies(index, Keyword.get(opts, :known_modules, [])),
+        else: {:ok, index}
+    end
+  end
+
   @spec fetch(t(), String.t()) :: {:ok, Entry.t()} | {:error, term()}
   def fetch(%__MODULE__{entries: entries}, module_name) do
     case Map.fetch(entries, module_name) do
