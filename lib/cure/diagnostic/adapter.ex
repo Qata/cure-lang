@@ -49,15 +49,7 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error([reason | _], opts), do: from_error(reason, opts)
 
   def from_error([], opts) do
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Type mismatch",
-      body: Doc.paragraph("The type checker reported an unsatisfied constraint without further detail."),
-      primary: primary_label(opts, "this expression does not satisfy its type constraints"),
-      payload: %{errors: []}
-    )
+    TypeAdapter.empty_type_failure(opts)
   end
 
   def from_error({:type_mismatch, _, _} = error, opts), do: TypeAdapter.from_error(error, opts)
@@ -2531,20 +2523,6 @@ defmodule Cure.Diagnostic.Adapter do
   @spec unknown_name(atom(), term(), keyword()) :: Diagnostic.t()
   def unknown_name(namespace, name, opts \\ []),
     do: NameAdapter.unknown_name(namespace, name, opts)
-
-  defp primary_label(opts, default_message) do
-    case Keyword.get(opts, :span) do
-      %Span{} = span ->
-        %Label{
-          span: span,
-          style: :primary,
-          message: Keyword.get(opts, :label, default_message)
-        }
-
-      nil ->
-        nil
-    end
-  end
 
   defp pickup_label(%Span{} = span, style, message), do: %Label{span: span, style: style, message: message}
   defp pickup_label(_, _style, _message), do: nil

@@ -19,6 +19,26 @@ defmodule Cure.Diagnostic.Adapter.Type do
     TypeProblem
   }
 
+  @doc false
+  def empty_type_failure(opts) do
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Type mismatch",
+      body: Doc.paragraph("The type checker reported an unsatisfied constraint without further detail."),
+      primary: primary_label(opts, "this expression does not satisfy its type constraints"),
+      payload: %{errors: []}
+    )
+  end
+
+  defp primary_label(opts, default_message) do
+    case Keyword.get(opts, :span) do
+      %Span{} = span -> %Label{span: span, style: :primary, message: Keyword.get(opts, :label, default_message)}
+      nil -> nil
+    end
+  end
+
   @spec from_family_error(term(), map(), keyword()) :: {:ok, Diagnostic.t()} | :error
   def from_family_error(cause, details, opts \\ [])
 
