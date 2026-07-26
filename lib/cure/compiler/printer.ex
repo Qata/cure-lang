@@ -789,10 +789,22 @@ defmodule Cure.Compiler.Printer do
   # demo built on the folded `computed directly by` surface (examples/**).
   defp to_string({:computed_use, meta, [_elab, {:macro_input, _mi, args}]}, depth, indent) do
     keyword = Keyword.fetch!(meta, :keyword)
-    segments = Keyword.get(meta, :syntax_segments, [])
-    pad = String.duplicate(indent, depth + 1)
-    {rendered, _leftover} = computed_use_segments(segments, args, depth, indent, pad)
-    keyword <> Enum.join(rendered, "")
+
+    case {keyword, args} do
+      {"regex",
+       [
+         {:literal, _pattern_meta, pattern},
+         {:literal, _flags_meta, flags}
+       ]}
+      when is_binary(pattern) and is_binary(flags) ->
+        "/" <> pattern <> "/" <> flags
+
+      _ ->
+        segments = Keyword.get(meta, :syntax_segments, [])
+        pad = String.duplicate(indent, depth + 1)
+        {rendered, _leftover} = computed_use_segments(segments, args, depth, indent, pad)
+        keyword <> Enum.join(rendered, "")
+    end
   end
 
   # -- Container (module, record, enum, protocol, and trait) ----------------
@@ -1687,6 +1699,17 @@ defmodule Cure.Compiler.Printer do
   defp render_family_capture_value({:case_block, _meta, arms}, depth, indent, pad) do
     body_pad = pad <> indent
     ["\n", body_pad, Enum.map_join(arms, "\n#{body_pad}", &render(&1, depth + 2, indent))]
+  end
+
+  defp render_family_capture_value({:declarations_block, _meta, declarations}, depth, indent, pad)
+       when is_list(declarations) do
+    body_pad = pad <> indent
+
+    [
+      "\n",
+      body_pad,
+      Enum.map_join(declarations, "\n#{body_pad}", &render(&1, depth + 2, indent))
+    ]
   end
 
   defp render_family_capture_value(value, depth, indent, _pad),

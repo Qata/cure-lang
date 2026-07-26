@@ -147,14 +147,23 @@ defmodule Cure.CLI.MigrateCliTest do
     assert File.read!(good) == before_good
   end
 
-  test "--check lists a pending file, writes nothing, and reports pending", %{dir: dir} do
+  test "--check prints a git-style diff, writes nothing, and reports pending", %{dir: dir} do
     f = Path.join(dir, "a.cure")
     File.write!(f, "mod A\nfn f(x: Int) -> Int = if x > 0 then 1 else 2\n")
     {_, 0} = System.cmd("git", ["-C", dir, "add", "a.cure"])
     {_, 0} = System.cmd("git", ["-C", dir, "commit", "-qm", "x"])
     before = File.read!(f)
 
-    assert {:error, {:pending, [^f]}} = CLI.cmd_migrate([f], check: true)
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        assert {:error, {:pending, [^f]}} = CLI.cmd_migrate([f], check: true)
+      end)
+
+    assert output =~ "--- a/a.cure"
+    assert output =~ "+++ b/a.cure"
+    assert output =~ "-fn f(x: Int) -> Int = if x > 0 then 1 else 2"
+    assert output =~ "+fn f(x: Int) -> Int = pickup"
+    assert output =~ "+  x > 0 -> 1"
     # --check never writes, regardless of outcome
     assert File.read!(f) == before
   end

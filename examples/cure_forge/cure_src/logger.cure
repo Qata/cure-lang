@@ -1,0 +1,6 @@
+## Transparent logger actor with a typed atom-list state.
+
+actor Cure.Logger state List(Atom) initial assert_type [:empty] : List(Atom) messages Atom handle_cast
+  pickup
+    message == :clear -> %[:noreply, assert_type [] : List(Atom)]
+    else -> %[:noreply, [message | state]]

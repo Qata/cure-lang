@@ -1,0 +1,27 @@
+mod SigmaPairs
+  ## Dependent pairs (Sigma types), backed by the stdlib inductive `Std.Sigma`.
+  #
+  # `Sigma(x: A, B)` pairs a value `x : A` with a second component whose type `B`
+  # may mention `x`. It is an ordinary inductive family (constructor `mk_pair`),
+  # written with the tuple literal `%[a, b]` and read with the projections
+  # `.1` / `.2`. The BEAM representation is a bare 2-tuple, ABI-identical to a
+  # plain pair.
+
+  # A value-indexed family: Below(n) is inhabited only by naturals < n.
+  type Below indices (n: Nat)
+    bz : Below(S(n))
+    bs : Below(n) -> Below(S(n))
+
+  # Non-dependent pair: the second component's type ignores the first.
+  fn plain() -> Sigma(x: Nat, Nat) = %[Z, S(Z)]
+
+  # Dependent pair: the second component's TYPE mentions the first component.
+  # Pack a bound `n = 2` with an element of `Below(n)`.
+  fn bounded() -> Sigma(n: Nat, Below(n)) = %[S(S(Z)), bz()]
+
+  # First projection: recover the packed witness.
+  fn bound_of(p: Sigma(n: Nat, Below(n))) -> Nat = p.1
+
+  # Second projection: its type `Below(p.1)` depends on the first projection.
+  fn elem_of(p: Sigma(n: Nat, Below(n))) -> Below(p.1) = p.2
+end
