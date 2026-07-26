@@ -910,6 +910,22 @@ defmodule Cure.Core.Inductive do
   defp strictly_positive?(env, fname, {:pi, _g, dom, cod}, seen),
     do: not occurs_deep?(env, fname, dom, seen) and strictly_positive?(env, fname, cod, seen)
 
+  # Instantiating a covariant higher-order parameter (Sigma/Tuple's second
+  # component is the common case) can expose a beta-redex in a constructor
+  # field. Positivity is a property of the normalized type, not its unreduced
+  # spelling: `((fn _ => Json) x)` must be recognized as the positive `Json`
+  # occurrence rather than rejected as an opaque application.
+  defp strictly_positive?(env, fname, {:app, {:lam, _g, _dom, body}, argument}, seen) do
+    argument = Cure.Core.Term.shift(argument, 1, 0)
+
+    normalized =
+      body
+      |> Cure.Core.Term.subst(0, argument)
+      |> Cure.Core.Term.shift(-1, 0)
+
+    strictly_positive?(env, fname, normalized, seen)
+  end
+
   # A recursive occurrence of the family itself is strictly positive ONLY when
   # `fname` does not also occur inside its own parameter/index arguments — the
   # same guard the other-family clause below applies. Without it a negative

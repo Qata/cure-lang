@@ -1,6 +1,7 @@
 mod JsonDerive
   use Std.String
   use Std.Semigroup
+  use Std.Json
 
   ###
   `@derive(JSON)` generates `to_json/1` that renders a record as a

@@ -14,6 +14,7 @@ defmodule Cure.Core.Builtins do
 
   # key => list of {ctor_name, arity}. Names are load-bearing.
   @schemas %{
+    any: [],
     bool: [{:False, 0}, {:True, 0}],
     nat: [{:Z, 0}, {:S, 1}],
     eq: [{:reflexive, 1}],
@@ -132,6 +133,7 @@ defmodule Cure.Core.Builtins do
   @spec seed(Env.t(), MapSet.t()) :: Env.t()
   def seed(%Env{} = env, exclude \\ MapSet.new()) do
     env
+    |> seed_builtin(:any, exclude)
     |> seed_builtin(:bool, exclude)
     |> seed_builtin(:nat, exclude)
     |> seed_builtin(:int, exclude)
@@ -291,6 +293,16 @@ defmodule Cure.Core.Builtins do
         exclude
       )
 
+  defp seed_builtin(env, :any, exclude),
+    do:
+      seed_builtin(
+        env,
+        :any,
+        any_family(Env.with_owner(env, "Std.Any")),
+        [],
+        exclude
+      )
+
   defp seed_builtin(env, :nat, exclude),
     do:
       seed_builtin(
@@ -349,6 +361,11 @@ defmodule Cure.Core.Builtins do
     :ok = validate!(env, key, fid)
     Inductive.register_builtin(env, key, fid)
   end
+
+  # `Any` is an opaque top type: every value can be checked at it through the
+  # kernel's subtyping rule, but it has no eliminator and therefore cannot be
+  # abused as an empty inductive after widening.
+  defp any_family(env), do: Inductive.opaque_family(Env.owned_name(env, :Any), [], 0)
 
   # Bool : Type0 = False | True  (both nullary)
   defp bool_family(env), do: Inductive.family(Env.owned_name(env, :Bool), [], [], 0)

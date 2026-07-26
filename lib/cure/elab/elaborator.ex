@@ -2111,7 +2111,7 @@ defmodule Cure.Elab.Elaborator do
   defp positional_projection(i, inner, names, ctx, env) do
     case telescope_arity_of(inner, names, ctx, env) do
       {:telescope, n} when i <= n and i >= 2 ->
-        elaborate_implicit_global_app(env, :"tproj#{i}", [inner], names, ctx)
+        elaborate_telescope_projection(i, inner, names, ctx, env)
 
       {:telescope, n} when i <= n ->
         sigma_projection(:fst, inner, names, ctx, env)
@@ -2129,6 +2129,47 @@ defmodule Cure.Elab.Elaborator do
           2 -> sigma_projection(:snd, inner, names, ctx, env)
           _ -> record_projection(inner, Integer.to_string(i), names, ctx, env)
         end
+    end
+  end
+
+  # The `tprojN` result is inferable from the tuple's telescope, but ordinary
+  # implicit insertion sees its erased component types only through a nested
+  # Sigma codomain. In synthesis mode that used to leave the trailing `r`
+  # metavariable unsolved, making `let x = tuple.2` spuriously check-only.
+  # Read the already-inferred telescope once and supply the erased arguments
+  # explicitly. These are ordinary canonical `Std.Sigma.tprojN` applications;
+  # no projection or tuple type is special-cased in the kernel.
+  defp elaborate_telescope_projection(i, inner, names, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+    unit_ctor = unit_ctor_name(env)
+
+    with {:ok, inner_term, type_value} <- elaborate_expr_typed(inner, names, ctx, env),
+         type_term =
+           type_value
+           |> Quote.reify(Context.length(ctx), Context.signature(ctx))
+           |> resplit_data(env),
+         {:ok, components, tail} <-
+           telescope_prefix(type_term, i, ctx, sigma_fam, unit_ctor, []) do
+      name = Env.resolve_key(env, env.defs, :"tproj#{i}")
+      args = components ++ [tail, inner_term]
+      term = Enum.reduce(args, {:global, name}, fn argument, application -> {:app, application, argument} end)
+      result_type = Enum.at(components, i - 1) |> Eval.eval(Context.env(ctx))
+      {:ok, term, result_type}
+    end
+  end
+
+  defp telescope_prefix(type, 0, _ctx, _sigma_fam, _unit_ctor, components),
+    do: {:ok, Enum.reverse(components), type}
+
+  defp telescope_prefix(type, remaining, ctx, sigma_fam, unit_ctor, components)
+       when remaining > 0 do
+    case Kernel.normalize(ctx, type) do
+      {:data, ^sigma_fam, [domain, codomain], []} ->
+        tail = Kernel.normalize(ctx, {:app, codomain, {:ctor, unit_ctor, []}})
+        telescope_prefix(tail, remaining - 1, ctx, sigma_fam, unit_ctor, [domain | components])
+
+      _ ->
+        {:error, {:not_a_telescope_projection, remaining}}
     end
   end
 
@@ -4268,6 +4309,7 @@ defmodule Cure.Elab.Elaborator do
     arms0 =
       arms0
       |> desugar_negative_patterns()
+      |> desugar_record_patterns(env)
       |> desugar_list_patterns()
       |> desugar_typed_constructor_args()
 
@@ -4314,6 +4356,54 @@ defmodule Cure.Elab.Elaborator do
     do: {tag, meta, Enum.map(children, &desugar_negative_pattern/1)}
 
   defp desugar_negative_pattern(pattern), do: pattern
+
+  # Record patterns are open and name-directed. Convert
+  # `Person{age: a}` to the ordinary positional constructor pattern
+  # `Person(_, a)` using the registered field telescope; omitted fields become
+  # wildcards. Nested records recurse through the same conversion.
+  defp desugar_record_patterns(arms, env) do
+    Enum.map(arms, fn
+      {:match_arm, meta, body} ->
+        {:match_arm, Keyword.update!(meta, :pattern, &desugar_record_pattern(&1, env)), body}
+
+      arm ->
+        arm
+    end)
+  end
+
+  defp desugar_record_pattern({:function_call, meta, field_pairs}, env) do
+    if Keyword.get(meta, :record, false) do
+      name = Keyword.fetch!(meta, :name)
+
+      case Inductive.get_ctor(env, String.to_atom(name)) do
+        %{args: fields} ->
+          provided =
+            Map.new(field_pairs, fn
+              {:pair, _pair_meta, [{:literal, _field_meta, field}, value]} ->
+                {field, value}
+            end)
+
+          positional =
+            Enum.map(fields, fn {field, _type} ->
+              provided
+              |> Map.get(field, {:variable, generated_meta(meta), "_"})
+              |> desugar_record_pattern(env)
+            end)
+
+          {:function_call, Keyword.delete(meta, :record), positional}
+
+        nil ->
+          {:function_call, meta, Enum.map(field_pairs, &desugar_record_pattern(&1, env))}
+      end
+    else
+      {:function_call, meta, Enum.map(field_pairs, &desugar_record_pattern(&1, env))}
+    end
+  end
+
+  defp desugar_record_pattern({tag, meta, children}, env) when is_list(children),
+    do: {tag, meta, Enum.map(children, &desugar_record_pattern(&1, env))}
+
+  defp desugar_record_pattern(pattern, _env), do: pattern
 
   defp validate_positional_forced_patterns(arms) do
     Enum.reduce_while(arms, :ok, fn
@@ -6497,6 +6587,55 @@ defmodule Cure.Elab.Elaborator do
   # tuple of variables/wildcards. The scrutinee type owns the arity: checking it
   # here prevents unused extra binders from making a malformed pattern appear to
   # work merely because their out-of-bounds projections are never elaborated.
+  defp try_tuple_match(
+         {:variable, _sm, _sn} = scrut,
+         [
+           {:match_arm, tuple_meta, tuple_body},
+           {:match_arm, fallback_meta, fallback_body}
+         ],
+         expected,
+         names,
+         ctx,
+         env
+       ) do
+    pattern = Keyword.fetch!(tuple_meta, :pattern)
+    fallback_pattern = Keyword.fetch!(fallback_meta, :pattern)
+
+    case {pattern, fallback_pattern} do
+      {{:tuple, _tm, elements}, {:variable, _fm, fallback_name}} ->
+        with {:ok, tuple_arity} <- tuple_pattern_arity(scrut, names, ctx, env),
+             :ok <- validate_tuple_pattern_arity(pattern, tuple_arity, length(elements)) do
+          fallback =
+            if fallback_name == "_",
+              do: single_body(fallback_body),
+              else: subst_surface_var(single_body(fallback_body), fallback_name, scrut)
+
+          projections = Enum.map(1..tuple_arity, &tuple_proj(scrut, Integer.to_string(&1)))
+
+          {success, structural, equalities} =
+            compile_tuple_row(elements, projections, single_body(tuple_body))
+
+          success =
+            Enum.reduce(Enum.reverse(equalities), success, fn {left, right}, body ->
+              condition =
+                {:binary_op, [category: :comparison, operator: :==], [left, right]}
+
+              {:conditional, [], [condition, body, fallback]}
+            end)
+
+          decision =
+            Enum.reduce(Enum.reverse(structural), success, fn {projection, nested_pattern}, body ->
+              nested_pattern_decision(projection, nested_pattern, body, fallback)
+            end)
+
+          elaborate_expr_checked(decision, expected, names, ctx, env)
+        end
+
+      _ ->
+        :not_applicable
+    end
+  end
+
   defp try_tuple_match({:variable, _sm, _sn} = scrut, [{:match_arm, meta, body}], expected, names, ctx, env) do
     case Keyword.fetch!(meta, :pattern) do
       {:tuple, _tm, elems} = pattern when is_list(elems) ->
@@ -6548,6 +6687,50 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp try_tuple_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
+
+  defp compile_tuple_row(patterns, projections, body) do
+    {substitutions, structural, _first_occurrences, equalities} =
+      Enum.zip(patterns, projections)
+      |> Enum.reduce({[], [], %{}, []}, fn
+        {{:variable, _meta, "_"}, _projection}, acc ->
+          acc
+
+        {{:variable, _meta, name}, projection}, {subs, nested, first, equalities} ->
+          case Map.fetch(first, name) do
+            {:ok, original} ->
+              {subs, nested, first, equalities ++ [{original, projection}]}
+
+            :error ->
+              {subs ++ [{name, projection}], nested, Map.put(first, name, projection), equalities}
+          end
+
+        {nested_pattern, projection}, {subs, nested, first, equalities} ->
+          {subs, nested ++ [{projection, nested_pattern}], first, equalities}
+      end)
+
+    success =
+      Enum.reduce(substitutions, body, fn {name, projection}, expression ->
+        subst_surface_var(expression, name, projection)
+      end)
+
+    {success, structural, equalities}
+  end
+
+  defp nested_pattern_decision(value, pattern, success, fallback) do
+    arms = [
+      {:match_arm, [pattern: pattern], [success]},
+      {:match_arm, [pattern: {:variable, [], "_"}], [fallback]}
+    ]
+
+    if special_match_arms?(arms) do
+      case desugar_special_match(value, arms, 0) do
+        {:ok, decision} -> decision
+        {:error, _reason} -> {:pattern_match, [], [value | arms]}
+      end
+    else
+      {:pattern_match, [], [value | arms]}
+    end
+  end
 
   defp validate_tuple_pattern_arities(patterns, tuple_arity) do
     Enum.reduce_while(patterns, :ok, fn {:tuple, _meta, elements} = pattern, :ok ->
@@ -6831,9 +7014,18 @@ defmodule Cure.Elab.Elaborator do
   # `bool_case/5`; no kernel change. Returns `:not_applicable` only when NO arm
   # is guarded.
   defp try_guard_match(scrut_expr, arms, expected, names, ctx, env) do
+    {unguarded_prefix, guarded_suffix} = Enum.split_while(arms, &(not guarded_arm?(&1)))
+
     cond do
       not Enum.any?(arms, &guarded_arm?/1) ->
         :not_applicable
+
+      unguarded_prefix != [] and guarded_suffix != [] and
+          Enum.all?(unguarded_prefix, &(not catchall_pat?(arm_pattern(&1)))) ->
+        fallback =
+          {:match_arm, [pattern: {:variable, [], "_"}], [{:pattern_match, [], [scrut_expr | guarded_suffix]}]}
+
+        elaborate_match(scrut_expr, unguarded_prefix ++ [fallback], expected, names, ctx, env)
 
       # A variable scrutinee is substituted into the guard chain as-is: only a
       # variable is duplicated (no recomputation), so the surface path is safe.
@@ -9241,7 +9433,20 @@ defmodule Cure.Elab.Elaborator do
           # `getNumberOfParameters` / Lean `inductive_val.get_nparams`.
           _ ->
             ty_core = Quote.reify(rhs_type, Context.length(ctx), Context.signature(ctx))
-            bind_once_let(name, rhs_core, ty_core, rhs_type, grade, rest, expected_core, names, ctx, env)
+
+            bind_once_let(
+              name,
+              rhs_core,
+              ty_core,
+              rhs_type,
+              grade,
+              rest,
+              expected_core,
+              names,
+              ctx,
+              env,
+              Keyword.get(meta, :opaque, false)
+            )
         end
 
       # The rhs has no INFERABLE type — a bare lambda, an `if`/`pickup`, any
@@ -9394,14 +9599,30 @@ defmodule Cure.Elab.Elaborator do
   defp pattern_binder_span(_other, _name), do: nil
 
   # `let x : T = e ⏎ rest`  ⟶  `{:let, Cure.Core.Grade.unrestricted(), T, e, rest}` with `x := e` in the context.
-  defp bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env) do
+  defp bind_once_let(
+         name,
+         rhs_core,
+         ty_core,
+         ty_value,
+         grade,
+         rest,
+         expected_core,
+         names,
+         ctx,
+         env,
+         opaque \\ false
+       ) do
     rhs_value = Eval.eval(rhs_core, Context.env(ctx))
 
     # `extend_def/3`, not `extend/2`: the binder is definitionally its value (ζ),
     # so a later `SNat(k)` sees `k`'s concrete value — the one thing a β-redex
     # cannot give. A shadowing binder deeper in `rest` correctly shadows this de
     # Bruijn binder, so no capture guard is needed on this path.
-    ctx1 = Context.extend_def(ctx, ty_value, rhs_value)
+    ctx1 =
+      if opaque,
+        do: Context.extend(ctx, ty_value),
+        else: Context.extend_def(ctx, ty_value, rhs_value)
+
     names1 = [name | names]
     expected1 = Subst.shift(expected_core, 1, 0)
 
@@ -9725,12 +9946,31 @@ defmodule Cure.Elab.Elaborator do
 
   def desugar_special_match(scrut, arms, line) do
     cond do
-      map_match_arms?(arms) -> desugar_map_arms(scrut, arms, line)
+      map_match_arms?(arms) -> desugar_map_match_once(scrut, arms, line)
       binary_match_arms?(arms) -> desugar_binary_arms(scrut, arms, line)
     end
   end
 
-  def desugar_map_match(scrut, arms, line), do: desugar_map_arms(scrut, arms, line)
+  def desugar_map_match(scrut, arms, line), do: desugar_map_match_once(scrut, arms, line)
+
+  # `has_key` and `get` both inspect the map scrutinee. Repeating an arbitrary
+  # dependent expression beneath both helpers can make implicit insertion solve
+  # a projection metavariable under a helper-local Π binder. Bind a non-variable
+  # scrutinee once, opaquely, before building those calls. The emitted Core let
+  # still evaluates the expression once; opacity only prevents ζ-reduction while
+  # elaborating the let body.
+  defp desugar_map_match_once({:variable, _meta, _name} = scrut, arms, line),
+    do: desugar_map_arms(scrut, arms, line)
+
+  defp desugar_map_match_once(scrut, arms, line) do
+    name = "$map_scrutinee_" <> fresh_tag()
+    variable = {:variable, [], name}
+
+    with {:ok, body} <- desugar_map_arms(variable, arms, line) do
+      binding = {:assignment, [let: true, opaque: true, line: line], [variable, scrut]}
+      {:ok, {:block, [line: line], [binding, body]}}
+    end
+  end
 
   # A wildcard/variable arm terminates the chain: `_` yields its body directly, a
   # named binder binds the whole scrutinee first.
@@ -9739,13 +9979,26 @@ defmodule Cure.Elab.Elaborator do
   defp desugar_map_arms(scrut, [{:match_arm, meta, [body]} | rest], line) do
     case Keyword.get(meta, :pattern) do
       {:map, _mm, pairs} ->
-        with {:ok, presence, value_eqs, binds} <- map_arm_guard_binds(scrut, pairs, line),
+        with {:ok, presence, value_eqs, binds, nested} <- map_arm_guard_binds(scrut, pairs, line),
              {:ok, else_expr} <- desugar_map_arms(scrut, rest, line) do
           # Cure's `and` is strict, so a value `get` must never run on an absent
           # key: gate all `get`s behind the (total) presence guard structurally.
           # Only once every listed key is present are the value-equality checks
           # and the binding `get`s evaluated.
-          then_body = if binds == [], do: body, else: {:block, [line: line], binds ++ [body]}
+          matched_body =
+            Enum.reduce(Enum.reverse(nested), body, fn {value, pattern}, success ->
+              {:pattern_match, [line: line],
+               [
+                 value,
+                 {:match_arm, [pattern: pattern], [success]},
+                 {:match_arm, [pattern: {:variable, [], "_"}], [else_expr]}
+               ]}
+            end)
+
+          then_body =
+            if binds == [],
+              do: matched_body,
+              else: {:block, [line: line], binds ++ [matched_body]}
 
           inner =
             case value_eqs do
@@ -9773,8 +10026,8 @@ defmodule Cure.Elab.Elaborator do
   # (`get(k) == lit`, evaluated only after presence holds), and (c) the `let`
   # bindings for variable value positions.
   defp map_arm_guard_binds(scrut, pairs, line) do
-    Enum.reduce_while(pairs, {:ok, [], [], []}, fn
-      {:pair, _pm, [{:literal, kmeta, key}, valpat]}, {:ok, presence, value_eqs, binds}
+    Enum.reduce_while(pairs, {:ok, [], [], [], []}, fn
+      {:pair, _pm, [{:literal, kmeta, key}, valpat]}, {:ok, presence, value_eqs, binds, nested}
       when is_atom(key) ->
         if Keyword.get(kmeta, :subtype) in [:symbol, :atom] do
           key_lit = {:literal, [subtype: :symbol], key}
@@ -9782,23 +10035,25 @@ defmodule Cure.Elab.Elaborator do
 
           case valpat do
             {:variable, _vm, "_"} ->
-              {:cont, {:ok, presence ++ [present], value_eqs, binds}}
+              {:cont, {:ok, presence ++ [present], value_eqs, binds, nested}}
 
             {:variable, _vm, _name} ->
               bind =
                 {:assignment, [let: true, line: line], [valpat, mk_call("get", [key_lit, scrut], line)]}
 
-              {:cont, {:ok, presence ++ [present], value_eqs, binds ++ [bind]}}
+              {:cont, {:ok, presence ++ [present], value_eqs, binds ++ [bind], nested}}
 
             {:literal, _lm, _lv} = lit ->
               eq =
                 {:binary_op, [category: :comparison, operator: :==, line: line],
                  [mk_call("get", [key_lit, scrut], line), lit]}
 
-              {:cont, {:ok, presence ++ [present], value_eqs ++ [eq], binds}}
+              {:cont, {:ok, presence ++ [present], value_eqs ++ [eq], binds, nested}}
 
             other ->
-              {:halt, {:error, {:unsupported_map_value_pattern, other}}}
+              value = mk_call("get", [key_lit, scrut], line)
+
+              {:cont, {:ok, presence ++ [present], value_eqs, binds, nested ++ [{value, other}]}}
           end
         else
           {:halt, {:error, {:unsupported_map_key_pattern, key}}}
@@ -9808,8 +10063,11 @@ defmodule Cure.Elab.Elaborator do
         {:halt, {:error, {:unsupported_map_key_pattern, other_key}}}
     end)
     |> case do
-      {:ok, presence, value_eqs, binds} -> {:ok, presence, value_eqs, binds}
-      {:error, _} = e -> e
+      {:ok, presence, value_eqs, binds, nested} ->
+        {:ok, presence, value_eqs, binds, nested}
+
+      {:error, _} = e ->
+        e
     end
   end
 

@@ -56,8 +56,8 @@ defmodule Cure.Audit.LedgerTest do
     {:ok, env} = Cure.Elab.Program.elaborate(src)
     roots = Ledger.roots(env)
 
-    # The ledger counts every builtin operator in the env.
-    assert audit(src).builtin_count == 32
+    # The ledger counts canonical builtin operations, not owner-local aliases.
+    assert audit(src).builtin_count == 22
 
     # Codegen's walk deliberately drops them ("never emitted as a function form").
     codegen_reachable = Cure.Elab.Program.reachable_def_names(env, roots)

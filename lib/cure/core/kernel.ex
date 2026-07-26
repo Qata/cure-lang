@@ -1854,6 +1854,30 @@ defmodule Cure.Core.Kernel do
 
   defp subtype?({:vtype, l1}, {:vtype, l2}, _ctx), do: Universe.le?(l1, l2)
 
+  defp subtype?(inferred, {:vdata, expected, []} = expected_value, ctx) do
+    sig = Context.signature(ctx)
+
+    expected == Inductive.builtin(sig, :any) or
+      Conv.conv_values?(inferred, expected_value, Context.length(ctx), sig)
+  end
+
+  defp subtype?({:vdata, family, inferred_args}, {:vdata, family, expected_args}, ctx)
+       when length(inferred_args) == length(expected_args) do
+    sig = Context.signature(ctx)
+
+    if family == Inductive.builtin(sig, :list) do
+      Enum.zip(inferred_args, expected_args)
+      |> Enum.all?(fn {inferred, expected} -> subtype?(inferred, expected, ctx) end)
+    else
+      Conv.conv_values?(
+        {:vdata, family, inferred_args},
+        {:vdata, family, expected_args},
+        Context.length(ctx),
+        sig
+      )
+    end
+  end
+
   defp subtype?(inferred, expected, ctx),
     do: Conv.conv_values?(inferred, expected, Context.length(ctx), Context.signature(ctx))
 end

@@ -32,16 +32,7 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   @examples_dir "examples"
 
   @gap_manifest %{
-    "derived_show" => %{category: :language, stage: :elaboration, reason: "derived protocol publication"},
-    "destructuring" => %{category: :language, stage: :elaboration, reason: "structural patterns"},
-    "json_derive" => %{category: :language, stage: :elaboration, reason: "generated function publication"},
-    "json_tree" => %{category: :language, stage: :elaboration, reason: "nested structural patterns"},
-    "lazy_iter" => %{category: :language, stage: :elaboration, reason: "Any covariance"},
-    "let_destructuring" => %{category: :language, stage: :elaboration, reason: "pattern-valued let"},
-    "match_showcase" => %{category: :language, stage: :elaboration, reason: "literal and structural patterns"},
-    "pattern_guards" => %{category: :language, stage: :elaboration, reason: "open record patterns"},
-    "specialise" => %{category: :optimizer, stage: :optimization, reason: "specialized clone assertions"},
-    "test_showcase" => %{category: :stdlib, stage: :elaboration, reason: "generic assertion instances"}
+    "specialise" => %{category: :optimizer, stage: :optimization, reason: "specialized clone assertions"}
   }
 
   @expected %{
@@ -60,7 +51,7 @@ defmodule Mix.Tasks.Cure.Check.Examples do
     "fsm_pipeline" => :compile_only,
     "hello" => "42",
     "holes_demo" => "0",
-    "json_derive" => ~s("{}"),
+    "json_derive" => ~s(~c"{}"),
     "json_tree" => "48",
     "lambda_block" => "54",
     "lazy_iter" => "55",

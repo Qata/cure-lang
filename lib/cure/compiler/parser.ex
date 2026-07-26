@@ -13874,12 +13874,12 @@ defmodule Cure.Compiler.Parser do
           :struct when dec_name == "derive" ->
             derive_names =
               Enum.map(args, fn
-                {:variable, _, n} -> String.downcase(n) |> String.to_atom()
-                {:function_call, m, _} -> Keyword.get(m, :name, "") |> String.downcase() |> String.to_atom()
-                other -> extract_literal_value(other)
+                {:variable, _, n} -> normalize_derived_interface(n)
+                {:function_call, m, _} -> Keyword.get(m, :name, "") |> normalize_derived_interface()
+                other -> other |> extract_literal_value() |> to_string() |> normalize_derived_interface()
               end)
 
-            {:container, Keyword.put(meta, :derive, derive_names), body}
+            {:container, Keyword.put(meta, :deriving, derive_names), body}
 
           _ ->
             {:container, Keyword.put(meta, :decorator, {:decorator, [name: String.to_atom(dec_name)], args}), body}
@@ -13925,6 +13925,13 @@ defmodule Cure.Compiler.Parser do
         other
     end
   end
+
+  # Decorator spellings follow the current standard-library interface names.
+  # `Ord` and `Eq` remain accepted migration aliases, but the declaration table
+  # only ever sees canonical identities.
+  defp normalize_derived_interface("Ord"), do: "Comparable"
+  defp normalize_derived_interface("Eq"), do: "Equatable"
+  defp normalize_derived_interface(name), do: name
 
   defp decorator_source_info(%Token{} = at, %Token{} = name, args, close_token) do
     last = if match?(%Token{}, close_token), do: close_token, else: name

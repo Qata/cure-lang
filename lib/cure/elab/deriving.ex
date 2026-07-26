@@ -39,8 +39,6 @@ defmodule Cure.Elab.Deriving do
       the derivation cannot thread
   """
   @spec generate(atom(), tuple(), Env.t()) :: {:ok, tuple()} | {:error, term()}
-  def generate(:Show, _container, _env), do: {:error, {:deriving_needs_strings, :Show}}
-
   def generate(:BeamEncode, {:container, _meta, _body} = container, env) do
     case Env.get_interface(env, :BeamEncode) do
       %{method_order: [method], methods: methods} ->
@@ -69,7 +67,8 @@ defmodule Cure.Elab.Deriving do
     end
   end
 
-  def generate(iface, {:container, meta, body}, env) when iface in [:Equatable, :Ord] do
+  def generate(iface, {:container, meta, body}, env)
+      when iface in [:Equatable, :Ord, :Comparable, :Show, :JSON] do
     case Env.get_interface(env, iface) do
       nil ->
         {:error, {:no_such_interface, iface}}
@@ -77,12 +76,27 @@ defmodule Cure.Elab.Deriving do
       desc ->
         type_name = Keyword.fetch!(meta, :name)
         type_params = Keyword.get(meta, :type_params, [])
-        ctors = constructors(body)
+
+        ctors =
+          if Keyword.get(meta, :container_type) == :struct,
+            do: [{type_name, length(record_fields(body))}],
+            else: constructors(body)
+
         for_type = for_type_ast(type_name, type_params)
 
         with :ok <- check_derivable_shape(iface, type_name, ctors),
              :ok <- check_no_constrained_field(iface, type_name, type_params, body),
-             {:ok, method_defs} <- method_defs(iface, desc, type_name, for_type, ctors, env) do
+             {:ok, method_defs} <-
+               method_defs(
+                 iface,
+                 desc,
+                 type_name,
+                 for_type,
+                 ctors,
+                 body,
+                 Keyword.get(meta, :container_type) == :struct,
+                 env
+               ) do
           impl_meta = [interface: Atom.to_string(iface), for: type_name, for_type: for_type, as: nil]
           {:ok, {:implementation, impl_meta, method_defs}}
         end
@@ -445,6 +459,9 @@ defmodule Cure.Elab.Deriving do
       {:function_def, m, _} ->
         if Keyword.get(m, :variant, false), do: Keyword.get(m, :params, []), else: []
 
+      {:param, meta, _name} ->
+        [Keyword.fetch!(meta, :type)]
+
       _ ->
         []
     end)
@@ -493,9 +510,9 @@ defmodule Cure.Elab.Deriving do
 
   # -- method synthesis -------------------------------------------------------
 
-  defp method_defs(iface, desc, type_name, for_type, ctors, env) do
+  defp method_defs(iface, desc, type_name, for_type, ctors, declaration_body, record?, env) do
     Enum.reduce_while(desc.method_order, {:ok, []}, fn m, {:ok, acc} ->
-      case method_def(iface, desc, m, type_name, for_type, ctors, env) do
+      case method_def(iface, desc, m, type_name, for_type, ctors, declaration_body, record?, env) do
         {:ok, fn_def} -> {:cont, {:ok, acc ++ [fn_def]}}
         {:error, _} = err -> {:halt, err}
       end
@@ -514,7 +531,7 @@ defmodule Cure.Elab.Deriving do
   # instance under that interface failed to elaborate, fields or no fields. GHC's derived
   # `Eq`/`Ord` and Idris 2's `Deriving.Eq`/`Ord` cannot disagree this way: header and body
   # come from the same generation step. Now so do Cure's.
-  defp method_def(iface, desc, m, _type_name, for_type, ctors, env) do
+  defp method_def(iface, desc, m, type_name, for_type, ctors, declaration_body, record?, env) do
     info = Map.fetch!(desc.methods, m)
 
     params =
@@ -533,8 +550,31 @@ defmodule Cure.Elab.Deriving do
     ]
 
     case Enum.map(params, fn {:param, _pm, pname} -> pname end) do
+      [value] when iface in [:Show, :JSON] ->
+        fields = record_fields(declaration_body)
+
+        if not record? do
+          {:error, {:cannot_derive_shape, iface, String.to_atom(type_name)}}
+        else
+          rendered =
+            if iface == :Show,
+              do: show_record_body(type_name, value, fields, info.name),
+              else: json_record_body(value, fields, info.name)
+
+          {:ok, {:function_def, meta, [rendered]}}
+        end
+
       [left, right] ->
-        {:ok, {:function_def, meta, [body(iface, info.name, left, right, ctors, env)]}}
+        record_fields = record_fields(declaration_body)
+
+        generated_body =
+          if record? do
+            record_comparison_body(iface, info.name, type_name, left, right, record_fields, env)
+          else
+            body(iface, info.name, left, right, ctors, env)
+          end
+
+        {:ok, {:function_def, meta, [generated_body]}}
 
       other ->
         # `Equatable.eq` and `Ord.lt` are binary comparators. A structural body cannot be
@@ -585,6 +625,61 @@ defmodule Cure.Elab.Deriving do
 
     match(var(left), arms)
   end
+
+  defp body(:Comparable, lt_name, left, right, ctors, env),
+    do: body(:Ord, lt_name, left, right, ctors, env)
+
+  defp record_comparison_body(iface, method, type_name, left, right, fields, env) do
+    body(iface, method, left, right, [{type_name, length(fields)}], env)
+  end
+
+  defp show_record_body(type_name, value, fields, method) do
+    contents =
+      fields
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {{field, _type}, index} ->
+        separator = if index == 0, do: "", else: ", "
+
+        [
+          string(separator <> field <> ": "),
+          call(method, [field_access(value, field)])
+        ]
+      end)
+
+    concat([string(type_name <> "{")] ++ contents ++ [string("}")])
+  end
+
+  defp json_record_body(value, fields, method) do
+    contents =
+      fields
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {{field, _type}, index} ->
+        separator = if index == 0, do: "", else: ","
+
+        [
+          string(separator <> "\"" <> field <> "\":"),
+          call(method, [field_access(value, field)])
+        ]
+      end)
+
+    concat([string("{")] ++ contents ++ [string("}")])
+  end
+
+  defp record_fields(body) do
+    Enum.flat_map(body, fn
+      {:param, meta, name} -> [{name, Keyword.fetch!(meta, :type)}]
+      _ -> []
+    end)
+  end
+
+  defp field_access(value, field),
+    do: {:attribute_access, [attribute: field], [var(value)]}
+
+  defp string(value), do: {:literal, [subtype: :string], value}
+  defp concat([single]), do: single
+
+  defp concat([head | tail]),
+    do: {:binary_op, [category: :concatenation, operator: :<>], [head, concat(tail)]}
 
   # The equality method name to call from a derived `Ord` (its lexicographic
   # fold advances on equal fields). Read from the in-scope `Equatable` interface;

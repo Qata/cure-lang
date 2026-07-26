@@ -71,13 +71,9 @@ defmodule Cure.Elab.DerivingRefusalTest do
   end
 
   describe "refusals" do
-    test "a container with no variants is refused, not derived as an empty match" do
+    test "record fields derive as the record's single constructor" do
       {:ok, env} = Program.elaborate("mod DvThree\n" <> @equatable <> "end\n")
 
-      # The exact shape `Declarations.struct_ctor_sig/2` builds a `rec`'s fields into:
-      # `{:param, meta, fname}` entries, none tagged `variant: true`. The surface parser
-      # never attaches `deriving` to a `rec` today, but `generate/3` is public and its
-      # contract does not restrict it to enums.
       fields = [
         {:param, [type: {:variable, [], "Int"}], "x"},
         {:param, [type: {:variable, [], "Int"}], "y"}
@@ -85,7 +81,7 @@ defmodule Cure.Elab.DerivingRefusalTest do
 
       container = {:container, [container_type: :struct, name: "Point", type_params: []], fields}
 
-      assert {:error, {:cannot_derive_shape, :Equatable, :Point}} =
+      assert {:ok, {:implementation, [{:interface, "Equatable"} | _], [_method]}} =
                Cure.Elab.Deriving.generate(:Equatable, container, env)
     end
 

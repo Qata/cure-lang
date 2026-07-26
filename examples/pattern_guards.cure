@@ -19,7 +19,7 @@ mod PatternGuards
     | _ -> "zero"
 
   # Match expression
-  fn result_to_string(r: Std.Result.Result(Int, String)) -> String =
+  fn result_to_string(r: Result(Int, String)) -> String =
     match r
       Ok(v) -> "ok"
       Error(e) -> "error"
@@ -52,7 +52,7 @@ mod PatternGuards
   # Nested destructuring (v0.18.0)
   # ---------------------------------------------------------------------------
 
-  fn unwrap_head_ok(xs: List(Std.Result.Result(Int, String)), default: Int) -> Int =
+  fn unwrap_head_ok(xs: List(Result(Int, String)), default: Int) -> Int =
     match xs
       [Ok(v) | _] -> v
       _           -> default

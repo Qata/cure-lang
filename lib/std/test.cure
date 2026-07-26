@@ -31,6 +31,7 @@ mod Std.Test
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
   use Std.Comparable
+  use Std.Result
 
   ## Private: raise `reason` as an Erlang error.
   @extern(:erlang, :error, 1)
@@ -42,19 +43,19 @@ mod Std.Test
       condition -> ()
       else      -> raise_error(:assertion_failed)
 
-  ## Assert `a == b`; raises `:not_equal` on mismatch. `requires Equatable(t)`
-  ## threads the equality dictionary for the compared type.
-  fn assert_eq(a: t, b: t) -> Unit requires Equatable(t) =
+  ## Assert structural equality; raises `:not_equal` on mismatch. Assertions are
+  ## intentionally available for every runtime value, including generic
+  ## containers whose element dictionary is not otherwise in lexical scope.
+  fn assert_eq(a: t, b: t) -> Unit =
     pickup
-      a == b -> ()
+      Std.Builtin.struct_eq(t, a, b) -> ()
       else   -> raise_error(:not_equal)
 
   ## Assert `a != b`; raises `:unexpectedly_equal` when they match.
-  ## `requires Equatable(t)` threads the equality dictionary (`!=` derives from `==`).
-  fn assert_ne(a: t, b: t) -> Unit requires Equatable(t) =
+  fn assert_ne(a: t, b: t) -> Unit =
     pickup
-      a != b -> ()
-      else   -> raise_error(:unexpectedly_equal)
+      Std.Builtin.struct_eq(t, a, b) -> raise_error(:unexpectedly_equal)
+      else   -> ()
 
   ## Assert `a > b`; raises `:not_greater` otherwise.
   fn assert_gt(a: t, b: t) -> Unit requires Comparable(t) =

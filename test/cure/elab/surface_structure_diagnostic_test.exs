@@ -27,28 +27,11 @@ defmodule Cure.Elab.SurfaceStructureDiagnosticTest do
     assert Renderer.lsp(diagnostic, registry)["range"] == range(2, 32, 40)
   end
 
-  test "a nested map value pattern points at only the unsupported value" do
+  test "a nested map value pattern uses ordinary structural matching" do
     source =
-      "mod M\n  use Std.Map\n  fn f(m: Map(Atom, Int)) -> Int = match m\n    %{a: [x]} -> x\n    _ -> 0\nend\n"
+      "mod M\n  use Std.Map\n  fn f(m: Map(Atom, List(Int))) -> Int = match m\n    %{a: [x]} -> x\n    _ -> 0\nend\n"
 
-    {diagnostic, registry} = diagnostic(source, "map.cure", :unsupported_map_value_pattern)
-
-    assert Renderer.plain(diagnostic, registry, width: 80) ==
-             String.trim_trailing("""
-             -- MAP VALUE PATTERN IS NOT SUPPORTED [E093] -------------------------- map.cure
-
-             Map-pattern values may bind a variable, ignore the value with `_`, or compare it
-             with a literal. Nested value patterns are not yet supported by the open-map
-             translation.
-
-             at map.cure:4:10
-             4 |     %{a: [x]} -> x
-               |          ^^^ simplify this map value pattern
-
-             Hint: Bind this value to one name, then inspect or match it inside the branch body
-             """)
-
-    assert Renderer.lsp(diagnostic, registry)["range"] == range(3, 9, 12)
+    assert {:ok, _env} = Program.elaborate(source, file: "map.cure")
   end
 
   test "a destructuring comprehension generator explains the one-variable restriction" do

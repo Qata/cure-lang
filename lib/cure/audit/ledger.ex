@@ -53,8 +53,10 @@ defmodule Cure.Audit.Ledger do
   @spec roots(Env.t()) :: [atom()]
   def roots(%Env{defs: defs, module_owner: owner}) when is_binary(owner) do
     defs
-    |> Map.keys()
-    |> Enum.filter(&(Cure.Elab.Name.owner(&1) == owner))
+    |> Enum.filter(fn {name, definition} ->
+      Cure.Elab.Name.owner(name) == owner and Map.get(definition, :body) != nil
+    end)
+    |> Enum.map(&elem(&1, 0))
     |> Enum.sort()
   end
 
@@ -117,8 +119,13 @@ defmodule Cure.Audit.Ledger do
         env.families
         |> Map.keys()
         |> Enum.filter(&Cure.Core.Inductive.opaque?(env, &1))
+        |> Enum.reject(&(&1 in Map.values(env.builtins)))
         |> Enum.sort(),
-      builtin_count: Enum.count(env.defs, fn {_n, d} -> Map.get(d, :builtin_op) end),
+      builtin_count:
+        env.defs
+        |> Enum.flat_map(fn {_name, definition} -> List.wrap(Map.get(definition, :builtin_op)) end)
+        |> Enum.uniq()
+        |> length(),
       holes: scans |> Enum.flat_map(& &1.holes) |> Enum.sort(),
       absurd: scans |> Enum.map(& &1.absurd) |> Enum.sum(),
       not_proven_total: not_proven_total(env, reachable),
