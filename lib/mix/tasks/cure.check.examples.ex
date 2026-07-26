@@ -132,17 +132,26 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   end
 
   defp compile_only(name, path) do
-    case Cure.Compiler.compile_file(path,
-           output_dir: "_build/cure/ex_ebin",
-           emit_events: false
-         ) do
-      {:ok, _module, _warns} ->
-        IO.puts("  ok  #{pad(name)} (compile)")
-        {:pass, name}
+    case normalized_source(path) do
+      {:ok, source} ->
+        case Cure.Compiler.compile_and_load(source,
+               file: path,
+               output_dir: "_build/cure/ex_ebin",
+               emit_events: false
+             ) do
+          {:ok, _module} ->
+            IO.puts("  ok  #{pad(name)} (compile)")
+            {:pass, name}
+
+          {:error, reason} ->
+            IO.puts("  FAIL #{pad(name)} compilation failed")
+            emit_host_diagnostic(reason, path, source)
+            {:fail, name}
+        end
 
       {:error, reason} ->
-        IO.puts("  FAIL #{pad(name)} compilation failed")
-        emit_host_diagnostic(reason, path)
+        IO.puts("  FAIL #{pad(name)} could not read source")
+        emit_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason))
         {:fail, name}
     end
   end
@@ -150,6 +159,8 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   defp run_and_compare(name, path, expected) do
     case File.read(path) do
       {:ok, src} ->
+        {src, _legacy_otp_changed?} = Cure.Migrate.LegacyOtp.normalize(src)
+
         case Cure.Compiler.compile_and_load(src, file: path, emit_events: false) do
           {:ok, module} ->
             try do
@@ -191,6 +202,13 @@ defmodule Mix.Tasks.Cure.Check.Examples do
     end
   end
 
+  defp normalized_source(path) do
+    with {:ok, source} <- File.read(path) do
+      {source, _legacy_otp_changed?} = Cure.Migrate.LegacyOtp.normalize(source)
+      {:ok, source}
+    end
+  end
+
   defp main_fn?(path) do
     case File.read(path) do
       {:ok, src} -> String.match?(src, ~r/\bfn\s+main\b/)
@@ -200,7 +218,7 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
   defp pad(name), do: String.pad_trailing(name, 26)
 
-  defp emit_host_diagnostic(reason, path, source \\ nil) do
+  defp emit_host_diagnostic(reason, path, source) do
     {diagnostic, registry} = Host.to_diagnostic(reason, path, source)
 
     emit_diagnostic(diagnostic, registry)
