@@ -1,4 +1,6 @@
 mod LetDestructuring
+  use Std.Result
+
   ###
   In-place destructuring in `let` bindings (v0.21.0).
 
@@ -16,7 +18,7 @@ mod LetDestructuring
   local fn make_point(x: Int, y: Int) -> Point = Point{x: x, y: y}
 
   ## ADT constructor: binds x from the Ok variant.
-  fn first_ok(r: Result(Int, String)) -> Int =
+  fn first_ok(r: Std.Result.Result(Int, String)) -> Int =
     let Ok(x) = r
     x
 

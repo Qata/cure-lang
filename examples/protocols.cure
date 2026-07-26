@@ -1,4 +1,7 @@
 mod Protocols
+  use Std.String
+  use Std.Semigroup
+
   # Define a protocol for converting values to strings
   interface Stringify(t)
     fn stringify(x: t) -> String
@@ -14,5 +17,5 @@ mod Protocols
   implementation Stringify for String
     fn stringify(x: String) -> String = x
   # Use the protocol in a function
-  fn display(x: t) -> String = "Value: " <> stringify(x)
+  fn display(x: t) -> String requires Stringify(t) = "Value: " <> stringify(x)
   fn main() -> Int = 0

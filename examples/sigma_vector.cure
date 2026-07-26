@@ -1,5 +1,5 @@
 mod SigmaVector
-  use Std.{List, Pair}
+  use Std.{List, Tuple}
 
   ## Sigma-style sized list example.
   #
@@ -10,19 +10,19 @@ mod SigmaVector
 
   ## Build a "sized list" -- a pair whose first component is the
   ## claimed length, and whose second component is the list data.
-  fn make_sized(items: List(Int)) -> Tuple =
+  fn make_sized(items: List(Int)) -> Tuple(Int, List(Int)) =
     %[Std.List.length(items), items]
 
   ## Project the length out of a sized list.
-  fn claimed_length(sv: Tuple) -> Int =
-    Std.Pair.first(sv)
+  fn claimed_length(sv: Tuple(Int, List(Int))) -> Int =
+    Std.Tuple.first(sv)
 
   ## Project the payload out of a sized vector.
-  fn payload(sv: Tuple) -> List(Int) =
-    Std.Pair.second(sv)
+  fn payload(sv: Tuple(Int, List(Int))) -> List(Int) =
+    Std.Tuple.second(sv)
 
   ## Total length of two sized lists.
-  fn combined_length(a: Tuple, b: Tuple) -> Int =
+  fn combined_length(a: Tuple(Int, List(Int)), b: Tuple(Int, List(Int))) -> Int =
     claimed_length(a) + claimed_length(b)
 
   ## Demonstration entry point:

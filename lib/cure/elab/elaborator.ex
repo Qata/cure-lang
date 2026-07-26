@@ -4265,7 +4265,12 @@ defmodule Cure.Elab.Elaborator do
     # rekey/refine/constructor_pattern all see the uniform function_call shape and
     # no `:list` node survives. Nested list patterns continue through the general
     # constructor-pattern matrix.
-    arms0 = arms0 |> desugar_list_patterns() |> desugar_typed_constructor_args()
+    arms0 =
+      arms0
+      |> desugar_negative_patterns()
+      |> desugar_list_patterns()
+      |> desugar_typed_constructor_args()
+
     {scrut_expr, arms0} = desugar_single_refutable_tuple_column(scrut_expr, arms0)
     {scrut_expr, arms0} = desugar_tuple_scrutinee(scrut_expr, arms0)
 
@@ -4278,6 +4283,37 @@ defmodule Cure.Elab.Elaborator do
 
     contextualize_authored_tuple_pattern_result(result, authored_arms, env)
   end
+
+  # Unary minus is an expression node in the parser, including in pattern
+  # position. Normalize it to the corresponding signed integer literal before
+  # shape dispatch so a chain containing `-1` remains a literal-pattern chain
+  # instead of falling through to constructor matching.
+  defp desugar_negative_patterns(arms) do
+    Enum.map(arms, fn
+      {:match_arm, meta, body} ->
+        {:match_arm, Keyword.update!(meta, :pattern, &desugar_negative_pattern/1), body}
+
+      arm ->
+        arm
+    end)
+  end
+
+  defp desugar_negative_pattern({:unary_op, meta, [{:literal, literal_meta, value}]})
+       when is_integer(value) and value >= 0 do
+    if Keyword.get(meta, :operator) == :- and Keyword.get(literal_meta, :subtype) == :integer do
+      {:literal, Keyword.merge(literal_meta, Keyword.take(meta, [:line, :col])), -value}
+    else
+      {:unary_op, meta, [{:literal, literal_meta, value}]}
+    end
+  end
+
+  defp desugar_negative_pattern({:literal, meta, value}) when is_binary(value),
+    do: desugar_string(value, meta)
+
+  defp desugar_negative_pattern({tag, meta, children}) when is_list(children),
+    do: {tag, meta, Enum.map(children, &desugar_negative_pattern/1)}
+
+  defp desugar_negative_pattern(pattern), do: pattern
 
   defp validate_positional_forced_patterns(arms) do
     Enum.reduce_while(arms, :ok, fn
@@ -7153,6 +7189,7 @@ defmodule Cure.Elab.Elaborator do
   defp literal_of?({:literal, _m, v}, :int), do: is_integer(v)
   defp literal_of?({:literal, _m, v}, :float), do: is_float(v)
   defp literal_of?({:literal, _m, v}, :bool), do: is_boolean(v)
+  defp literal_of?({:literal, _m, v}, :atom), do: is_atom(v)
   # A char literal `'a'` carries its integer codepoint (subtype `:char`).
   defp literal_of?({:literal, _m, v}, :bounded), do: is_integer(v)
   defp literal_of?(_p, _prim), do: false
@@ -7162,6 +7199,7 @@ defmodule Cure.Elab.Elaborator do
 
   defp lit_core(v, :int), do: {:int_lit, v}
   defp lit_core(v, :float), do: {:float_lit, v}
+  defp lit_core(v, :atom), do: {:atom_lit, v}
   defp lit_core(v, :bounded), do: {:bounded_lit, v}
 
   defp lit_core(v, :bool, env), do: {:ctor, resolve_ctor_key(env, if(v, do: :True, else: :False)), []}
@@ -7253,7 +7291,7 @@ defmodule Cure.Elab.Elaborator do
   # variable's term for a pin arm). A `:bounded` scrutinee (Char) has no monomorphic
   # eq twin, so it uses the polymorphic `struct_eq` applied to the signature-aware
   # readback of the scrutinee type (its type argument is erased at emit).
-  defp eq_test_core(:bounded, scrut_term, rhs_core, scrut_type, ctx) do
+  defp eq_test_core(prim, scrut_term, rhs_core, scrut_type, ctx) when prim in [:bounded, :atom] do
     ty = Quote.reify(scrut_type, Context.length(ctx), Context.signature(ctx))
     {:app, app2(builtin_op_global(:struct_eq), ty, scrut_term), rhs_core}
   end
@@ -9021,6 +9059,30 @@ defmodule Cure.Elab.Elaborator do
         nil -> let_inferred(name, rhs, meta, grade, rest, expected_core, names, ctx, env)
         ann -> let_ascribed(name, rhs, ann, meta, grade, rest, expected_core, names, ctx, env)
       end
+    end
+  end
+
+  # A pattern-valued let is the single-arm form of the ordinary typed pattern
+  # eliminator. Keeping the authored pattern intact means constructor, tuple,
+  # list, record, map, binary, pin, and nested patterns all take the same path as
+  # `match`; the match checker also supplies the structured impossible-pattern
+  # and missing-branch diagnostics. The scrutinee remains a single Core `case`
+  # input, so an effectful initializer is evaluated exactly once.
+  defp elaborate_let_block(
+         [{:assignment, meta, [pattern, rhs]} = assignment | rest],
+         expected_core,
+         names,
+         ctx,
+         env
+       )
+       when rest != [] do
+    if Keyword.get(meta, :let, false) do
+      body = {:block, Keyword.take(meta, [:line, :col]), rest}
+      arm = {:match_arm, Keyword.put([], :pattern, pattern), [body]}
+      match = {:pattern_match, Keyword.take(meta, [:line, :col]), [rhs, arm]}
+      elaborate_expr_checked(match, expected_core, names, ctx, env)
+    else
+      {:error, {:unsupported_block_statement, assignment}}
     end
   end
 

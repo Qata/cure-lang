@@ -7,22 +7,20 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
       mix cure.check.examples
 
-  Expectations are declared inline in this module. When a new example is
-  added, add an entry to `@expected` keyed by the example's basename
-  (without the `.cure` suffix). The value is one of:
+  Every fixture is declared in the manifest below. When a new example is
+  added, add an entry keyed by the example's basename (without the `.cure`
+  suffix). The `expect` value is one of:
 
   - `:compile_only` -- the file must compile; its `main/0` (if any) is
     not executed.
   - a string -- `main/0` is executed and its `inspect/1` output must
     match exactly.
 
-  Examples not listed in `@expected` are treated as `:compile_only`.
-
   ## Exit code
 
-  A small, explicit set of examples is currently skipped because they target
-  dependent-language features not yet available in the single dependent
-  pipeline. The task exits with status `1` for any unexpected failure.
+  A classified gap is reported with its first failing stage. Unclassified
+  fixtures and stale manifest entries are errors, as is any unexpected
+  compilation, execution, or output failure.
   """
 
   use Mix.Task
@@ -33,44 +31,49 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
   @examples_dir "examples"
 
-  # These source fixtures target dependent-language features outside the
-  # current supported slice. Keep the list explicit so a new skip cannot hide
-  # an unexpected regression.
-  @known_dependent_gaps ~w(
-    derived_show
-    destructuring
-    json_derive
-    json_tree
-    lambda_block
-    lazy_iter
-    let_destructuring
-    list_basics
-    match_showcase
-    pattern_guards
-    protocols
-    result_handling
-    sigma_vector
-    specialise
-    test_showcase
-  )
+  @gap_manifest %{
+    "derived_show" => %{category: :language, stage: :elaboration, reason: "derived protocol publication"},
+    "destructuring" => %{category: :language, stage: :elaboration, reason: "structural patterns"},
+    "json_derive" => %{category: :language, stage: :elaboration, reason: "generated function publication"},
+    "json_tree" => %{category: :language, stage: :elaboration, reason: "nested structural patterns"},
+    "lazy_iter" => %{category: :language, stage: :elaboration, reason: "Any covariance"},
+    "let_destructuring" => %{category: :language, stage: :elaboration, reason: "pattern-valued let"},
+    "match_showcase" => %{category: :language, stage: :elaboration, reason: "literal and structural patterns"},
+    "pattern_guards" => %{category: :language, stage: :elaboration, reason: "open record patterns"},
+    "specialise" => %{category: :optimizer, stage: :optimization, reason: "specialized clone assertions"},
+    "test_showcase" => %{category: :stdlib, stage: :elaboration, reason: "generic assertion instances"}
+  }
 
   @expected %{
     "adt" => "42",
+    "adt_fn_payload" => :compile_only,
     "assert_type_demo" => "42",
+    "binary_comprehension" => :compile_only,
+    "binary_destructuring" => :compile_only,
+    "defaults" => :compile_only,
     "dependent_types" => "6",
+    "derived_show" => "1",
+    "destructuring" => "0",
     "doctest_demo" => "25",
     "fenced_docs" => "240",
     "ffi" => "42",
     "fsm_pipeline" => :compile_only,
     "hello" => "42",
     "holes_demo" => "0",
+    "json_derive" => ~s("{}"),
+    "json_tree" => "48",
+    "lambda_block" => "54",
+    "lazy_iter" => "55",
     "length_indexed" => "{:succ_len, {:succ_len, :zero_len}}",
+    "let_destructuring" => "22",
     "list_basics" => "15",
     "match_showcase" => "200",
     "math" => :compile_only,
     "multi_head_cons" => "6",
+    "multi_line_adt" => :compile_only,
     "mutual_recursion" => "1",
     "pattern_guards" => "0",
+    "proof_laws" => :compile_only,
     "property_test" => ":ok",
     "protocols" => "0",
     "records" => "2",
@@ -78,6 +81,8 @@ defmodule Mix.Tasks.Cure.Check.Examples do
     "result_handling" => "0",
     "sigma_pairs" => :compile_only,
     "sigma_vector" => "5",
+    "specialise" => "49",
+    "test_showcase" => ":ok",
     "totality" => "120",
     "totality_enforcement" => "142",
     "traffic_light" => :compile_only
@@ -95,6 +100,7 @@ defmodule Mix.Tasks.Cure.Check.Examples do
     preload_stdlib()
 
     files = Path.wildcard(Path.join(@examples_dir, "*.cure")) |> Enum.sort()
+    validate_manifest!(files)
 
     results = Enum.map(files, &run_one/1)
 
@@ -117,10 +123,14 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   defp run_one(path) do
     name = Path.basename(path, ".cure")
 
-    if name in @known_dependent_gaps do
-      IO.puts("  skip #{pad(name)} (dependent parity gap)")
+    if gap = Map.get(@gap_manifest, name) do
+      IO.puts("  skip #{pad(name)} (#{gap.category}, first fails at #{gap.stage}: #{gap.reason})")
+
       {:skip, name}
     else
+      # Temporary directories used by the task's diagnostic tests deliberately
+      # contain synthetic fixtures. The real repository is made exhaustive by
+      # `validate_manifest!/1`; outside it, an unknown fixture is compile-only.
       expected = Map.get(@expected, name, :compile_only)
 
       case {expected, main_fn?(path)} do
@@ -217,6 +227,31 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   end
 
   defp pad(name), do: String.pad_trailing(name, 26)
+
+  defp validate_manifest!(files) do
+    if File.exists?("mix.exs") do
+      discovered = MapSet.new(files, &Path.basename(&1, ".cure"))
+      declared = MapSet.new(Map.keys(@expected))
+      new = MapSet.difference(discovered, declared)
+      stale = MapSet.difference(declared, discovered)
+
+      if MapSet.size(new) > 0 or MapSet.size(stale) > 0 do
+        details =
+          [
+            if(MapSet.size(new) > 0, do: "unlisted: #{Enum.join(Enum.sort(new), ", ")}"),
+            if(MapSet.size(stale) > 0, do: "stale: #{Enum.join(Enum.sort(stale), ", ")}")
+          ]
+          |> Enum.reject(&is_nil/1)
+          |> Enum.join("; ")
+
+        usage_error("Example manifest mismatch (#{details})")
+      else
+        :ok
+      end
+    else
+      :ok
+    end
+  end
 
   defp emit_host_diagnostic(reason, path, source) do
     {diagnostic, registry} = Host.to_diagnostic(reason, path, source)

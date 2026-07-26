@@ -34,6 +34,23 @@ defmodule Cure.Elab.LiteralPatternTest do
     assert apply(mod, :c, []) == {:S, {:S, :Z}}
   end
 
+  test "negative integer literals stay in the primitive pattern chain" do
+    src =
+      @nat <>
+        "  fn classify(n: Int) -> Nat = match n\n" <>
+        "    0 -> Z()\n" <>
+        "    -1 -> S(Z())\n" <>
+        "    _ -> Z()\n" <>
+        "  fn yes() -> Nat = classify(-1)\n" <>
+        "  fn no() -> Nat = classify(1)\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.LitNegative", functions: [:classify, :yes, :no])
+
+    assert apply(mod, :yes, []) == {:S, :Z}
+    assert apply(mod, :no, []) == :Z
+  end
+
   test "boolean literal pattern (exhaustive, no catch-all) runs on the BEAM" do
     src =
       @nat <>
@@ -45,6 +62,43 @@ defmodule Cure.Elab.LiteralPatternTest do
 
     assert apply(mod, :t, []) == {:S, :Z}
     assert apply(mod, :f, []) == :Z
+  end
+
+  test "atom literal patterns dispatch through structural equality" do
+    src =
+      @nat <>
+        "  fn classify(a: Atom) -> Nat = match a\n" <>
+        "    :ok -> S(Z())\n" <>
+        "    _ -> Z()\n" <>
+        "  fn yes() -> Nat = classify(:ok)\n" <>
+        "  fn no() -> Nat = classify(:error)\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.LitAtom", functions: [:classify, :yes, :no])
+
+    assert apply(mod, :yes, []) == {:S, :Z}
+    assert apply(mod, :no, []) == :Z
+  end
+
+  test "string literal patterns reuse nested list-pattern lowering" do
+    src =
+      @nat <>
+        "  fn classify(s: String) -> Nat = match s\n" <>
+        "    \"ok\" -> S(Z())\n" <>
+        "    _ -> Z()\n" <>
+        "  fn yes() -> Nat = classify(\"ok\")\n" <>
+        "  fn no() -> Nat = classify(\"error\")\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+
+    {:ok, mod} =
+      Emit.compile_and_load(env,
+        module: :"Cure.LitString",
+        functions: [:classify, :yes, :no]
+      )
+
+    assert apply(mod, :yes, []) == {:S, :Z}
+    assert apply(mod, :no, []) == :Z
   end
 
   test "a named catch-all binds the scrutinee" do
