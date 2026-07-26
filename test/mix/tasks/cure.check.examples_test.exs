@@ -76,4 +76,20 @@ defmodule Mix.Tasks.Cure.Check.ExamplesTest do
     assert stderr =~ "INVALID COMMAND USAGE [E099]"
     assert stderr =~ "Usage: mix cure.check.examples"
   end
+
+  test "a classified language gap that now passes fails as stale", %{dir: dir} do
+    File.write!(
+      Path.join(dir, "examples/derived_show.cure"),
+      "mod DerivedShow\n  fn main() -> Int = 1\nend\n"
+    )
+
+    Mix.Task.reenable("cure.check.examples")
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        assert catch_exit(Mix.Task.run("cure.check.examples", [])) == {:shutdown, 1}
+      end)
+
+    assert output =~ "stale gap manifest entry (now passes)"
+  end
 end

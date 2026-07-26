@@ -124,9 +124,13 @@ defmodule Mix.Tasks.Cure.Check.Examples do
     name = Path.basename(path, ".cure")
 
     if gap = Map.get(@gap_manifest, name) do
-      IO.puts("  skip #{pad(name)} (#{gap.category}, first fails at #{gap.stage}: #{gap.reason})")
-
-      {:skip, name}
+      if gap.category != :optimizer and gap_now_passes?(name, path) do
+        IO.puts("  FAIL #{pad(name)} stale gap manifest entry (now passes)")
+        {:fail, name}
+      else
+        IO.puts("  skip #{pad(name)} (#{gap.category}, first fails at #{gap.stage}: #{gap.reason})")
+        {:skip, name}
+      end
     else
       # Temporary directories used by the task's diagnostic tests deliberately
       # contain synthetic fixtures. The real repository is made exhaustive by
@@ -227,6 +231,23 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   end
 
   defp pad(name), do: String.pad_trailing(name, 26)
+
+  defp gap_now_passes?(name, path) do
+    expected = Map.fetch!(@expected, name)
+
+    with {:ok, source} <- normalized_source(path),
+         {:ok, module} <- Cure.Compiler.compile_and_load(source, file: path, emit_events: false) do
+      case {expected, main_fn?(path)} do
+        {:compile_only, _} -> true
+        {_, false} -> true
+        {value, true} when is_binary(value) -> inspect(module.main()) == value
+      end
+    else
+      _ -> false
+    end
+  catch
+    _, _ -> false
+  end
 
   defp validate_manifest!(files) do
     if File.exists?("mix.exs") do
