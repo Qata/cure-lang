@@ -14,7 +14,7 @@ defmodule Cure.Elab.SurfaceStructureDiagnosticTest do
              -- BINARY SEGMENT FORM IS NOT SUPPORTED [E093] ------------- binary_segment.cure
 
              Binary construction and matching currently support ordinary 8-bit byte
-             expressions, plus a final variable `rest/binary` tail in patterns. This sized,
+             expressions, plus a final variable `rest::binary` tail in patterns. This sized,
              typed, or otherwise structured segment cannot be lowered faithfully.
 
              at binary_segment.cure:3:33

@@ -414,7 +414,7 @@ defmodule Cure.Diagnostic.Adapter.Syntax do
   defp surface_structure_content(:unsupported_binary_segment) do
     {
       "Binary segment form is not supported",
-      "Binary construction and matching currently support ordinary 8-bit byte expressions, plus a final variable `rest/binary` tail in patterns. This sized, typed, or otherwise structured segment cannot be lowered faithfully.",
+      "Binary construction and matching currently support ordinary 8-bit byte expressions, plus a final variable `rest::binary` tail in patterns. This sized, typed, or otherwise structured segment cannot be lowered faithfully.",
       "this binary segment cannot be lowered",
       "Use plain byte segments, or move rich bit-syntax encoding and decoding behind an explicit binary helper"
     }

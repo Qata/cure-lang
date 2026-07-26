@@ -81,7 +81,7 @@ defmodule Cure.DiagnosticExerciserTest do
        "mod DiagnosticCoverage\n  type Choice = First | Second\n  fn choose(value: Choice) -> Choice = match value\n    First() -> First()\nend\n",
        :pattern_coverage},
       {"pattern structure", "E119",
-       "mod DiagnosticPatternStructure\n  use Std.Binary\n  fn first(value: Binary) -> Int = match value\n    <<byte, _rest/binary>> -> byte\nend\n",
+       "mod DiagnosticPatternStructure\n  use Std.Binary\n  fn first(value: Binary) -> Int = match value\n    <<byte, _rest::binary>> -> byte\nend\n",
        :pattern_structure},
       {"primitive declaration", "E120", "mod DiagnosticPrimitive\n  @builtin(:sparkle) primitive Sparkle\nend\n",
        :primitive_declaration},

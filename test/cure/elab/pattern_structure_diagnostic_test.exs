@@ -123,12 +123,12 @@ defmodule Cure.Elab.PatternStructureDiagnosticTest do
 
   test "an open binary match points after its last branch" do
     src =
-      "mod M\n  use Std.Binary\n  fn f(b: Binary) -> Int = match b\n    <<a, _rest/binary>> -> a\nend\n"
+      "mod M\n  use Std.Binary\n  fn f(b: Binary) -> Int = match b\n    <<a, _rest::binary>> -> a\nend\n"
 
     {diagnostic, registry} = diagnostic(src, "binary_default.cure", :binary_match_needs_default)
 
     assert diagnostic.code == "E119"
-    assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {4, 29}
+    assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {4, 30}
 
     assert Renderer.plain(diagnostic, registry, width: 80) ==
              String.trim_trailing("""
@@ -137,14 +137,14 @@ defmodule Cure.Elab.PatternStructureDiagnosticTest do
              Binary patterns only cover the byte and segment shapes written in their
              branches; other binary values can still arrive.
 
-             at binary_default.cure:4:29
-             4 |     <<a, _rest/binary>> -> a
-               |                             ^ add a catch-all branch here
+             at binary_default.cure:4:30
+             4 |     <<a, _rest::binary>> -> a
+               |                              ^ add a catch-all branch here
 
              Hint: Add `_ -> ...` to handle every remaining binary value
              """)
 
-    assert Renderer.lsp(diagnostic, registry)["range"] == range(3, 28, 28)
+    assert Renderer.lsp(diagnostic, registry)["range"] == range(3, 29, 29)
   end
 
   defp diagnostic(src, file, kind) do

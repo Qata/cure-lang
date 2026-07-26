@@ -104,7 +104,7 @@ These are conjoined with the user-written `when` clause via
   `match` or the helpers in `Std.Match`.
 - Range patterns (`1..10 -> ...`). Compile-time rejected.
 - Bitstring patterns with complex segment specifiers (`x:8/integer,
-  rest/binary`). The parser accepts `<<...>>` literals; the
+  rest::binary`). The parser accepts `<<...>>` literals; the
   pattern compiler only handles integer segments and bare variable
   tails today. Full segment specifiers land in v0.19.0.
 

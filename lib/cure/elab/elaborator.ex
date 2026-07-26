@@ -10083,7 +10083,7 @@ defmodule Cure.Elab.Elaborator do
   # Byte-binary patterns, the destructuring twin of `desugar_map_arms`. A match
   # whose arms are `<<…>>` patterns desugars to `byte_size`-guarded conditionals
   # over `Std.Binary`: the length guard (`==` for a fixed pattern, `>=` when a
-  # `rest/binary` tail is present) gates the byte reads, then literal byte
+  # `rest::binary` tail is present) gates the byte reads, then literal byte
   # positions add `byte_at(b, i) == lit` guards and variable positions bind
   # `byte_at(b, i)` / `drop_bytes(b, k)`. Open-ended, so a trailing default arm is
   # required. Sized/typed segments (`x/float`) are rejected, not mislowered.
@@ -10123,7 +10123,7 @@ defmodule Cure.Elab.Elaborator do
 
   # Split a byte pattern's segments into (a) the length guard, (b) literal-byte
   # equality guards, and (c) the variable/tail `let` bindings. The optional
-  # `rest/binary` tail must come last; any other typed segment is rejected.
+  # `rest::binary` tail must come last; any other typed segment is rejected.
   defp binary_arm_guard_binds(scrut, segs, line) do
     {fixed, tail} = split_binary_tail(segs)
 
@@ -10139,12 +10139,15 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # The last segment is a tail iff it is a `_v/binary` (division-marker) segment.
+  # The last segment is a tail iff it is an unsized binary-family segment.
+  # `::binary` is the sole public spelling; the former `/binary` experiment was
+  # never released and deliberately remains an unsupported binary expression.
   defp split_binary_tail(segs) do
     case List.last(segs) do
-      {:bin_segment, _sm, [{:binary_op, opm, [v, {:variable, _tm, "binary"}]}]} = seg ->
-        if Keyword.get(opm, :operator) == :/ do
-          {segs |> Enum.reverse() |> tl() |> Enum.reverse(), {:tail, v, seg}}
+      {:bin_segment, meta, [v]} = seg ->
+        if Keyword.get(meta, :type) in [:binary, :bytes, :bitstring, :bits] and
+             is_nil(Keyword.get(meta, :size)) do
+          {Enum.drop(segs, -1), {:tail, v, seg}}
         else
           {segs, :none}
         end
@@ -10199,7 +10202,7 @@ defmodule Cure.Elab.Elaborator do
 
   # `<<b1, b2, …>>` → `Std.Binary.of_bytes([b1, b2, …])`: a byte binary literal is
   # a list of byte values packed into a BEAM binary. Only default 8-bit-integer
-  # segments are supported here; a `/type` segment (`x/float`, `x/binary`) is a
+  # segments are supported here; a typed segment (`x::float`, `x::binary`) is a
   # deferred rich-bit-syntax case and is rejected rather than mislowered. The
   # module must `use Std.Binary`.
   # `"a#{e}b"` → `str_concat("a", str_concat(e, "b"))`: a right fold over the
@@ -10253,7 +10256,7 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # A `/type` segment parses as a division `value / type_name` (`<<x/float>>`,
-  # `<<rest/binary>>`); the sole surface marker for a non-default segment.
+  # `<<rest::binary>>`); the sole surface marker for a non-default segment.
   defp typed_segment?({:binary_op, meta, [_v, {:variable, _vm, _type}]}),
     do: Keyword.get(meta, :operator) == :/
 

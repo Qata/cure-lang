@@ -45,7 +45,7 @@ mod LetDestructuring
   ## Binary destructure reads the first byte and handles the empty case.
   fn first_byte(buf: Binary) -> Int =
     match buf
-      <<b, _rest/binary>> -> b
+      <<b, _rest::binary>> -> b
       _ -> 0
 
   fn main() -> Int =
