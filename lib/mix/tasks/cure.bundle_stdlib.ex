@@ -39,9 +39,10 @@ defmodule Mix.Tasks.Cure.BundleStdlib do
     if File.dir?(source_dir) do
       File.mkdir_p!(dest_dir)
 
-      source_dir
-      |> Path.join("*.cure")
-      |> Path.wildcard()
+      sources = source_dir |> Path.join("*.cure") |> Path.wildcard()
+      prune_removed_sources(sources, dest_dir)
+
+      sources
       |> Enum.reduce({:ok, %{copied: 0, skipped: 0}}, fn src, {:ok, counts} ->
         dst = Path.join(dest_dir, Path.basename(src))
 
@@ -55,6 +56,16 @@ defmodule Mix.Tasks.Cure.BundleStdlib do
     else
       {:ok, %{copied: 0, skipped: 0}}
     end
+  end
+
+  defp prune_removed_sources(sources, dest_dir) do
+    current = sources |> Enum.map(&Path.basename/1) |> MapSet.new()
+
+    dest_dir
+    |> Path.join("*.cure")
+    |> Path.wildcard()
+    |> Enum.reject(&MapSet.member?(current, Path.basename(&1)))
+    |> Enum.each(&File.rm!/1)
   end
 
   @doc false

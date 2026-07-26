@@ -31,7 +31,7 @@ Verified against the Idris oracle (`~/Develop/Idris2`), which rejects it:
 | `let x = consume(c) in x` (×1) | accept | accept | accept |
 
 Oracle cluster `test/oracle/let_linear/` pins all four (`rel=same`), and
-`test/oracle/otp/ob1_neg_launder_cap` pins the capability version.
+`metatheory/otp/oracle/otp/ob1_neg_launder_cap` pins the capability version.
 
 ## The fix (relevance.ex, `:let` `:not_join`)
 

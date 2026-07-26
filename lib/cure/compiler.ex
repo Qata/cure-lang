@@ -42,10 +42,25 @@ defmodule Cure.Compiler do
   @spec compile_file(String.t(), keyword()) ::
           {:ok, module(), list()} | {:error, term()}
   def compile_file(path, opts \\ []) do
+    case compile_file_with_artifact(path, opts) do
+      {:ok, module, warnings, _artifact} -> {:ok, module, warnings}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc """
+  Compile a file and return the checked module artifact consumed by codegen.
+
+  Incremental compilation uses this entry point so interface hashing reuses the
+  exact certified environment that produced the BEAM artifact.
+  """
+  @spec compile_file_with_artifact(String.t(), keyword()) ::
+          {:ok, module(), list(), Cure.Elab.CheckedModule.t() | nil} | {:error, term()}
+  def compile_file_with_artifact(path, opts \\ []) do
     case File.read(path) do
       {:ok, source} ->
         opts = Keyword.put_new(opts, :file, path)
-        compile_string(source, opts)
+        compile_string_with_artifact(source, opts)
 
       {:error, reason} ->
         {:error, {:file_read_error, path, reason}}
@@ -82,6 +97,18 @@ defmodule Cure.Compiler do
   @spec compile_string(String.t(), keyword()) ::
           {:ok, module(), list()} | {:error, term()}
   def compile_string(source, opts \\ []) do
+    case compile_string_with_artifact(source, opts) do
+      {:ok, module, warnings, _artifact} -> {:ok, module, warnings}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc """
+  Compile source and retain the checked module artifact used for emission.
+  """
+  @spec compile_string_with_artifact(String.t(), keyword()) ::
+          {:ok, module(), list(), Cure.Elab.CheckedModule.t() | nil} | {:error, term()}
+  def compile_string_with_artifact(source, opts \\ []) do
     file = Keyword.get(opts, :file, "nofile")
     output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
     emit? = Keyword.get(opts, :emit_events, true)
@@ -95,8 +122,12 @@ defmodule Cure.Compiler do
            {:ok, ast} <- migrate_warn(ast, file),
            ast = inject_prelude_uses(ast, prelude_providers),
            {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
-           {:ok, units, cg_warnings} <- codegen(ast, file, emit?, output_dir, declared_phases) do
-        write_beam_units(units, output_dir, emit?, file, cg_warnings)
+           {:ok, units, cg_warnings, artifact} <-
+             codegen(ast, source, file, emit?, output_dir, declared_phases),
+           {:ok, module, warnings} <-
+             write_beam_units(units, output_dir, emit?, file, cg_warnings) do
+        if artifact, do: Cure.Elab.Program.publish_checked_interface(artifact)
+        {:ok, module, warnings, artifact}
       end
     end)
   end
@@ -115,7 +146,7 @@ defmodule Cure.Compiler do
   Bulk drivers share this entry point so parser scope and compile order cannot
   disagree about user `@prelude` modules.
   """
-  @spec prepare_files([Path.t()]) ::
+  @spec prepare_files([Path.t()], keyword()) ::
           {:ok,
            %{
              ordered: [Path.t()],
@@ -124,8 +155,12 @@ defmodule Cure.Compiler do
              module_index: Cure.Compiler.ModuleIndex.t()
            }}
           | {:error, term()}
-  def prepare_files(files) when is_list(files) do
-    with {:ok, graph} <- Cure.Compiler.DepGraph.scan(files, validate_dependencies: true),
+  def prepare_files(files, opts \\ []) when is_list(files) do
+    with {:ok, graph} <-
+           Cure.Compiler.DepGraph.scan(files,
+             validate_dependencies: true,
+             known_modules: Keyword.get(opts, :known_modules, [])
+           ),
          {:ok, ordered, cycles} <- Cure.Compiler.DepGraph.order(graph) do
       {:ok,
        %{
@@ -368,7 +403,8 @@ defmodule Cure.Compiler do
            {:ok, ast} <- parse(tokens, file, emit?, edition, prelude_providers),
            ast = inject_prelude_uses(ast, prelude_providers),
            {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
-           {:ok, units, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases) do
+           {:ok, units, _cg_warnings, _artifact} <-
+             codegen(ast, source, file, emit?, nil, declared_phases) do
         # compile_and_load/2 intentionally does NOT persist bytecode to
         # disk -- it only loads into the current VM.
         compile_and_load_units(units, file)
@@ -544,34 +580,34 @@ defmodule Cure.Compiler do
     end
   end
 
-  defp codegen(ast, _file, _emit?, _output_dir, _declared_phases) do
+  defp codegen(ast, source, file, _emit?, _output_dir, _declared_phases) do
     case Cure.Compiler.LiftModule.collect(ast) do
       {:ok, lifted_requests} ->
-        codegen_modules(ast, Cure.Compiler.LiftModule.strip(ast), lifted_requests)
+        codegen_modules(ast, Cure.Compiler.LiftModule.strip(ast), lifted_requests, source, file)
 
       {:error, reason} ->
         {:error, {:codegen_error, reason}}
     end
   end
 
-  defp codegen_modules(original_ast, main_ast, lifted_requests) do
+  defp codegen_modules(original_ast, main_ast, lifted_requests, source, file) do
     if match?({:lift_module, _, _}, main_ast) do
       case emit_lifted_modules(lifted_requests) do
-        {:ok, lifted_units} -> {:ok, lifted_units, []}
+        {:ok, lifted_units} -> {:ok, lifted_units, [], nil}
         {:error, _} = error -> error
       end
     else
-      codegen_modules_with_main(original_ast, main_ast, lifted_requests)
+      codegen_modules_with_main(original_ast, main_ast, lifted_requests, source, file)
     end
   end
 
-  defp codegen_modules_with_main(original_ast, main_ast, lifted_requests) do
+  defp codegen_modules_with_main(original_ast, main_ast, lifted_requests, source, file) do
     # Single pipeline: every module is elaborated, checked, erased, and emitted
     # through the dependent Core.
     result =
       with :ok <- Cure.Elab.Program.validate_stdlib_imports(main_ast) do
-        case dependent_codegen(main_ast) do
-          {:ok, forms} -> {:ok, forms, []}
+        case dependent_codegen(main_ast, source, file) do
+          {:ok, forms, artifact} -> {:ok, forms, [], artifact}
           {:error, {:codegen_error, {:expansion_ill_typed, _} = reason}} -> {:error, reason}
           {:error, _} = err -> err
         end
@@ -582,10 +618,10 @@ defmodule Cure.Compiler do
     # Inject the module's `@group(:g)` decorator as a BEAM `-group([:g]).`
     # attribute after the ordinary dependent pipeline has produced forms.
     case result do
-      {:ok, forms, warnings} when is_list(forms) ->
+      {:ok, forms, warnings, artifact} when is_list(forms) ->
         with {:ok, lifted_units} <- emit_lifted_modules(lifted_requests) do
           main_forms = inject_group_attribute(forms, original_ast)
-          {:ok, [{forms_module(main_forms), main_forms} | lifted_units], warnings}
+          {:ok, [{forms_module(main_forms), main_forms} | lifted_units], warnings, artifact}
         end
 
       other ->
@@ -657,15 +693,20 @@ defmodule Cure.Compiler do
 
   # A dependent module is lowered by the kernel: elaborate to `Cure.Core`, erase
   # its {0,ω} index arguments, and emit the erased residue as real BEAM forms.
-  defp dependent_codegen(ast) do
-    with {:ok, env, local_defs} <- Cure.Elab.Program.check_ast_with_locals(ast),
+  defp dependent_codegen(ast, source, file) do
+    with {:ok, artifact} <-
+           Cure.Elab.Program.check_ast_artifact(ast,
+             source: source,
+             file: file,
+             prelude_mode: :bootstrap_safe
+           ),
          {:ok, forms} <-
            Cure.Elab.Emit.compile_forms(
-             env,
-             Cure.Elab.Program.module_atom(ast),
-             local_defs
+             artifact.env,
+             artifact.module,
+             artifact.local_defs
            ) do
-      {:ok, forms}
+      {:ok, forms, artifact}
     else
       {:error, {:source_context, {:expansion_ill_typed, _details}, _context} = reason} ->
         {:error, reason}

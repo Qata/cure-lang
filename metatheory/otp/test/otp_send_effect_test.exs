@@ -11,7 +11,7 @@ defmodule Cure.Stdlib.OtpSendEffectTest do
 
   alias Cure.Elab.Program
 
-  # The self-contained effect-honest calculus (mirrors lib/std/otp_send_effect.cure).
+  # The self-contained effect-honest calculus (mirrors metatheory/otp/src/otp_send_effect.cure).
   @calculus """
     type Reply0 = R0
     type Msg = Inc | Dec | Query(Reply0)

@@ -273,6 +273,7 @@ defmodule Cure.Elab.Emit do
     Process.put(:cure_emit_origins, origins)
     Process.put(:cure_emit_prefix, prefix)
     Process.put(:cure_emit_local_owners, local_owners)
+    Process.put(:cure_emit_fresh_counter, 0)
 
     aliases =
       Enum.flat_map(names, fn name ->
@@ -303,6 +304,7 @@ defmodule Cure.Elab.Emit do
       Process.delete(:cure_emit_prefix)
       Process.delete(:cure_emit_local_owners)
       Process.delete(:cure_emit_aliases)
+      Process.delete(:cure_emit_fresh_counter)
     end
   end
 
@@ -855,6 +857,11 @@ defmodule Cure.Elab.Emit do
     end
   end
 
+  # `Effect(T)` is direct-style, so the unsafe `run` boundary has no runtime
+  # representation. The erased type argument is already absent here.
+  defp lower_builtin_op(:effect_run, [value], env, ctx), do: lower(env, value, ctx)
+  defp lower_builtin_op(:effect_run, args, env, ctx), do: curry_apply(builtin_op_wrapper(:effect_run), args, env, ctx)
+
   defp lower_builtin_op(op, args, env, ctx) do
     case args do
       [a, b] -> {:op, @line, erl_binop(op), lower(env, a, ctx), lower(env, b, ctx)}
@@ -881,6 +888,9 @@ defmodule Cure.Elab.Emit do
 
   defp builtin_op_wrapper(:bnot),
     do: fun1(:BopA, {:op, @line, :bnot, {:var, @line, :BopA}})
+
+  defp builtin_op_wrapper(:effect_run),
+    do: fun1(:BopA, {:var, @line, :BopA})
 
   defp builtin_op_wrapper(op) do
     body = {:op, @line, erl_binop(op), {:var, @line, :BopL}, {:var, @line, :BopR}}
@@ -1203,8 +1213,8 @@ defmodule Cure.Elab.Emit do
     {:clause, @line, [pattern], [], [body_form]}
   end
 
-  # A synthetic BEAM variable name, unique across the *entire* compilation run
-  # (not just within one lexical nesting chain). Binder names used to be derived
+  # A synthetic BEAM variable name, unique across one emitted module (not just
+  # within one lexical nesting chain). Binder names used to be derived
   # from `length(ctx)` (de-Bruijn context depth): sound along a single ancestor
   # chain, but two SIBLING subterms lowered from the same `ctx` (e.g. independent
   # arguments to a ctor/call, or independent elements of a list literal) could
@@ -1214,23 +1224,28 @@ defmodule Cure.Elab.Emit do
   # name) or — worse — silently REBIND: a nested case whose fresh field name
   # happens to equal an already-bound ancestor variable stops introducing a new
   # binding and instead matches against the ancestor's *value*, corrupting the
-  # program. `System.unique_integer/1` sidesteps both: every call reserves one
-  # globally-fresh id, so no two synthetic binders can ever collide, siblings or
-  # not. (Each field of a multi-field clause must call this once per field —
+  # program. A module-scoped monotonic counter sidesteps both: every call reserves
+  # one fresh id, so no two synthetic binders in the module can ever collide,
+  # siblings or not. Resetting it at `module_forms/5` also makes BEAM output
+  # independent of what compiled earlier in the VM. (Each field of a multi-field
+  # clause must call this once per field —
   # never derive further names by adding an offset to one reserved id, since
   # that reintroduces the exact same collision class against other reserved ids.)
   #
   # The `_` between prefix and id is load-bearing, not decoration. Positional
   # parameter binders use a SEPARATE scheme — `V<pos>` / `_e<pos>` (see
   # `peel_params/4`, ~line 455), where `<pos>` is a small de Bruijn index — and
-  # are NOT minted here. `System.unique_integer/1` is only unique among ITS OWN
-  # ids; it can (and early in the VM's life does) return a small value like `1`,
-  # so a bare `:"V#{1}"` would alias the parameter `V1`. In Erlang an already-bound
+  # are NOT minted here. The counter can return a small value like `1`, so a bare
+  # `:"V#{1}"` would alias the parameter `V1`. In Erlang an already-bound
   # `V1` in `[V1|V2]` is an equality match, not a fresh bind, corrupting the clause
   # (a non-deterministic `CaseClauseError`). The separator makes the fresh
   # namespace `<prefix>_<digits>` provably disjoint from the positional
   # `<prefix><digits>` shape — no fresh binder can ever spell a positional name.
-  defp fresh_var(prefix), do: :"#{prefix}_#{System.unique_integer([:positive, :monotonic])}"
+  defp fresh_var(prefix) do
+    id = Process.get(:cure_emit_fresh_counter, 0) + 1
+    Process.put(:cure_emit_fresh_counter, id)
+    :"#{prefix}_#{id}"
+  end
 
   # `erl_lint` flags a bound-but-unused variable (`unused_var`). An erased proof
   # discards its parameters — an equality proof erases to the runtime-irrelevant

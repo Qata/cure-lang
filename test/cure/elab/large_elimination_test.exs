@@ -122,7 +122,7 @@ defmodule Cure.Elab.LargeEliminationTest do
     assert {:ok, _env} = Program.elaborate(src)
   end
 
-  test "a dependent match expands a wildcard across uncovered constructors" do
+  test "a dependent match accepts explicit branches for every constructor" do
     src = """
     mod LEDependentDefault
       type Kind = Number | Truth
@@ -133,7 +133,7 @@ defmodule Cure.Elab.LargeEliminationTest do
 
       fn keep(kind: Kind, value: Selected(kind)) -> Selected(kind) = match kind
         Number -> value
-        _ -> value
+        Truth -> value
     end
     """
 

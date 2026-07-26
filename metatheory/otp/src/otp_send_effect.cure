@@ -17,7 +17,7 @@ mod Std.Otp.SendEffect
   ## `msg : Msg`. Send-safety is an invariant of the send, not of purity.
   ##
   ## Soundness evidence (rejection of violations) is in the differential oracle
-  ## `test/oracle/otp/`, mirrored in Idris 2 with a user-defined effect monad `Eff`
+  ## `metatheory/otp/oracle/otp/`, mirrored in Idris 2 with a user-defined effect monad `Eff`
   ## (the faithful analog of Cure's inert `Effect` former):
   ##   * `ob2_eff_send_safe`     accept/accept — the effect-threaded client below
   ##   * `ob2_eff_neg_wrong_msg` reject/reject — a message NOT of the actor's type,

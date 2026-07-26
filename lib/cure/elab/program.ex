@@ -10,7 +10,7 @@ defmodule Cure.Elab.Program do
   alias Cure.Compiler.{Lexer, MacroFamily, MacroSyntax, MacroValidate, ModuleIndex, ModuleInterface, Parser}
   alias Cure.Compiler.Parser.FixityScan
   alias Cure.Core.{Env, Inductive, Validator}
-  alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, TotalityClosure}
+  alias Cure.Elab.{CheckedModule, Coherence, Declarations, Erase, MacroExpand, TotalityClosure}
   alias Cure.Stdlib.Paths
 
   @loader_state_key {__MODULE__, :module_loader_state}
@@ -105,10 +105,58 @@ defmodule Cure.Elab.Program do
   end
 
   @spec check_ast(tuple() | list(), keyword()) :: {:ok, Env.t()} | {:error, term()}
-  def check_ast(ast, _opts) do
+  def check_ast(ast, opts) do
+    with {:ok, %CheckedModule{env: env}} <- check_ast_artifact(ast, opts), do: {:ok, env}
+  end
+
+  @doc """
+  Elaborate and certify `ast` once, returning every semantic projection needed
+  by later compiler stages.
+
+  When both `:source` and `:file` are supplied, the artifact includes the
+  canonical `ModuleInterface` built from the same certified environment while
+  the same loader generation is still live. This is the entry point for real
+  compilation. AST-only callers still receive a reusable checked artifact, but
+  its `interface` and source identity fields are `nil`.
+  """
+  @spec check_ast_artifact(tuple() | list(), keyword()) ::
+          {:ok, CheckedModule.t()} | {:error, term()}
+  def check_ast_artifact(ast, opts \\ []) when is_list(opts) do
     with_loader_session(fn ->
-      with :ok <- check_declarations(ast) do
-        check_ast_elixir_core_in_session(ast)
+      source = Keyword.get(opts, :source)
+      file = Keyword.get(opts, :file)
+      module_name = Keyword.get(opts, :module_name, find_module_name(ast) || "Main")
+
+      with :ok <-
+             validate_artifact_identity(
+               ast,
+               module_name,
+               file,
+               source,
+               Keyword.get(opts, :require_module_identity, false)
+             ),
+           :ok <- check_declarations(ast),
+           {:ok, env} <-
+             check_ast_elixir_core_in_session(
+               ast,
+               source_context_opts(source, file),
+               Keyword.get(opts, :prelude_mode, :ordinary)
+             ),
+           local_defs = checked_local_defs(ast, env),
+           {:ok, interface} <- checked_module_interface(ast, env, module_name, file, source) do
+        emit_elaboration_event({:checked, Keyword.get(opts, :purpose, :entry), module_name, file})
+
+        {:ok,
+         %CheckedModule{
+           ast: ast,
+           env: env,
+           interface: interface,
+           module: module_atom(ast),
+           module_name: module_name,
+           source_hash: source_hash(source),
+           source_path: expanded_source_path(file, source),
+           local_defs: local_defs
+         }}
       end
     end)
   end
@@ -687,20 +735,24 @@ defmodule Cure.Elab.Program do
   @doc false
   @spec check_ast_elixir_core(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast_elixir_core(ast),
-    do: with_loader_session(fn -> check_ast_elixir_core_in_session(ast) end)
+    do: with_loader_session(fn -> check_ast_elixir_core_in_session(ast, [], :ordinary) end)
 
-  defp check_ast_elixir_core_in_session(ast) do
+  defp check_ast_elixir_core_in_session(ast, source_opts, prelude_mode) do
     with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
          {:ok, qualified} <- qualified_resolved_imports(ast),
-         {:ok, prelude} <- prelude_slice_env(ast),
-         seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
+         {:ok, prelude} <- checked_prelude_env(ast, prelude_mode),
+         owner = find_module_name(ast) || "Main",
+         imported = without_incoming_owner(imported, owner),
+         qualified = without_incoming_owner(qualified, owner),
+         prelude = without_incoming_owner(prelude, owner),
+         seeded = Env.with_owner(seed_with_telescope_support(ast), owner),
          {:ok, base} <- merge_env(seeded, prelude),
          {:ok, opened} <- merge_env(base, imported),
          {:ok, merged} <- merge_env(opened, qualified),
          env0 = install_module_visibility(merged, ast),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          :ok <- MacroValidate.check_program(ast, env),
-         {:ok, certified} <- certify_type_level_with_source(ast, env),
+         {:ok, certified} <- certify_type_level_with_source(ast, env, source_opts),
          {:ok, certified} <- Cure.Elab.Equation.generate_all(certified, ast) do
       # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
       # defs so their intra-module uses keep inlining; any other module name
@@ -709,7 +761,31 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp certify_type_level_with_source(ast, env, opts \\ []) do
+  # A module cannot import its own prior interface through a transitive prelude
+  # edge. In a bulk build, for example, another ambient provider can carry
+  # `Std.Sigma` back into `Std.Sigma` even though direct self-injection is
+  # excluded. Its old equation index then makes `Equation.generate_all/2`
+  # believe the local equations already exist while local registration has
+  # replaced their generated theorem definitions. Start the module from a clean
+  # same-owner definition/equation namespace; dependencies owned by every other
+  # module remain available for conversion and checking.
+  defp without_incoming_owner(%Env{} = env, owner) when is_binary(owner) do
+    defs = reject_owned(env.defs, owner)
+    equations = reject_owned(env.equations, owner)
+
+    certified =
+      case env.certified do
+        %MapSet{} = names -> MapSet.filter(names, &(Cure.Elab.Name.owner(&1) != owner))
+        nil -> nil
+      end
+
+    %{env | defs: defs, equations: equations, certified: certified}
+  end
+
+  defp reject_owned(table, owner),
+    do: Map.reject(table, fn {key, _value} -> Cure.Elab.Name.owner(key) == owner end)
+
+  defp certify_type_level_with_source(ast, env, opts) do
     case TotalityClosure.certify_type_level_detailed(env) do
       {:ok, certified} ->
         {:ok, certified}
@@ -1411,53 +1487,57 @@ defmodule Cure.Elab.Program do
   """
   @spec check_ast_with_locals(tuple() | list()) :: {:ok, Env.t(), [atom()]} | {:error, term()}
   def check_ast_with_locals(ast) do
+    with {:ok, %CheckedModule{env: env, local_defs: local_defs}} <- check_ast_artifact(ast) do
+      {:ok, env, local_defs}
+    end
+  end
+
+  defp checked_local_defs(ast, env) do
     local_defs = local_emit_names(ast)
 
-    with {:ok, env} <- check_ast(ast) do
-      # `implementation` declarations synthesise mangled method globals that are
-      # not in the source AST; they are still this module's locals and must be
-      # emitted alongside the source-declared defs. But the coherence table also
-      # carries every AMBIENT instance a `@prelude` module makes visible — and
-      # `Std.Equatable`/`Std.Comparable` are whole-module `@prelude`, so their ~two
-      # dozen instances are ambient in EVERY module. Emitting all of them into
-      # every consumer bloats each beam with instance methods it never defines
-      # (costly on the AtomVM/ESP32 target) and needlessly duplicates code that
-      # already lives in the owning module's beam.
-      #
-      # Each mangled impl key is OWNER-QUALIFIED (`Std.Equatable#__impl_…`), so
-      # emit only the instances THIS module owns. A reference to a non-owned
-      # instance (a resolved `==`, a constructed dictionary) then falls through
-      # `Emit.remote_target/2`'s owner branch to a REMOTE call into the owner's
-      # module (`Cure.Std.Equatable`), where the instance is emitted exactly once.
-      # Unqualified synthesised globals (owner = nil) have no remote home, so this
-      # module must still host them.
-      self_owner = ast |> module_atom() |> Atom.to_string() |> String.replace_prefix("Cure.", "")
+    # `implementation` declarations synthesise mangled method globals that are
+    # not in the source AST; they are still this module's locals and must be
+    # emitted alongside the source-declared defs. But the coherence table also
+    # carries every AMBIENT instance a `@prelude` module makes visible — and
+    # `Std.Equatable`/`Std.Comparable` are whole-module `@prelude`, so their ~two
+    # dozen instances are ambient in EVERY module. Emitting all of them into
+    # every consumer bloats each beam with instance methods it never defines
+    # (costly on the AtomVM/ESP32 target) and needlessly duplicates code that
+    # already lives in the owning module's beam.
+    #
+    # Each mangled impl key is OWNER-QUALIFIED (`Std.Equatable#__impl_…`), so
+    # emit only the instances THIS module owns. A reference to a non-owned
+    # instance (a resolved `==`, a constructed dictionary) then falls through
+    # `Emit.remote_target/2`'s owner branch to a REMOTE call into the owner's
+    # module (`Cure.Std.Equatable`), where the instance is emitted exactly once.
+    # Unqualified synthesised globals (owner = nil) have no remote home, so this
+    # module must still host them.
+    self_owner = ast |> module_atom() |> Atom.to_string() |> String.replace_prefix("Cure.", "")
 
-      canonical_locals =
-        Enum.map(local_defs, fn name ->
-          if Cure.Elab.Name.qualified?(name),
-            do: name,
-            else: Cure.Elab.Name.qualify(self_owner, name)
-        end)
+    canonical_locals =
+      Enum.map(local_defs, fn name ->
+        if Cure.Elab.Name.qualified?(name),
+          do: name,
+          else: Cure.Elab.Name.qualify(self_owner, name)
+      end)
 
-      own_impls =
-        Enum.filter(impl_def_names(env), fn key ->
-          case Cure.Elab.Name.owner(key) do
-            nil -> true
-            ^self_owner -> true
-            _ambient -> false
-          end
-        end)
+    own_impls =
+      Enum.filter(impl_def_names(env), fn key ->
+        case Cure.Elab.Name.owner(key) do
+          nil -> true
+          ^self_owner -> true
+          _ambient -> false
+        end
+      end)
 
-      roots = Enum.uniq(canonical_locals ++ own_impls)
+    roots = Enum.uniq(canonical_locals ++ own_impls)
 
-      # Local `where` functions and other lifted runtime helpers are synthesized
-      # during elaboration and therefore do not appear in the authored AST scan.
-      # Derive the final emission set from canonical Core edges so those helpers
-      # are emitted regardless of declaration order. Qualified dependencies owned
-      # by another module stay remote and are not copied into this module.
-      {:ok, env, Enum.uniq(roots ++ reachable_def_names(env, roots))}
-    end
+    # Local `where` functions and other lifted runtime helpers are synthesized
+    # during elaboration and therefore do not appear in the authored AST scan.
+    # Derive the final emission set from canonical Core edges so those helpers
+    # are emitted regardless of declaration order. Qualified dependencies owned
+    # by another module stay remote and are not copied into this module.
+    Enum.uniq(roots ++ reachable_def_names(env, roots))
   end
 
   # The def keys codegen must emit, one per source `:function_def`. A member of a
@@ -2208,11 +2288,60 @@ defmodule Cure.Elab.Program do
     path = Path.expand(path)
     :persistent_term.erase({__MODULE__, :module_interface, path})
     :persistent_term.erase({__MODULE__, :macro_home_env, path})
-    :persistent_term.erase({__MODULE__, :macro_home_cache_fingerprint})
+    :persistent_term.erase(macro_home_cache_fingerprint_key())
     File.rm(module_interface_cache_path(path))
     File.rm(macro_home_cache_path(path))
     :ok
   end
+
+  @doc """
+  Publish the canonical interface carried by a successfully emitted checked
+  module.
+
+  Publication happens only after BEAM writing succeeds. Shipped stdlib
+  interfaces retain their source-hash-keyed process and disk caches; ordinary
+  user modules remain loader-generation scoped.
+  """
+  @spec publish_checked_interface(CheckedModule.t()) :: :ok
+  def publish_checked_interface(%CheckedModule{
+        interface: %ModuleInterface{} = interface,
+        source_path: path,
+        source_hash: source_hash
+      })
+      when is_binary(path) and is_binary(source_hash) do
+    :persistent_term.erase({__MODULE__, :macro_home_env, path})
+    File.rm(macro_home_cache_path(path))
+
+    if stdlib_source_path?(path) do
+      cache_key = {__MODULE__, :module_interface, path}
+
+      case :persistent_term.get(cache_key, :missing) do
+        {:cached, previous_hash, _result} when previous_hash != source_hash ->
+          :persistent_term.erase(macro_home_cache_fingerprint_key())
+
+        _unchanged_or_missing ->
+          :ok
+      end
+
+      result =
+        case read_module_interface_cache(path, interface.module_name, source_hash) do
+          {:ok, %ModuleInterface{interface_hash: hash}} = canonical
+          when hash == interface.interface_hash ->
+            canonical
+
+          _missing_or_semantically_changed ->
+            fresh = {:ok, interface}
+            write_module_interface_cache(path, interface.module_name, source_hash, fresh)
+            fresh
+        end
+
+      :persistent_term.put(cache_key, {:cached, source_hash, result})
+    end
+
+    :ok
+  end
+
+  def publish_checked_interface(%CheckedModule{}), do: :ok
 
   # Canonical module interfaces are immutable functions of the compiler and the
   # source closure. Persisting successful interfaces avoids rebuilding the whole
@@ -2222,7 +2351,7 @@ defmodule Cure.Elab.Program do
   defp read_module_interface_cache(path, module_name, source_hash) do
     with true <- not is_nil(source_hash),
          {:ok, binary} <- File.read(module_interface_cache_path(path)),
-         {:cure_module_interface, 1, fingerprint, expanded_path, ^module_name, ^source_hash,
+         {:cure_module_interface, 2, fingerprint, expanded_path, ^module_name, ^source_hash,
           {:ok, %ModuleInterface{} = interface} = result} <- :erlang.binary_to_term(binary),
          true <- fingerprint == macro_home_cache_fingerprint(),
          true <- expanded_path == Path.expand(path),
@@ -2247,7 +2376,7 @@ defmodule Cure.Elab.Program do
     temporary = destination <> ".#{System.unique_integer([:positive])}.tmp"
 
     payload =
-      {:cure_module_interface, 1, macro_home_cache_fingerprint(), Path.expand(path), module_name, source_hash, result}
+      {:cure_module_interface, 2, macro_home_cache_fingerprint(), Path.expand(path), module_name, source_hash, result}
       |> :erlang.term_to_binary(compressed: 6)
 
     with :ok <- File.mkdir_p(directory),
@@ -2281,7 +2410,7 @@ defmodule Cure.Elab.Program do
   # are stored; corrupt or stale files are ignored and replaced atomically.
   defp read_macro_home_cache(path) do
     with {:ok, binary} <- File.read(macro_home_cache_path(path)),
-         {:cure_macro_home, 1, fingerprint, expanded_path, {:ok, %Env{}} = result} <-
+         {:cure_macro_home, 2, fingerprint, expanded_path, {:ok, %Env{}} = result} <-
            :erlang.binary_to_term(binary),
          true <- fingerprint == macro_home_cache_fingerprint(),
          true <- expanded_path == Path.expand(path) do
@@ -2299,7 +2428,7 @@ defmodule Cure.Elab.Program do
     temporary = destination <> ".#{System.unique_integer([:positive])}.tmp"
 
     payload =
-      {:cure_macro_home, 1, macro_home_cache_fingerprint(), Path.expand(path), result}
+      {:cure_macro_home, 2, macro_home_cache_fingerprint(), Path.expand(path), result}
       |> :erlang.term_to_binary(compressed: 6)
 
     with :ok <- File.mkdir_p(directory),
@@ -2323,7 +2452,11 @@ defmodule Cure.Elab.Program do
   end
 
   defp macro_home_cache_fingerprint do
-    key = {__MODULE__, :macro_home_cache_fingerprint}
+    # Include the currently loaded Program BEAM identity in the process-cache
+    # key. Mix can reload this module in a long-lived VM; a single static key
+    # would otherwise keep the fingerprint computed by the previous compiler
+    # implementation and incorrectly bless artifacts written before the reload.
+    key = macro_home_cache_fingerprint_key()
 
     case :persistent_term.get(key, :missing) do
       :missing ->
@@ -2350,6 +2483,10 @@ defmodule Cure.Elab.Program do
       fingerprint ->
         fingerprint
     end
+  end
+
+  defp macro_home_cache_fingerprint_key do
+    {__MODULE__, :macro_home_cache_fingerprint, __MODULE__.module_info(:md5)}
   end
 
   defp cached_module_interface(module_name, path) do
@@ -2436,45 +2573,161 @@ defmodule Cure.Elab.Program do
     with {:ok, source} <- File.read(path),
          {:ok, tokens} <- Lexer.tokenize(source, file: path, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, file: path, emit_events: false),
-         :ok <- validate_module_identity(ast, requested_name, path),
-         :ok <- check_declarations(ast),
-         dependencies = module_dependency_sources(ast),
-         {:ok, prelude} <- module_prelude_env(ast),
-         {:ok, imported} <- load_dependency_env(imports(ast)),
-         {:ok, qualified} <- qualified_resolved_imports(ast),
-         seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
-         {:ok, base} <- merge_env(seeded, prelude),
-         {:ok, opened} <- merge_env(base, imported),
-         {:ok, merged} <- merge_env(opened, qualified),
-         env0 = install_module_visibility(merged, ast),
-         {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
-         {:ok, certified} <- certify_type_level_with_source(ast, env, source: source, file: path),
-         {:ok, certified} <- Cure.Elab.Equation.generate_all(certified, ast) do
-      direct_ids = direct_import_ids(imports(ast))
+         {:ok, %CheckedModule{interface: %ModuleInterface{} = interface}} <-
+           check_ast_artifact(ast,
+             source: source,
+             file: path,
+             module_name: requested_name,
+             purpose: :interface,
+             prelude_mode: :bootstrap_safe,
+             require_module_identity: true
+           ) do
+      {:ok, interface}
+    end
+  end
 
-      export_env =
-        certified
-        |> install_module_visibility(ast)
-        |> mark_inline_hints(find_module_name(ast))
+  defp validate_artifact_identity(_ast, _module_name, _file, _source, false), do: :ok
 
-      dependency_names = dependency_module_names(dependencies)
+  defp validate_artifact_identity(_ast, _module_name, _file, source, true)
+       when not is_binary(source),
+       do: :ok
 
-      {:ok,
-       ModuleInterface.new(%{
-         module_name: requested_name,
-         source_path: path,
-         source_hash: :crypto.hash(:sha256, source),
-         dependency_interface_hashes: loaded_dependency_interface_hashes(dependency_names),
-         dependency_names: dependency_names,
-         direct_edges: module_interface_edges(ast),
-         canonical_declarations: owned_declarations(export_env, requested_name),
-         canonical_externs: owned_externs(export_env, requested_name),
-         extension_payloads: interface_extensions(export_env, requested_name),
-         source_metadata: %{dependency_source_hashes: dependency_source_hashes(dependency_names)},
-         owned_env: export_env,
-         export_env: export_env,
-         direct_import_names: direct_ids
-       })}
+  defp validate_artifact_identity(ast, module_name, file, source, true)
+       when is_binary(file) and is_binary(source),
+       do: validate_module_identity(ast, module_name, file)
+
+  defp validate_artifact_identity(_ast, _module_name, _file, _source, true), do: :ok
+
+  defp source_context_opts(source, file) when is_binary(source) and is_binary(file),
+    do: [source: source, file: file]
+
+  defp source_context_opts(_source, _file), do: []
+
+  defp checked_module_interface(_ast, _env, _module_name, _file, source)
+       when not is_binary(source),
+       do: {:ok, nil}
+
+  defp checked_module_interface(ast, env, module_name, file, source)
+       when is_binary(file) and is_binary(source) do
+    interface_ast = without_injected_prelude_imports(ast)
+    dependencies = module_dependency_sources(ast)
+    dependency_names = dependency_module_names(dependencies)
+
+    ambient_preludes =
+      Enum.uniq(injected_prelude_sources(ast) ++ prelude_sources_for(interface_ast))
+
+    export_env = canonical_export_env(env, module_name, interface_ast, ambient_preludes)
+
+    {:ok,
+     ModuleInterface.new(%{
+       module_name: module_name,
+       source_path: file,
+       source_hash: source_hash(source),
+       dependency_interface_hashes: loaded_dependency_interface_hashes(dependency_names),
+       dependency_names: dependency_names,
+       direct_edges: module_interface_edges(interface_ast),
+       canonical_declarations: owned_declarations(export_env, module_name),
+       canonical_externs: owned_externs(export_env, module_name),
+       extension_payloads: interface_extensions(export_env, module_name),
+       source_metadata: %{dependency_source_hashes: dependency_source_hashes(dependency_names)},
+       owned_env: env,
+       export_env: export_env,
+       direct_import_names: direct_import_ids(imports(interface_ast))
+     })}
+  end
+
+  defp checked_module_interface(_ast, _env, _module_name, _file, _source), do: {:ok, nil}
+
+  defp canonical_export_env(env, module_name, interface_ast, injected_preludes) do
+    owned_keys =
+      env.defs
+      |> Map.keys()
+      |> Enum.filter(&(Cure.Elab.Name.owner(&1) == module_name))
+
+    required = env.defs |> reachable_global_closure(owned_keys) |> MapSet.new()
+    injected_owners = MapSet.new(injected_preludes)
+
+    defs =
+      Map.reject(env.defs, fn {key, _definition} ->
+        MapSet.member?(injected_owners, Cure.Elab.Name.owner(key)) and
+          not MapSet.member?(required, key)
+      end)
+
+    canonical =
+      env
+      |> Map.put(:defs, defs)
+      |> Map.put(:coherence, coherence_with_available_methods(env.coherence, defs))
+      |> install_module_visibility(interface_ast)
+
+    ambient = injected_owners
+
+    canonical
+    |> Map.put(:bare_modules, MapSet.union(canonical.bare_modules || MapSet.new(), ambient))
+    |> Map.put(:qualified_modules, MapSet.union(canonical.qualified_modules || MapSet.new(), ambient))
+  end
+
+  defp coherence_with_available_methods(nil, _defs), do: nil
+
+  defp coherence_with_available_methods(%Coherence{} = coherence, defs) do
+    available? = fn {_key, ref} ->
+      ref
+      |> Map.get(:methods, %{})
+      |> Map.values()
+      |> Enum.all?(&Map.has_key?(defs, &1))
+    end
+
+    anon = Map.filter(coherence.anon, available?)
+    named = Map.filter(coherence.named, available?)
+
+    %Coherence{
+      anon: anon,
+      named: named,
+      anon_origins: Map.take(coherence.anon_origins, Map.keys(anon)),
+      named_origins: Map.take(coherence.named_origins, Map.keys(named))
+    }
+  end
+
+  defp injected_prelude_sources(ast) do
+    ast
+    |> import_entries()
+    |> Enum.filter(fn {_sources, meta} -> Keyword.get(meta, :prelude_injected, false) end)
+    |> Enum.flat_map(&elem(&1, 0))
+    |> Enum.uniq()
+  end
+
+  defp without_injected_prelude_imports({:import, meta, _children} = node) when is_list(meta) do
+    if Keyword.get(meta, :prelude_injected, false), do: nil, else: node
+  end
+
+  defp without_injected_prelude_imports({tag, meta, children}) when is_list(children) do
+    normalized =
+      children
+      |> Enum.map(&without_injected_prelude_imports/1)
+      |> Enum.reject(&is_nil/1)
+
+    {tag, meta, normalized}
+  end
+
+  defp without_injected_prelude_imports(items) when is_list(items) do
+    items
+    |> Enum.map(&without_injected_prelude_imports/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp without_injected_prelude_imports(other), do: other
+
+  defp source_hash(source) when is_binary(source), do: :crypto.hash(:sha256, source)
+  defp source_hash(_source), do: nil
+
+  defp expanded_source_path(file, source) when is_binary(file) and is_binary(source),
+    do: Path.expand(file)
+
+  defp expanded_source_path(_file, _source), do: nil
+
+  defp emit_elaboration_event(event) do
+    case Process.get(:cure_elaboration_observer) do
+      observer when is_pid(observer) -> send(observer, {:cure_elaboration, event})
+      _ -> :ok
     end
   end
 
@@ -2610,6 +2863,9 @@ defmodule Cure.Elab.Program do
   defp module_prelude_env(ast) do
     if prelude_bootstrap?(find_module_name(ast)), do: {:ok, Env.empty()}, else: prelude_slice_env(ast)
   end
+
+  defp checked_prelude_env(ast, :bootstrap_safe), do: module_prelude_env(ast)
+  defp checked_prelude_env(ast, :ordinary), do: prelude_slice_env(ast)
 
   defp prelude_sources_for(ast) do
     if prelude_bootstrap?(find_module_name(ast)),
@@ -3565,9 +3821,11 @@ defmodule Cure.Elab.Program do
                 Enum.reduce(bindings, {[], %{}, counter}, fn
                   {:function_def, hmeta, hbody}, {acc, names, n} ->
                     hname = Keyword.fetch!(hmeta, :name)
+                    helper_param_names = hmeta |> Keyword.get(:params, []) |> Enum.map(&param_name/1)
 
                     captures =
                       param_names
+                      |> Enum.reject(&(&1 in helper_param_names))
                       |> Enum.filter(fn name ->
                         surface_occurs?(hbody, name) or surface_occurs?(hmeta, name)
                       end)

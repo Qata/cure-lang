@@ -265,11 +265,11 @@ before resuming the proof.
 ## 9. Deliverables / definition of done
 
 - [ ] Spike module typechecks (or a filed roadblock report if it doesn't) — §6.
-- [ ] `lib/std/otp_proof.cure` (`Std.Otp.Proof`) — obligation (1) preservation
+- [ ] `metatheory/otp/src/otp_proof.cure` (`Std.Otp.Proof`) — obligation (1) preservation
       lemma, kernel-checked, totality-certified. Update `raw_call`'s docstring at
       `lib/std/otp_raw.cure` to reference the discharged `ReplyOf`.
 - [ ] Obligation (2) send-safety lemma (may be a second module / later milestone).
-- [ ] `test/oracle/otp/` cluster — `.cure`/`.idr` mirrors of the core lemmas;
+- [ ] `metatheory/otp/oracle/otp/` cluster — `.cure`/`.idr` mirrors of the core lemmas;
       `mix cure.oracle otp` green.
 - [ ] Any capability-expansion landed with its own spec/plan + full gate green.
 - [ ] Full suite green **once** at the end; Antigen coverage unregressed.

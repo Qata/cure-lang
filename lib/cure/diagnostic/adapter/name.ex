@@ -1942,6 +1942,16 @@ defmodule Cure.Diagnostic.Adapter.Name do
   def candidate_suggestions([], _spelling, _opts), do: []
 
   def candidate_suggestions(candidates, spelling, opts) do
+    candidates = Enum.filter(candidates, &(Suggest.distance(spelling, candidate_spelling_name(&1)) <= 2))
+
+    if candidates == [] do
+      []
+    else
+      build_candidate_suggestion(candidates, spelling, opts)
+    end
+  end
+
+  defp build_candidate_suggestion(candidates, spelling, opts) do
     names = Enum.map(candidates, &suggestion_name/1)
 
     qualification_hint =
@@ -2120,6 +2130,9 @@ defmodule Cure.Diagnostic.Adapter.Name do
 
   defp suggestion_name(%{name: name}), do: name
   defp suggestion_name(name), do: name_to_string(name)
+
+  defp candidate_spelling_name(%{name: name}), do: name_to_string(name)
+  defp candidate_spelling_name(name), do: name_to_string(name)
 
   defp primary(opts, default_message) do
     case Keyword.get(opts, :span) do

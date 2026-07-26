@@ -145,6 +145,40 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
       cleanup_tmps()
     end
 
+    test "a skipped dependency is loaded before a changed consumer compiles" do
+      src = make_tmp!()
+      dst = make_tmp!()
+
+      write_cure!(src, "z_helper.cure", """
+      mod Std.TcaSkippedHelper
+        @extern(:erlang, :abs, 1)
+        fn ext_helper(x: Int) -> Int
+      """)
+
+      consumer =
+        write_cure!(src, "a_user.cure", """
+        mod Std.TcaSkippedUser
+          use Std.TcaSkippedHelper
+          fn use_it(x: Int) -> Int = ext_helper(x)
+        """)
+
+      assert {:ok, %{errors: 0}} = BundleStdlibBeams.bundle(src, dst)
+
+      :code.purge(:"Cure.Std.TcaSkippedHelper")
+      :code.delete(:"Cure.Std.TcaSkippedHelper")
+      bump_mtime!(consumer, 5)
+
+      assert {:ok, %{compiled: 1, skipped: 1, errors: 0}} =
+               BundleStdlibBeams.bundle(src, dst)
+
+      assert {:module, :"Cure.Std.TcaSkippedHelper"} =
+               :code.ensure_loaded(:"Cure.Std.TcaSkippedHelper")
+    after
+      :code.purge(:"Cure.Std.TcaSkippedHelper")
+      :code.delete(:"Cure.Std.TcaSkippedHelper")
+      cleanup_tmps()
+    end
+
     test "renders the underlying structured diagnostic when a module fails" do
       src = make_tmp!()
       dst = make_tmp!()

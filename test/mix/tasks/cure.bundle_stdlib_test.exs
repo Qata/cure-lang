@@ -87,6 +87,22 @@ defmodule Mix.Tasks.Cure.BundleStdlibTest do
     after
       cleanup_tmps()
     end
+
+    test "removes bundled Cure sources that no longer belong to the stdlib" do
+      src = make_tmp!()
+      dst = make_tmp!()
+      write_cure!(src, "otp.cure", "mod Std.Otp\n")
+      write_cure!(dst, "otp.cure", "stale\n")
+      write_cure!(dst, "otp_proof.cure", "mod Std.Otp.Proof\n")
+      File.write!(Path.join(dst, "README.md"), "keep me")
+
+      assert {:ok, counts} = BundleStdlib.bundle(src, dst)
+      assert counts.copied + counts.skipped == 1
+      refute File.exists?(Path.join(dst, "otp_proof.cure"))
+      assert File.exists?(Path.join(dst, "README.md"))
+    after
+      cleanup_tmps()
+    end
   end
 
   describe "should_copy?/2" do

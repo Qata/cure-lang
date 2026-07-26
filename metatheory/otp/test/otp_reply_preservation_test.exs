@@ -11,7 +11,7 @@ defmodule Cure.Stdlib.OtpReplyPreservationTest do
 
   alias Cure.Elab.Program
 
-  # The self-contained reply calculus (mirrors lib/std/otp_reply_preservation.cure), so
+  # The self-contained reply calculus (mirrors metatheory/otp/src/otp_reply_preservation.cure), so
   # the tests can add well-typed and ILL-typed configs/bridges against it.
   @calculus """
     type Req = GetCount | Ping

@@ -21,7 +21,7 @@ mod Std.Otp.Proof
   ## **What "kernel-checked" buys.** The kernel accepts `reply`, `handle`, and
   ## `serve` below only because each obligation holds. The DUAL — that violations
   ## are *rejected* — is the soundness evidence and lives in the differential
-  ## oracle `test/oracle/otp/`, mirrored in Idris 2 (which has the same `1 x : T`
+  ## oracle `metatheory/otp/oracle/otp/`, mirrored in Idris 2 (which has the same `1 x : T`
   ## multiplicity and large elimination), where all four probes agree:
   ##   * `ob1_reply_linear`   — accept  / accept   (this module's `serve`)
   ##   * `ob1_neg_wrong_reply`— reject  / reject   (a reply value not `ReplyOf(req)`)
@@ -99,7 +99,7 @@ mod Std.Otp.Proof
   ## clause — and because a handler must be TOTAL (kernel-certified exhaustive) to
   ## exist, every message of the derived type is handled: send-safe.
   ##
-  ## Soundness evidence is again the rejection of violations, in `test/oracle/otp/`:
+  ## Soundness evidence is again the rejection of violations, in `metatheory/otp/oracle/otp/`:
   ##   * `ob2_send_safe`     accept/accept — `post(spawn_actor(dispatch), msg)`
   ##   * `ob2_neg_wrong_msg` reject/reject — a message NOT of the actor's type
   ##   * `ob2_neg_nontotal`  reject/reject — a non-exhaustive handler cannot form

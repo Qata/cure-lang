@@ -13,7 +13,7 @@ defmodule Cure.Stdlib.OtpReplyConservationTest do
 
   alias Cure.Elab.Program
 
-  # Self-contained calculus (mirrors lib/std/otp_reply_conservation.cure). Uses the
+  # Self-contained calculus (mirrors metatheory/otp/src/otp_reply_conservation.cure). Uses the
   # cross-module Std.Nat/Std.Proof lemmas — exercising the prelude-in-slice fix.
   @calculus """
     use Std.Nat

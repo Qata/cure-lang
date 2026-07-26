@@ -6197,6 +6197,12 @@ defmodule Cure.Compiler.Parser do
       :quote ->
         parse_quote(state)
 
+      :unsafe ->
+        parse_unsafe(state, token)
+
+      :do ->
+        parse_do(state, token)
+
       :pickup ->
         parse_pickup(state)
 
@@ -6271,6 +6277,112 @@ defmodule Cure.Compiler.Parser do
       _ ->
         # Treat unknown keywords as identifiers (e.g., type names used as values)
         {variable(token), advance(state)}
+    end
+  end
+
+  # `unsafe expr` is a prefix marker, not a runtime expression. Keep it on
+  # call metadata so elaboration can enforce it after resolving the callee.
+  defp parse_unsafe(state, token) do
+    state = advance(state)
+    {operand, state} = parse_expr(state, 110)
+
+    case operand do
+      # `unsafe run do` is the compact spelling for running an indented
+      # effect block.  `do` is a keyword, so it cannot be parsed as an
+      # ordinary function argument by the Pratt loop; claim it here while the
+      # unsafe marker is still available to attach to the generated call.
+      {:variable, meta, "run"} when is_list(meta) ->
+        case peek(state) do
+          %Token{type: :keyword, value: :do} = do_token ->
+            {body, state} = parse_do(state, do_token)
+            call_meta = Keyword.put(meta, :name, "run")
+            call_meta = Keyword.put(call_meta, :unsafe, true)
+            call_meta = Keyword.put(call_meta, :unsafe_span, token.span)
+            {{:function_call, call_meta, [body]}, state}
+
+          _ ->
+            meta = Keyword.put(meta, :unsafe, true) |> Keyword.put(:unsafe_span, token.span)
+            {{:variable, meta, "run"}, state}
+        end
+
+      {:function_call, meta, args} when is_list(meta) ->
+        meta = Keyword.put(meta, :unsafe, true) |> Keyword.put(:unsafe_span, token.span)
+        {{:function_call, meta, args}, state}
+
+      _ ->
+        {{:unsafe_expression, [line: token.line, col: token.col, unsafe_span: token.span], [operand]}, state}
+    end
+  end
+
+  # `do` is deliberately a surface-only construct.  Its statements are the
+  # same assignments the effect elaborator already understands, but `<-`
+  # makes the sequencing intent explicit and avoids pretending that an effect
+  # result is an ordinary pure value.
+  #
+  #     do
+  #       value <- operation()
+  #       next(value)
+  #
+  # The resulting block is checked against `Effect(R)` by its context (most
+  # commonly `unsafe run`), and the existing elaborator lowers each binding
+  # to `effect_bind` and the final pure value to `effect_pure`.
+  defp parse_do(state, token) do
+    state = advance(state) |> skip_newlines()
+
+    case peek(state) do
+      %Token{type: :indent} = indent_token ->
+        state = advance(state)
+        {exprs, state} = parse_do_block_body(state, indent_token.value, [])
+        state = expect_dedent(state)
+        meta = [do: true, line: token.line, col: token.col]
+        {{:block, meta, exprs}, state}
+
+      observed ->
+        state =
+          add_error(state, {
+            :do_block_indent_missing,
+            %{
+              expected: :indent,
+              observed: observed.type,
+              span: zero_width_start(observed.span),
+              line: observed.line,
+              column: observed.col
+            }
+          })
+
+        {{:block, [do: true, line: token.line, col: token.col], []}, state}
+    end
+  end
+
+  defp parse_do_block_body(state, indent, acc) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      _ ->
+        {expr, state} = parse_do_statement(state)
+        state = skip_newlines(state)
+        parse_do_block_body(state, indent, [expr | acc])
+    end
+  end
+
+  defp parse_do_statement(state) do
+    # Look ahead before parsing a normal expression.  Otherwise the Pratt
+    # parser quite correctly treats the first `<` in `<-` as comparison
+    # syntax, and the sequencing marker is no longer recoverable.
+    case {peek(state), peek_at(state, 1), peek_at(state, 2)} do
+      {%Token{type: :identifier} = binder, %Token{type: :lt}, %Token{type: :minus}} ->
+        pattern = variable(binder)
+        pattern_meta = elem(pattern, 1)
+        state = state |> advance() |> advance() |> advance() |> skip_newlines()
+        {value, state} = parse_expr_or_block(state)
+        meta = [let: true, do_bind: true, line: Keyword.get(pattern_meta, :line), col: Keyword.get(pattern_meta, :col)]
+        {{:assignment, meta, [pattern, value]}, state}
+
+      _ ->
+        parse_expr(state, 0)
     end
   end
 

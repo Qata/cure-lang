@@ -10,7 +10,12 @@ defmodule Cure.Compiler.ModuleInterface do
   excluded from semantic identity.
   """
 
-  @schema_version 1
+  # Version 2 introduces the checked-module handoff: `owned_env` is the exact
+  # certified environment and `export_env` is its canonical consumer
+  # projection.  Old version-1 artifacts may have been produced by a second,
+  # context-dependent elaboration and must never be reused as version-2
+  # interfaces.
+  @schema_version 2
 
   @enforce_keys [
     :module_name,

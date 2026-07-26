@@ -263,6 +263,10 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_named_call(meta, args, names, ctx, env) do
+    elaborate_named_call_regular(meta, args, names, ctx, env)
+  end
+
+  defp elaborate_named_call_regular(meta, args, names, ctx, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
 
@@ -395,6 +399,13 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_named_call_resolved(meta, name, atom, args, names, resolved, ctx, env) do
+    case require_unsafe_call(meta, name, resolved, env) do
+      :ok -> elaborate_named_call_resolved_unchecked(meta, name, atom, args, names, resolved, ctx, env)
+      {:error, _} = error -> error
+    end
+  end
+
+  defp elaborate_named_call_resolved_unchecked(meta, name, atom, args, names, resolved, ctx, env) do
     cond do
       # An interface-method call (`eqs(x, y)`) resolves to a concrete instance
       # from the head-positioned argument's type — inlined at a concrete head,
@@ -1035,10 +1046,14 @@ defmodule Cure.Elab.Elaborator do
   # There is no `:let` desugaring to guess a type for: build the `:let` Core chain
   # by inferring each binding's rhs, then let the kernel infer the whole term's type
   # (which sidesteps hand-managing the de Bruijn depth of the body's type).
-  def elaborate_expr_typed({:block, _meta, stmts}, names, ctx, env) do
-    with {:ok, term} <- infer_block_term(stmts, names, ctx, env),
-         {:ok, type} <- Kernel.infer(ctx, term) do
-      {:ok, term, type}
+  def elaborate_expr_typed({:block, meta, stmts} = block, names, ctx, env) do
+    if Keyword.get(meta, :do, false) do
+      infer_do_block(block, stmts, names, ctx, env)
+    else
+      with {:ok, term} <- infer_block_term(stmts, names, ctx, env),
+           {:ok, type} <- Kernel.infer(ctx, term) do
+        {:ok, term, type}
+      end
     end
   end
 
@@ -1208,16 +1223,6 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # `pickup` predicate dispatch (value-surface Wave 1). Pure syntactic
-  # desugaring to a right-nested `:conditional` chain; reuses the conditional
-  # path's Bool-guard and branch-join checks verbatim. No kernel change.
-  # See docs/superpowers/specs/2026-07-09-wave1-pickup-design.md.
-  def elaborate_expr_typed({:pickup, _meta, clauses}, names, ctx, env) do
-    with {:ok, desugared} <- desugar_pickup(clauses) do
-      elaborate_expr_typed(desugared, names, ctx, env)
-    end
-  end
-
   # Wave-2 List sugar: rewrite `[]`/`[h|t]`/`[a,b,c]` to Nil/Cons ctor-call form
   # and delegate, reusing all ctor inference (see desugar_list/1).
   # `()` — the unit value (Swift-style), the sole inhabitant of `Unit`. It is the
@@ -1313,7 +1318,55 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({tag, meta, _}, _names, _ctx, _env) when tag in [:splice, :splice_group],
     do: {:error, splice_outside_quote_error(tag, meta)}
 
+  # `pickup` predicate dispatch (value-surface Wave 1). Pure syntactic
+  # desugaring to a right-nested `:conditional` chain; reuses the conditional
+  # path's Bool-guard and branch-join checks verbatim. No kernel change.
+  # See docs/superpowers/specs/2026-07-09-wave1-pickup-design.md.
+  def elaborate_expr_typed({:pickup, _meta, clauses}, names, ctx, env) do
+    with {:ok, desugared} <- desugar_pickup(clauses) do
+      elaborate_expr_typed(desugared, names, ctx, env)
+    end
+  end
+
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  # A do block is commonly supplied as an argument to `run`, where ordinary
+  # application elaboration initially asks for an inferred argument type. Its
+  # effectful first bind gives us the payload type needed to switch to the
+  # checking path; that path then constructs the complete bind chain and keeps
+  # the Effect wrapper visible until the explicit unsafe boundary.
+  defp infer_do_block({:block, _meta, _stmts} = block, [first | _], names, ctx, env) do
+    with {:assignment, _assignment_meta, [_pattern, rhs]} <- first,
+         {:ok, _rhs_core, {:veffect_type, result_type}} <- elaborate_expr_typed(rhs, names, ctx, env),
+         result_core = Quote.reify(result_type, Context.length(ctx), Context.signature(ctx)),
+         expected = {:effect_type, result_core},
+         {:ok, term} <- elaborate_expr_checked(block, expected, names, ctx, env),
+         {:ok, type} <- Kernel.infer(ctx, term) do
+      {:ok, term, type}
+    else
+      _ -> {:error, {:do_requires_effectful_bind, first}}
+    end
+  end
+
+  defp infer_do_block(_block, _stmts, _names, _ctx, _env),
+    do: {:error, {:do_requires_effectful_bind, :empty}}
+
+  defp require_unsafe_call(meta, name, resolved, env) do
+    required? =
+      name == "run" or
+        case Env.get_def(env, resolved) do
+          %{unsafe: true} -> true
+          _ -> false
+        end
+
+    if required? and not Keyword.get(meta, :unsafe, false) do
+      {:error,
+       {:unsafe_call_required,
+        %{callee: name, resolved: resolved, span: surface_expression_span({:function_call, meta, []})}}}
+    else
+      :ok
+    end
+  end
 
   defp pattern_only_context(meta, category) do
     source_info = Cure.MetaAST.Metadata.source_info(meta)
@@ -2727,6 +2780,13 @@ defmodule Cure.Elab.Elaborator do
       union_ctor != nil ->
         {:ok, {:ctor, union_ctor, []}}
 
+      # A literal whose TYPE is a union member is an ordinary union injection,
+      # not an attempt to invoke the literal protocol on the union itself. Infer
+      # the literal's normal type first, then let the shared checked fallback
+      # inject it. Exact literal members were handled by the nullary case above.
+      union_goal?(expected_core) ->
+        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
       # A string literal checks as its `List(Char)` desugaring (see the typed
       # clause), so the expected `List(Char)`/`String` type drives each char.
       string? ->
@@ -3250,8 +3310,8 @@ defmodule Cure.Elab.Elaborator do
       {:data, ^bounded_family, [], [{:nat_lit, bound}]} when value < bound ->
         {:ok, {:bounded_lit, value}}
 
-      {:data, ^bounded_family, [], [{:nat_lit, _bound}]} ->
-        {:error, {:bounded_literal_out_of_range, value, expected_core}}
+      {:data, ^bounded_family, [], [{:nat_lit, bound}]} ->
+        {:error, {:bounded_lit_out_of_range, value, bound}}
 
       _ ->
         case Kernel.check(ctx, {:int_lit, value}, Eval.eval(expected_core, Context.env(ctx))) do
@@ -4192,6 +4252,8 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_validated_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
+    authored_arms = arms0
+
     # A tuple SCRUTINEE (`match %[xs, ys] | %[C(…), D(…)] -> …`) is lowered to a
     # nested single-scrutinee match (`match xs | C(…) -> match ys | D(…) -> …`),
     # so the existing dependent single-scrutinee machinery handles it — absurd
@@ -4207,11 +4269,14 @@ defmodule Cure.Elab.Elaborator do
     {scrut_expr, arms0} = desugar_single_refutable_tuple_column(scrut_expr, arms0)
     {scrut_expr, arms0} = desugar_tuple_scrutinee(scrut_expr, arms0)
 
-    if hoist_named_default?(scrut_expr, arms0) do
-      hoist_named_default_scrutinee(scrut_expr, arms0, result_type_term, names, ctx, env)
-    else
-      elaborate_match_dispatch(scrut_expr, arms0, result_type_term, names, ctx, env)
-    end
+    result =
+      if hoist_named_default?(scrut_expr, arms0) do
+        hoist_named_default_scrutinee(scrut_expr, arms0, result_type_term, names, ctx, env)
+      else
+        elaborate_match_dispatch(scrut_expr, arms0, result_type_term, names, ctx, env)
+      end
+
+    contextualize_authored_tuple_pattern_result(result, authored_arms, env)
   end
 
   defp validate_positional_forced_patterns(arms) do
@@ -5204,7 +5269,7 @@ defmodule Cure.Elab.Elaborator do
   # `{:absurd}` branch; coverage is enforced by the kernel's check_coverage.
   defp elaborate_with_branches(arms, %{ctx: ctx, env: env, dname: dname} = cfg) do
     with {:ok, {arm_map, default}} <- partition_arms(arms, ctx, env, dname),
-         {:ok, arm_map} <- expand_dependent_default(arm_map, default, dname, env) do
+         :ok <- reject_with_default(default) do
       arm_map
       |> Enum.reduce_while({:ok, []}, fn
         {_cname, {:impossible_marked, _pattern}}, {:ok, acc} ->
@@ -5220,43 +5285,10 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A dependent case has no Core-level default branch. Expand a source catch-all
-  # into one explicit arm for every uncovered constructor so each copy receives
-  # the constructor-specific motive and sibling refinement. A named catch-all
-  # binds the whole scrutinee, reconstructed from that arm's explicit fields;
-  # `_` needs no substitution. This is the dependent counterpart of the ordinary
-  # match default expansion and avoids rejecting valid `_ -> ...` clauses merely
-  # because another parameter's type mentions the scrutinee.
-  defp expand_dependent_default(arm_map, nil, _dname, _env), do: {:ok, arm_map}
+  defp reject_with_default(nil), do: :ok
 
-  defp expand_dependent_default(arm_map, {vname, body}, dname, env) do
-    expanded =
-      Inductive.ctors_of(env, dname)
-      |> Enum.reject(&Map.has_key?(arm_map, &1.name))
-      |> Enum.reduce(arm_map, fn ctor, acc ->
-        vars =
-          ctor.plicities
-          |> Enum.with_index()
-          |> Enum.flat_map(fn
-            {:explicit, index} -> ["$default_#{index}_#{map_size(acc)}"]
-            {:implicit, _index} -> []
-          end)
-
-        args = Enum.map(vars, &{:variable, [], &1})
-        pattern = {:function_call, [name: Atom.to_string(ctor.name)], args}
-
-        branch_body =
-          if vname == "_" do
-            body
-          else
-            subst_surface_var(body, vname, pattern)
-          end
-
-        Map.put(acc, ctor.name, {:matched, pattern, branch_body})
-      end)
-
-    {:ok, expanded}
-  end
+  defp reject_with_default({name, _body}),
+    do: {:error, {:unsupported_pattern, %{reason: :default_in_with, name: name}}}
 
   defp elaborate_with_branch(cname, pattern, body_expr, cfg) do
     %{
@@ -5444,7 +5476,7 @@ defmodule Cure.Elab.Elaborator do
   # convoy `(case e …) cap`.
   defp elaborate_with_motivegen_branches(arms, %{ctx: ctx, env: env, dname: dname} = cfg) do
     with {:ok, {arm_map, default}} <- partition_arms(arms, ctx, env, dname),
-         {:ok, arm_map} <- expand_dependent_default(arm_map, default, dname, env) do
+         :ok <- reject_with_default(default) do
       arm_map
       |> Enum.reduce_while({:ok, []}, fn
         {_cname, {:impossible_marked, _pattern}}, {:ok, acc} ->
@@ -6536,15 +6568,18 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp contextualize_tuple_pattern_result(
-         {:error, {:source_context, {:missing_branch, _branch} = reason, context}},
+         {:error, {:source_context, {:missing_branch, branch}, context}},
          arms,
          tuple_arity,
          position
        ) do
-    details = tuple_pattern_error_context(arms, tuple_arity, position)
+    details =
+      arms
+      |> tuple_pattern_error_context(tuple_arity, position)
+      |> Map.put(:branch, branch)
 
     {:error,
-     {:source_context, reason,
+     {:source_context, {:tuple_missing_branch, details},
       context
       |> Map.merge(details)}}
   end
@@ -6555,6 +6590,87 @@ defmodule Cure.Elab.Elaborator do
        {:tuple_missing_branch, Map.put(tuple_pattern_error_context(arms, tuple_arity, position), :branch, branch)}}
 
   defp contextualize_tuple_pattern_result(result, _arms, _tuple_arity, _position), do: result
+
+  defp contextualize_authored_tuple_pattern_result(result, authored_arms, env) do
+    case missing_branch_reason(result) do
+      {:ok, branch, existing_context} ->
+        case authored_tuple_arms(authored_arms, branch, env) do
+          [] ->
+            result
+
+          tuple_arms ->
+            {:tuple, _meta, elements} = tuple_arms |> hd() |> arm_pattern()
+            tuple_arity = length(elements)
+            position = tuple_refutable_position(tuple_arms, tuple_arity)
+
+            details =
+              tuple_arms
+              |> tuple_pattern_error_context(tuple_arity, position)
+              |> Map.put(:branch, branch)
+
+            reason = {:tuple_missing_branch, details}
+
+            case existing_context do
+              nil -> {:error, reason}
+              context -> {:error, {:source_context, reason, Map.merge(context, details)}}
+            end
+        end
+
+      :error ->
+        result
+    end
+  end
+
+  defp missing_branch_reason({:error, {:missing_branch, branch}}), do: {:ok, branch, nil}
+
+  defp missing_branch_reason({:error, {:source_context, {:missing_branch, branch}, context}})
+       when is_map(context),
+       do: {:ok, branch, context}
+
+  defp missing_branch_reason(_result), do: :error
+
+  defp authored_tuple_arms(arms, branch, env) do
+    branch_family = Inductive.ctor_family(env, branch)
+
+    arms
+    |> Enum.flat_map(fn {:match_arm, meta, body} ->
+      pattern = Keyword.fetch!(meta, :pattern)
+
+      case refutable_tuple_for_family(pattern, branch_family, env) do
+        nil -> []
+        tuple -> [{:match_arm, Keyword.put(meta, :pattern, tuple), body}]
+      end
+    end)
+  end
+
+  defp refutable_tuple_for_family({:tuple, _meta, elements} = tuple, branch_family, env) do
+    if Enum.any?(elements, &pattern_from_family?(&1, branch_family, env)) do
+      tuple
+    else
+      Enum.find_value(elements, &refutable_tuple_for_family(&1, branch_family, env))
+    end
+  end
+
+  defp refutable_tuple_for_family({:function_call, _meta, arguments}, branch_family, env),
+    do: Enum.find_value(arguments, &refutable_tuple_for_family(&1, branch_family, env))
+
+  defp refutable_tuple_for_family({_tag, _meta, children}, branch_family, env) when is_list(children),
+    do: Enum.find_value(children, &refutable_tuple_for_family(&1, branch_family, env))
+
+  defp refutable_tuple_for_family(_pattern, _branch_family, _env), do: nil
+
+  defp pattern_from_family?({:function_call, meta, _arguments}, branch_family, env) do
+    name =
+      case Keyword.fetch!(meta, :name) do
+        name when is_binary(name) -> String.to_atom(name)
+        name -> name
+      end
+
+    key = resolve_ctor_key(env, name)
+    Inductive.ctor_family(env, key) == branch_family
+  end
+
+  defp pattern_from_family?(_pattern, _branch_family, _env), do: false
 
   defp tuple_pattern_error_context(arms, tuple_arity, position) do
     element_spans =
@@ -12045,6 +12161,9 @@ defmodule Cure.Elab.Elaborator do
       elaborate_named_call_scoped(meta, args, scope, env)
     end
   end
+
+  def elaborate_expr({:unsafe_expression, meta, _children}, _scope, _env),
+    do: {:error, {:unsafe_call_required, %{span: Keyword.get(meta, :unsafe_span)}}}
 
   def elaborate_expr({:record_update, meta, children}, scope, env) do
     with {:ok, positional} <- desugar_record_update(meta, children, env) do

@@ -138,13 +138,13 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   *type* is now also carried through the reduction (G1×G2, see `Std.Otp.ReplyPreservation`
   below), AND the LINEAR *capability*'s consumed-exactly-once is now ALSO an operational
   conservation theorem over the relation — `Std.Otp.ReplyConservation`
-  (`lib/std/otp_reply_conservation.cure`): the reply capabilities are a conserved resource,
+  (`metatheory/otp/src/otp_reply_conservation.cure`): the reply capabilities are a conserved resource,
   a single step preserves `pending + answered` (`step_conserves`, via `Std.Proof.plus_succ_right`),
   a whole run preserves it (`total_invariant`, induction over the reflexive-transitive closure
   `LStar`), and a COMPLETE run from `MkConfig(n, Z)` to `MkConfig(Z, m)` forces `n ≡ m`
   (`drain`) — every capability answered exactly once, none lost or duplicated. Plus the
   linearity guard `no_answer_without_cap` (no reply without a capability). Kernel-checked,
-  Idris-mirrored (`test/oracle/otp/reply_conservation`, rel=same), tests in
+  Idris-mirrored (`metatheory/otp/oracle/otp/reply_conservation`, rel=same), tests in
   `otp_reply_conservation_test.exs`. This is the operational DUAL of `Std.Otp.Proof`'s
   intrinsic QTT-grade proof — so obligation (1) is now discharged both intrinsically and
   operationally. (It dogfoods the cross-module lemma-import fix landed the same session —
@@ -154,53 +154,53 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   relation.** Core Erlang gives the *untyped* relation; NVLang's preservation is over a
   *toy* single-actor step (no interleaving, no ether). Nobody has typed-OTP subject
   reduction over a real concurrent semantics. → **DONE (progress + preservation = type
-  safety).** `Std.Otp.Preservation` (`lib/std/otp_preservation.cure`) proves SUBJECT
+  safety).** `Std.Otp.Preservation` (`metatheory/otp/src/otp_preservation.cure`) proves SUBJECT
   REDUCTION for the send/arrive/receive fragment (single receiver, message-type safety) —
   the NVLang Thm 4.1 property over the *actual* ether→mailbox reduction, not a toy step.
-  `Std.Otp.Safety` (`lib/std/otp_safety.cure`) adds PROGRESS — a well-typed config is
+  `Std.Otp.Safety` (`metatheory/otp/src/otp_safety.cure`) adds PROGRESS — a well-typed config is
   never stuck (either final, or an arrive/receive step is available) — and combines the
   two into the canonical safety theorem `safety : (c) -> WT(c) -> Safe(c)` (a well-typed
   config is either final or steps to a WELL-TYPED config). Both kernel-checked, totality-
-  certified, Idris-mirrored (`test/oracle/otp/preservation`, `.../safety`, rel=same); tests
+  certified, Idris-mirrored (`metatheory/otp/oracle/otp/preservation`, `.../safety`, rel=same); tests
   in `otp_preservation_test.exs`, `otp_safety_test.exs`. `safety` exercises plain-`match`
   sibling refinement — matching `c` refines the witness `wt` so `preservation(wt, step)`
   type-checks. **Multiple pids / interleaving now DONE — `Std.Otp.System`
-  (`lib/std/otp_system.cure`):** a `System` is a pool of per-process `Config`s, a `SysStep`
+  (`metatheory/otp/src/otp_system.cure`):** a `System` is a pool of per-process `Config`s, a `SysStep`
   is ANY one process taking a step while the others stay fixed (asynchronous, no global
   lock), and `sys_preservation` proves GLOBAL well-typedness (every process well-typed) is
   preserved by any interleaved step — NVLang's toy single-actor step cannot state this.
-  Idris-mirrored (`test/oracle/otp/system`, rel=same), tests in `otp_system_test.exs`.
+  Idris-mirrored (`metatheory/otp/oracle/otp/system`, rel=same), tests in `otp_system_test.exs`.
   Exit/link/monitor signals are `Std.Otp.Monitor`/`Std.Otp.Link`. **Cross-process message
-  delivery now DONE — `Std.Otp.Routing` (`lib/std/otp_routing.cure`):** `Deliver(before,
+  delivery now DONE — `Std.Otp.Routing` (`metatheory/otp/src/otp_routing.cure`):** `Deliver(before,
   after)` routes a message into SOME process's ether (`DeliverHere` head / `DeliverThere`
   deeper — the scan is the routing), REQUIRING `Accepted(t)` (a message may only be routed
   to a process that accepts it — the typed inter-process send). `deliver_preservation`
   proves routing preserves GLOBAL well-typedness, so a system of COMMUNICATING processes
-  stays well-typed. Idris-mirrored (`test/oracle/otp/routing`, rel=same). **Mailbox FIFO
-  order now DONE — `Std.Otp.Fifo` (`lib/std/otp_fifo.cure`):** `SArrive` appends to the
+  stays well-typed. Idris-mirrored (`metatheory/otp/oracle/otp/routing`, rel=same). **Mailbox FIFO
+  order now DONE — `Std.Otp.Fifo` (`metatheory/otp/src/otp_fifo.cure`):** `SArrive` appends to the
   mailbox END (FIFO) and `SRecv` consumes the FRONT; preservation is re-proved via the
   `all_accepted_snoc` lemma (appending an accepted message keeps the mailbox all-accepted)
   — exactly the `AllAccepted`-over-append lemma the order-abstracted modules deferred, now
-  discharged once and for all. Idris-mirrored (`test/oracle/otp/fifo`, rel=same).
-  **HETEROGENEOUS routing now DONE — `Std.Otp.HetRouting` (`lib/std/otp_het_routing.cure`):**
+  discharged once and for all. Idris-mirrored (`metatheory/otp/oracle/otp/fifo`, rel=same).
+  **HETEROGENEOUS routing now DONE — `Std.Otp.HetRouting` (`metatheory/otp/src/otp_het_routing.cure`):**
   each process carries its OWN accepted-set (interface); `WTProc` types its ether/mailbox
   against that set via a `Member`/`AllMember` predicate; `Deliver` requires `Member(t, set)`
   — `t` must be in the TARGET process's own interface — and `preservation` proves routing
   preserves global well-typedness even when every process speaks a different protocol. This
   is the interface-indexed core `Registry`'s `GenServer(q, r)` handles denote. Idris-mirrored
-  (`test/oracle/otp/het_routing`, rel=same). The G2 concurrent-reduction line is now
+  (`metatheory/otp/oracle/otp/het_routing`, rel=same). The G2 concurrent-reduction line is now
   complete (interleaving + FIFO + homogeneous AND heterogeneous typed delivery). The
   composition with obligation (1) is **DONE for the reply TYPE** — see G1×G2 below.
 - **G1×G2. COMPOSE: dependent reply typing preserved through delivery.** **DONE —
-  `Std.Otp.ReplyPreservation` (`lib/std/otp_reply_preservation.cure`).** Strengthens G2's
+  `Std.Otp.ReplyPreservation` (`metatheory/otp/src/otp_reply_preservation.cure`).** Strengthens G2's
   payload from a message *tag* to a request-answering *reply* `(r, v)` and proves
   `preservation : WT b -> Step b a -> WT a` where `WT` demands every in-flight/delivered
   reply is well-typed for its request (`HasReply(r, v)`). The `reify : HasReply(r, v) ->
   ReplyOf(r)` bridge shows `HasReply` faithfully reflects obligation (1)'s large-
   elimination `ReplyOf` — so preserving `HasReply` IS preserving the dependent `ReplyOf`
   typing through send/arrive/receive. Kernel-checked, totality-certified, Idris-mirrored
-  (`test/oracle/otp/reply_preservation` + `reply_neg_wrong_reply`, rel=same); behavioural
-  negatives in `test/cure/stdlib/otp_reply_preservation_test.exs`. **Honest remainder:**
+  (`metatheory/otp/oracle/otp/reply_preservation` + `reply_neg_wrong_reply`, rel=same); behavioural
+  negatives in `metatheory/otp/test/otp_reply_preservation_test.exs`. **Honest remainder:**
   this carries the reply *type*; the LINEAR *capability*'s consumed-exactly-once is not
   yet an operational conservation theorem over the relation (a request-response
   conservation over a config of outstanding reply capabilities) — that is the last G1
@@ -208,58 +208,58 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
 - **G3. Typed monitors / links / DOWN.** NVLang has `MonitorRef` in the grammar only
   (prose §2.5, no rules/theorems); Core Erlang omits monitors; KWC has the *operational*
   monitor model but untyped. → **DONE for monitors — `Std.Otp.Monitor`
-  (`lib/std/otp_monitor.cure`).** The typing rule: a monitor reference is EVIDENCE its
+  (`metatheory/otp/src/otp_monitor.cure`).** The typing rule: a monitor reference is EVIDENCE its
   holder accepts `DOWN` (`MkMRef : Accepted(TDown) -> MRef`; `monitor_accepts` reads it
   back). The death step `SDown` delivers `DOWN` into the monitor's ether and requires an
   `MRef`, so `preservation` shows delivery preserves well-typedness — a monitor never
   gets a `DOWN` it cannot handle. Dually, a receiver whose vocabulary excludes `DOWN`
   cannot form an `MRef` (uninhabited `Accepted(TDown)`), so unmonitored processes are
   DOWN-safe by construction. Composes with `Std.Otp.Safety` (`SDown` is one more typed
-  delivery rule). Kernel-checked, Idris-mirrored (`test/oracle/otp/monitor`, rel=same),
+  delivery rule). Kernel-checked, Idris-mirrored (`metatheory/otp/oracle/otp/monitor`, rel=same),
   tests in `otp_monitor_test.exs`. **Links DONE too — `Std.Otp.Link`
-  (`lib/std/otp_link.cure`).** The bidirectional companion: on a linked peer's death the
+  (`metatheory/otp/src/otp_link.cure`).** The bidirectional companion: on a linked peer's death the
   outcome is gated by the `trap_exit` flag — a TRAPPING process receives a well-typed
   `EXIT` message (`SExitTrap`, requiring `Accepted(TExit)` carried by `LinkTrap`), a
   NON-trapping process propagates to a terminal `Dead` state (`SExitProp`). `preservation`
   holds for BOTH outcomes — the novel content is the message-vs-death DISPATCH on the flag,
   neither branch reaching an ill-typed state. The step rules are gated to the correct flag
-  (a wrong-flag step is unconstructible). Idris-mirrored (`test/oracle/otp/link`, rel=same),
+  (a wrong-flag step is unconstructible). Idris-mirrored (`metatheory/otp/oracle/otp/link`, rel=same),
   tests in `otp_link_test.exs`. **`demonitor` now DONE — `Std.Otp.Demonitor`
-  (`lib/std/otp_demonitor.cure`):** an `MRef` is indexed by an `Active`/`Removed` lifecycle
+  (`metatheory/otp/src/otp_demonitor.cure`):** an `MRef` is indexed by an `Active`/`Removed` lifecycle
   state, `demonitor` moves `Active → Removed`, and the death step `SDown` REQUIRES an
   `Active` monitor — so a DOWN delivered after `demonitor` is unconstructible (mirrors
   `Std.Otp.Timer`'s Pending/Cancelled discipline, completing the monitor lifecycle
-  establish→observe→cancel). Idris-mirrored (`test/oracle/otp/demonitor`, rel=same); the
+  establish→observe→cancel). Idris-mirrored (`metatheory/otp/oracle/otp/demonitor`, rel=same); the
   parallel `unlink` over `Std.Otp.Link`'s trap-flagged link is the same shape. **Remaining
   in G3:** cascading-exit liveness, and the `DOWN`/`EXIT` reason/ref payload (abstracted to
   bare tags here).
 - **G4. Timers / `send_after` / `receive after`.** **No paper** — KWC *explicitly*
   excludes timers, Core Erlang omits them, mailbox types list timeouts as future work.
-  → **DONE — `Std.Otp.Timer` (`lib/std/otp_timer.cure`).** Two typing obligations: (1)
+  → **DONE — `Std.Otp.Timer` (`metatheory/otp/src/otp_timer.cure`).** Two typing obligations: (1)
   `send_after` is a typed send — `MkTimer : Accepted(t) -> TimerRef(t, Pending)`, only an
   accepted message can be scheduled; (2) cancellation is observable in the type — a
   `TimerRef` is indexed by a `Pending`/`Cancelled` lifecycle state, `cancel` moves
   `Pending → Cancelled`, and `SFire` requires a `Pending` timer, so "fire after cancel" is
   UNCONSTRUCTIBLE. `preservation` shows a fired timer delivers an accepted message;
   `TTimeout` models the `receive ... after` branch. Kernel-checked, Idris-mirrored
-  (`test/oracle/otp/timer`, rel=same), tests in `otp_timer_test.exs`. Delay/clock ordering
+  (`metatheory/otp/oracle/otp/timer`, rel=same), tests in `otp_timer_test.exs`. Delay/clock ordering
   abstracted (a fired timer is one that reached its deadline).
 - **G5. Effect tracking for OTP ops.** NVLang *explicitly* excludes it (§8.4); Cure has
   `Effect(T)`. → **DONE for the send algebra — `Std.Otp.SendEffect`
-  (`lib/std/otp_send_effect.cure`).** The effect-honest companion to obligation (2):
+  (`metatheory/otp/src/otp_send_effect.cure`).** The effect-honest companion to obligation (2):
   `spawn_actor`/`post` return `Effect(Pid(m))`/`Effect(Response)` and the client threads
   them with monadic `let` (`effect_bind`). The point proven is that the clause-DERIVED
   message index survives the effect discipline — the bind refines the implicit `m := Msg`
   from the handler's domain, and the effectful `post` still forces `msg : Msg`. So
   send-safety is an invariant of the send, not of purity. Kernel-checked; Idris-mirrored
-  with a user-defined `Eff` monad (`test/oracle/otp/ob2_eff_send_safe` +
+  with a user-defined `Eff` monad (`metatheory/otp/oracle/otp/ob2_eff_send_safe` +
   `ob2_eff_neg_wrong_msg`, rel=same); behavioural negatives in
-  `test/cure/stdlib/otp_send_effect_test.exs`. (The wider typed OTP library `Std.Otp`
+  `metatheory/otp/test/otp_send_effect_test.exs`. (The wider typed OTP library `Std.Otp`
   already returns `Effect` for every op; this module isolates the *derived-index ×
   effect-bind* interaction as a metatheory result.)
 - **G6. `gen_server:call` failure/totality.** No paper types the 5000 ms timeout /
   caller-`exit` failure mode; NVLang's `await` is total. → **DONE — `Std.Otp.Call`
-  (`lib/std/otp_call.cure`).** A total call reifies its failure as a VALUE:
+  (`metatheory/otp/src/otp_call.cure`).** A total call reifies its failure as a VALUE:
   `CallOutcome(r) = Replied(r) | Failed(CallError)` (`Timeout`/`NoProc`/`ServerDied`). The
   totality enforcement is the kernel's exhaustiveness check — `resume` matches both
   constructors, and a consumer that ignores `Failed` is REJECTED as non-total
@@ -267,43 +267,43 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   not expressible in a total program. A call typed as bare `r` would be unsound (it cannot
   always produce an `r`); `CallOutcome(r)` is the honest total type, and a
   `try_call : … -> Effect(CallOutcome(r))` on top of `Std.Otp.SendEffect` is the total
-  wrapper. Idris-mirrored (`test/oracle/otp/call`, rel=same). **Supervision-restart now
-  DONE — `Std.Otp.Supervisor` (`lib/std/otp_supervisor.cure`):** a `Fleet(specs)` is a
+  wrapper. Idris-mirrored (`metatheory/otp/oracle/otp/call`, rel=same). **Supervision-restart now
+  DONE — `Std.Otp.Supervisor` (`metatheory/otp/src/otp_supervisor.cure`):** a `Fleet(specs)` is a
   supervisor's running children indexed by the whole spec list, and `restart_all`
   (one-for-all) / `restart_one` (one-for-one) return `Fleet(specs)` with the SAME `specs` —
   so the TYPE certifies the supervision invariant: a restart revives children but never
   changes what children the supervisor has. `establish : (specs) -> Fleet(specs)` says a
   running fleet of exactly the declared children always exists. Idris-mirrored
-  (`test/oracle/otp/supervisor`, rel=same), tests pin that restart cannot reshape the spec
+  (`metatheory/otp/oracle/otp/supervisor`, rel=same), tests pin that restart cannot reshape the spec
   list. Restart-intensity limits (max_restarts/max_seconds) are an operational bound not
   modelled.
 - **G7. `Pid` vs `GenServer` separation + `whereis` partiality** (conformance F-2/F-2c).
-  No paper; Cure's own audit. → **DONE — `Std.Otp.Registry` (`lib/std/otp_registry.cure`).**
+  No paper; Cure's own audit. → **DONE — `Std.Otp.Registry` (`metatheory/otp/src/otp_registry.cure`).**
   F-2: a `GenServer(q, r)` WRAPS a pid and carries its protocol; a bare `Pid` cannot be
   used where a `GenServer` is expected (`server_pid(MkPid)` fails to unify — a Pid is not a
   GenServer), and `expect_server` is the explicit protocol assertion (FFI trust boundary),
   not a silent identity. F-2c: `whereis` returns `PidOption` (`NoPid | SomePid`), never a
   bare `Pid`; consuming it (`with_pid`) must handle `NoPid` or fail totality certification.
-  Idris-mirrored (`test/oracle/otp/registry`, rel=same), tests in `otp_registry_test.exs`
+  Idris-mirrored (`metatheory/otp/oracle/otp/registry`, rel=same), tests in `otp_registry_test.exs`
   (both the Pid≠GenServer and non-total-consumer negatives). `Pid` abstract, `q`/`r` phantom
   on the handle (the request-reply typing itself is `Std.Otp.Proof`/`Std.Otp.SendEffect`).
 - **G8. ORDERED selective-receive typing.** Mailbox types are commutative; Erlang is
   ordered. Recovering order (position-indexed patterns) is *new type theory* both mailbox
   papers name as future work. → **SLICE DONE — `Std.Otp.SelectiveReceive`
-  (`lib/std/otp_selective_receive.cure`).** `SelRecv(before, x, after)` types Erlang's
+  (`metatheory/otp/src/otp_selective_receive.cure`).** `SelRecv(before, x, after)` types Erlang's
   front-to-back scan directly: `SelHere` (head is `x`, consume it) and `SelSkip` (head is
   another tag, keep it and recurse) ARE the arrival-order scan — order is the inductive
   structure of the receive, not abstracted. `preserves` (selective receive keeps the
   mailbox well-typed) and `received_accepted` (the received message is accepted) hold by
   induction on the scan; a receive of a tag absent from the mailbox is unconstructible.
-  Idris-mirrored (`test/oracle/otp/selective_receive`, rel=same), tests in
+  Idris-mirrored (`metatheory/otp/oracle/otp/selective_receive`, rel=same), tests in
   `otp_selective_receive_test.exs`. **Still open (the hard core):** arbitrary
   pattern-directed selective receive with protocol-level ordering of a whole conversation.
   This is the ordered-scan primitive that a full solution builds on.
 - **G9. Mailbox type INFERENCE.** The **universally-named open problem** — Special
   Delivery, de'Liguoro–Padovani, and the OTP tooling literature all name inference as
   THE gap ("users must specify explicit patterns on each guard"). → **DECIDABLE CORE DONE
-  — `Std.Otp.Inference` (`lib/std/otp_inference.cure`).** Two parts: (1) the interface is
+  — `Std.Otp.Inference` (`metatheory/otp/src/otp_inference.cure`).** Two parts: (1) the interface is
   already DERIVED not annotated — `spawn_actor(handler)` infers `Pid(<handler domain>)` via
   the elaborator's metavariable solving, demonstrated in `otp_inference_test.exs`; (2) the
   metatheory that makes that trustworthy — mailbox membership is DECIDABLE: `decide_handles`
@@ -311,7 +311,7 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   self-sends handled? — the closure constraint) are TOTAL, proof-carrying decision
   procedures, built on decidable tag equality (`tag_eq`, from constructor disjointness).
   So the "is this message handled?" check the literature discharges by annotation is settled
-  by an algorithm. Idris-mirrored (`test/oracle/otp/inference`, rel=same). **Still OPEN (the
+  by an algorithm. Idris-mirrored (`metatheory/otp/oracle/otp/inference`, rel=same). **Still OPEN (the
   research core):** inference across an EVOLVING protocol (a session where the accepted set
   changes over a conversation) is constraint-solving over the whole behaviour, not a
   membership check; and GLOBAL interface inference from the system-wide send/receive graph.

@@ -146,6 +146,16 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
         if should_compile?(src, beam_path) do
           do_compile(src, dest_dir, counts, compile_opts)
         else
+          # A fresh BEAM is also an input to later modules in this same bundle:
+          # compiled macros and final module-resolution validation may need it
+          # loaded even though its source does not need recompilation. Skipping
+          # without loading made clean VMs report a transient E101 for providers
+          # such as Std.Syntax, then succeed on a later stdlib pass.
+          beam_path
+          |> Path.basename(".beam")
+          |> String.to_atom()
+          |> refresh_loaded_beam(dest_dir)
+
           {:ok, %{counts | skipped: counts.skipped + 1}}
         end
 

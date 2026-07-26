@@ -208,15 +208,6 @@ defmodule Cure.Compiler.Incremental do
         |> Keyword.get(:compile_opts, [])
         |> Keyword.put(:prelude_providers, prelude_providers)
         |> Keyword.put(:module_index, graph.module_index),
-      module_index: graph.module_index,
-      # `roots` drives BOTH deletion scoping (above) and the standalone
-      # interface-hash recomputation below. `Program.module_interface/2` resolves
-      # a module's `use`-dependencies through `:cure_source_roots`; without it,
-      # any module with a dependency fails to elaborate, its fresh interface hash
-      # is `nil`, and every dependent is needlessly treated as changed. Setting
-      # the roots here (as `mix cure.compile` does for the compile step) keeps
-      # incrementality effective for non-leaf modules.
-      roots: roots,
       old: manifest.modules,
       # Seed `new` with the post-deletion kept map, NOT `%{}`. Every module the
       # walk actually visits overwrites its own key below (skip branch: `old`;
@@ -274,18 +265,22 @@ defmodule Cure.Compiler.Incremental do
   end
 
   defp compile_and_stage(mod, path, state) do
-    case Cure.Compiler.compile_file(path, [output_dir: state.output_dir] ++ state.compile_opts) do
-      {:ok, _module, _warnings} ->
-        # `path` may be a shipped-stdlib source, whose interface the loader
-        # memoizes for the lifetime of the OS process (`Program.
-        # cached_module_interface/2` — a sound assumption for ordinary
-        # compilation, but one this exact recompile just violated). Evict any
-        # stale entry before recomputing so a same-process rebuild of a
-        # stdlib-recognized path (e.g. two `mix cure.compile_stdlib` runs, or
-        # two `compile_dir` calls, sharing a VM) is never compared against a
-        # first-run interface that no longer matches the source on disk.
-        Program.invalidate_module_interface(path)
-        new_hash = interface_hash_for(mod, path, state.roots, state.module_index)
+    case Cure.Compiler.compile_file_with_artifact(
+           path,
+           [output_dir: state.output_dir] ++ state.compile_opts
+         ) do
+      {:ok, _module, _warnings, artifact} ->
+        new_hash =
+          case artifact do
+            %Cure.Elab.CheckedModule{
+              module_name: ^mod,
+              interface: %Cure.Compiler.ModuleInterface{} = interface
+            } ->
+              interface_hash(interface)
+
+            _ ->
+              nil
+          end
 
         stored = get_in(state.old, [mod, Access.key(:interface_hash, nil)])
         changed? = is_nil(new_hash) or is_nil(stored) or new_hash != stored
@@ -312,32 +307,6 @@ defmodule Cure.Compiler.Incremental do
           | iface: Map.put(state.iface, mod, %{changed: true}),
             errors: [{mod, reason} | state.errors]
         }
-    end
-  end
-
-  # Recompute `mod`'s interface hash with `:cure_source_roots` bound so its
-  # `use`-dependencies resolve, restoring the prior value afterward (mirrors
-  # `Cure.Compiler`'s own `with_source_roots`). Returns nil if the interface
-  # cannot be computed, which conservatively marks the module interface-changed.
-  defp interface_hash_for(mod, path, roots, module_index) do
-    previous = Process.get(:cure_source_roots)
-    previous_index = Process.get(:cure_module_index)
-    Process.put(:cure_source_roots, roots)
-    Process.put(:cure_module_index, module_index)
-
-    try do
-      case Program.module_interface(mod, path) do
-        {:ok, iface} -> interface_hash(iface)
-        _ -> nil
-      end
-    after
-      if previous == nil,
-        do: Process.delete(:cure_source_roots),
-        else: Process.put(:cure_source_roots, previous)
-
-      if previous_index == nil,
-        do: Process.delete(:cure_module_index),
-        else: Process.put(:cure_module_index, previous_index)
     end
   end
 

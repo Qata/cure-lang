@@ -201,6 +201,17 @@ defmodule Cure.Core.Env do
     }
   end
 
+  @doc "Mark a registered definition as requiring the explicit `unsafe` call marker."
+  @spec put_unsafe(t(), atom(), boolean()) :: t()
+  def put_unsafe(%__MODULE__{} = env, name, required \\ true) when is_boolean(required) do
+    key = resolve_key(env, env.defs, name)
+
+    case Map.fetch(env.defs, key) do
+      {:ok, definition} -> %{env | defs: Map.put(env.defs, key, Map.put(definition, :unsafe, required))}
+      :error -> env
+    end
+  end
+
   @doc "Attach inert authored-hole metadata to a definition for release-boundary diagnostics."
   @spec put_source_holes(t(), atom(), map()) :: t()
   def put_source_holes(%__MODULE__{} = env, name, source_holes) when is_map(source_holes) do

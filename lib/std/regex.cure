@@ -56,27 +56,89 @@ mod Std.Regex
   ## Normalize structural extraction shapes into ergonomic public results.
   ## Every companion value function is total at the corresponding computed
   ## type; no equality cast connects the raw and simplified interpretations.
+  fn SimplifyPairUnit(right: ShapeCode) -> ShapeCode = match right
+    UnitC -> UnitC
+    CharC -> CharC
+    StringC -> StringC
+    BoolC -> BoolC
+    NatC -> NatC
+    IntC -> IntC
+    PairC(left, right) -> PairC(left, right)
+    ChoiceC(left, right) -> ChoiceC(left, right)
+    OptionC(inner) -> OptionC(inner)
+    ListC(inner) -> ListC(inner)
+
+  fn SimplifyPairPresent(left: ShapeCode, right: ShapeCode) -> ShapeCode = match right
+    UnitC -> left
+    CharC -> PairC(left, CharC)
+    StringC -> PairC(left, StringC)
+    BoolC -> PairC(left, BoolC)
+    NatC -> PairC(left, NatC)
+    IntC -> PairC(left, IntC)
+    PairC(pair_left, pair_right) -> PairC(left, PairC(pair_left, pair_right))
+    ChoiceC(choice_left, choice_right) -> PairC(left, ChoiceC(choice_left, choice_right))
+    OptionC(inner) -> PairC(left, OptionC(inner))
+    ListC(inner) -> PairC(left, ListC(inner))
+
   fn SimplifyPair(left: ShapeCode, right: ShapeCode) -> ShapeCode = match left
-    UnitC -> match right
-      UnitC -> UnitC
-      _ -> right
-    _ -> match right
-      UnitC -> left
-      _ -> PairC(left, right)
+    UnitC -> SimplifyPairUnit(right)
+    CharC -> SimplifyPairPresent(CharC, right)
+    StringC -> SimplifyPairPresent(StringC, right)
+    BoolC -> SimplifyPairPresent(BoolC, right)
+    NatC -> SimplifyPairPresent(NatC, right)
+    IntC -> SimplifyPairPresent(IntC, right)
+    PairC(pair_left, pair_right) -> SimplifyPairPresent(PairC(pair_left, pair_right), right)
+    ChoiceC(choice_left, choice_right) -> SimplifyPairPresent(ChoiceC(choice_left, choice_right), right)
+    OptionC(inner) -> SimplifyPairPresent(OptionC(inner), right)
+    ListC(inner) -> SimplifyPairPresent(ListC(inner), right)
+
+  fn SimplifyChoiceUnit(right: ShapeCode) -> ShapeCode = match right
+    UnitC -> BoolC
+    CharC -> ChoiceC(UnitC, CharC)
+    StringC -> ChoiceC(UnitC, StringC)
+    BoolC -> ChoiceC(UnitC, BoolC)
+    NatC -> ChoiceC(UnitC, NatC)
+    IntC -> ChoiceC(UnitC, IntC)
+    PairC(left, right) -> ChoiceC(UnitC, PairC(left, right))
+    ChoiceC(left, right) -> ChoiceC(UnitC, ChoiceC(left, right))
+    OptionC(inner) -> ChoiceC(UnitC, OptionC(inner))
+    ListC(inner) -> ChoiceC(UnitC, ListC(inner))
 
   fn SimplifyChoice(left: ShapeCode, right: ShapeCode) -> ShapeCode = match left
-    UnitC -> match right
-      UnitC -> BoolC
-      _ -> ChoiceC(left, right)
-    _ -> ChoiceC(left, right)
+    UnitC -> SimplifyChoiceUnit(right)
+    CharC -> ChoiceC(CharC, right)
+    StringC -> ChoiceC(StringC, right)
+    BoolC -> ChoiceC(BoolC, right)
+    NatC -> ChoiceC(NatC, right)
+    IntC -> ChoiceC(IntC, right)
+    PairC(pair_left, pair_right) -> ChoiceC(PairC(pair_left, pair_right), right)
+    ChoiceC(choice_left, choice_right) -> ChoiceC(ChoiceC(choice_left, choice_right), right)
+    OptionC(inner) -> ChoiceC(OptionC(inner), right)
+    ListC(inner) -> ChoiceC(ListC(inner), right)
 
   fn SimplifyOption(inner: ShapeCode) -> ShapeCode = match inner
     UnitC -> BoolC
-    _ -> OptionC(inner)
+    CharC -> OptionC(CharC)
+    StringC -> OptionC(StringC)
+    BoolC -> OptionC(BoolC)
+    NatC -> OptionC(NatC)
+    IntC -> OptionC(IntC)
+    PairC(left, right) -> OptionC(PairC(left, right))
+    ChoiceC(left, right) -> OptionC(ChoiceC(left, right))
+    OptionC(option_inner) -> OptionC(OptionC(option_inner))
+    ListC(list_inner) -> OptionC(ListC(list_inner))
 
   fn SimplifyList(inner: ShapeCode) -> ShapeCode = match inner
     UnitC -> NatC
-    _ -> ListC(inner)
+    CharC -> ListC(CharC)
+    StringC -> ListC(StringC)
+    BoolC -> ListC(BoolC)
+    NatC -> ListC(NatC)
+    IntC -> ListC(IntC)
+    PairC(left, right) -> ListC(PairC(left, right))
+    ChoiceC(left, right) -> ListC(ChoiceC(left, right))
+    OptionC(option_inner) -> ListC(OptionC(option_inner))
+    ListC(list_inner) -> ListC(ListC(list_inner))
 
   fn Simplify(shape: ShapeCode) -> ShapeCode = match shape
     UnitC -> UnitC
@@ -90,28 +152,82 @@ mod Std.Regex
     OptionC(inner) -> SimplifyOption(Simplify(inner))
     ListC(inner) -> SimplifyList(Simplify(inner))
 
+  fn simplify_pair_unit_value(right: ShapeCode, right_value: Sem(right)) -> Sem(SimplifyPairUnit(right)) = match right
+    UnitC -> ()
+    CharC -> right_value
+    StringC -> right_value
+    BoolC -> right_value
+    NatC -> right_value
+    IntC -> right_value
+    PairC(_, _) -> right_value
+    ChoiceC(_, _) -> right_value
+    OptionC(_) -> right_value
+    ListC(_) -> right_value
+
+  fn simplify_pair_present_value(left: ShapeCode, right: ShapeCode, left_value: Sem(left), right_value: Sem(right)) -> Sem(SimplifyPairPresent(left, right)) = match right
+    UnitC -> left_value
+    CharC -> %[left_value, right_value]
+    StringC -> %[left_value, right_value]
+    BoolC -> %[left_value, right_value]
+    NatC -> %[left_value, right_value]
+    IntC -> %[left_value, right_value]
+    PairC(_, _) -> %[left_value, right_value]
+    ChoiceC(_, _) -> %[left_value, right_value]
+    OptionC(_) -> %[left_value, right_value]
+    ListC(_) -> %[left_value, right_value]
+
   fn simplify_pair_value(left: ShapeCode, right: ShapeCode, left_value: Sem(left), right_value: Sem(right)) -> Sem(SimplifyPair(left, right)) = match left
-    UnitC -> match right
-      UnitC -> ()
-      _ -> right_value
-    _ -> match right
-      UnitC -> left_value
-      _ -> %[left_value, right_value]
+    UnitC -> simplify_pair_unit_value(right, right_value)
+    CharC -> simplify_pair_present_value(CharC, right, left_value, right_value)
+    StringC -> simplify_pair_present_value(StringC, right, left_value, right_value)
+    BoolC -> simplify_pair_present_value(BoolC, right, left_value, right_value)
+    NatC -> simplify_pair_present_value(NatC, right, left_value, right_value)
+    IntC -> simplify_pair_present_value(IntC, right, left_value, right_value)
+    PairC(pair_left, pair_right) -> simplify_pair_present_value(PairC(pair_left, pair_right), right, left_value, right_value)
+    ChoiceC(choice_left, choice_right) -> simplify_pair_present_value(ChoiceC(choice_left, choice_right), right, left_value, right_value)
+    OptionC(inner) -> simplify_pair_present_value(OptionC(inner), right, left_value, right_value)
+    ListC(inner) -> simplify_pair_present_value(ListC(inner), right, left_value, right_value)
+
+  fn simplify_choice_unit_value(right: ShapeCode, value: Choice(Unit, Sem(right))) -> Sem(SimplifyChoiceUnit(right)) = match right
+    UnitC -> match value
+      ChoseLeft(_) -> true
+      ChoseRight(_) -> false
+    CharC -> value
+    StringC -> value
+    BoolC -> value
+    NatC -> value
+    IntC -> value
+    PairC(_, _) -> value
+    ChoiceC(_, _) -> value
+    OptionC(_) -> value
+    ListC(_) -> value
 
   fn simplify_choice_value(left: ShapeCode, right: ShapeCode, value: Choice(Sem(left), Sem(right))) -> Sem(SimplifyChoice(left, right)) = match left
-    UnitC -> match right
-      UnitC -> match value
-        ChoseLeft(_) -> true
-        ChoseRight(_) -> false
-      _ -> value
-    _ -> value
+    UnitC -> simplify_choice_unit_value(right, value)
+    CharC -> value
+    StringC -> value
+    BoolC -> value
+    NatC -> value
+    IntC -> value
+    PairC(_, _) -> value
+    ChoiceC(_, _) -> value
+    OptionC(_) -> value
+    ListC(_) -> value
 
   fn simplify_option_value(inner: ShapeCode, value: Option(Sem(inner))) -> Sem(SimplifyOption(inner)) =
     match inner
       UnitC -> match value
         Some(_) -> true
         None() -> false
-      _ -> value
+      CharC -> value
+      StringC -> value
+      BoolC -> value
+      NatC -> value
+      IntC -> value
+      PairC(_, _) -> value
+      ChoiceC(_, _) -> value
+      OptionC(_) -> value
+      ListC(_) -> value
 
   fn count_units(values: List(Unit)) -> Nat = match values
     [] -> Z()
@@ -120,7 +236,15 @@ mod Std.Regex
   fn simplify_list_values(inner: ShapeCode, values: List(Sem(inner))) -> Sem(SimplifyList(inner)) =
     match inner
       UnitC -> count_units(values)
-      _ -> values
+      CharC -> values
+      StringC -> values
+      BoolC -> values
+      NatC -> values
+      IntC -> values
+      PairC(_, _) -> values
+      ChoiceC(_, _) -> values
+      OptionC(_) -> values
+      ListC(_) -> values
 
   fn simplify_value(shape: ShapeCode, value: Sem(shape)) -> Sem(Simplify(shape)) = match shape
     UnitC -> value

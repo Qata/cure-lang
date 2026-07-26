@@ -43,10 +43,22 @@ defmodule Cure.Audit.Ledger do
   end
 
   @doc """
-  The defs the audited module owns: everything in its env that the prelude env
-  does not already have. A macro-emitted def appears here, which is the point.
+  The defs the audited module owns.
+
+  Canonical definition identity is authoritative: a module-local definition,
+  including one emitted by a macro, is keyed as `Module#name`. Imported and
+  ambient definitions remain available for the reachability walk, but are not
+  roots merely because an interface projection differs from the probe env.
   """
   @spec roots(Env.t()) :: [atom()]
+  def roots(%Env{defs: defs, module_owner: owner}) when is_binary(owner) do
+    defs
+    |> Map.keys()
+    |> Enum.filter(&(Cure.Elab.Name.owner(&1) == owner))
+    |> Enum.sort()
+  end
+
+  # Compatibility for synthetic/legacy environments with no canonical owner.
   def roots(%Env{defs: defs}) do
     prelude = prelude_env().defs
 

@@ -10,7 +10,7 @@ defmodule Cure.Stdlib.OtpPreservationTest do
 
   alias Cure.Elab.Program
 
-  # The self-contained calculus (mirrors lib/std/otp_preservation.cure), so the tests
+  # The self-contained calculus (mirrors metatheory/otp/src/otp_preservation.cure), so the tests
   # can add well-typed and ILL-typed clients against it.
   @calculus """
     type Tag = TInc | TDec | TQuery

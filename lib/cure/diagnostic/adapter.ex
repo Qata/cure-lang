@@ -688,6 +688,19 @@ defmodule Cure.Diagnostic.Adapter do
     Hole.inferred_failure(Keyword.get(meta, :name), context, opts)
   end
 
+  def from_error({:source_context, {:unsafe_call_required, details}, context}, opts)
+      when is_map(details) and is_map(context),
+      do: contextual_type_failure(:unsafe_call_required, Map.merge(context, details), opts)
+
+  def from_error({:unsafe_call_required, details}, opts) when is_map(details),
+    do: contextual_type_failure(:unsafe_call_required, details, opts)
+
+  def from_error({:run_requires_effect, details}, opts) when is_map(details),
+    do: contextual_type_failure(:run_requires_effect, details, opts)
+
+  def from_error({:run_arity, actual}, opts),
+    do: contextual_type_failure(:run_arity, %{actual: actual}, opts)
+
   def from_error({:source_context, {kind, _operator}, context} = error, opts)
       when kind in [:unsupported_operand_type, :no_operator_meaning] and is_map(context),
       do: TypeAdapter.from_error(error, opts)
@@ -2462,6 +2475,19 @@ defmodule Cure.Diagnostic.Adapter do
         :not_a_function ->
           {"Application target is not callable", "This value is used as a function, but its type is not callable.",
            "apply a function or constructor value"}
+
+        :unsafe_call_required ->
+          {"Unsafe call requires `unsafe`",
+           "Calling `#{name_to_string(details.callee || "this function")}` crosses an unsafe boundary and must be written with the `unsafe` keyword.",
+           "prefix the call with `unsafe`"}
+
+        :run_requires_effect ->
+          {"`run` expects an effect", "The argument to `run` must have type `Effect(T)`.",
+           "pass an effectful computation to `run`"}
+
+        :run_arity ->
+          {"`run` expects one argument", "The effect escape `run` takes exactly one computation.",
+           "pass exactly one argument"}
 
         :branch_arity ->
           {"Pattern branch has the wrong arity",

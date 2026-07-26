@@ -160,7 +160,7 @@ defmodule Cure.Core.Builtins do
   end
 
   @doc """
-  Seed the 31 builtin-op globals (16 int binary [11 arith/cmp + 5 bitwise] +
+  Seed the 32 builtin-op globals (16 int binary [11 arith/cmp + 5 bitwise] +
   10 float binary + int_neg/int_bnot/float_neg + the A1 polymorphic
   struct_eq/struct_ne) as body-less defs carrying a `builtin_op` marker. Public
   so the Antigen generator envs (SigMenu v1, Generators.Totality) can reuse it.
@@ -178,6 +178,20 @@ defmodule Cure.Core.Builtins do
     |> seed_unops(@int_unops, int_ty)
     |> seed_unops(@float_unops, {:float_type})
     |> seed_struct_ops(bool_ty)
+    |> seed_run()
+  end
+
+  # `run : {a : Type} -> Effect(a) -> a` is the one deliberate escape from
+  # direct-style effects. The type parameter is erased, and the operation is
+  # lowered by the emitter to its sole present argument.
+  defp seed_run(env) do
+    ty =
+      {:pi, :erased, {:type, 0}, {:pi, Grade.unrestricted(), {:effect_type, {:var, 0}}, {:var, 1}}}
+
+    env
+    |> Env.add_def(:run, ty, nil, [:erased, :unrestricted])
+    |> Env.register_builtin_op(:run, :effect_run)
+    |> Env.put_unsafe(:run)
   end
 
   # The family id to bake into every comparison / structural-equality codomain.

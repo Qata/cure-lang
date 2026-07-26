@@ -44,12 +44,21 @@ defmodule Cure.Diagnostic.Adapter.Pattern do
 
   def with_default_pattern_failure(details, context, opts) do
     name = name_to_string(details.name)
-    span = Map.get(details, :span) || Map.get(context, :span) || Keyword.get(opts, :span)
+    branches = Map.get(context, :branch_patterns, [])
+
+    default =
+      Enum.find(branches, fn branch ->
+        Map.get(branch, :kind) == :variable and Map.get(branch, :name) == name
+      end)
+
+    span =
+      Map.get(details, :span) ||
+        (default && (Map.get(default, :pattern_span) || Map.get(default, :span))) ||
+        Map.get(context, :span) || Keyword.get(opts, :span)
 
     constructor_labels =
-      context
-      |> Map.get(:with_arms, [])
-      |> Enum.filter(&(Map.get(&1, :pattern_kind) == :constructor))
+      branches
+      |> Enum.filter(&(Map.get(&1, :kind) == :constructor))
       |> Enum.map(&(Map.get(&1, :pattern_span) || Map.get(&1, :span)))
       |> Enum.map(&label(&1, :secondary, "this branch refines a constructor"))
       |> Enum.reject(&is_nil/1)

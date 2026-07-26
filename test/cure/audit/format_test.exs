@@ -13,7 +13,7 @@ defmodule Cure.Audit.FormatTest do
           bucket: :otp
         }
       ],
-      builtin_count: 31,
+      builtin_count: 32,
       not_proven_total: [:reverse, :last, :drop, :take]
     }
   end
@@ -27,7 +27,7 @@ defmodule Cure.Audit.FormatTest do
     assert text =~ "AXIOMS — CURE RUNTIME (0)"
     assert text =~ "AXIOMS — CURE BRIDGE (0)"
     assert text =~ "OPAQUE TYPES (0)"
-    assert text =~ "31 builtin operators"
+    assert text =~ "32 builtin operators"
     assert text =~ "HOLES (0)"
     assert text =~ "ABSURD (0)"
     assert text =~ "NOT PROVEN TOTAL (4)"
@@ -101,7 +101,7 @@ defmodule Cure.Audit.FormatTest do
     assert json =~ ~s("schema":1)
     assert json =~ ~s("mfa":"erlang:length/1")
     assert json =~ ~s("bucket":"otp")
-    assert json =~ ~s("builtin_count":31)
+    assert json =~ ~s("builtin_count":32)
     assert String.ends_with?(json, "}\n")
   end
 

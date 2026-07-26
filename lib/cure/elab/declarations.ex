@@ -569,6 +569,7 @@ defmodule Cure.Elab.Declarations do
         |> Env.put_labels(sig.name, param_label_vector(sig.params))
         |> register_parameter_spans(sig.name, sig.params)
         |> register_declaration_span(sig.name, meta)
+        |> maybe_register_unsafe(sig.name, meta)
         |> maybe_register_lemma(sig, meta)
 
       env2 =
@@ -604,6 +605,7 @@ defmodule Cure.Elab.Declarations do
             |> Env.add_def(sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities, sig.plicities)
             |> Env.put_labels(sig.name, param_label_vector(sig.params))
             |> register_parameter_spans(sig.name, sig.params)
+            |> maybe_register_unsafe(sig.name, meta)
 
           {:ok, final}
         end
@@ -933,6 +935,7 @@ defmodule Cure.Elab.Declarations do
         final =
           env
           |> Env.add_def(sig.name, final_pi, lambda, quantities, sig.plicities)
+          |> maybe_register_unsafe(sig.name, meta)
           |> Env.put_source_holes(sig.name, collect_source_holes(body_expr, def_env, sig.return_span))
           |> Env.put_labels(sig.name, param_label_vector(sig.params))
           |> register_parameter_spans(sig.name, sig.params)
@@ -946,6 +949,16 @@ defmodule Cure.Elab.Declarations do
         final = maybe_certify(final, sig.name)
         Cure.Elab.Equation.generate(final, sig.name, meta, body_expr)
       end
+    end
+  end
+
+  defp maybe_register_unsafe(env, name, meta) do
+    case Keyword.get(meta, :decorator) do
+      {:decorator, decorator_meta, _args} when is_list(decorator_meta) ->
+        Env.put_unsafe(env, name, Keyword.get(decorator_meta, :name) == :unsafe)
+
+      _ ->
+        env
     end
   end
 

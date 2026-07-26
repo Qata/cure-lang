@@ -557,14 +557,10 @@ defmodule Cure.Compiler.IncrementalTest do
 
   # Regression (cold-clone bootstrap): a `@prelude` provider under `Std.*` is
   # injected as an ambient `use` into EVERY sibling module (`inject_prelude_uses/2`),
-  # but `compile_order/1` deliberately follows the acyclic `order_deps` graph, which
-  # does NOT carry those ambient edges — the prelude closure is cyclic, so no order
-  # can place every provider first. A provider therefore routinely compiles AFTER its
-  # ambient consumers. `validate_stdlib_imports/1` must not demand a loadable BEAM for
-  # such an injected import: on a cold `_build` (fresh clone) no stdlib beam exists
-  # yet, so requiring one fails EVERY module with `{:missing_stdlib_module, ...}` and
-  # the stdlib can never bootstrap itself. Explicit `use` edges keep the beam
-  # guarantee — those ARE `order_deps` edges, so the dep is always built first.
+  # `compile_order/1` now follows the canonical dependency graph, including ambient
+  # prelude providers. The provider must therefore precede its consumer even when
+  # filenames sort in the opposite order, and a cold build must succeed without any
+  # pre-existing BEAM artifact.
   @std_ambient_provider """
   @prelude
   mod Std.AmbientFixture
@@ -576,7 +572,7 @@ defmodule Cure.Compiler.IncrementalTest do
     fn alpha() -> Int = 1
   """
 
-  test "an injected ambient @prelude provider does not require a prebuilt beam (cold bootstrap)" do
+  test "an injected ambient @prelude provider is ordered and compiles from a cold bootstrap" do
     root = Path.join(System.tmp_dir!(), "cure_cold_#{:erlang.unique_integer([:positive])}")
     src = Path.join(root, "std")
     out = Path.join(root, "ebin")
@@ -599,8 +595,8 @@ defmodule Cure.Compiler.IncrementalTest do
     {:ok, graph} = DepGraph.scan(paths)
     pos = Incremental.compile_order(graph) |> Enum.with_index() |> Map.new()
 
-    assert pos["Std.AlphaFixture"] < pos["Std.AmbientFixture"],
-           "precondition: the consumer must be scheduled BEFORE the ambient provider"
+    assert pos["Std.AmbientFixture"] < pos["Std.AlphaFixture"],
+           "the canonical dependency graph must schedule the ambient provider first"
 
     assert {:ok, s} = Incremental.compile_dir(paths, out, source_roots: [src])
 

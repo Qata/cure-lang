@@ -26,7 +26,7 @@ defmodule Cure.Core.BuiltinsSeedTest do
     env = Builtins.seed(Env.empty(), MapSet.new([:Nat]))
 
     for constructor <- [:FromNat, :NegativeSuccessor] do
-      assert %{args: [{:n, {:data, :"Std.Nat#Nat", [], []}}]} =
+      assert %{args: [{:_a0, {:data, :"Std.Nat#Nat", [], []}}]} =
                Inductive.get_ctor(env, constructor)
     end
   end

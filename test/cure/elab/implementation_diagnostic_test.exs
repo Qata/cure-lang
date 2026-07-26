@@ -69,7 +69,7 @@ defmodule Cure.Elab.ImplementationDiagnosticTest do
              6 |     fn eqz(x: Int, y: Int) -> Bool = int_eq(x, y)
                |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `eqz` was not found
 
-             Hint: Did you mean `eqs`, `nes`?
+             Hint: Did you mean `eqs`?
              """)
 
     lsp = Renderer.lsp(diagnostic, registry)
@@ -288,7 +288,7 @@ defmodule Cure.Elab.ImplementationDiagnosticTest do
              4 |   implementation Equatble for Int
                |                  ^^^^^^^^ `Equatble` was not found
 
-             Hint: Did you mean `Equatable`, `Comparable`?
+             Hint: Did you mean `Equatable`?
              """)
 
     lsp = Renderer.lsp(diagnostic, registry)

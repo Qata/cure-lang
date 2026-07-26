@@ -47,7 +47,7 @@ defmodule Cure.Compiler.Lexer do
     band bor bxor bsl bsr bnot
     true false nil
     extern proof
-    quote
+    quote unsafe
   )a
 
   # Contextual words are identifiers lexically. The parser promotes them only

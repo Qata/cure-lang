@@ -22,7 +22,7 @@ defmodule Cure.Compiler.LexerTest do
       keywords = ~w(mod fn let type rec proto impl local use as
                     match if elif else then for do
                     in try catch finally throw return yield
-                    spawn send receive after when where extern)
+                    spawn send receive after when where extern unsafe)
 
       for kw <- keywords do
         tokens = lex!(kw)

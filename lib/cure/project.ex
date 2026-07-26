@@ -317,6 +317,55 @@ defmodule Cure.Project do
     end
   end
 
+  @doc """
+  Return the source roots of installed dependencies.
+
+  Path dependencies resolve directly from their package `lib/` directory.
+  Git and registry dependencies resolve from their installed `_build/deps`
+  trees. The result is deterministic and contains only existing directories.
+  """
+  @spec dependency_source_paths(t()) :: [Path.t()]
+  def dependency_source_paths(%__MODULE__{dependencies: deps, root: root}) do
+    deps
+    |> Enum.flat_map(fn dep ->
+      name = Map.get(dep, :name, "")
+
+      cond do
+        is_binary(Map.get(dep, :path)) and String.trim(dep.path) != "" ->
+          [Path.join(Path.expand(dep.path, root), "lib")]
+
+        is_binary(Map.get(dep, :git)) and String.trim(dep.git) != "" ->
+          [Path.join([root, "_build", "deps", name, "lib"])]
+
+        true ->
+          Path.wildcard(Path.join([root, "_build", "deps", "#{name}-*", "**", "lib"]))
+      end
+    end)
+    |> Enum.map(&Path.expand/1)
+    |> Enum.filter(&File.dir?/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  @doc "Return installed dependency BEAM directories for runtime/codegen loading."
+  @spec dependency_ebin_paths(t()) :: [Path.t()]
+  def dependency_ebin_paths(%__MODULE__{dependencies: deps, root: root}) do
+    deps
+    |> Enum.flat_map(fn dep ->
+      name = Map.get(dep, :name, "")
+
+      if is_binary(Map.get(dep, :path)) or is_binary(Map.get(dep, :git)) do
+        [Path.join([root, "_build", "deps", name])]
+      else
+        Path.wildcard(Path.join([root, "_build", "deps", "#{name}-*", "ebin"]))
+      end
+    end)
+    |> Enum.map(&Path.expand/1)
+    |> Enum.filter(&File.dir?/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
   # Compile a dependency's sources, each under its OWN edition (dep_project_dir,
   # bounded at `base`, so it honours the dep's own Cure.toml — nested or not — yet
   # never inherits the consumer's edition). Most compile errors stay non-fatal (a

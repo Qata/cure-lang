@@ -489,4 +489,46 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     assert apply(:"Cure.Generated.StructuredApp", :stop, [:state]) == :ok
     assert apply(:"Cure.Generated.StructuredApp", :start_phase, [:boot, :normal, []]) == :ok
   end
+
+  test "all structured OTP families coexist with an effect do block" do
+    source = """
+    mod M
+      use Std.Actor
+      use Std.Fsm
+      use Std.Supervisor
+      use Std.App
+
+      @extern(:erlang, :abs, 1)
+      fn effect_abs(n: Int) -> Effect(Int)
+      fn probe(n: Int) -> Int = unsafe run do
+        result <- effect_abs(n)
+        result
+
+      actor Cure.Generated.DoActor
+        state Int
+        initial 0
+        on_message
+          Ping -> state
+
+      fsm Cure.Generated.DoFsm
+        state Int
+        events
+          Tick -> :keep_state_and_data
+
+      sup Cure.Generated.DoSup
+        children
+          actor Cure.Generated.DoActor as Worker
+
+      app Cure.Generated.DoApp
+        root Cure.Generated.DoSup
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.M", :probe, [-9]) == 9
+    assert {:ok, :initial, 0} = apply(:"Cure.Generated.DoFsm", :init, [0])
+    assert {:ok, {{:one_for_one, 3, 5}, [_]}} = apply(:"Cure.Generated.DoSup", :init, [[]])
+    assert apply(:"Cure.Generated.DoApp", :stop, [:state]) == :ok
+  end
 end

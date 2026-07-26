@@ -92,7 +92,7 @@ defmodule Cure.Audit.GoldenTest do
   OPAQUE TYPES (0)
 
   KERNEL BUILTINS
-    31 builtin operators (Cure.Core.Builtins)
+    32 builtin operators (Cure.Core.Builtins)
 
   HOLES (0)
 
