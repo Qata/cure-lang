@@ -176,7 +176,7 @@ type, and protocol.
 
 ### `##` doc comments
 `##` comments on the line above a `mod`, `fn`, `type`, `rec`, or
-`proto` definition attach as its docstring. Consecutive `##` blocks
+`interface` definition attach as its docstring. Consecutive `##` blocks
 separated by blank lines are merged into a single paragraph-separated
 body, so you can write a docstring the way you would write regular
 prose:

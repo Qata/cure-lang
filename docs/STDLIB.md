@@ -24,12 +24,13 @@ The documentation below is organised by topic:
 - [Core utilities](#core-utilities)  -- `Std.Core`, `Std.Io`, `Std.Show`,
   `Std.System`, `Std.Test`.
 - [Containers and data](#containers-and-data)  -- `Std.List`, `Std.Map`,
-  `Std.Set`, `Std.Bounded`, `Std.Vector`, `Std.Pair`, `Std.Option`,
+  `Std.Set`, `Std.Bounded`, `Std.Vector`, `Std.Tuple`, `Std.Option`,
   `Std.Result`, `Std.Match`.
-- [Protocols](#protocols)  -- `Std.Equatable`, `Std.Ord`, `Std.Functor`.
+- [Interfaces](#interfaces)  -- `Std.Equatable`, `Std.Comparable`,
+  `Std.Show`, `Std.Semigroup`, `Std.Functor`.
 - [Value-shaped modules](#value-shaped-modules)  -- `Std.String`,
-  `Std.Math`, `Std.Regex`, `Std.Json`, `Std.Http`, `Std.Time`.
-- [Types and proofs](#types-and-proofs)  -- `Std.Equal`,
+  `Std.Math`, `Std.Regex`, `Std.Json`, `Std.Time`.
+- [Types and proofs](#types-and-proofs)  -- `Std.Equivalent`,
   `Std.Proof`.
 - [Concurrency and OTP](#concurrency-and-otp)  -- `Std.Actor`,
   `Std.Fsm`, `Std.Process`, `Std.Supervisor`, `Std.App`.
@@ -69,22 +70,23 @@ and test fixtures can then ask for a subset of the library via
 Known groups and their current membership (also the source of truth
 for `Cure.Stdlib.Preload.known_groups/0`):
 
-- `:core` -- `Std.Core`, `Std.Bounded`, `Std.Equal`, `Std.Equatable`, `Std.Ord`,
-  `Std.Show`, `Std.Functor`, `Std.Proof`. `Std.Proof` is the one
-  module that relies on the compile-time default (`:core`); `proof`
-  containers only admit legacy proof-shaped returns, so no explicit
-  `@group` decorator lives in its source.
+- `:core` -- foundational types, operators, interfaces, proofs, syntax, and
+  primitive homes, including `Std.Core`, `Std.Equivalent`,
+  `Std.Equatable`, `Std.Comparable`, `Std.Show`, `Std.Functor`,
+  `Std.Semigroup`, and `Std.Proof`.
 - `:collections` -- `Std.List`, `Std.Map`, `Std.Set`, `Std.Vector`,
-  `Std.Pair`, `Std.Match`, `Std.Iter`.
-- `:text` -- `Std.String`, `Std.Regex`, `Std.Json`.
-- `:numeric` -- `Std.Math`.
-- `:system` -- `Std.Io`, `Std.System`, `Std.Time`, `Std.App`,
-  `Std.CRDT`.
-- `:concurrency` -- `Std.Actor`, `Std.Fsm`, `Std.Process`,
-  `Std.Supervisor`.
+  `Std.Tuple`, `Std.Match`, `Std.NonEmpty`, `Std.Optic`,
+  `Std.Dynamic`, and `Std.Iter`.
+- `:text` -- `Std.String`, `Std.Regex`, the `Std.Regex.Syntax` family,
+  and `Std.Json`.
+- `:numeric` -- `Std.Math` and `Std.Decimal`.
+- `:system` -- `Std.Io`, `Std.System`, `Std.Time`, `Std.Measurements`,
+  `Std.App`, and `Std.CRDT`.
+- `:concurrency` -- the typed `Std.Otp` algebra and its raw boundary,
+  plus `Std.Actor`, `Std.ActorBehavior`, `Std.Beam`, `Std.Fsm`,
+  `Std.Process`, and `Std.Supervisor`.
 - `:option` -- `Std.Option`, `Std.Result`.
 - `:test` -- `Std.Test`, `Std.Gen`.
-- `:network` -- `Std.Http`.
 
 Groups are **selection tags only** — they say *which* modules a `kind:`
 pulls in, never in what order. Compile order and load closure are automatic:
@@ -101,11 +103,40 @@ through `Cure.Stdlib.Preload.preload/1` and
 `Cure.REPL.Docs.default_uses/1`. See `docs/REPL.md` for the TOML
 shape and worked examples.
 
+## 0.34 module map
+
+The hand-written sections below cover the most frequently used modules. The
+source-level generated reference remains authoritative for every exported
+member. Modules added or substantially reshaped by the dependent pipeline
+include:
+
+- **Primitive and bootstrap homes** -- `Std.Int`, `Std.Float`, `Std.Char`,
+  `Std.Atom`, `Std.Binary`, `Std.Bool`, `Std.Unit`, and `Std.Nat`.
+- **Interfaces and operators** -- `Std.Equatable`, `Std.Comparable`,
+  `Std.Show`, `Std.Semigroup`, `Std.Functor`, `Std.Arithmetic`,
+  `Std.Literal`, and `Std.Operators`. `Std.Arithmetic` declares operation
+  interfaces, but numeric surface operators still select their primitive
+  implementations by operand kind; the callable interface methods are the
+  forward-compatible algebra surface.
+- **Dependent data** -- `Std.Vector`, `Std.Bounded`, `Std.NonEmpty`,
+  `Std.Sigma`, `Std.Tuple`, `Std.Decision`, and `Std.Equivalent`.
+- **Proofs and reflection** -- `Std.Proof`, `Std.Proof.Math`, the
+  `Std.Proof.Int.*` and linear-arithmetic modules, `Std.Refine`,
+  `Std.Telescope`, `Std.Syntax`, and `Std.Syntax.Raw`.
+- **Collections and data shape** -- `Std.List`, `Std.Map`, `Std.Set`,
+  `Std.Dynamic`, `Std.DataSuffix`, `Std.Match`, `Std.Optic`, and `Std.Iter`.
+- **Text and parsing** -- `Std.String`, `Std.Regex` plus its syntax-parser
+  family, and `Std.Json`.
+- **Numeric and measurements** -- `Std.Math`, `Std.Decimal`, and
+  `Std.Measurements`.
+- **Typed BEAM/OTP** -- `Std.Otp`, `Std.Otp.Raw`, `Std.Beam`,
+  `Std.ActorBehavior`, `Std.Actor`, `Std.Fsm`, `Std.Process`,
+  `Std.Supervisor`, `Std.ExitReason`, and `Std.App`.
+
 ## Core utilities
 ### Std.Core
-Identity, composition, boolean operations, comparison, and both the
-`Result` and `Option` sum types. These are the most commonly used
-combinators in Cure programs.
+Identity, composition, boolean operations, comparisons, and convenience
+wrappers over the canonical `Std.Result` and `Std.Option` inductives.
 #### Combinators
 - `identity(x: T) -> T`  -- returns `x` unchanged.
 - `compose(f: B -> C, g: A -> B) -> (A -> C)`  -- right-to-left
@@ -144,23 +175,23 @@ combinators in Cure programs.
 - `option_or(o, default) -> T`  -- unwrap-or-default alias used by
   `Std.Match`.
 ### Std.Io
-Minimal stdout surface. Every impure entry carries the `! Io` effect in
-its signature so callers are forced to declare the effect.
-- `put_chars(text: String) -> Atom ! Io`  -- write without newline;
+Minimal stdout surface. Operations that write retain the explicit `! Io`
+effect annotation.
+- `put_chars(text: String) -> Unit ! Io`  -- write without newline;
   wraps `:io.put_chars/1`.
-- `println(text: String) -> Atom ! Io`  -- write `text <> "\n"`.
-- `print(text: String) -> Atom ! Io`  -- alias for `put_chars`.
+- `println(text: String) -> Unit ! Io`  -- write `text <> "\n"`.
+- `print(text: String) -> Unit ! Io`  -- alias for `put_chars`.
 - `int_to_string(n: Int) -> String`,
   `float_to_string(f: Float) -> String`,
   `atom_to_string(a: Atom) -> String`  -- cheap conversion helpers.
-- `print_int(n: Int) -> Atom`, `print_float(f: Float) -> Atom`  --
+- `print_int(n: Int) -> Unit ! Io`, `print_float(f: Float) -> Unit ! Io`  --
   convenience wrappers that call `println` on the converted value.
 ### Std.Show
 A single-method display protocol. Instances convert a value to its
 human-readable `String` form; this is the counterpart to Elixir's
 `String.Chars` / `Inspect` split.
-- `proto Show(T)` with `fn show(x: T) -> String`.
-- Built-in impls for `Int`, `Float`, `String`, `Bool`, `Atom`.
+- `interface Show(t)` with `fn show(x: t) -> String`.
+- Built-in implementations for `Int`, `Float`, `String`, `Bool`, `Atom`.
   Strings are wrapped in quotes, atoms are prefixed with `:`.
 - `show_line(x: T) -> String`  -- `show(x) <> "\n"`.
 ### Std.System
@@ -179,20 +210,22 @@ to `:erlang.halt/1` and terminates the whole BEAM node.
 - `exit(code: Int) -> Atom`  -- halt the node with status `code`.
 ### Std.Test
 Assertion primitives plus a shrinking-aware property runner.
-- `assert(cond: Bool) -> Atom`  -- raises `:assertion_failed` on
+- `assert(cond: Bool) -> Unit`  -- raises `:assertion_failed` on
   `false`.
-- `assert_eq(a, b) -> Atom`  -- raises `:not_equal`.
-- `assert_ne(a, b) -> Atom`  -- raises `:unexpectedly_equal`.
-- `assert_gt(a, b) -> Atom`, `assert_lt(a, b) -> Atom`  -- strict
+- `assert_eq(a, b) -> Unit`  -- structural equality; raises `:not_equal`.
+- `assert_ne(a, b) -> Unit`  -- raises `:unexpectedly_equal`.
+- `assert_gt(a, b) -> Unit`, `assert_lt(a, b) -> Unit`  -- strict
   ordering assertions.
-- `forall(gen, property, runs) -> Atom`  -- run `property` against
-  `runs` samples drawn from `gen`. Returns `:ok` on success; raises
+- `forall(gen, property, runs) -> Unit`  -- run `property` against
+  `runs` samples drawn from `gen`. Returns `()` on success; raises
   `:property_failed` on a counterexample.
-- `forall_default(gen, property) -> Atom`  -- wrapper with 100 runs.
-- `forall_shrunk(gen, property, runs) -> T`  -- like `forall/3` but
-  shrinks the first failing sample via `Std.Gen.shrink/1` before
-  raising `:property_failed_with_shrunk`.
-- `forall_shrunk_default(gen, property) -> T`  -- 100-run default.
+- `forall_default(gen, property) -> Unit`  -- wrapper with 100 runs.
+- `forall_shrunk(gen, property, runs) -> Result(Unit, t)`  -- returns
+  `Ok(())` on success or `Error(minimal)` with the minimized counterexample.
+  A throwing property counts as failure; a throwing generator is a caller
+  error because it provides no witness to return.
+- `forall_shrunk_default(gen, property) -> Result(Unit, t)`  -- 100-run
+  default. Import `Std.Result` to name and match the result.
 
 ## Containers and data
 ### Std.List
@@ -282,18 +315,18 @@ Representation after erasure: `:empty` or `{:prepend, head, tail}`.
 - `count(xs) -> Nat` and `length(xs) -> Nat` -- runtime Peano length.
 - `any(xs, pred) -> Bool` and `all(xs, pred) -> Bool`.
 The old tuple-backed `%[:vector, len, list]` API has been retired.
-### Std.Pair
-Two-tuple helpers. Internally delegates to `:erlang.element/2`.
-- `element(index: Int, tuple) -> T`  -- 1-based BEAM accessor; also
-  used by `Std.Vector`.
-- `first(pair) -> T`, `second(pair) -> T`, `swap(pair) -> Tuple`.
-- `map_first(pair, f)`, `map_second(pair, f)`, `map_both(pair, f, g)`.
-- `to_list(pair) -> List(T)`, `from_list(list) -> Tuple`  -- the
-  `from_list` helper pads or truncates pathological inputs with
-  zeros.
+### Std.Tuple
+Canonical flat tuple surface.
+- `Tuple(a, b)` is the arity-2 product; `Tuple(a, b, c, ...)` supports flat
+  n-ary tuples.
+- Values use `%[a, b, ...]` and projections use `.1`, `.2`, and later
+  positions.
+- `first`, `second`, and `swap` cover pairs; `third` covers a 3-tuple.
+- `Std.Tuple` replaces the retired `Std.Pair`.
 ### Std.Option
-Standalone `Option(T)` module (parallel to the Option helpers in
-`Std.Core`; kept separate so it can be imported alone).
+Canonical home of the `Option(t)` inductive and its constructors. Import it
+with `use Std.Option`, then write bare `Option`, `Some`, and `None`; do not
+spell the type as `Std.Option.Option`.
 - `some(value)`, `none()`  -- constructors.
 - `is_some(o)`, `is_none(o)`  -- predicates.
 - `unwrap(o, default) -> T`, `or_else(o, default) -> T`  -- total
@@ -305,8 +338,9 @@ Standalone `Option(T)` module (parallel to the Option helpers in
 - `zip(a, b) -> Option(Tuple)`  -- `Some(%[va, vb])` when both sides
   are `Some`, else `None()`.
 ### Std.Result
-Standalone `Result(T, E)` module. Same shape as the Result half of
-`Std.Core`, with one extra combinator:
+Canonical home of the `Result(t, e)` inductive and its constructors. Import it
+with `use Std.Result`, then write bare `Result`, `Ok`, and `Error`; qualified
+and imported constructor forms resolve through the same module interface.
 - `ok(v)`, `error(e)`, `is_ok(r)`, `is_error(r)`, `unwrap(r, default)`,
   `unwrap_error(r, default)`  -- basics.
 - `map(r, f) -> Result(U, E)`, `map_error(r, f) -> Result(T, F)`.
@@ -328,23 +362,25 @@ smoke test for the pattern engine.
 #### Options / Results
 - `unwrap_ok(r, default) -> T`, `unwrap_some(o, default) -> T`.
 
-## Protocols
+## Interfaces
 ### Std.Equatable
-Structural equality with a default `ne/2`.
-- `proto Equatable(T)` with `fn eq(a: T, b: T) -> Bool`.
-- Built-in impls for `Int`, `Float`, `String`, `Bool`, `Atom`.
-- `ne(a, b) -> Bool`  -- `!eq(a, b)`.
-### Std.Ord
-Three-way comparison plus total-order helpers.
-- `proto Ord(T)` with `fn compare(a: T, b: T) -> Atom` returning
-  `:lt`, `:eq`, or `:gt`.
-- Built-in impls for `Int`, `Float`, `String`, `Atom`.
-- `lt`, `le`, `gt`, `ge`  -- derived from `compare/2`.
+Runtime equality through the surface operators.
+- `interface Equatable(t)` with ``fn `==`(a: t, b: t) -> Bool``.
+- Implementations for `Int`, `Float`, `Bool`, `Atom`, `Char`, `Nat`,
+  `Option(t)`, and `List(t)`.
+- `` `!=`(a, b) -> Bool requires Equatable(t)`` is derived from `` `==` ``.
+### Std.Comparable
+Total ordering, requiring `Equatable(t)`.
+- `interface Comparable(t) requires Equatable(t)` with the minimal
+  ``fn `<`(a: t, b: t) -> Bool`` method.
+- Implementations for `Int`, `Float`, `Char`, and `String`.
+- `<=`, `>`, `>=`, and `compare` are constrained derived functions;
+  `compare` returns `LessThan`, `EqualTo`, or `GreaterThan`.
 ### Std.Functor
-Minimal `fmap`-style functor. Useful as a teaching example of the
-protocol system.
-- `proto Functor(F)` with `fn fmap(container: F, f: A -> B) -> F`.
-- `impl Functor for List` delegates to `Std.List.map/2`.
+Higher-kinded `fmap` interface.
+- `interface Functor(f)` where `f : Type -> Type`.
+- `fmap(container: f(a), g: a -> b) -> f(b)`.
+- `implementation Functor for List` delegates to `Std.List.map/2`.
 
 ## Value-shaped modules
 ### Std.Char
@@ -384,15 +420,26 @@ Integer helpers written in Cure plus `@extern` wrappers around the
   `negate(x)`, `is_even(x)`, `is_odd(x)`, `safe_div(a, b)` (returns
   `0` when the divisor is zero).
 ### Std.Regex
-`Std.Regex` is being rebuilt as a dependently typed parser. The old unindexed
-syntax tree, runtime pattern parser, recursive suffix matcher, and OTP regex
-shim have been removed. A literal such as `/[A-Z]*/im` remains source syntax,
-but its completed implementation must expand at compile time to an indexed
-`Regex(result)` and direct compiled machine behavior.
+Dependently typed regular expressions. `Regex(result)` records the value a
+successful parse produces, so extraction shape is checked statically rather
+than returned through `Dynamic` or a cast.
 
-The authoritative API, semantics, proof obligations, and implementation order
-are specified in
-`docs/superpowers/specs/stdlib/2026-07-21-dependently-typed-regex-design.md`.
+- `Pattern(shape)` and `Sem(shape)` describe raw extraction shapes;
+  `Simplify(shape)` computes their ergonomic public result.
+- `compile_regex` builds the direct pattern machine and typed evidence
+  conversion.
+- `parse_full`, `parse_prefix`, and `parse_prefix_with` return
+  `Option(result)` (or a result/remainder tuple for prefix parsing).
+- `search` returns `Option(Match(result))`; `matches` is the boolean consumer.
+- Constructors include `empty`, `predicate`, `exactly`, concatenation,
+  alternation, repetition, optional/one-or-more, capture, mapping, anchors,
+  boundaries, and configured regex options.
+- Regex literals expand at compile time through the `Std.Regex.Syntax` parser
+  family into the indexed representation.
+
+The deleted unindexed tree, recursive suffix matcher, and OTP-regex shim are
+not compatibility paths; all current regex operations use the dependent
+machine and evidence decoder.
 ### Std.Json (v0.23.0)
 Typed JSON encoder/decoder that pairs with the v0.21.0
 `@derive(JSON)` extension.
@@ -407,20 +454,6 @@ Typed JSON encoder/decoder that pairs with the v0.21.0
   `Obj(...)`.
 
 Runtime module: `:cure_std_json`.
-### Std.Http (v0.23.0)
-Minimal HTTP/1.1 client built on OTP's `:httpc`, with no external
-dependencies. Uses `Result` so HTTP calls compose naturally with the
-rest of the standard library.
-- `rec Response { status: Int, headers: List((String, String)),
-   body: Bitstring }`.
-- `type HttpError = Timeout | BadStatus(Int) | NetworkError(String)
-   | DecodeError(String)`.
-- `get(url) -> Result(Response, HttpError)`.
-- `get_with_headers(url, headers) -> Result(Response, HttpError)`.
-- `post(url, headers, body) -> Result(Response, HttpError)`.
-- `head(url) -> Result(Response, HttpError)`.
-
-Runtime module: `:cure_std_http`.
 ### Std.Time (v0.27.0)
 Instants and durations on top of OTP's `Calendar` / `DateTime`.
 Everything is stored in microseconds so arithmetic stays monomorphic.
@@ -450,18 +483,13 @@ Everything is stored in microseconds so arithmetic stays monomorphic.
 Runtime module: `:cure_std_time`.
 
 ## Types and proofs
-### Std.Equal
-Legacy equality-token helpers. All four functions currently return
-the runtime atom `:cure_refl`; their public stdlib signatures are
-`Atom`-based compatibility APIs, not trusted kernel proofs.
-
-Core has internal `Eq`/`refl`/`rewrite` support and tests, but the
-Cure source surface for those proofs is not fully wired through the
-dependent compiler yet.
-- `refl(x: T) -> Atom`.
-- `sym(eq: Atom) -> Atom`.
-- `trans(p: Atom, q: Atom) -> Atom`.
-- `cong(f: T -> U, eq: Atom) -> Atom`.
+### Std.Equivalent
+Kernel-recognised inductive identity.
+- `Equivalent(a, x, y)` is the proposition that `x` and `y` are identical.
+- `reflexive : Equivalent(a, w, w)` is its sole constructor and is erased.
+- `sym`, `trans`, and `cong` are ordinary structurally checked Cure proofs.
+- `TypeEquivalent(x, y)` supplies equality between small types without
+  assuming the inconsistent `Type : Type`.
 ### Std.Proof
 Kernel-checked propositional equality laws over `Std.Nat`, proved by
 structural induction in Cure.

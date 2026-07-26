@@ -20,8 +20,8 @@ now. What's new below is what the surface gained.
 
 ```cure
 type Vector(a: Type) indices (n: Nat)
-  empty   : Vector(a, Zero)
-  prepend : a -> Vector(a, n) -> Vector(a, Suc(n))
+  empty   : Vector(a, Z)
+  prepend : a -> Vector(a, n) -> Vector(a, S(n))
 ```
 
 **Dependent function types** — the codomain may mention the argument:
@@ -58,8 +58,8 @@ cases:
 
 ```cure
 match pf
-  Refl -> ...
-  _    -> impossible
+  reflexive -> ...
+  _         -> impossible
 ```
 
 **`with`-abstraction** (Idris-style), including multiple binders,
@@ -116,6 +116,10 @@ fn asserted() -> Int = assert_type 42 : Int
 
 - **N-ary tuples** — flat `Tuple(T1, …, Tn)` surface with positional
   `.i` projection and `element(t, i)` (compile-time bounds-checked).
+- **Contextual integer literals** — a numeral defaults to `Int`, but in a
+  checking position `ExpressibleByNaturalLiteral` /
+  `ExpressibleByIntegerLiteral` may construct the expected type and reject an
+  invalid finite-domain value at compile time.
 
 ---
 
@@ -297,11 +301,14 @@ Everything re-elaborates on the dependent pipeline. New / reshaped:
   full optic composition).
 - **`Std.NonEmpty`**, **`Std.Decision`** (decidable props with
   evidence), **`Std.Sigma`**, **`Std.Tuple`**.
-- **`Std.Equal` / `Std.Proof`** — genuine inductive `Eq`/`refl`;
-  primitive equality tokens retired.
+- **`Std.Equivalent` / `Std.Proof`** — genuine inductive
+  `Equivalent`/`reflexive`; primitive equality tokens retired.
 - `Option`/`Result` are real inductives; `Map(k, v)` is parameterised;
   `String = List(Char)`; `Char`/`Atom`/`Binary`/`Int`/`Float` get
   visible primitive homes.
+- **`Std.Regex`** is now indexed by its extraction result and compiles to a
+  direct pattern machine with typed evidence decoding; the old unindexed
+  tree/suffix matcher and OTP-regex shim are gone.
 - `@prelude` marks a stdlib item ambient without an explicit `use`.
 
 ---
@@ -404,4 +411,4 @@ linear `infer` on deep constructor spines; linear code-hole scanning.
   renamed (see §4); migration rules provided.
 - `Std.Access` removed → use `Std.Optic`.
 - Primitive `Eq`/`refl`/`rewrite` and `bool_elim` retired in favour of
-  inductive definitions.
+  `Equivalent`/`reflexive` and ordinary inductive definitions.

@@ -37,18 +37,21 @@ Metastatic's cross-language analysis tools.
 ## Key Features
 
 - **Dependent types** -- types that depend on values, verified at compile time
-- **Refinement types** -- constrained subtypes checked via SMT solver
+- **Indexed and dependent types** -- GADT-style indexed families, dependent
+  function results, implicit arguments, Sigma pairs, and kernel-checked
+  propositional equality
 - **Records** -- named product types with construction (`Point{x: 1, y: 2}`),
   field access (`p.x`), and functional update (`Point{p | x: new_x}`);
   compile to BEAM maps; type-checked with per-field schemas
-- **First-class FSMs** -- finite state machines as language constructs with
+- **Typed FSM macros** -- finite state machines as transparent standard-library
+  syntax with
   compile-time verification (reachability, deadlock freedom, hard event validation),
   dual-mode compilation (simple `gen_statem` or callback `GenServer`),
   Finitomata-inspired `!`/`?` event suffixes, inline `on_transition` handlers,
   and lifecycle callbacks (`on_enter`, `on_exit`, `on_failure`, `on_timer`)
-- **Typed actors and supervisors** (v0.25.0) -- `actor Name` containers
-  compile to loaded `GenServer` modules; `sup Name` containers compile
-  to verified `Supervisor` behaviour modules with compile-time checks on
+- **Typed actors and supervisors** (v0.25.0, dependent macro surface in
+  v0.34) -- `actor Name` and `sup Name` expand to checked lifted modules over
+  `Std.Otp`, with compile-time checks on
   strategy / intensity / period / child-id uniqueness / restart /
   shutdown. `Std.Actor`, `Std.Process`, and `Std.Supervisor` expose the
   runtime from Cure source
@@ -70,15 +73,20 @@ Metastatic's cross-language analysis tools.
 - **Indentation-structured** -- no closing delimiters, visual layout determines scope
 - **Expression-oriented** -- everything is an expression, the last expression in a block is its value
 - **BEAM-native** -- compiles to standard BEAM bytecode, full OTP interoperability
-- **Protocols** -- ad-hoc polymorphism via `proto`/`impl` with
-  guard-based dispatch compiled to multi-clause BEAM functions
-- **Effect system** -- `! Io, Exception, ...` annotations; inferred when omitted
+- **Interfaces and implementations** -- ad-hoc polymorphism via
+  `interface`/`implementation`, explicit `requires` constraints, canonical
+  cross-module instance lookup, and structural derivation
+- **Quantitative types** -- erased, linear, affine, and unrestricted binders
+  are checked by the dependent kernel before erasure
+- **Effects** -- `Effect(T)` marks direct-style computations while keeping the
+  effect former visible to dependent checking
 
 ## Quick Example
 
 ```cure
 mod MyApp.Math
-  use Std.{Result, Option}
+  use Std.Result
+  use Std.Option
 
   type Sign = Positive | Negative | Zero
 
@@ -91,7 +99,10 @@ mod MyApp.Math
     | x when x < 0 -> Negative
     | _             -> Zero
 
-  fn safe_divide(a: Int, b: {x: Int | x != 0}) -> Int = a / b
+  fn safe_divide(a: Int, b: Int) -> Result(Int, Atom) =
+    pickup
+      b == 0 -> Error(:division_by_zero)
+      else   -> Ok(a / b)
 ```
 
 ## Usage
@@ -196,9 +207,9 @@ module.my_function(args)
 The standard library is self-hosted -- written in Cure itself under `lib/std/`.
 Compile it with `mix cure.compile_stdlib`.
 
-- **`Std.Core`** (36 functions) -- identity, compose, pipe, boolean ops,
-  comparisons, Result type (ok, error, is_ok, map_ok, and_then, or_else),
-  Option type (some, none, is_some, unwrap, map_option, flat_map_option)
+- **`Std.Core`** -- identity, composition, application, and other foundational
+  combinators. `Option` and `Result` now live in their canonical
+  `Std.Option` and `Std.Result` modules
 - **`Std.List`** (25 functions) -- length, head, tail, last, cons, append,
   concat, reverse, map, filter, foldl, foldr, flat_map, zip_with, nth, take,
   drop, contains, find, any, all, sum, product, count
@@ -207,18 +218,16 @@ Compile it with `mix cure.compile_stdlib`.
 - **`Std.String`** (17 functions) -- length, is_empty, concat, downcase, upcase,
   trim, from_int, from_float, from_atom, to_int, to_float, to_atom, split,
   repeat, reverse
-- **`Std.Pair`** (9 functions) -- element, first, second, swap, map_first,
-  map_second, map_both, to_list, from_list
-- **`Std.Access`** (protocol + 6 lenses + 6 nested helpers) -- Elixir-style
-  `Access` behaviour for Cure. Protocol callbacks `fetch/2`,
-  `get_and_update/3`, `pop/2` with implementations for maps (records
-  included) and keyword-style lists; direct helpers `fetch_bang`, `get`,
-  `get_and_update`, `pop`; composable lenses `key`, `key_default`,
-  `key_bang`, `elem_at`, `at`, `all`, `filter`; and nested traversal
-  helpers `fetch_in`, `get_in`, `put_in`, `update_in`,
-  `get_and_update_in`, `pop_in`
-- **`Std.Show`** (6 functions) -- Show protocol with `show/1` dispatch for
+- **`Std.Tuple`** -- canonical flat tuple types and projections:
+  `first`, `second`, `swap`, and n-ary accessors such as `third`
+- **`Std.Optic`** -- statically typed lenses, affine traversals, and
+  composable record-field optics; replaces the retired `Std.Access`
+- **`Std.Show`** -- `Show` interface with `show/1` dispatch for
   Int, Float, String, Bool, Atom; `show_line/1` convenience
+- **`Std.Equatable` / `Std.Comparable`** -- comparison interfaces backing
+  `==`, `!=`, `<`, `<=`, `>`, `>=`, and `compare`
+- **`Std.Equivalent`** -- the inductive identity type and its
+  kernel-checked `reflexive`, `sym`, `trans`, and `cong` proofs
 - **`Std.Io`** (8 functions) -- put_chars, println, print, int_to_string,
   float_to_string, atom_to_string, print_int, print_float
 - **`Std.System`** (10 functions) -- monotonic_time, system_time, timestamp_ms,
@@ -252,7 +261,8 @@ See the `examples/` directory for sample Cure programs:
 - `result_handling.cure` -- Result type error handling with and_then
 - `pattern_guards.cure` -- pattern matching, guards, match expressions
 - `recursion.cure` -- recursive functions (factorial, fibonacci, reverse)
-- `protocols.cure` -- protocol definition and dispatch
+- `protocols.cure` -- interface definition, implementation, constraints, and
+  dispatch
 - `ffi.cure` -- calling Erlang functions via @extern
 - `adt.cure` -- algebraic data types (Option, Result, Color)
 - `records.cure` -- record definition, construction, field access, and
@@ -267,7 +277,7 @@ See the `examples/` directory for sample Cure programs:
 - `cure_moneta/` -- full example project: money and ledger library;
   multi-line ADT (`Currency`), refinement types (`PositiveAmount`, `Rate`),
   `Money{amount, currency, fractional_units}` record (EUR/JPY/OMR-aware
-  display), `Show` and `Eq` protocols, FX conversion via `@extern` FFI,
+  display), `Show` and `Equatable` interfaces, FX conversion via `@extern` FFI,
   ledger mutations with `Result`-chaining, and a payment transaction FSM
   with hard (`dispatch!`), soft (`retry?`, `cancel?`), wildcard, `on_timer`,
   `on_enter`, and `on_failure` callbacks
@@ -304,7 +314,12 @@ cure check examples/protocols.cure
 ## Documentation
 
 - [Language Specification](docs/LANGUAGE_SPEC.md) -- syntax, keywords, operators, all constructs
-- [Type System](docs/TYPE_SYSTEM.md) -- bidirectional checking, refinement types, SMT verification
+- [Type System](docs/TYPE_SYSTEM.md) -- dependent bidirectional checking,
+  indexed families, quantitative binders, conversion, and erasure
+- [Dependent Types](docs/DEPENDENT_TYPES.md) -- indexed-family and proof
+  programming guide
+- [Patterns](docs/PATTERNS.md) -- structural patterns, guards, pins, and
+  pattern-valued `let`
 - [FFI](docs/FFI.md) -- `@extern` foreign-function interface: module forms, effects, and lowering
 - [FSM Guide](docs/FSM_GUIDE.md) -- FSM definition, compilation, runtime, verification
 - [Supervision](docs/SUPERVISION.md) -- typed actors, `sup` containers, the Melquiades Operator, links and monitors (v0.25.0)
@@ -331,11 +346,14 @@ mix dialyzer
 
 ## Status
 
-All core milestones complete. The full compilation pipeline is operational:
-lexer, parser, bidirectional type checker with record types, refinement types
-and exhaustiveness analysis, protocol dispatch codegen, BEAM code generation,
-FSM compilation with structural verification, effect system, documentation
-generator, formatter, stdlib, CLI, CI, and example programs.
+The classic checker/code-generator has been removed. Every source file now
+passes through the dependent elaborator, trusted Core validator, erasure, and
+BEAM emitter. The current unreleased work includes indexed families,
+quantitative binders, interfaces and implementations, structural derivation,
+canonical module interfaces, macro expansion, structured diagnostics, and
+authoritative compilation/runtime checks for the root example corpus. See
+[`ROADMAP-0.34.md`](ROADMAP-0.34.md) and the Unreleased section of
+[`CHANGELOG.md`](CHANGELOG.md).
 ### Release history
 - **v0.32.0 -- Trust, Export, Recall, Narrate**: proof-carrying packages
   (`mix cure.verify`), cross-language ADT export to proto3
@@ -423,4 +441,5 @@ generator, formatter, stdlib, CLI, CI, and example programs.
   FSM `gen_statem` compiler, CLI, CI, examples.
 ## License
 
-To be determined.
+MIT. See the repository's
+[LICENSE](https://github.com/Qata/cure-lang/blob/main/LICENSE).

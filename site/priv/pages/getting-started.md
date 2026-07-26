@@ -108,7 +108,14 @@ Or via the Mix task:
 mix cure.compile_stdlib
 ```
 
-This compiles all `.cure` files in `lib/std/` and writes the resulting `.beam` files to `_build/cure/ebin/`. The stdlib ships 33+ modules (`Std.Core`, `Std.List`, `Std.Math`, `Std.String`, `Std.Pair`, `Std.Show`, `Std.Io`, `Std.System`, `Std.Map`, `Std.Set`, `Std.Option`, `Std.Functor`, `Std.Equal`, `Std.Match`, `Std.Proof`, `Std.Gen`, `Std.Iter`, `Std.Access`, `Std.Json`, `Std.Http`, `Std.Actor`, `Std.Process`, `Std.Supervisor`, `Std.App`, `Std.Time`, `Std.Regex`, `Std.CRDT`, and more). As of v0.29.0 every module carries a module-level `## Examples` block; browse the rendered docs at [cure-lang.org/stdlib](/stdlib) or run `cure doc` locally to produce the same two-pane layout under `_build/cure/doc/`.
+This compiles all `.cure` files in `lib/std/` and writes the resulting `.beam`
+files to `_build/cure/ebin/`. The library includes canonical `Std.Option` and
+`Std.Result` inductives, `Std.Equatable` / `Std.Comparable` interfaces,
+kernel-checked `Std.Equivalent` proofs, indexed `Std.Vector`, typed
+`Std.Optic`, `Std.Otp`, `Std.Iter`, text/regex/JSON modules, and the OTP
+runtime modules. Browse the rendered sources at
+[cure-lang.org/stdlib](/stdlib), or run `cure doc` locally to build the same
+two-pane reference under `_build/cure/doc/`.
 
 ## Other CLI commands
 

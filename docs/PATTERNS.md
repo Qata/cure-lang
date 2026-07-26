@@ -4,12 +4,14 @@ matching. It covers every pattern shape accepted by `match`, `let`,
 multi-clause function heads, comprehension generators, and `try ...
 catch` clauses.
 
-## Pattern AST to Erlang mapping
+## Pattern elaboration and Erlang mapping
 
-The pattern compiler lives in `Cure.Compiler.PatternCompiler`. It
-lowers MetaAST pattern nodes into Erlang abstract forms. The table
-below is the contract you can rely on when inspecting compiler output
-or writing Elixir-side tooling.
+There is no separate classic pattern compiler. `Cure.Elab.Elaborator`
+checks every pattern form through one dependent path, preserving narrowed
+bindings, constructor identities, equality constraints, and source spans.
+After kernel validation and evidence erasure, `Cure.Elab.Emit` lowers the
+runtime pattern to Erlang abstract forms. The table below describes that final
+shape for compiler-output and Elixir-side tooling.
 
 - `{:variable, _, "_"}` lowers to `{:var, L, :_}` (wildcard).
 - `{:variable, _, name}` on first occurrence lowers to
@@ -18,12 +20,12 @@ or writing Elixir-side tooling.
   original binding.
 - `{:pin, _, [{:variable, _, name}]}` lowers to a fresh variable plus
   an equality guard against the pre-existing binding for `name`. If
-  `name` is unbound at that point, the type checker emits `E024` and
-  the compiler falls back to a plain binding.
+  `name` is unbound at that point, elaboration fails with the structured
+  unbound-pin diagnostic.
 - `{:literal, [subtype: :integer], n}` lowers to `{:integer, L, n}`.
-  Similarly for `:float`, `:symbol`, `:boolean`, `:null`, `:char`.
-  Strings lower to a utf8 binary pattern; byte strings to a raw
-  binary.
+  Similarly for `:float`, `:symbol`, `:boolean`, `:null`, and `:char`.
+  Strings elaborate as `List(Char)` patterns; byte literals lower through
+  `Std.Binary`.
 - `{:tuple, _, elems}` recurses into every child as a pattern and
   lowers to `{:tuple, L, forms}`.
 - `{:list, [cons: true], [head, tail]}` lowers to
@@ -89,8 +91,8 @@ not block compilation.
 
 ## Injected guards
 
-`Cure.Compiler.PatternCompiler` can add synthetic guards to a clause
-when the pattern uses:
+Dependent pattern elaboration records equality constraints when a pattern
+uses:
 
 - `^x` (pin operator).
 - A variable that occurs more than once in the same pattern.

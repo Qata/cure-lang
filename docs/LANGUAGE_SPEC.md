@@ -7,11 +7,15 @@ indentation level, not by keywords like `do`/`end` or braces.
 
 ### Keywords
 
-`fn`, `mod`, `rec`, `fsm`, `actor`, `proto`, `impl`, `type`, `let`, `if`,
-`then`, `else`, `elif`, `match`, `when`, `where`, `local`, `use`, `return`,
-`throw`, `try`, `catch`, `finally`, `for`, `in`, `true`, `false`, `nil`,
-`and`, `or`, `not`, `spawn`, `send`, `receive`, `after`, `proof`, `extern`,
-`end`, `do`
+The active edition reserves the words reported by the lexer. The declaration
+and expression keywords most users encounter are:
+
+`fn`, `mod`, `rec`, `fsm`, `actor`, `interface`, `implementation`, `type`,
+`typealias`, `primitive`, `let`, `pickup`, `else`, `match`, `with`, `when`,
+`local`, `use`, `return`, `throw`, `try`, `catch`, `finally`, `for`, `in`,
+`true`, `false`, `nil`, `and`, `or`, `not`, `spawn`, `send`, `receive`,
+`after`, `unsafe`, `quote`, `syntax`, `becomes`, `computed`, `by`, `end`,
+and `do`.
 
 `requires` is contextual in function and implementation signatures. It lists
 interface obligations without reserving the word as an ordinary identifier:
@@ -230,16 +234,11 @@ any other lambda.
 
 ### Refinement types
 
-```cure
-type NonZero = {x: Int | x != 0}
-type Positive = {x: Int | x > 0}
-type Percentage = {p: Int | p >= 0 and p <= 100}
-```
-
-Refinement type subtyping is verified at compile time using Z3.
-With **path-sensitive refinement** (v0.17.0), the type of a variable
-appearing in an `if`/`match` guard is refined for the duration of that
-branch.
+The classic `{x: T | predicate}` type former has been retired from the trusted
+dependent pipeline. Express structural invariants with indexed families and
+proof arguments. Guard predicates still narrow control flow for diagnostics
+and exhaustiveness; SMT-backed guard analysis is linting outside the trusted
+kernel, not evidence for a dependent type.
 
 ### Sigma types (dependent pairs)
 
@@ -264,13 +263,15 @@ normalization and definitional equality.
 ### Equality types
 
 ```cure
-refl(x) : Eq(T, x, x)
+reflexive : Equivalent(T, x, x)
 ```
 
-`Eq(T, a, b)`, `refl`, and `rewrite` are part of the dependent-kernel
-design and Core has internal equality/rewrite support. The public Cure
-surface is not fully wired through the trusted dependent compiler yet;
-`Std.Equal` remains an `Atom`-returning compatibility module.
+`Std.Equivalent` declares the kernel-recognised inductive identity family
+`Equivalent(T, a, b)` and its sole constructor `reflexive`. Matching a proof
+against `reflexive` identifies its endpoints definitionally. `sym`, `trans`,
+and `cong` are ordinary Cure functions checked by the same kernel. This proof
+type is distinct from `Std.Equatable`, whose `==` method computes a runtime
+`Bool`.
 
 ### Proof authoring
 
@@ -317,6 +318,80 @@ fn factorial(n: Int) -> Int
 
 The dependent totality closure classifies definitions before certification.
 Add `@total true` to require a successful totality proof at compile time.
+
+### Indexed families
+
+Use `indices` to separate uniform parameters from constructor-varying indices:
+
+```cure
+type Vector(a: Type) indices (n: Nat)
+  empty   : Vector(a, Z)
+  prepend : a -> Vector(a, n) -> Vector(a, S(n))
+```
+
+Constructor-index equations refine each match branch. A branch whose
+constructor cannot inhabit the scrutinee indices may be marked `impossible`;
+forced (`.`) patterns record values already determined by those equations.
+Empty families use `type Void = |`.
+
+### Quantitative binders
+
+Core binders carry a grade in `{0, 1, ω}`. The surface supports erased,
+`:linear`, `:affine`, and unrestricted parameters and local bindings. Grade
+`0` values are checked but erased. The kernel rejects using erased data in
+runtime computation and rejects duplicating or dropping a linear value.
+
+### Union and top types
+
+`A | B` is permitted in any type position and discrimination is ordered.
+`Never` is bottom and `Any` is top. Top-type widening propagates through safe
+covariant positions (`List(Int)` satisfies `List(Any)`) but not through
+invariant or index-sensitive positions.
+
+### Contextual integer literals
+
+A numeral infers as `Int` without an expected type. In a checking position the
+elaborator may resolve `ExpressibleByNaturalLiteral(t)` or
+`ExpressibleByIntegerLiteral(t)` and call its total conversion. Conversion
+returns `LiteralValue(value)` or `InvalidLiteral`, allowing bounded domains to
+reject an out-of-range source literal during compilation.
+
+## User-defined syntax
+
+Surface macros declare grammar with `syntax ... becomes`. Holes carry a syntax
+kind, may repeat, and may request hygienic fresh names:
+
+```cure
+syntax beam_ops tell <dest: Code> <message: Code>
+  becomes Std.Otp.tell(dest, message)
+```
+
+`quote` constructs syntax and `$(...)` splices:
+
+```cure
+let ast = quote %[:ok, $(payload)]
+```
+
+`computed by` delegates expansion to an elaborator function.
+`to_syntax`/`from_syntax` reflect losslessly through `Std.Syntax`. Generated
+declarations retain both macro-invocation and macro-definition provenance and
+are published through the ordinary module-interface tables.
+
+## Editions and migration
+
+`@edition` and `[project].edition` in `Cure.toml` select a grammar/keyword
+edition. Earlier spellings remain recognizable to migration tooling rather
+than becoming parallel current syntaxes:
+
+```bash
+cure migrate --check src
+cure migrate --print src/old.cure
+cure migrate --strict src
+```
+
+The canonical renames include `proto` / `impl` to `interface` /
+`implementation`, legacy conditionals to `pickup`, uppercase type variables to
+lowercase, and retired module names to current providers.
 
 ## Records
 
@@ -407,17 +482,26 @@ Record construction uses `map_field_assoc` (`:=>`). Record update uses
 `map_field_exact` (`:=`) which requires the keys to already exist, giving
 a `bad_key` error at runtime if the base value has an incompatible shape.
 
-## Protocols
+## Interfaces and implementations
 
 ```cure
-proto Show(T)
-  fn show(x: T) -> String
+interface Show(t)
+  fn show(x: t) -> String
 
-impl Show for Int
+implementation Show for Int
   fn show(x: Int) -> String = Std.String.from_int(x)
 ```
 
-Protocol dispatch is compiled to guard-based multi-clause functions.
+Generic callers state dictionary requirements explicitly:
+
+```cure
+fn display(x: t) -> String requires Show(t) = show(x)
+```
+
+Definitions, methods, and implementations are published under canonical
+owner-qualified identities. A bare method is available only when its interface
+and implementation dictionary are in lexical scope; qualified module
+availability does not leak transitive bare names.
 
 ## FSMs (Finite State Machines)
 
@@ -609,11 +693,11 @@ match result
 
 match option
   Some(x) -> x
-  None()  -> 0
+  None    -> 0
 ```
-Nullary constructors must be written with empty parentheses
-(`None()`), never bare `None` -- a bare `None` is a fresh variable
-binding.
+Nullary constructors may be written bare (`None`) or with explicit empty
+parentheses (`None()`). A bare PascalCase name is resolved against the
+scrutinee type's constructors; lowercase bare names remain variable bindings.
 ### The pin operator `^x`
 ```cure
 let target = get_tag()
@@ -709,10 +793,11 @@ let Point{x, y}   = p                   # record punning
 let <<b, _::binary>> = buf              # binary destructure
 ```
 
-Non-exhaustive `let` patterns emit code `E034` as a warning (not an
-error): the binding still compiles, and Erlang's `=` raises at
-runtime on a failed match. Setting `partial: true` on the assignment
-metadata suppresses the warning.
+Pattern-valued `let` uses the same typed pattern elaborator as `match`.
+Bindings receive their narrowed types and become visible to subsequent
+expressions in the block. Impossible or non-matching patterns produce a
+structured diagnostic rather than being silently weakened into an unchecked
+assignment.
 
 ### Binary patterns
 

@@ -63,7 +63,7 @@ links remain valid across rebuilds:
 
 - `#fn-<name>` -- public functions.
 - `#type-<name>` -- `type` aliases and ADTs.
-- `#proto-<name>` -- `proto` declarations.
+- `#interface-<name>` -- `interface` declarations.
 
 When `[doc].source_url` is configured (or the built-in Cure site
 falls back to the repository's GitHub path), each entry also carries a
@@ -112,10 +112,9 @@ source_ref = "main"
 
 ### Normalisation
 
-The TOML parser lives in `Cure.Project`. The `[doc]` and
-`[doc.groups_for_modules]` tables are normalised by
-`Cure.Project.normalize_doc/2` into a plain map shape that the
-generator consumes directly:
+The TOML parser and documentation-config normalisation live in
+`Cure.Project`. The `[doc]` and `[doc.groups_for_modules]` tables become a
+plain map shape that the generator consumes directly:
 
 ```elixir
 %{
@@ -214,7 +213,7 @@ so the two views of the same stdlib module are visually consistent.
 ### `##` blocks and blank-line merging
 
 `##` comments above a definition (`mod`, `fn`, `type`, `rec`,
-`proto`) attach as its docstring. Consecutive `##` blocks separated
+`interface`) attach as its docstring. Consecutive `##` blocks separated
 by a blank-line gap (or by plain `#` comments that the lexer drops)
 are merged into a single Markdown body with a paragraph break
 between blocks -- so a module-level docstring can read as natural

@@ -2,204 +2,195 @@
 
 ## Overview
 
-Cure has a bidirectional type system with support for:
+Cure uses one bidirectional dependent type checker. The pre-0.34 classic
+checker and code-generation path have been deleted. Surface programs elaborate
+to dependent Core, the small kernel validates that Core, proof/index arguments
+are erased according to their quantitative grades, and the remaining program
+is emitted as BEAM code.
 
-- Primitive types and composite types
-- Algebraic data types (ADTs / sum types)
-- Refinement types with SMT-backed verification
-- Protocol-based ad-hoc polymorphism
-- Pattern exhaustiveness checking
+The type system includes:
 
-## Bidirectional Type Checking
+- cumulative universes and dependent function (`Pi`) types;
+- dependent pairs (`Sigma`) and indexed inductive families;
+- definitional equality by normalization;
+- inductive propositional equality through `Std.Equivalent`;
+- implicit arguments and higher-order pattern unification;
+- quantitative `{0, 1, ω}` binder usage;
+- structural pattern refinement and exhaustiveness;
+- interfaces, implementations, and explicit `requires` constraints;
+- union types, a bottom type, and `Any` as a top type in safe covariant
+  positions;
+- totality certificates governing which definitions may reduce during type
+  checking.
 
-The type checker operates in two modes:
+## Bidirectional elaboration
 
-- **Infer mode**: determines the type of an expression from its structure
-- **Check mode**: verifies an expression has an expected type
+Elaboration alternates between:
 
-Functions are checked in two passes:
-1. Collect all function signatures (name, parameter types, return type)
-2. Check each function body against its declared return type
+- **infer** — synthesize a Core term and its type from an expression;
+- **check** — elaborate an expression against an expected type.
 
-## Primitive Types
+Expected types flow into lambdas, constructors, holes, blocks, and local
+bindings. Implicit constraints may be postponed until later explicit
+arguments reveal enough information, so typability does not depend on argument
+order.
 
-- `Int` -- arbitrary-precision integers
-- `Float` -- IEEE 754 floating point
-- `String` -- UTF-8 binary strings
-- `Bool` -- `true` or `false`
-- `Atom` -- Erlang atoms (`:ok`, `:error`)
-- `Char` -- single Unicode character
-- `Unit` -- no meaningful value (`nil`)
-- `Pid` -- BEAM process identifier; bare `Pid` elaborates to
-  `{:pid, :any}` (v0.25.0)
-- `Pid(Inbox)` -- typed pid where `Inbox` is the ADT the receiving
-  process accepts (v0.25.0)
-- `Ref` -- monitor reference returned by `Std.Process.monitor/1`
-  (v0.25.0)
+Declarations receive canonical owner-qualified identities. Imports control
+lexical visibility, while module interfaces separately retain qualified
+availability. Repeated interface loading is idempotent and does not leak
+transitive bare names.
 
-## Composite Types
+## Universes and dependent functions
 
-- `List(T)` -- homogeneous linked list
-- `Map(K, V)` -- map from `K` to `V`
-- `%[A, B, ...]` -- tuple type, mirroring the value syntax `%[a, b, ...]`
-- `A -> B`, `(A, B) -> C` -- function types
-
-The canonical tuple-type spelling is `%[A, B]`. Legacy `(A, B)` remains
-accepted and compiles to the identical dependent tuple and flat BEAM value, but
-emits the explainable `E086 / E-TYPE-TUPLE-PAREN` deprecation. This does not
-affect grouped `(A)` or the parameter list in `(A, B) -> C`.
-
-## Subtyping
-
-- `Int <: Float` (numeric widening)
-- `Never <: T` for all T (bottom type)
-- `T <: Any` for all T (top type)
-- `{x: Int | P(x)} <: Int` (refinement drops constraint)
-- `List(A) <: List(B)` if `A <: B` (covariant)
-- `(A -> B) <: (C -> D)` if `C <: A` and `B <: D` (contravariant params)
-- `Pid(A) <: Pid(B)` if `A <: B` (covariant in the inbox, v0.25.0).
-  In particular, any `Pid(Inbox)` is a subtype of the top `Pid` alias
-  (elaborated as `Pid(:any)`), so untyped APIs remain assignable from
-  narrower typed pids without friction.
-
-## Refinement Types
-
-Refinement types constrain a base type with a logical predicate:
+`Type`, `Type 1`, and higher universes are cumulative and predicative. A
+function result may mention its arguments:
 
 ```cure
-type NonZero = {x: Int | x != 0}
-type Positive = {x: Int | x > 0}
-type Percentage = {p: Int | p >= 0 and p <= 100}
+fn append(
+  {a: Type},
+  {m: Nat},
+  {n: Nat},
+  xs: Vector(a, m),
+  ys: Vector(a, n)
+) -> Vector(a, plus(m, n))
 ```
 
-### Subtype Verification
+Brace-delimited parameters are implicit. They are inferred from explicit
+arguments and can be grade `0`, so they disappear at runtime.
 
-Refinement subtyping is verified at compile time using Z3:
+## Indexed inductive families
 
-- `Positive <: NonZero` because `forall x. x > 0 => x != 0` (proven by Z3)
-- `Percentage <: NonNegative` because `forall p. (p >= 0 and p <= 100) => p >= 0`
-- `NonZero` is NOT `<: Positive` (counterexample: x = -1)
-
-### Satisfiability
-
-The compiler verifies refinement types are not empty:
-
-- `{x: Int | x > 0}` is satisfiable (x = 1 works)
-- `{x: Int | x > 0 and x < 0}` is unsatisfiable (warning)
-
-## Pattern Exhaustiveness
-
-The type checker analyzes match expressions for completeness:
-
-- `Bool`: requires `true` and `false`
-- `Result(T, E)`: requires `Ok(...)` and `Error(...)`
-- `Option(T)`: requires `Some(...)` and `None()`
-- `List(T)`: requires `[]` and `[_ | _]`
-- Infinite types (`Int`, `String`): require a wildcard `_`
-
-Non-exhaustive matches produce compile-time warnings.
-
-## Guard-Based Type Refinement
-
-When a function has a guard, parameter types are refined within the body:
+`indices` separates uniform parameters from constructor-varying indices:
 
 ```cure
-fn process(x: Int) -> Int when x > 0 =
-  # Inside this body, x has type {x: Int | x > 0}
-  x * 2
+type Vector(a: Type) indices (n: Nat)
+  empty   : Vector(a, Z)
+  prepend : a -> Vector(a, n) -> Vector(a, S(n))
 ```
 
-For multi-clause functions, the type checker uses SMT to verify
-guard coverage and detect unreachable clauses.
+Constructor checking preserves the index equations. Pattern matching unifies
+those equations per branch, narrows local bindings, and rejects impossible
+constructor/index combinations. `impossible` arms and forced (`.`) patterns
+make those proofs explicit.
 
-## Record types
+## Sigma pairs and tuples
 
-Records introduce named product types. The type checker represents them as
-`{:named, "TypeName"}` -- a lightweight reference that carries the original
-name without erasing it to `Any`.
+`Sigma(name: A, B(name))` pairs a value with a second component whose type may
+depend on it. Ordinary tuples use matching value/type syntax:
 
-### Schema registration
-
-The checker's first pass (`collect_signatures`) registers each `rec` definition
-in `Env.types`:
-
-```
-"Point" -> {:record, :point, %{"x" => :int, "y" => :int}}
-"Person" -> {:record, :person, %{"name" => :string, "age" => :int}}
+```cure
+let pair : %[Int, Bool] = %[42, true]
 ```
 
-This schema is available during the second pass so that field accesses and
-record updates can be type-checked against the declared field types.
+`%[A, B, ...]` is the canonical tuple type. Legacy `(A, B)` is accepted only
+for migration and emits `E086 / E-TYPE-TUPLE-PAREN`; grouped types and function
+domains are unaffected.
 
-### Typing rules
+## Primitive and structural types
 
-- **Construction** -- `Point{x: 3, y: 4}` has type `{:named, "Point"}`.
-- **Field access** -- `p.x` where `p : {:named, "Point"}` has type `:int`
-  (looked up from the registered schema). Field access on `Any` produces `Any`.
-- **Record update** -- `Point{p | x: new_x}` where `p : {:named, "Point"}`
-  type-checks each override value against the declared field type and returns
-  `{:named, "Point"}`.
-- **Parameters** -- `fn f(p: Point)` resolves `Point` to `{:named, "Point"}`,
-  making `p` available with full field-type information in the body.
+Visible primitive homes include `Std.Int`, `Std.Float`, `Std.Char`,
+`Std.Atom`, and `Std.Binary`. `String` is the transparent alias
+`List(Char)`. `Option(t)` and `Result(t, e)` are ordinary inductives imported
+from `Std.Option` and `Std.Result`.
 
-### Subtyping for named types
+`Map(k, v)` is parameterized. Record declarations introduce nominal product
+types, while tuple and map types remain structural.
 
-`{:named, Name}` participates in the subtype hierarchy:
+## Subtyping and `Any`
 
-- `{:named, T} <: Any` for all T (inherited from the universal rule)
-- `{:named, "Pair"} <: {:adt, :pair, _params}` when
-  `String.downcase("Pair") == "pair"` -- named types satisfy their
-  corresponding parameterized ADT return type (e.g. `fn f() -> Pair(A, B)`
-  is satisfied by a body of type `{:named, "Pair"}`)
-- `{:named, T} <: {:named, T}` (reflexivity, from `subtype?(t, t)`)
+`Never` is the bottom type and `Any` is the top type. Widening propagates only
+through positions declared safe:
 
-## Protocols
+- `List(Int)` can satisfy `List(Any)` because list elements are covariant;
+- function inputs remain contravariant and outputs covariant;
+- invariant or dependent positions reject widening that would lose an index or
+  permit an unsafe write;
+- `Pid(inbox)` is covariant in its accepted-message type.
 
-Protocols provide ad-hoc polymorphism. The type checker:
+Diagnostics identify the invariant/dependent position that prevented a
+widening. Erasure never uses `Any` to discard runtime checks or proof
+obligations.
 
-1. Registers protocol method signatures during the first pass
-2. Validates implementation method signatures match the protocol
-3. Checks implementation bodies against declared types
+## Quantitative types
 
-## Typed Sends (v0.25.0)
+Every binder carries a grade in `{0, 1, ω}`:
 
-`Cure.Elab.Elaborator` handles `{:send, meta, [target, message]}` nodes
-emitted by the Melquiades Operator `<-|` (and the keyword form
-`send target, msg`) in the dependent pipeline:
+- `0` — compile-time only and erased;
+- `1` / `:linear` — used exactly once;
+- `:affine` — used at most once;
+- `ω` — unrestricted.
 
-1. Infer the target's type. If it is `{:pid, inbox}`, unify the
-   message type against `inbox`.
-2. Emit `E046 Inbox Mismatch` with a concrete diagnostic when the
-   unification fails.
-3. Return the message's type as the expression's type, so
-   `let reply = pid <-| msg` binds `reply` to the value that was sent.
+The kernel rejects scrutinizing, returning, or using an erased value in runtime
+computation. Initializers are still checked even when their binding is unused.
+Linear capabilities, such as typed OTP replies, therefore cannot be duplicated
+or silently dropped.
 
-Bare `Pid` elaborates to `{:pid, :any}`; sends against it never fail
-type-checking but attract `E045 Untyped Send` under strict mode.
-Effect inference attracts the `:state` effect for every send.
+## Definitional and propositional equality
 
-## Sigma, Pi, equality, holes, totality (v0.17.0)
+Definitional equality normalizes both terms and compares their normal forms. It
+is automatic and produces no proof object.
 
-See `DEPENDENT_TYPES.md` for the full guide. Brief summary:
+`Equivalent(a, x, y)` is propositional equality. Its `reflexive` constructor is
+accepted when the endpoints are definitionally equal; matching the proof
+identifies the endpoints. `Std.Equivalent` provides symmetry, transitivity, and
+congruence as checked Cure functions.
 
-- **Sigma types** -- `{:sigma, var, fst_type, snd_ast}` -- dependent
-  pairs where the second component's type may reference the first
-  component's value. Surface syntax: `Sigma(name: T1, T2)`.
-- **Pi types** -- `{:pi, [{name, type, mode}], ret_ast}` -- dependent
-  function types. Return types may reference parameter names; the
-  checker substitutes and normalises at every call site.
-- **Equality types** -- Core has `{:eq, T, a, b}`, `refl`, and
-  `rewrite` support, but the public Cure source surface is not fully
-  wired through the trusted dependent compiler yet. `Std.Equal`
-  remains a runtime-token compatibility API.
-- **Holes** -- `?name` and `??` placeholders. The checker emits a
-  `:hole_goal` event with the goal type and local context.
-- **Totality** -- `Cure.Elab.TotalityClosure` validates the reachable
-  definition closure before trusted certification. The `@total true`
-  decorator makes that requirement explicit at the declaration.
-- **Type-level reduction** -- `Cure.Core.Normalise` evaluates dependent Core
-  terms for definitional equality.
-- **Unification** -- `Cure.Elab.Unify` solves implicit metavariables with an
-  occurs check and preserves source context for failures.
-- **Branch refinement** -- dependent pattern elaboration refines indices and
-  local types independently in each checked branch.
+`Equivalent` is distinct from the `Equatable(t)` interface. `Equatable`
+computes `Bool` through `==`; it does not prove an identity proposition.
+
+## Interfaces and implementations
+
+```cure
+interface Show(t)
+  fn show(x: t) -> String
+
+implementation Show for Int
+  fn show(x: Int) -> String = Std.String.from_int(x)
+
+fn display(x: t) -> String requires Show(t) = show(x)
+```
+
+The compiler checks implementation signatures, required superinterfaces,
+coherence, and method bodies. Resolution is compile-time and canonical; a
+missing dictionary produces a structured diagnostic. Higher-kinded interfaces,
+including `Functor(Type -> Type)`, use the same mechanism.
+
+Generated declarations from `@derive` enter the same declaration and module
+interface tables as authored implementations.
+
+## Structural patterns
+
+One typed pattern elaborator handles literals, tuples, lists and cons cells,
+maps, records, user constructors, `Option`, `Result`, pins, repeated variables,
+guards, and multi-clause function heads. It preserves constructor identity,
+nested source spans, narrowed bindings, equality constraints for repeated
+variables, and pattern-only erasure evidence.
+
+Pattern-valued `let` uses the same grammar and introduces all narrowed bindings
+sequentially:
+
+```cure
+let Ok(%[head, tail]) = parse(input)
+```
+
+Exhaustiveness and unreachable-branch analysis operate on the elaborated
+constructors and index equations. Z3-backed guard coverage is an untrusted
+warning layer; kernel validity never depends on it.
+
+## Totality and conversion
+
+Type checking may unfold only definitions backed by a validated size-change
+termination certificate. The analysis covers structural recursion and mutual
+recursion. An uncertified definition can still exist, but remains opaque during
+conversion. `@total true` requires certification at the declaration.
+
+## Holes and diagnostics
+
+`?name` and `??` are typed holes. They report the expected type and local
+context through the structured diagnostic pipeline. Diagnostics retain
+authored source ranges, canonical definition identities, machine-readable
+codes, related spans, and safe code actions for terminal, JSON, and LSP
+consumers.
+
+See [Dependent Types](DEPENDENT_TYPES.md), [Patterns](PATTERNS.md),
+[Proofs](PROOFS.md), and [Kernel](KERNEL.md) for the detailed guides.

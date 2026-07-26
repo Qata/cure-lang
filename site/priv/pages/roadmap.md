@@ -5,6 +5,46 @@
 }
 ---
 
+## In development: v0.34.0 -- One dependent language
+
+v0.34 removes the classic compiler path. Every program now flows through the
+dependent elaborator, trusted Core kernel, quantitative erasure, and BEAM
+emitter.
+
+- **Dependent surface** -- indexed families with separate parameters and
+  indices, dependent results, implicit erased parameters, Sigma pairs,
+  impossible and forced patterns, `with` abstraction, unions, `typealias`, and
+  visible primitive declarations.
+- **Quantitative checking** -- `{0, 1, ω}` grades plus affine/linear binders;
+  proof/index data cannot escape erasure and capabilities cannot be duplicated.
+- **Identity** -- `Std.Equivalent` and `reflexive` replace primitive
+  `Eq`/`refl`/`rewrite`. Runtime comparison remains the distinct
+  `Std.Equatable` interface.
+- **Interfaces** -- `interface`, `implementation`, and `requires` replace
+  `proto`, `impl`, and implicit guard dispatch. `Std.Comparable` replaces
+  `Std.Ord`.
+- **Canonical modules** -- stable owner-qualified identities, lexical versus
+  qualified visibility, deterministic implementation loading, user preludes,
+  propagated operator fixity, and incremental dependency invalidation.
+- **Patterns and functions** -- one typed structural-pattern path for
+  `match`, function heads, and `let`; complete multi-expression lambda bodies
+  with expected-type inference.
+- **Generation** -- structural `@derive` implementations are published like
+  authored declarations; staged syntax, hygienic holes, quotation, splicing,
+  `computed by`, and `Std.Syntax` support user macros.
+- **Standard library** -- canonical `Std.Option` / `Std.Result`,
+  `Std.Equivalent`, `Std.Equatable`, `Std.Comparable`, indexed vectors,
+  typed optics and OTP, proof/reflection modules, and the expanded lazy
+  iterator surface.
+- **Tooling** -- editions and `cure migrate`, trust-ledger auditing,
+  structured diagnostics, canonical multi-file builds, and an authoritative
+  example runner. The root corpus currently has 40 passing examples and one
+  optimizer-only skip.
+
+Specialization is intentionally deferred to a later optimizer release. See
+[`ROADMAP-0.34.md`](https://github.com/am-kantox/cure-lang/blob/main/ROADMAP-0.34.md)
+and the Unreleased changelog for the full engineering inventory.
+
 ## Implemented: v0.33.0 -- Formalisation
 
 The two branching constructs in the language -- `match` and `pickup`

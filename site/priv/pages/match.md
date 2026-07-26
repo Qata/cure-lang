@@ -15,11 +15,11 @@
 > specification is the authority.
 
 Pattern matching is the primary way Cure programs decompose data and
-direct control flow. Every pattern is compiled down to Erlang abstract
-forms by `Cure.Compiler.PatternCompiler`, type-checked against the
-scrutinee, and analysed for exhaustiveness. Guards, pin equalities, and
-repeated-variable equalities are injected as `andalso` guard chains, so
-a pattern always succeeds-or-fails atomically.
+direct control flow. Every pattern passes through the dependent elaborator,
+which preserves constructor identities, narrowed bindings, index equations,
+and source spans before kernel validation and erasure. Runtime guards, pin
+equalities, and repeated-variable constraints then lower to atomic BEAM
+matching behavior.
 
 This page is the authoritative user-facing reference for the language
 feature. The on-disk companion document
@@ -66,8 +66,8 @@ Supported literal shapes:
 - Integers (`42`, `0xFF`, `0b1010`, `1_000_000`), with unary minus
   accepted as `-42`.
 - Floats (`3.14`, `0.001`).
-- Strings (`"hello"`), lowered to a `utf8` binary pattern. Byte
-  strings lower to a raw binary pattern.
+- Strings (`"hello"`), elaborated as `List(Char)` patterns. Byte literals
+  lower through `Std.Binary`.
 - Atoms (`:ok`, `:error`, `:my_atom`).
 - Booleans (`true`, `false`).
 - `nil`.
@@ -218,12 +218,12 @@ type Result(T, E) = Ok(T) | Error(E)
 
 match opt
   Some(v) -> v
-  None()  -> 0
+  None    -> 0
 ```
 
-Nullary constructors **must** use explicit empty parentheses. A bare
-`None` on its own would bind a fresh variable, not match the nullary
-constructor.
+Nullary constructors may be written bare (`None`) or with explicit empty
+parentheses (`None()`). Bare PascalCase names resolve against the scrutinee
+type's constructors; lowercase bare names remain variable bindings.
 
 Constructor patterns recurse into their arguments as patterns, so
 nested ADTs decompose in a single arm:
@@ -357,43 +357,20 @@ each available via `cure explain Edd` or `cure why Edd`:
 - **E024** - unbound pin variable.
 - **E025** - non-exhaustive nested match (Maranget walker).
 
-## Path-sensitive refinement
+## Dependent branch refinement
 
-Pattern matches narrow the type of their scrutinee along each arm.
-`Cure.Types.PathRefinement` threads the arm's implied constraints
-back into the type environment so that subsequent expressions see a
-more precise type.
+Pattern matching refines constructor indices and local binding types in each
+arm. This is performed by dependent pattern elaboration and index unification,
+not by the removed classic `Cure.Types.PathRefinement` /
+`PatternRefinement` modules.
 
-```cure
-if x != 0 then 100 / x else 0
-```
+Literal and repeated-variable patterns contribute equality constraints;
+constructor patterns preserve their canonical family/constructor identity;
+record, tuple, list, and map subpatterns propagate the expected component
+types. Pattern-only evidence is erased after the kernel validates the branch.
 
-Inside the `then` branch `x` is refined to `{x: Int | x != 0}`, so the
-division is safe without an explicit refinement annotation.
-
-## Structural refinement narrowing
-
-v0.20.0 ships `Cure.Types.PatternRefinement`, whose `narrow/2` takes a
-pattern AST and a scrutinee type and returns
-`{bindings, narrowed_scrutinee}`. Two kinds of witnesses come back:
-
-**Literal-equality witnesses.** A sub-pattern that is a literal means
-the matched value *is* that literal along the arm. Matching `0`
-against `Int` narrows the scrutinee to `{x: Int | x == 0}`; inside a
-tuple pattern the other slots keep their original element types.
-
-**Disjoint-tag witnesses.** A constructor pattern (`Ok(v)`,
-`Error(e)`) or a map pattern with a literal `:kind` tag narrows the
-scrutinee to a tagged variant:
-
-```elixir
-narrow({:function_call, [name: "Ok"], [{:variable, [], "v"}]}, :any)
-# => {%{"v" => :any}, {:variant, :ok, []}}
-```
-
-Every narrowed type is something the SMT translator already
-understands, so `PatternRefinement` integrates directly with the
-existing refinement machinery.
+Guard coverage and shadowing may additionally be checked by Z3-backed linting.
+Those warnings do not create trusted refinement types or proof evidence.
 
 ## Worked example: JSON-shaped data
 

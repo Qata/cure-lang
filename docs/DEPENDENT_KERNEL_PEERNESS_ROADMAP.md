@@ -1,5 +1,12 @@
 # Dependent Kernel Peerness Roadmap
 
+> Status note: this roadmap predates the 0.34 kernel convergence. Items
+> describing primitive `Eq`/`refl`/`rewrite`, the classic checker, or missing
+> public dependent elaboration are complete and superseded by
+> `Std.Equivalent`, the single dependent pipeline, and Final-Core validation.
+> Remaining research items are prospective work, not current language
+> limitations.
+
 This note summarizes the current state of the dependent typing work on this
 branch, the gap to Idris/Agda-style peerness, and pragmatic milestones for
 closing it.

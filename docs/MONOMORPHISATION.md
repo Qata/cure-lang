@@ -1,5 +1,12 @@
 # Monomorphisation
 
+> **Deferred after 0.33.** This document describes the v0.31 classic-AST
+> optimizer. Its `Cure.Types.*` discovery/unification path was removed with the
+> classic compiler and has not yet been rebuilt over checked dependent Core.
+> `specialise` remains the sole optimizer-only example skip. Do not treat the
+> flags or algorithm below as a supported 0.34 pipeline; specialization is
+> scheduled for a later optimizer release.
+
 The Cure optimiser specialises polymorphic functions whose call sites
 all use concrete types. Specialised clones are smaller, easier to
 inline, and more amenable to constant folding -- the rest of the v0.31.0
