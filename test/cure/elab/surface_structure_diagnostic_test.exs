@@ -6,7 +6,7 @@ defmodule Cure.Elab.SurfaceStructureDiagnosticTest do
   alias Cure.Elab.Program
 
   test "a typed binary segment points at the segment rather than the enclosing function" do
-    source = "mod M\n  use Std.Binary\n  fn f(b: Binary) -> Binary = <<b/binary>>\nend\n"
+    source = "mod M\n  use Std.Binary\n  fn f(b: Binary) -> Binary = <<b::float>>\nend\n"
     {diagnostic, registry} = diagnostic(source, "binary_segment.cure", :unsupported_binary_segment)
 
     assert Renderer.plain(diagnostic, registry, width: 80) ==
@@ -18,7 +18,7 @@ defmodule Cure.Elab.SurfaceStructureDiagnosticTest do
              typed, or otherwise structured segment cannot be lowered faithfully.
 
              at binary_segment.cure:3:33
-             3 |   fn f(b: Binary) -> Binary = <<b/binary>>
+             3 |   fn f(b: Binary) -> Binary = <<b::float>>
                |                                 ^^^^^^^^ this binary segment cannot be lowered
 
              Hint: Use plain byte segments, or move rich bit-syntax encoding and decoding behind an explicit binary helper

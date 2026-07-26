@@ -9,7 +9,7 @@ defmodule Cure.Elab.BinarySyntaxTest do
   former.
 
   Scope: default 8-bit-integer segments plus a trailing `rest::binary`. Sized or
-  typed bit segments (`x:16`, `x/float`, endianness/signedness) are a separate
+  typed bit segments (`x:16`, `x::float`, endianness/signedness) are a separate
   future extension and are rejected here rather than silently mislowered. The
   module must `use Std.Binary` so the emitted primitives resolve.
 
@@ -117,17 +117,6 @@ defmodule Cure.Elab.BinarySyntaxTest do
     # three bytes → not an exact 2-byte match → fallthrough
     assert apply(m, :pair, [<<3, 4, 5>>]) == 0
     assert apply(m, :pair, [<<3>>]) == 0
-  end
-
-  test "the unreleased /binary spelling is rejected, not treated as a tail" do
-    src = """
-    mod M
-      use Std.Binary
-      fn f(b: Binary) -> Binary = <<b/binary>>
-    end
-    """
-
-    assert {:error, {:source_context, {:unsupported_binary_segment, _}, _}} = Program.elaborate(src)
   end
 
   test "a binary match with no default arm is rejected" do

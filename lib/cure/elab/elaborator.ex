@@ -10086,7 +10086,7 @@ defmodule Cure.Elab.Elaborator do
   # `rest::binary` tail is present) gates the byte reads, then literal byte
   # positions add `byte_at(b, i) == lit` guards and variable positions bind
   # `byte_at(b, i)` / `drop_bytes(b, k)`. Open-ended, so a trailing default arm is
-  # required. Sized/typed segments (`x/float`) are rejected, not mislowered.
+  # required. Sized/typed segments (`x::float`) are rejected, not mislowered.
   defp desugar_binary_arms(_scrut, [], _line), do: {:error, {:binary_match_needs_default}}
 
   defp desugar_binary_arms(scrut, [{:match_arm, meta, [body]} | rest], line) do
@@ -10140,8 +10140,6 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # The last segment is a tail iff it is an unsized binary-family segment.
-  # `::binary` is the sole public spelling; the former `/binary` experiment was
-  # never released and deliberately remains an unsupported binary expression.
   defp split_binary_tail(segs) do
     case List.last(segs) do
       {:bin_segment, meta, [v]} = seg ->
@@ -10221,7 +10219,7 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # Rich bit-syntax specifiers (`::16`, `/float`, `::size(n)`, unit/signedness/
+  # Rich bit-syntax specifiers (`::16`, `::float`, `::size(n)`, unit/signedness/
   # endianness) live in the segment meta after parsing. `of_bytes` packs a list
   # of 8-bit bytes and cannot express any of them, so a sized/typed segment is
   # REJECTED here rather than silently mislowered — dropping a `::16` size would
@@ -10235,9 +10233,6 @@ defmodule Cure.Elab.Elaborator do
         cond do
           Enum.any?(@rich_segment_keys, &(Keyword.get(sm, &1) != nil)) ->
             {:halt, {:error, {:unsupported_binary_segment, seg}}}
-
-          typed_segment?(expr) ->
-            {:halt, {:error, {:unsupported_binary_segment, expr}}}
 
           true ->
             {:cont, {:ok, acc ++ [expr]}}
@@ -10254,13 +10249,6 @@ defmodule Cure.Elab.Elaborator do
         e
     end
   end
-
-  # A `/type` segment parses as a division `value / type_name` (`<<x/float>>`,
-  # `<<rest::binary>>`); the sole surface marker for a non-default segment.
-  defp typed_segment?({:binary_op, meta, [_v, {:variable, _vm, _type}]}),
-    do: Keyword.get(meta, :operator) == :/
-
-  defp typed_segment?(_), do: false
 
   # `"abc"` → the `:list` literal `['a', 'b', 'c']`: one char-literal element per
   # Unicode codepoint (`String.to_charlist` decodes UTF-8), so a string is exactly

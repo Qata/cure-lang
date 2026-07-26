@@ -147,7 +147,7 @@ defmodule Cure.Compiler.BinSegmentTest do
              """) == 3
     end
 
-    # Rich bit-syntax construction (`::16`, `/float`, `::size(n)`, …) is a
+    # Rich bit-syntax construction (`::16`, `::float`, `::size(n)`, …) is a
     # deferred value-surface case in the sole (dependent) pipeline: `of_bytes`
     # packs a list of 8-bit bytes and cannot express a wider segment. The
     # elaborator REJECTS a sized segment rather than silently dropping the size
