@@ -22,7 +22,7 @@ defmodule Cure.LSP.Positions do
   def line_range(line, source, encoding) do
     line = max(line - 1, 0)
     text = if is_binary(source), do: Enum.at(String.split(source, "\n"), line), else: nil
-    length = if is_binary(text), do: encoded_length(text, encoding), else: 0
+    length = if is_binary(text), do: encoded_length(String.trim_trailing(text, "\r"), encoding), else: 0
     %{"start" => %{"line" => line, "character" => 0}, "end" => %{"line" => line, "character" => length}}
   end
 

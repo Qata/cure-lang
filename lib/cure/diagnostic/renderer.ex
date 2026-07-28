@@ -103,6 +103,15 @@ defmodule Cure.Diagnostic.Renderer do
     }
   end
 
+  @doc "Project a Cure diagnostic into the JSON-safe form of the compiler envelope."
+  @spec code_map(Diagnostic.t()) :: map()
+  def code_map(%Diagnostic{} = diagnostic) do
+    code_diagnostic(diagnostic)
+    |> Map.put(:code, diagnostic.code)
+    |> Map.put(:details, to_map(diagnostic))
+    |> stringify_keys()
+  end
+
   @doc "Project a Cure diagnostic into the standard Mix compiler structure."
   @spec mix_diagnostic(Diagnostic.t()) :: Mix.Task.Compiler.Diagnostic.t()
   def mix_diagnostic(%Diagnostic{} = diagnostic) do

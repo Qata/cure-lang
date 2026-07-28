@@ -74,8 +74,8 @@ defmodule Cure.CLI do
           title: :string,
           main: :string,
           extras: :keep,
-          # v0.31.0 -- monomorphisation + PGO
-          monomorphise: :boolean,
+          # Retained v0.31 profile-file options. The classic optimizer itself
+          # was deleted with the classic compiler.
           pgo: :boolean,
           record_profile: :boolean,
           profile_dir: :string,
@@ -433,10 +433,14 @@ defmodule Cure.CLI do
       end
 
     preload_stdlib(project)
+    preload_project_dependencies(project)
+
+    dependency_roots = dependency_source_roots(project)
 
     compile_opts = [
       output_dir: output_dir,
-      emit_events: false
+      emit_events: false,
+      source_roots: dependency_roots ++ source_roots(paths)
     ]
 
     files =
@@ -449,14 +453,14 @@ defmodule Cure.CLI do
       end)
       |> Enum.uniq()
 
-    {ordered, providers} =
-      case Cure.Compiler.prepare_files(files) do
-        {:ok, %{ordered: ordered, providers: providers, cycles: cycles}} ->
+    {ordered, providers, module_index} =
+      case Cure.Compiler.prepare_files(files, known_modules: modules_in_roots(dependency_roots)) do
+        {:ok, %{ordered: ordered, providers: providers, cycles: cycles, module_index: module_index}} ->
           Enum.each(cycles, fn walk ->
             emit_host_diagnostic({:import_cycle, walk}, hd(paths))
           end)
 
-          {ordered, providers}
+          {ordered, providers, module_index}
 
         {:error, reason} ->
           emit_host_diagnostic(reason, hd(paths))
@@ -465,7 +469,11 @@ defmodule Cure.CLI do
 
     # A user `@prelude` module reached by the scan contributes its operators to
     # every file compiled in this run — even siblings that do not `use` it.
-    compile_opts = Keyword.put(compile_opts, :prelude_providers, providers)
+    compile_opts =
+      compile_opts
+      |> Keyword.put(:prelude_providers, providers)
+      |> Keyword.put(:module_index, module_index)
+
     Enum.each(ordered, &compile_one(&1, compile_opts, verbose?))
   end
 
@@ -498,6 +506,8 @@ defmodule Cure.CLI do
       end
 
     preload_stdlib(project)
+    preload_project_dependencies(project)
+    source_roots = [Path.dirname(Path.expand(path)) | dependency_source_roots(project)]
 
     source =
       case File.read(path) do
@@ -509,7 +519,11 @@ defmodule Cure.CLI do
           exit({:shutdown, 1})
       end
 
-    case Cure.Compiler.compile_and_load(source, file: path, emit_events: false) do
+    case Cure.Compiler.compile_and_load(source,
+           file: path,
+           emit_events: false,
+           source_roots: source_roots
+         ) do
       {:ok, module} ->
         if function_exported?(module, :main, 0) do
           result = module.main()
@@ -595,6 +609,51 @@ defmodule Cure.CLI do
     Cure.Stdlib.Preload.preload(opts)
   end
 
+  defp preload_project_dependencies(%Cure.Project{} = project) do
+    project
+    |> Cure.Project.dependency_ebin_paths()
+    |> Enum.each(fn ebin ->
+      ebin
+      |> Path.join("Cure.*.beam")
+      |> Path.wildcard()
+      |> Enum.each(fn beam ->
+        module = beam |> Path.basename(".beam") |> String.to_atom()
+
+        case File.read(beam) do
+          {:ok, binary} ->
+            _ = :code.load_binary(module, String.to_charlist(beam), binary)
+
+          {:error, _} ->
+            :ok
+        end
+      end)
+    end)
+  end
+
+  defp preload_project_dependencies(_project), do: :ok
+
+  defp dependency_source_roots(%Cure.Project{} = project),
+    do: Cure.Project.dependency_source_paths(project)
+
+  defp dependency_source_roots(_project), do: []
+
+  defp source_roots(paths) do
+    paths
+    |> Enum.map(fn path -> if File.dir?(path), do: path, else: Path.dirname(path) end)
+    |> Enum.map(&Path.expand/1)
+    |> Enum.uniq()
+  end
+
+  defp modules_in_roots(roots) do
+    roots
+    |> Enum.flat_map(fn root -> Path.wildcard(Path.join(root, "**/*.cure")) end)
+    |> Cure.Compiler.ModuleIndex.build(validate_dependencies: false)
+    |> case do
+      {:ok, index} -> Cure.Compiler.ModuleIndex.module_names(index)
+      {:error, _} -> []
+    end
+  end
+
   # -- check -------------------------------------------------------------------
 
   @dialyzer {:nowarn_function, cmd_check: 2}
@@ -649,27 +708,29 @@ defmodule Cure.CLI do
     else
       info("Compiling Cure standard library (#{length(cure_files)} modules)")
 
-      outcomes =
-        Enum.map(cure_files, fn path ->
-          name = Path.basename(path, ".cure")
+      case Cure.Compiler.compile_files(cure_files,
+             output_dir: output_dir,
+             emit_events: false,
+             source_roots: [stdlib_dir],
+             continue_on_error: true
+           ) do
+        {:ok, result} ->
+          Enum.each(result.compiled, fn {path, module, _warnings} ->
+            info("  #{Path.basename(path, ".cure")} -> #{module}")
+          end)
 
-          case Cure.Compiler.compile_file(path, output_dir: output_dir, emit_events: false) do
-            {:ok, module, _} ->
-              info("  #{name} -> #{module}")
-              :ok
+          Enum.each(result.errors, fn {path, reason} ->
+            info("  #{Path.basename(path, ".cure")}: compilation failed")
+            emit_host_diagnostic(reason, path)
+          end)
 
-            {:error, reason} ->
-              info("  #{name}: compilation failed")
-              emit_host_diagnostic(reason, path)
-              :error
-          end
-        end)
+          info("Output: #{output_dir}")
+          if result.errors != [], do: exit({:shutdown, 1})
 
-      info("Output: #{output_dir}")
-
-      # A module that failed to compile must make the command fail — otherwise a
-      # broken stdlib build reports success and a CI wrapper reads exit 0.
-      if Enum.any?(outcomes, &(&1 == :error)), do: exit({:shutdown, 1})
+        {:error, reason} ->
+          emit_host_diagnostic(reason, stdlib_dir)
+          exit({:shutdown, 1})
+      end
     end
   end
 
@@ -802,18 +863,30 @@ defmodule Cure.CLI do
       end
 
     preload_stdlib(project)
-    load_project_lib()
+    preload_project_dependencies(project)
+    dependency_roots = dependency_source_roots(project)
+    load_project_lib(project)
 
-    test_files = Path.wildcard("test/**/*.cure")
+    test_files =
+      Path.wildcard("test/**/*.cure")
+      # Oracle and fixture sources are compiled by their dedicated regression
+      # runners; many are intentionally invalid and must not be executable
+      # project tests.
+      |> Enum.reject(&non_runnable_test_source?/1)
 
-    if test_files == [] do
-      info("No test files found in test/")
-    else
-      results =
+    results =
+      if test_files == [] do
+        info("No runnable test files found in test/ (oracle and fixture sources are excluded)")
+        []
+      else
         Enum.map(test_files, fn file ->
           source = File.read!(file)
 
-          case Cure.Compiler.compile_and_load(source, file: file, emit_events: false) do
+          case Cure.Compiler.compile_and_load(source,
+                 file: file,
+                 emit_events: false,
+                 source_roots: [Path.dirname(Path.expand(file)) | dependency_roots]
+               ) do
             {:ok, mod} ->
               # Run all test_ functions
               exports = mod.module_info(:exports)
@@ -849,33 +922,38 @@ defmodule Cure.CLI do
           end
         end)
         |> List.flatten()
-
-      results =
-        if doctests? do
-          results ++ run_doctests(filter)
-        else
-          results
-        end
-
-      pass = Enum.count(results, fn {s, _} -> s == :pass end)
-      fail = Enum.count(results, fn {s, _} -> s == :fail end)
-
-      Enum.each(results, fn
-        {:pass, name} -> info("  PASS #{name}")
-        {:fail, name} -> info("  FAIL #{name}")
-      end)
-
-      info("#{pass} passed, #{fail} failed")
-
-      if cover? do
-        results_cov = Cure.Cover.collect()
-        _ = Cure.Cover.summary(results_cov)
-        _ = Cure.Cover.report(results_cov)
-        info("Coverage HTML written to _build/cure/cover/index.html")
       end
 
-      if fail > 0, do: exit({:shutdown, 1})
+    results =
+      if doctests? do
+        results ++ run_doctests(filter)
+      else
+        results
+      end
+
+    pass = Enum.count(results, fn {s, _} -> s == :pass end)
+    fail = Enum.count(results, fn {s, _} -> s == :fail end)
+
+    Enum.each(results, fn
+      {:pass, name} -> info("  PASS #{name}")
+      {:fail, name} -> info("  FAIL #{name}")
+    end)
+
+    info("#{pass} passed, #{fail} failed")
+
+    if cover? do
+      results_cov = Cure.Cover.collect()
+      _ = Cure.Cover.summary(results_cov)
+      _ = Cure.Cover.report(results_cov)
+      info("Coverage HTML written to _build/cure/cover/index.html")
     end
+
+    if fail > 0, do: exit({:shutdown, 1})
+  end
+
+  defp non_runnable_test_source?(path) do
+    expanded = Path.expand(path)
+    String.contains?(expanded, "/test/oracle/") or String.contains?(expanded, "/test/fixtures/")
   end
 
   # Compile and load every `lib/**/*.cure` in the current project so
@@ -885,19 +963,22 @@ defmodule Cure.CLI do
   # in `lib/` will already produce a follow-up `:undef` from the test
   # that depends on it, which is more actionable than a single
   # "compilation error" line.
-  defp load_project_lib do
-    "lib/**/*.cure"
-    |> Path.wildcard()
-    |> Enum.sort()
-    |> Enum.each(fn file ->
-      case Cure.Compiler.compile_and_load(File.read!(file), file: file, emit_events: false) do
-        {:ok, _module} ->
-          :ok
+  defp load_project_lib(project) do
+    files = Path.wildcard("lib/**/*.cure")
 
-        {:error, reason} ->
+    case Cure.Compiler.compile_files(files,
+           emit_events: false,
+           source_roots: ["lib" | dependency_source_roots(project)],
+           continue_on_error: true
+         ) do
+      {:ok, result} ->
+        Enum.each(result.errors, fn {file, reason} ->
           emit_host_diagnostic(reason, file)
-      end
-    end)
+        end)
+
+      {:error, reason} ->
+        emit_host_diagnostic(reason, "lib")
+    end
   end
 
   defp run_doctests(filter) do
@@ -1287,6 +1368,7 @@ defmodule Cure.CLI do
   # :manual item is never promoted to a :strict_violation — it stays a block
   # (spec §8: --strict does not promote :manual).
   def plan_migration_source(src, opts) do
+    {src, _legacy_otp_changed?} = Cure.Migrate.LegacyOtp.normalize(src)
     target = Keyword.fetch!(opts, :target)
     # Parse the INPUT under the SOURCE edition (`:from`, the file's current
     # edition), NOT the target (F-B). A keyword retired *at* target is still a
@@ -1435,6 +1517,7 @@ defmodule Cure.CLI do
 
   defp migrate_preflight_file(file, target, source_edition) do
     with {:ok, source} <- File.read(file),
+         {source, _legacy_otp_changed?} <- Cure.Migrate.LegacyOtp.normalize(source),
          # Parse the input under the file's CURRENT edition (its own pragma if it
          # carries one, else the project's edition) — see plan_migration_source/2
          # (F-B). The verify reparse inside the fixpoint stays on `target`.
@@ -1456,6 +1539,7 @@ defmodule Cure.CLI do
           {:ok,
            %{
              path: file,
+             input: source,
              output: output,
              changed?: printed != baseline,
              warnings: warnings,
@@ -1519,9 +1603,14 @@ defmodule Cure.CLI do
   end
 
   defp migrate_apply(results, true, _print?) do
-    # --check: report the files a migration would change; never writes.
+    # --check: report the files a migration would change as reviewable,
+    # git-style unified diffs; never writes.
     pending = for r <- results, r.changed?, do: r.path
-    Enum.each(pending, fn path -> info("would migrate: #{path}") end)
+
+    Enum.each(results, fn result ->
+      if result.changed?, do: print_migration_diff(result)
+    end)
+
     if pending == [], do: :ok, else: {:error, {:pending, pending}}
   end
 
@@ -1541,6 +1630,57 @@ defmodule Cure.CLI do
     end)
 
     :ok
+  end
+
+  defp print_migration_diff(%{path: path, input: input, output: output}) do
+    id = System.unique_integer([:positive])
+    dir = Path.join(System.tmp_dir!(), "cure_migrate_diff_#{id}")
+    before = Path.join(dir, "before.cure")
+    after_path = Path.join(dir, "after.cure")
+
+    label =
+      if Path.type(path) == :absolute do
+        Path.basename(path)
+      else
+        Path.relative_to_cwd(path)
+      end
+
+    source_label = String.trim_leading(path, "/")
+
+    File.mkdir_p!(dir)
+    File.write!(before, input)
+    File.write!(after_path, output)
+
+    try do
+      {diff, _status} =
+        System.cmd(
+          "git",
+          [
+            "diff",
+            "--no-index",
+            "--no-color",
+            "--unified=3",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            before,
+            after_path
+          ],
+          stderr_to_stdout: true
+        )
+
+      diff =
+        diff
+        |> String.replace("a/#{String.trim_leading(before, "/")}", "a/#{label}")
+        |> String.replace("b/#{String.trim_leading(after_path, "/")}", "b/#{label}")
+        |> String.replace("a//#{String.trim_leading(before, "/")}", "a/#{label}")
+        |> String.replace("b//#{String.trim_leading(after_path, "/")}", "b/#{label}")
+        |> String.replace("a//#{source_label}", "a/#{label}")
+        |> String.replace("b//#{source_label}", "b/#{label}")
+
+      IO.write(diff)
+    after
+      File.rm_rf!(dir)
+    end
   end
 
   # Bump the edition marker to `target` (phase 2). A whole-project run (no

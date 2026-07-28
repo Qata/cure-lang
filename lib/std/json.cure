@@ -48,6 +48,12 @@ mod Std.Json
     | Arr(List(Value))
     | Obj(List(JsonPair))
 
+  ## Values that have a canonical JSON representation. Record derivation
+  ## publishes an ordinary implementation of this interface, so `to_json/1`
+  ## resolves through the same dictionary machinery as authored code.
+  interface JSON(t)
+    fn to_json(value: t) -> String
+
   ## Encode a `Value` as a JSON string.
   @extern(:cure_std_json, :encode, 1)
   fn encode(v: Value) -> String
@@ -62,6 +68,18 @@ mod Std.Json
   ## Widen a Cure `Int` to a JSON number `Value` via the integer path.
   @extern(:cure_std_json, :num_of_int, 1)
   fn num_of_int(n: Int) -> Value
+
+  implementation JSON for Int
+    fn to_json(value: Int) -> String = encode(num_of_int(value))
+
+  implementation JSON for Float
+    fn to_json(value: Float) -> String = encode(Num(value))
+
+  implementation JSON for String
+    fn to_json(value: String) -> String = encode(Str(value))
+
+  implementation JSON for Bool
+    fn to_json(value: Bool) -> String = encode(Bool(value))
 
   ## Build a `JsonPair` for use inside `Obj(...)`.
   fn pair(k: String, v: Value) -> JsonPair = JsonPair{key: k, value: v}

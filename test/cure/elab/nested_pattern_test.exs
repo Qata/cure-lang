@@ -15,6 +15,8 @@ defmodule Cure.Elab.NestedPatternTest do
   """
   use ExUnit.Case, async: true
 
+  alias Cure.Compiler.Errors
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.{Program, Emit}
 
   @nat "mod M\n  type Nat = Z | S(Nat)\n"
@@ -119,6 +121,70 @@ defmodule Cure.Elab.NestedPatternTest do
 
     assert apply(mod, :f, [{:S, :Z}]) == {:S, :Z}
     assert apply(mod, :f, [:Z]) == :Z
+  end
+
+  test "a branch after a nested match catch-all labels both unreachable roles" do
+    src =
+      @nat <>
+        "  fn f(n: Nat) -> Nat = match n\n" <>
+        "    S(S(x)) -> x\n" <>
+        "    rest -> rest\n" <>
+        "    Z() -> Z()\n" <>
+        "end\n"
+
+    assert {:error,
+            {:source_context,
+             {:unreachable_after_default_pattern, %{name: "rest", span: branch_span, default_span: default_span}}, _} =
+              error} =
+             Program.elaborate(src)
+
+    assert {branch_span.start_line, branch_span.start_column} == {6, 5}
+    assert {default_span.start_line, default_span.start_column} == {5, 5}
+
+    {diagnostic, registry} = Errors.to_diagnostic(error, "nested_after_default.cure", src)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- BRANCH APPEARS AFTER A CATCH-ALL [E119] ----------- nested_after_default.cure
+
+             No value can reach this branch because the preceding catch-all pattern already
+             accepts every value not handled above it.
+
+             at nested_after_default.cure:6:5
+             5 |     rest -> rest
+               |     ---- this catch-all already accepts every remaining value as `rest`
+             6 |     Z() -> Z()
+               |     ^^^ this branch can never be reached
+
+             Hint: Move the catch-all to the end of the match, or narrow it to a constructor pattern
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 5, "character" => 4},
+             "end" => %{"line" => 5, "character" => 7}
+           }
+
+    assert [related] = lsp["relatedInformation"]
+
+    assert related["location"]["range"] == %{
+             "start" => %{"line" => 4, "character" => 4},
+             "end" => %{"line" => 4, "character" => 8}
+           }
+
+    assert lsp["data"]["payload"] == %{
+             "checking" => "f",
+             "kind" => "unreachable_after_default_pattern",
+             "name" => "rest"
+           }
+
+    fixed =
+      src
+      |> String.replace("    rest -> rest\n", "")
+      |> String.replace("    Z() -> Z()\n", "    Z() -> Z()\n    rest -> rest\n")
+
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "nested_after_default_fixed.cure")
   end
 
   test "a NAMED catch-all with nesting over a non-variable scrutinee hoists and binds once" do

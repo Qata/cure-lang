@@ -30,6 +30,9 @@ defmodule Cure.Core.Env do
             constrained: %{},
             primitives: %{},
             import_modules: MapSet.new(),
+            bare_modules: nil,
+            bare_bindings: nil,
+            qualified_modules: nil,
             lemmas: %{},
             equations: %{},
             module_owner: nil,
@@ -56,6 +59,19 @@ defmodule Cure.Core.Env do
           # direct owner over a name reachable only via a module's transitive
           # re-export, matching must-import semantics (Haskell/Elm/Idris/Swift).
           import_modules: MapSet.t(String.t()),
+          # Modules whose declarations may be referenced by a bare spelling.
+          # `nil` is retained only for ownerless/synthetic compatibility
+          # environments; real module elaboration installs an explicit set.
+          bare_modules: MapSet.t(String.t()) | nil,
+          # Exact canonical declarations exposed by lexical imports, ambient
+          # prelude items, and the compiler seed. Unlike `bare_modules`, this
+          # can expose `Std.List#List`/`Std.List#Nil` without also exposing
+          # every function owned by Std.List.
+          bare_bindings: MapSet.t(atom()) | nil,
+          # Modules whose canonical declarations may be referenced through an
+          # authored qualified path. This is deliberately independent of
+          # `import_modules`: `M.f` makes M available without opening `f`.
+          qualified_modules: MapSet.t(String.t()) | nil,
           # Inert elaborator metadata (the kernel never reads it): `@lemma`-tagged
           # theorems keyed by their conclusion-head atom, for auto proof-search
           # (see `Cure.Elab.ProofSearch`). Same status as `interfaces`/`coherence`.
@@ -92,6 +108,39 @@ defmodule Cure.Core.Env do
   @spec owner(t()) :: String.t() | nil
   def owner(%__MODULE__{module_owner: owner}), do: owner
 
+  @doc "Install the lexical and qualified module visibility for this elaboration."
+  @spec with_module_visibility(t(), MapSet.t(String.t()), MapSet.t(String.t())) :: t()
+  def with_module_visibility(%__MODULE__{} = env, bare_modules, qualified_modules) do
+    %{
+      env
+      | bare_modules: bare_modules,
+        qualified_modules: qualified_modules
+    }
+  end
+
+  @doc "Whether an owner may supply a bare spelling in this environment."
+  @spec bare_module_available?(t(), String.t() | nil) :: boolean()
+  def bare_module_available?(%__MODULE__{bare_modules: nil}, _owner), do: true
+
+  def bare_module_available?(%__MODULE__{bare_modules: modules, module_owner: owner}, candidate),
+    do: candidate == owner or MapSet.member?(modules, candidate)
+
+  @doc "Whether one canonical declaration may supply a bare spelling."
+  @spec bare_key_available?(t(), atom()) :: boolean()
+  def bare_key_available?(%__MODULE__{bare_bindings: nil} = env, key),
+    do: bare_module_available?(env, Cure.Elab.Name.owner(key))
+
+  def bare_key_available?(%__MODULE__{bare_bindings: bindings, module_owner: owner}, key) do
+    Cure.Elab.Name.owner(key) == owner or MapSet.member?(bindings, key)
+  end
+
+  @doc "Whether an owner may be named by a qualified surface path."
+  @spec qualified_module_available?(t(), String.t() | nil) :: boolean()
+  def qualified_module_available?(%__MODULE__{qualified_modules: nil}, _owner), do: true
+
+  def qualified_module_available?(%__MODULE__{qualified_modules: modules, module_owner: owner}, candidate),
+    do: candidate == owner or MapSet.member?(modules, candidate)
+
   @doc """
   Attach the name of the def whose body is currently being elaborated (see the
   `current_def` field doc). Set once per top-level def, at the single entry
@@ -125,7 +174,7 @@ defmodule Cure.Core.Env do
   @type def_body :: Cure.Core.Term.t() | nil | {:extern, {module(), atom(), arity()}}
 
   @spec add_def(t(), atom(), Cure.Core.Term.t(), def_body()) :: t()
-  def add_def(env, name, type_term, body_term), do: add_def(env, name, type_term, body_term, nil)
+  def add_def(env, name, type_term, body_term), do: add_def(env, name, type_term, body_term, nil, nil)
 
   @doc """
   Register a global function definition with per-parameter {0,ω} quantities
@@ -133,7 +182,10 @@ defmodule Cure.Core.Env do
   erasure (M8.3 / M9).
   """
   @spec add_def(t(), atom(), Cure.Core.Term.t(), def_body(), [atom()] | nil) :: t()
-  def add_def(%__MODULE__{} = env, name, type_term, body_term, quantities) do
+  def add_def(env, name, type_term, body_term, quantities),
+    do: add_def(env, name, type_term, body_term, quantities, nil)
+
+  def add_def(%__MODULE__{} = env, name, type_term, body_term, quantities, plicities) do
     name = owned_name(env, name)
 
     %{
@@ -143,9 +195,21 @@ defmodule Cure.Core.Env do
             name: name,
             type: type_term,
             body: body_term,
-            quantities: quantities
+            quantities: quantities,
+            plicities: plicities
           })
     }
+  end
+
+  @doc "Mark a registered definition as requiring the explicit `unsafe` call marker."
+  @spec put_unsafe(t(), atom(), boolean()) :: t()
+  def put_unsafe(%__MODULE__{} = env, name, required \\ true) when is_boolean(required) do
+    key = resolve_key(env, env.defs, name)
+
+    case Map.fetch(env.defs, key) do
+      {:ok, definition} -> %{env | defs: Map.put(env.defs, key, Map.put(definition, :unsafe, required))}
+      :error -> env
+    end
   end
 
   @doc "Attach inert authored-hole metadata to a definition for release-boundary diagnostics."
@@ -162,6 +226,17 @@ defmodule Cure.Core.Env do
   @doc "The global definition `%{name, type, body}` for `name`, or nil."
   @spec get_def(t(), atom()) :: map() | nil
   def get_def(%__MODULE__{} = env, name), do: Map.get(env.defs, resolve_key(env, env.defs, name))
+
+  @doc "Mark a definition as an authored transparent type alias."
+  @spec put_typealias(t(), atom()) :: t()
+  def put_typealias(%__MODULE__{} = env, name) do
+    key = resolve_key(env, env.defs, name)
+
+    case Map.fetch(env.defs, key) do
+      {:ok, definition} -> %{env | defs: Map.put(env.defs, key, Map.put(definition, :typealias, true))}
+      :error -> env
+    end
+  end
 
   @doc "Return the owner-qualified key for a declaration in the current module."
   @spec owned_name(t(), atom() | String.t()) :: atom()
@@ -194,7 +269,12 @@ defmodule Cure.Core.Env do
         # owner-qualified key whose base it is — via an index, because
         # rediscovering it by walking every key made this O(table) on every
         # unresolved lookup.
-        case Map.get(name_indexes(table).aliases, Atom.to_string(name), []) do
+        candidates =
+          name_indexes(table).aliases
+          |> Map.get(Atom.to_string(name), [])
+          |> Enum.filter(&bare_key_available?(env, &1))
+
+        case candidates do
           [key] -> key
           _ -> name
         end
@@ -840,6 +920,22 @@ defmodule Cure.Core.Inductive do
   # conservatively rejected.
   defp strictly_positive?(env, fname, {:pi, _g, dom, cod}, seen),
     do: not occurs_deep?(env, fname, dom, seen) and strictly_positive?(env, fname, cod, seen)
+
+  # Instantiating a covariant higher-order parameter (Sigma/Tuple's second
+  # component is the common case) can expose a beta-redex in a constructor
+  # field. Positivity is a property of the normalized type, not its unreduced
+  # spelling: `((fn _ => Json) x)` must be recognized as the positive `Json`
+  # occurrence rather than rejected as an opaque application.
+  defp strictly_positive?(env, fname, {:app, {:lam, _g, _dom, body}, argument}, seen) do
+    argument = Cure.Core.Term.shift(argument, 1, 0)
+
+    normalized =
+      body
+      |> Cure.Core.Term.subst(0, argument)
+      |> Cure.Core.Term.shift(-1, 0)
+
+    strictly_positive?(env, fname, normalized, seen)
+  end
 
   # A recursive occurrence of the family itself is strictly positive ONLY when
   # `fname` does not also occur inside its own parameter/index arguments — the

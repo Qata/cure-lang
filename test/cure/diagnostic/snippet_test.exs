@@ -43,6 +43,19 @@ defmodule Cure.Diagnostic.SnippetTest do
     assert rendered =~ "^ insert here"
   end
 
+  test "CRLF source lines do not leak carriage returns into snippets" do
+    source = "fn bad() -> Int = true\r\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:crlf, source, "crlf.cure")
+    {:ok, span} = SourceRegistry.span(registry, :crlf, byte_size("fn bad() -> Int = "), byte_size(source) - 2)
+    primary = %Label{span: span, style: :primary, message: "this expression is not an Int"}
+
+    rendered = render(primary, [], registry)
+
+    assert rendered =~ "fn bad() -> Int = true\n"
+    refute rendered =~ "\r"
+    assert rendered =~ "^ this expression is not an Int"
+  end
+
   test "cross-file regions remain separate and ANSI styles marker roles only" do
     registry = SourceRegistry.new() |> SourceRegistry.register(:one, "first", "one.cure")
     registry = SourceRegistry.register(registry, :two, "second", "two.cure")

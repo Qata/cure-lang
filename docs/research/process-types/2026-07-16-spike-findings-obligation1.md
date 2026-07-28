@@ -150,12 +150,12 @@ scope during a `match` (no convoy):
 CONSTRAINS: a well-typed reply preserves the request's reply type and consumes the
 capability exactly once.
 
-**Trust anchor.** The `test/oracle/otp/` cluster mirrors the positive + three
+**Trust anchor.** The `metatheory/otp/oracle/otp/` cluster mirrors the positive + three
 negatives in Cure and Idris 2; `mix cure.oracle otp` reports `rel=same` on all four
 (accept/accept, reject/reject ×3). Idris 2 has the same `1 x : T` multiplicity and
 large elimination, so agreement localizes trust.
 
-**Deliverable.** `lib/std/otp_proof.cure` (`Std.Otp.Proof`) — kernel-checked,
+**Deliverable.** `metatheory/otp/src/otp_proof.cure` (`Std.Otp.Proof`) — kernel-checked,
 totality-certified, compiled into the stdlib every build. `raw_call`'s docstring in
 `lib/std/otp_raw.cure` now points at it.
 
@@ -180,7 +180,7 @@ Operational send-safety: a well-typed `post` delivers to the handler the pid
 carries, which must be TOTAL (kernel-certified exhaustive) to exist, so every
 message of the derived type is handled. Negatives reject: `ob2_neg_wrong_msg`
 (`:index_mismatch` — a message not of the actor's type), `ob2_neg_nontotal`
-(`:missing_branch` — a non-exhaustive handler cannot form). `test/oracle/otp/`
+(`:missing_branch` — a non-exhaustive handler cannot form). `metatheory/otp/oracle/otp/`
 mirrors all three in Idris, `rel=same`.
 
 This needed one gap fix — **higher-order constructor fields**. A parenthesised
@@ -213,7 +213,7 @@ linearity enforced (drop / dup in a branch reject). Two changes:
    there. The branch-λ grade is therefore ω; the sibling's real linearity is
    enforced via the convoy, not the branch binder.
 
-Differential oracle `test/oracle/otp/ob1_branching*` mirrors Cure's `with r` against
+Differential oracle `metatheory/otp/oracle/otp/ob1_branching*` mirrors Cure's `with r` against
 Idris's native dependent `match` (which refines the linear sibling for free),
 `rel=same` on accept + drop-reject + dup-reject. Behavioral test
 `linear_sibling_refinement_test.exs`. Gates: Antigen 563/318-318, elab 1046, core

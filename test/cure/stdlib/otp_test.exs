@@ -27,7 +27,7 @@ defmodule Cure.Stdlib.OtpTest do
 
   # A program in module `App` that `use`s Std.Otp and declares a request ADT.
   defp app(body) do
-    Program.elaborate("mod App\n  use Std.Otp\n  type Cmd = Inc | Dec\n#{body}end\n")
+    Program.elaborate("mod App\n  use Std.Otp\n  use Std.ExitReason\n  type Cmd = Inc | Dec\n#{body}end\n")
   end
 
   defp effect_result?({:pi, _g, _d, cod}), do: effect_result?(cod)
@@ -39,11 +39,13 @@ defmodule Cure.Stdlib.OtpTest do
     {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
     assert {:ok, env, locals} = Program.check_ast_with_locals(ast)
+    local_bases = MapSet.new(locals, &Cure.Elab.Name.base/1)
 
-    assert :self in locals and :spawn in locals and :spawn_link in locals and :start_link in locals and
-             :start_statem in locals and
-             :start_supervisor in locals and
-             :tell in locals and :call in locals and :cast in locals
+    assert "self" in local_bases and "spawn" in local_bases and "spawn_link" in local_bases and
+             "start_link" in local_bases and
+             "start_statem" in local_bases and
+             "start_supervisor" in local_bases and
+             "tell" in local_bases and "call" in local_bases and "cast" in local_bases
 
     for op <- [:spawn, :spawn_link, :start_link, :start_statem, :start_supervisor, :tell, :call, :cast],
         do: assert(effect_result?(Env.get_def(env, op).type))
@@ -54,6 +56,7 @@ defmodule Cure.Stdlib.OtpTest do
     {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
     assert {:ok, env, locals} = Program.check_ast_with_locals(ast)
+    local_bases = MapSet.new(locals, &Cure.Elab.Name.base/1)
 
     for op <- [
           :self,
@@ -77,7 +80,7 @@ defmodule Cure.Stdlib.OtpTest do
           :unregister,
           :whereis
         ] do
-      assert op in locals
+      assert Atom.to_string(op) in local_bases
 
       refute match?({:extern, _}, Env.get_def(env, op).body),
              "#{op} must be an ordinary checked wrapper"
@@ -286,6 +289,7 @@ defmodule Cure.Stdlib.OtpTest do
     mod BeamObservationProof
       use Std.Beam
       use Std.Option
+      use Std.Result
 
       fn atom_view() -> Option(Atom) = atom(forget(:ready))
       fn tuple_size_view() -> Option(Int) = tuple_arity(forget(%[:ok, 3]))

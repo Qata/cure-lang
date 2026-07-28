@@ -46,7 +46,45 @@ defmodule Cure.Diagnostic.SinkTest do
 
     assert {:ok, _flushed} = Sink.flush(sink)
     {_input, output} = StringIO.contents(device)
-    assert [%{"code" => "E099"}] = Jason.decode!(output)
+    assert [%{"code" => "E099", "severity" => "error"}] = Jason.decode!(output)
+  end
+
+  test "Code flush preserves the compiler envelope fields" do
+    diagnostic =
+      Cure.Diagnostic.new(
+        code: "E099",
+        key: :usage_error,
+        severity: :error,
+        title: "Invalid command usage",
+        body: Cure.Diagnostic.Doc.paragraph("cure check"),
+        primary: %Cure.Diagnostic.Label{
+          span:
+            Cure.Diagnostic.Span.new(
+              source_id: :source,
+              path: "demo.cure",
+              start_byte: 0,
+              end_byte: 1,
+              start_line: 1,
+              start_column: 1,
+              end_line: 1,
+              end_column: 2
+            ),
+          style: :primary
+        }
+      )
+
+    {:ok, device} = StringIO.open("")
+    sink = Sink.new(format: :code, output_device: device) |> Sink.emit(diagnostic)
+
+    assert {:ok, _flushed} = Sink.flush(sink)
+    {_input, output} = StringIO.contents(device)
+    [rendered] = Jason.decode!(output)
+
+    assert rendered["code"] == "E099"
+    assert rendered["severity"] == "error"
+    assert rendered["file"] == "demo.cure"
+    assert rendered["message"] =~ "E099"
+    assert rendered["details"]["code"] == "E099"
   end
 
   test "LSP rendering honors the configured position encoding" do

@@ -44,7 +44,7 @@ mod Std.Binary
   fn from_binary(b: Binary) -> List(Char)
 
   ## Byte-granular primitives. These back the byte-syntax surface forms
-  ## `<<b1, b2, …>>` (construction) and `<<b, rest/binary>>` (pattern): the
+  ## `<<b1, b2, …>>` (construction) and `<<b, rest::binary>>` (pattern): the
   ## elaborator desugars byte segments to `of_bytes` and `byte_at`/`drop_bytes`
   ## guarded by `byte_size`. Sized/typed bit segments (`x:16`, `x/float`) are a
   ## separate future extension; these cover the default 8-bit-integer case.

@@ -9,20 +9,25 @@ defmodule Cure.RegressionTest do
 
   alias Mix.Tasks.Cure.Check
 
-  # :slow — compiles all 81 stdlib modules (~22s). CI covers this both here
-  # (`mix test --include slow`) and via its dedicated `mix cure.check.stdlib` step.
+  # :slow — compiles all 126 stdlib modules through the strict public regression
+  # task. The dependent stdlib now takes more than ExUnit's default 60-second
+  # wall budget on a cold build, especially on the lower end of the CI matrix.
+  # Keep a test-local ceiling: this remains a timeout, not an unbounded escape,
+  # while ordinary tests retain the global 60-second deadlock guard.
   @tag :regression
   @tag :slow
+  @tag timeout: 600_000
   test "every Std.* module compiles without warnings" do
-    result =
-      ExUnit.CaptureIO.capture_io(fn ->
-        try do
-          Check.Stdlib.run([])
-        catch
-          :exit, {:shutdown, 1} -> flunk("stdlib regression failed")
-        end
-      end)
+    # `test_helper` makes canonical Std modules sticky to expose accidental
+    # producer reloads. The strict regression task is a producer itself, so run
+    # it in a clean VM just as CI's dedicated task invocation does.
+    {result, status} =
+      System.cmd("mix", ["cure.check.stdlib"],
+        env: [{"MIX_ENV", "test"}],
+        stderr_to_stdout: true
+      )
 
+    assert status == 0, result
     assert result =~ ~r/stdlib: \d+ passed, 0 failed/
   end
 

@@ -240,7 +240,10 @@ Field references that do not exist in `T`'s declared schema emit `E021` (warning
 
 An ADT constructor pattern `C(p_1, ..., p_n)` matches a value built with constructor `C` and decomposes its arguments against `p_1, ..., p_n`. The constructor name MUST be a PascalCase identifier; PascalCase distinguishes constructor patterns from variable patterns at the lexical level.
 
-Nullary constructors MUST be written with explicit empty parentheses: `None()`, never `None`. A bare PascalCase identifier in pattern position is a parser-level error (the language does not support bare-name constructor patterns); a bare lowercase identifier is a variable pattern (§ 5.3).
+Nullary constructors MAY be written bare (`None`) or with explicit empty
+parentheses (`None()`). A bare PascalCase identifier is resolved as a nullary
+constructor of the scrutinee type; a bare lowercase identifier remains a
+variable pattern (§ 5.3).
 
 The number of arguments in the pattern MUST match the constructor's declared arity. Arity mismatches are rejected at type-checking time with the language's general arity diagnostic.
 
@@ -939,7 +942,6 @@ A conforming language server MUST:
   - *Add wildcard `_` clause* for `E004` and `E025`;
   - *Convert single-clause `match` to `let`* for `H-MATCH-USE-LET`;
   - *Insert missing constructor* for each Maranget-witnessed missing case;
-  - *Replace bare PascalCase variable with `()`* when the user wrote `None` instead of `None()`;
   - *Inline pin* (rewrite `^x -> ...` as `x_ -> ... when x_ == x`);
 - treat each `match` as a foldable region but not as a top-level document symbol;
 - grow smart-selection from a clause to its enclosing block in one step.
@@ -960,7 +962,8 @@ The compiler MUST produce diagnostics with the following stable identifiers; imp
 - `E034` / `W-MATCH-LET-NONEXHAUSTIVE` — refutable pattern in `let` position (§ 18.3). Severity: warning.
 - `E-MATCH-EMPTY` — `match` block contains no clauses (macro-generated case). Severity: error.
 - `E-MATCH-CONSTRUCTOR-ARITY` — constructor pattern arity disagrees with declaration. Severity: error.
-- `E-MATCH-NULLARY-NEEDS-PARENS` — bare `Tag` in pattern position; should be `Tag()`. Severity: error.
+- `E091` / `E-MATCH-UNKNOWN-CONSTRUCTOR` — PascalCase pattern name is not a
+  constructor of the scrutinee type. Severity: error.
 - `W-MATCH-EFFECTFUL-GUARD` — `when` guard observed to have side effects. Severity: warning.
 - `H-MATCH-USE-LET` — single-arm irrefutable-pattern `match` rewritten to `let`. Severity: hint.
 - `H-MATCH-LINE-TOO-LONG` — clause cannot fit within `max_line_width` even when wrapped. Severity: hint.
@@ -971,7 +974,9 @@ The compiler MUST produce diagnostics with the following stable identifiers; imp
 
 - **Predicate dispatch without a scrutinee.** Use `pickup`.
 - **Truthy/falsy coercion in guards.** `match` guards are strictly `Bool` (§ 6.1.4).
-- **Implicit constructor conjuration.** A bare PascalCase identifier in pattern position is *not* a nullary constructor; it is a syntax error. Nullary constructors require explicit empty parentheses.
+- **Implicit constructor fields.** Bare constructor resolution applies only to
+  nullary constructors. Constructors with fields must spell and pattern-match
+  those fields explicitly.
 - **Fall-through.** Each evaluation selects exactly one clause.
 - **Pattern-level effects.** Pattern matching is pure. Side effects belong in the scrutinee, the guards, or the branch bodies.
 
@@ -1078,8 +1083,8 @@ match x
 -- E-MATCH-BRANCH-MISMATCH (Int and String have no LUB)
 
 match value
-  None -> 0
--- E-MATCH-NULLARY-NEEDS-PARENS
+  Missing -> 0
+-- E091 / E-MATCH-UNKNOWN-CONSTRUCTOR
 
 match m
   %{(1 + 1): v} -> v
@@ -1450,15 +1455,17 @@ pickup
   else       -> wait ()
 ```
 
-### H.2 Bare PascalCase
+### H.2 Bare Nullary Constructors
 
 ```text
 match opt
   Some(x) -> x
-  None    -> default     -- E-MATCH-NULLARY-NEEDS-PARENS
+  None    -> default
 ```
 
-The bare `None` is a syntax error. Write `None()`.
+This is equivalent to writing `None()`. Bare PascalCase names are resolved
+against the scrutinee type, so an unknown name produces a constructor
+resolution error rather than becoming a variable.
 
 ### H.3 Defensive Wildcards on Closed ADTs
 

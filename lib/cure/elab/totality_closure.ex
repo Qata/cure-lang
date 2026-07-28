@@ -33,6 +33,16 @@ defmodule Cure.Elab.TotalityClosure do
   """
   @spec certify_type_level(Env.t()) :: {:ok, Env.t()} | {:error, {:totality_required, atom()}}
   def certify_type_level(%Env{} = env) do
+    case certify_type_level_detailed(env) do
+      {:error, {:totality_required, name, _reason}} -> {:error, {:totality_required, name}}
+      result -> result
+    end
+  end
+
+  @doc false
+  @spec certify_type_level_detailed(Env.t()) ::
+          {:ok, Env.t()} | {:error, {:totality_required, atom(), term()}}
+  def certify_type_level_detailed(%Env{} = env) do
     env
     |> type_level_fns()
     |> MapSet.to_list()
@@ -43,7 +53,7 @@ defmodule Cure.Elab.TotalityClosure do
     |> Enum.reduce_while({:ok, env}, fn name, {:ok, acc} ->
       case Kernel.validate_certificate(acc, name) do
         {:ok, acc2} -> {:cont, {:ok, acc2}}
-        {:error, _reason} -> {:halt, {:error, {:totality_required, name}}}
+        {:error, reason} -> {:halt, {:error, {:totality_required, name, reason}}}
       end
     end)
   end

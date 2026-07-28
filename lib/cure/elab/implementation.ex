@@ -31,21 +31,49 @@ defmodule Cure.Elab.Implementation do
   def register({:implementation, meta, body}, env) do
     iface = meta |> Keyword.fetch!(:interface) |> String.to_atom()
     for_type = Keyword.fetch!(meta, :for_type)
+    for_name = surface_for_name(for_type, Keyword.get(meta, :for))
     as_name = Keyword.get(meta, :as)
+    implementation_span = implementation_header_span(meta)
+    interface_span = implementation_interface_span(meta)
+    interface_candidates = Map.keys(env.interfaces)
 
     with {:ok, head} <- head_key(for_type, env),
          desc when not is_nil(desc) <- Env.get_interface(env, iface),
          :ok <- check_no_stray_clauses(desc, iface, body),
          {:ok, method_map, mangled_fns} <-
-           build_methods(desc, iface, head, for_type, body, env),
+           build_methods(desc, iface, head, for_name, for_type, body, implementation_span, env),
          ref = %{iface: iface, head: head, methods: method_map, as: as_name},
-         {:ok, env1} <- register_instance(env, iface, head, as_name, ref),
+         {:ok, env1} <-
+           register_instance(env, iface, head, as_name, ref, %{
+             interface: iface,
+             head: head,
+             for: for_name,
+             span: implementation_span
+           }),
          {:ok, env2} <- register_signatures(mangled_fns, env1),
          {:ok, env3} <- bind_named_instance(env2, desc, iface, head, as_name, ref) do
-      {:ok, env3, mangled_fns, superinterface_obligations(iface, desc, head)}
+      {:ok, env3, mangled_fns, superinterface_obligations(iface, desc, head, for_name, implementation_span)}
     else
-      nil -> {:error, {:no_such_interface, iface}}
-      {:error, _} = err -> err
+      nil ->
+        {:error,
+         {:no_such_interface,
+          %{
+            interface: iface,
+            span: interface_span,
+            candidates: interface_candidates
+          }}}
+
+      {:error, {:instance_head_ill_formed, details}} ->
+        {:error,
+         {:instance_head_ill_formed,
+          Map.merge(details, %{
+            interface: iface,
+            for: for_name,
+            span: implementation_type_span(meta)
+          })}}
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -90,16 +118,22 @@ defmodule Cure.Elab.Implementation do
   defp head_key(for_type_ast, env) do
     case Declarations.lower_type(for_type_ast, [], env) do
       {:ok, core_type} ->
-        atom =
+        head =
           core_type
           |> Cure.Core.Eval.eval([])
           |> Cure.Core.Normalise.whnf_value(env, [])
           |> whnf_head_atom()
 
-        {:ok, atom}
+        case head do
+          :non_type_head ->
+            {:error, {:instance_head_ill_formed, %{reason: :not_type_head}}}
+
+          atom ->
+            {:ok, atom}
+        end
 
       {:error, reason} ->
-        {:error, {:instance_head_ill_formed, reason}}
+        {:error, {:instance_head_ill_formed, %{reason: :lowering_failed, underlying: reason}}}
     end
   end
 
@@ -137,13 +171,23 @@ defmodule Cure.Elab.Implementation do
 
     body
     |> Enum.flat_map(fn
-      {:function_def, m, _b} -> [Keyword.fetch!(m, :name)]
+      {:function_def, m, _b} -> [{Keyword.fetch!(m, :name), m}]
       _ -> []
     end)
-    |> Enum.find(&(not MapSet.member?(declared, &1)))
+    |> Enum.find(fn {name, _meta} -> not MapSet.member?(declared, name) end)
     |> case do
-      nil -> :ok
-      stray -> {:error, {:unknown_interface_method, iface, String.to_atom(stray)}}
+      nil ->
+        :ok
+
+      {stray, member_meta} ->
+        {:error,
+         {:unknown_interface_method,
+          %{
+            interface: iface,
+            method: String.to_atom(stray),
+            candidates: desc.method_order,
+            span: metadata_span(member_meta)
+          }}}
     end
   end
 
@@ -158,10 +202,18 @@ defmodule Cure.Elab.Implementation do
   # precede `implementation Small for T` (order-independent, matching Idris). An
   # interface with no `requires` clause has `super: []`, so this yields no
   # obligations. Older descriptors without the key default to `[]`.
-  defp superinterface_obligations(iface, desc, head) do
+  defp superinterface_obligations(iface, desc, head, for_name, span) do
     desc
     |> Map.get(:super, [])
-    |> Enum.map(fn super_interface -> {iface, super_interface, head} end)
+    |> Enum.map(fn super_interface ->
+      %{
+        interface: iface,
+        superinterface: super_interface,
+        head: head,
+        for: for_name,
+        span: span
+      }
+    end)
   end
 
   # -- methods ----------------------------------------------------------------
@@ -170,7 +222,7 @@ defmodule Cure.Elab.Implementation do
   # function_def — either the instance's own clause renamed, or the interface
   # default specialised to this head type. Returns the `method => mangled_atom`
   # map alongside the decls.
-  defp build_methods(desc, iface, head, for_type, body, env) do
+  defp build_methods(desc, iface, head, for_name, for_type, body, implementation_span, env) do
     Enum.reduce_while(desc.method_order, {:ok, %{}, []}, fn method, {:ok, mm, fns} ->
       mangled = mangled_name(env, iface, head, method)
 
@@ -179,8 +231,20 @@ defmodule Cure.Elab.Implementation do
         renamed = rename_fn(fn_decl, mangled)
         {:cont, {:ok, Map.put(mm, method, mangled), fns ++ [renamed]}}
       else
-        :missing -> {:halt, {:error, {:missing_method, iface, method}}}
-        {:error, _} = err -> {:halt, err}
+        :missing ->
+          {:halt,
+           {:error,
+            {:missing_method,
+             %{
+               interface: iface,
+               method: method,
+               head: head,
+               for: for_name,
+               span: implementation_span
+             }}}}
+
+        {:error, _} = err ->
+          {:halt, err}
       end
     end)
   end
@@ -254,9 +318,74 @@ defmodule Cure.Elab.Implementation do
          true <- Cure.Core.Conv.conv?(expected_core, actual_core, [], 0, env) do
       :ok
     else
-      _ -> {:error, {:method_signature_mismatch, iface, method}}
+      _ ->
+        expected_core = lower_type_or_nil(expected_ast, expected_scope, env)
+        actual_core = lower_type_or_nil(actual_ast, actual_scope, env)
+
+        {:error,
+         {:method_signature_mismatch,
+          %{
+            interface: iface,
+            method: method,
+            expected: expected_core,
+            actual: actual_core,
+            span: metadata_span(m)
+          }}}
     end
   end
+
+  defp lower_type_or_nil(ast, scope, env) do
+    case Declarations.lower_type(ast, scope, env) do
+      {:ok, core} -> core
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp metadata_span(meta), do: meta |> Cure.MetaAST.Metadata.source_info() |> source_info_span()
+  defp source_info_span(%Cure.MetaAST.SourceInfo{whole: span}), do: span
+  defp source_info_span(_source_info), do: nil
+
+  defp implementation_header_span(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{opener: %Cure.Diagnostic.Span{} = opener} = source_info ->
+        ending =
+          [source_info.name, source_info.annotation | Map.values(source_info.fields || %{})]
+          |> Enum.filter(&match?(%Cure.Diagnostic.Span{}, &1))
+          |> Enum.max_by(& &1.end_byte, fn -> opener end)
+
+        %Cure.Diagnostic.Span{
+          opener
+          | end_byte: ending.end_byte,
+            end_line: ending.end_line,
+            end_column: ending.end_column
+        }
+
+      source_info ->
+        source_info_span(source_info)
+    end
+  end
+
+  defp implementation_type_span(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{annotation: %Cure.Diagnostic.Span{} = span} -> span
+      _source_info -> implementation_header_span(meta)
+    end
+  end
+
+  defp implementation_interface_span(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+      _source_info -> implementation_header_span(meta)
+    end
+  end
+
+  defp surface_for_name({:literal, _meta, value}, _fallback) when is_integer(value),
+    do: Integer.to_string(value)
+
+  defp surface_for_name({:literal, _meta, value}, _fallback) when is_float(value),
+    do: Float.to_string(value)
+
+  defp surface_for_name(_for_type, fallback), do: fallback
 
   # Build the surface function-type AST `T1 -> ... -> Tn -> R` from a param list
   # and return type, MIRRORING `Interface.build_method_map`'s `method_type_ast`
@@ -336,13 +465,13 @@ defmodule Cure.Elab.Implementation do
 
   # -- registration -----------------------------------------------------------
 
-  defp register_instance(env, iface, head, as_name, ref) do
+  defp register_instance(env, iface, head, as_name, ref, origin) do
     coherence = Env.coherence(env) || Coherence.new()
 
     result =
       case as_name do
-        nil -> Coherence.register_anon(coherence, iface, head, ref)
-        name -> Coherence.register_named(coherence, String.to_atom(name), {iface, head}, ref)
+        nil -> Coherence.register_anon(coherence, iface, head, ref, origin)
+        name -> Coherence.register_named(coherence, String.to_atom(name), {iface, head}, ref, origin)
       end
 
     case result do

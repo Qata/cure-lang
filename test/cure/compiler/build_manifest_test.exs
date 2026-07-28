@@ -69,4 +69,18 @@ defmodule Cure.Compiler.BuildManifestTest do
     assert is_binary(a) and byte_size(a) == 32
     assert a == b
   end
+
+  test "artifact fingerprint excludes presentation and tooling beams" do
+    refute M.semantic_toolchain_beam?("/tmp/Elixir.Cure.Diagnostic.Adapter.Name.beam")
+    refute M.semantic_toolchain_beam?("/tmp/Elixir.Cure.CLI.beam")
+    refute M.semantic_toolchain_beam?("/tmp/Elixir.Antigen.Cover.beam")
+    refute M.semantic_toolchain_beam?("/tmp/Elixir.Mix.Tasks.Cure.Compile.beam")
+  end
+
+  test "artifact fingerprint retains semantic compiler beams" do
+    assert M.semantic_toolchain_beam?("/tmp/Elixir.Cure.Compiler.beam")
+    assert M.semantic_toolchain_beam?("/tmp/Elixir.Cure.Core.Kernel.beam")
+    assert M.semantic_toolchain_beam?("/tmp/Elixir.Cure.Elab.Program.beam")
+    assert M.semantic_toolchain_beam?("/tmp/Elixir.Cure.Project.beam")
+  end
 end

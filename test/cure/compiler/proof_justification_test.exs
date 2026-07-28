@@ -60,6 +60,11 @@ defmodule Cure.Compiler.ProofJustificationTest do
     assert backward[:direction] == :backwards and backward[:target] == {:at, 2}
     assert local[:direction] == :forward and local[:target] == {:in, "hypothesis"}
 
+    assert %SourceInfo{fields: %{direction: forward_direction}} = Metadata.source_info(forward)
+    assert %SourceInfo{fields: %{direction: backward_direction}} = Metadata.source_info(backward)
+    assert slice(source, forward_direction) == "rewrite"
+    assert slice(source, backward_direction) == "backwards"
+
     assert Enum.all?(
              [forward, backward, local],
              &match?(%SourceInfo{whole: %Cure.Diagnostic.Span{}}, Metadata.source_info(&1))
@@ -69,6 +74,8 @@ defmodule Cure.Compiler.ProofJustificationTest do
     assert printed == String.trim_trailing(source)
     assert Metadata.strip_diagnostics(parse!(printed)) == Metadata.strip_diagnostics(ast)
   end
+
+  defp slice(source, span), do: binary_part(source, span.start_byte, span.end_byte - span.start_byte)
 
   test "a directed rewrite missing `using` has exact labels and a machine edit" do
     source = "rewrite backwards equality_proof"

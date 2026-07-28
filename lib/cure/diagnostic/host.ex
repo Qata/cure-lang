@@ -1,7 +1,8 @@
 defmodule Cure.Diagnostic.Host do
   @moduledoc "Single presentation boundary for compiler and host command output."
 
-  alias Cure.Diagnostic.{Operational, Sink}
+  alias Cure.Diagnostic.Sink
+  alias Cure.Diagnostic.Adapter.Operational
 
   @doc "Render a compiler or host failure with its authored source context."
   @spec render(term(), String.t(), String.t() | nil) :: String.t()

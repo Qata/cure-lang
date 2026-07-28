@@ -71,6 +71,21 @@ defmodule Cure.Elab.CharLiteralTest do
       assert {:ok, _env} = Program.elaborate(src)
     end
 
+    test "a char literal remains Char when used in a dependent index" do
+      src = """
+      mod CharIndex
+        use Std.Char
+
+        type Witness indices (char: Char)
+          WitnessA : Witness('a')
+
+        fn witness() -> Witness('a') = WitnessA()
+      end
+      """
+
+      assert {:ok, _env} = Program.elaborate(src)
+    end
+
     test "an out-of-range codepoint is rejected cleanly (both loci, no crash)" do
       {:ok, sig} = Program.elaborate("mod M\n  use Std.Bounded\nend\n")
       ctx = Context.empty(sig)

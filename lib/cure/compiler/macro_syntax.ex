@@ -62,6 +62,7 @@ defmodule Cure.Compiler.MacroSyntax do
 
   @type synlit ::
           {:s_int, integer}
+          | {:s_char, non_neg_integer()}
           | {:s_float, float}
           | {:s_str, String.t()}
           | {:s_bool, boolean}
@@ -144,6 +145,34 @@ defmodule Cure.Compiler.MacroSyntax do
 
   def to_syntax(other), do: {:syn_raw, synlit(other)}
 
+  @doc "Convert the host reflection representation to the native constructor representation used by compiled Cure code."
+  @spec to_runtime(repr()) :: term()
+  def to_runtime({:syn_node, tag, attrs, kids}),
+    do: {:Node, tag, runtime_attrs(attrs), Enum.map(kids, &to_runtime/1)}
+
+  def to_runtime({:syn_leaf, tag, attrs, lit}),
+    do: {:Leaf, tag, runtime_attrs(attrs), synlit_to_runtime(lit)}
+
+  def to_runtime({:syn_raw, lit}), do: {:Raw, synlit_to_runtime(lit)}
+  def to_runtime({:syn_quoted, inner}), do: {:Quoted, to_runtime(inner)}
+  def to_runtime({:syn_failure, name, args}), do: {:Failure, name, Enum.map(args, &to_runtime/1)}
+
+  defp runtime_attrs(attrs), do: Enum.map(attrs, fn {key, value} -> {:KV, key, synlit_to_runtime(value)} end)
+
+  defp synlit_to_runtime({:s_int, value}), do: {:SInt, value}
+  defp synlit_to_runtime({:s_char, value}), do: {:SChar, value}
+  defp synlit_to_runtime({:s_float, value}), do: {:SFloat, value}
+  defp synlit_to_runtime({:s_str, value}) when is_binary(value), do: {:SStr, String.to_charlist(value)}
+  defp synlit_to_runtime({:s_bool, value}), do: {:SBool, value}
+  defp synlit_to_runtime({:s_atom, value}), do: {:SAtom, value}
+  defp synlit_to_runtime({:s_list, values}), do: {:SList, Enum.map(values, &synlit_to_runtime/1)}
+  defp synlit_to_runtime({:s_syntax, value}), do: {:SSyntax, to_runtime(value)}
+
+  defp synlit_to_runtime({:s_map, pairs}),
+    do: {:SMap, Enum.map(pairs, fn {key, value} -> {:SPair, synlit_to_runtime(key), synlit_to_runtime(value)} end)}
+
+  defp synlit_to_runtime(:s_opaque), do: :SOpaque
+
   # -- quote lowering: quoted form -> Std.Syntax builder surface AST ----------
 
   @doc """
@@ -211,6 +240,7 @@ defmodule Cure.Compiler.MacroSyntax do
   defp segments_to_ast([{:group, inner} | rest]), do: qq_append(inner, segments_to_ast(rest))
 
   defp synlit_ast({:s_int, n}), do: qq_call("SInt", [qq_lit(:integer, n)])
+  defp synlit_ast({:s_char, n}), do: qq_call("SChar", [qq_lit(:char, n)])
   defp synlit_ast({:s_float, f}), do: qq_call("SFloat", [qq_lit(:float, f)])
   defp synlit_ast({:s_str, s}), do: qq_call("SStr", [qq_lit(:string, s)])
   defp synlit_ast({:s_bool, b}), do: qq_call("SBool", [qq_lit(:boolean, b)])
@@ -541,6 +571,7 @@ defmodule Cure.Compiler.MacroSyntax do
   defp decode_source_value(value), do: value
 
   defp from_synlit({:s_int, n}), do: n
+  defp from_synlit({:s_char, n}), do: n
   defp from_synlit({:s_float, f}), do: f
   defp from_synlit({:s_str, s}), do: s
   defp from_synlit({:s_bool, b}), do: b
@@ -819,6 +850,142 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
+  @doc """
+  Decode the erased BEAM representation of `Std.Syntax`.
+
+  This is the runtime twin of `from_core/1`. Computed macros normally use the
+  bounded Core normalizer, while an already-compiled macro may be executed as
+  an optimization. Both paths cross the same mirror representation before
+  generated syntax is accepted.
+  """
+  @spec from_runtime(term()) :: repr() | {:error, term()}
+  def from_runtime({:Node, tag, attrs, kids}) when is_atom(tag) and is_list(kids) do
+    with {:ok, attrs} <- from_runtime_attrs(attrs),
+         {:ok, kids} <- map_results(kids, &from_runtime/1),
+         true <- Enum.all?(kids, &syntax_repr?/1) do
+      {:syn_node, tag, attrs, kids}
+    else
+      _ -> {:error, {:invalid_runtime_syntax_node, attrs, kids}}
+    end
+  end
+
+  def from_runtime({:Leaf, tag, attrs, lit}) when is_atom(tag) do
+    with {:ok, attrs} <- from_runtime_attrs(attrs),
+         {:ok, lit} <- from_runtime_synlit(lit) do
+      {:syn_leaf, tag, attrs, lit}
+    else
+      _ -> {:error, {:invalid_runtime_syntax_leaf, tag}}
+    end
+  end
+
+  def from_runtime({:Raw, lit}) do
+    case from_runtime_synlit(lit) do
+      {:ok, decoded} -> {:syn_raw, decoded}
+      error -> error
+    end
+  end
+
+  def from_runtime({:Quoted, syntax}) do
+    case from_runtime(syntax) do
+      {:error, _} = error -> error
+      decoded -> {:syn_quoted, decoded}
+    end
+  end
+
+  def from_runtime({:Failure, name, args}) when is_atom(name) and is_list(args) do
+    with {:ok, args} <- map_results(args, &from_runtime/1),
+         true <- Enum.all?(args, &syntax_repr?/1) do
+      {:syn_failure, name, args}
+    else
+      _ -> {:error, {:invalid_runtime_syntax_failure, name}}
+    end
+  end
+
+  def from_runtime(other), do: {:error, {:unsupported_runtime_syntax, other}}
+
+  @doc "Decode the erased BEAM representation of a source-level `MacroResult`."
+  @spec from_runtime_macro_result(term()) ::
+          {:expanded, repr()}
+          | {:rejected, [repr()]}
+          | :not_macro_result
+          | {:error, term()}
+  def from_runtime_macro_result({:Expanded, syntax}) do
+    case from_runtime(syntax) do
+      {:error, _} = error -> error
+      repr -> {:expanded, repr}
+    end
+  end
+
+  def from_runtime_macro_result({:Rejected, diagnostics}) when is_list(diagnostics) do
+    with {:ok, diagnostics} <- map_results(diagnostics, &from_runtime/1),
+         true <- Enum.all?(diagnostics, &syntax_repr?/1) do
+      {:rejected, diagnostics}
+    else
+      _ -> {:error, :invalid_runtime_macro_diagnostics}
+    end
+  end
+
+  def from_runtime_macro_result(_), do: :not_macro_result
+
+  defp from_runtime_attrs(attrs) when is_list(attrs) do
+    map_results(attrs, fn
+      {:KV, key, lit} when is_atom(key) ->
+        with {:ok, lit} <- from_runtime_synlit(lit), do: {key, lit}
+
+      _ ->
+        {:error, :invalid_runtime_syntax_attr}
+    end)
+  end
+
+  defp from_runtime_attrs(_), do: {:error, :invalid_runtime_syntax_attrs}
+
+  defp from_runtime_synlit({:SInt, n}) when is_integer(n), do: {:ok, {:s_int, n}}
+  defp from_runtime_synlit({:SChar, n}) when is_integer(n) and n >= 0 and n <= 0x10FFFF, do: {:ok, {:s_char, n}}
+  defp from_runtime_synlit({:SFloat, f}) when is_float(f), do: {:ok, {:s_float, f}}
+
+  defp from_runtime_synlit({:SStr, chars}) when is_list(chars) do
+    if Enum.all?(chars, &(is_integer(&1) and &1 >= 0)) do
+      try do
+        {:ok, {:s_str, List.to_string(chars)}}
+      rescue
+        ArgumentError -> {:error, :invalid_runtime_syntax_string}
+      end
+    else
+      {:error, :invalid_runtime_syntax_string}
+    end
+  end
+
+  defp from_runtime_synlit({:SBool, value}) when is_boolean(value), do: {:ok, {:s_bool, value}}
+  defp from_runtime_synlit({:SAtom, value}) when is_atom(value), do: {:ok, {:s_atom, value}}
+
+  defp from_runtime_synlit({:SList, values}) when is_list(values) do
+    with {:ok, values} <- map_results(values, &from_runtime_synlit/1),
+         do: {:ok, {:s_list, values}}
+  end
+
+  defp from_runtime_synlit({:SSyntax, syntax}) do
+    case from_runtime(syntax) do
+      {:error, _} = error -> error
+      decoded -> {:ok, {:s_syntax, decoded}}
+    end
+  end
+
+  defp from_runtime_synlit({:SMap, pairs}) when is_list(pairs) do
+    with {:ok, pairs} <- map_results(pairs, &from_runtime_pair/1),
+         do: {:ok, {:s_map, pairs}}
+  end
+
+  defp from_runtime_synlit(:SOpaque), do: {:ok, :s_opaque}
+  defp from_runtime_synlit(_), do: {:error, :invalid_runtime_syntax_literal}
+
+  defp from_runtime_pair({:SPair, key, value}) do
+    with {:ok, key} <- from_runtime_synlit(key),
+         {:ok, value} <- from_runtime_synlit(value),
+         do: {key, value}
+  end
+
+  defp from_runtime_pair(_), do: {:error, :invalid_runtime_syntax_pair}
+
   defp decode_macro_diagnostics(value) do
     case from_core(value) do
       {:error, _} ->
@@ -897,7 +1064,8 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  defp validate_expansion_node({:syn_failure, _name, _args}, _path), do: :ok
+  defp validate_expansion_node({:syn_failure, name, args}, path) when is_atom(name) and is_list(args),
+    do: validate_reflected_children(args, [{:failure_arguments} | path])
 
   defp validate_expansion_node({:syn_raw, _lit}, path),
     do: {:error, {:raw_syntax_in_expansion, path}}
@@ -935,6 +1103,7 @@ defmodule Cure.Compiler.MacroSyntax do
   end
 
   defp validate_synlit({:s_int, value}, _path) when is_integer(value), do: :ok
+  defp validate_synlit({:s_char, value}, _path) when is_integer(value) and value >= 0 and value <= 0x10FFFF, do: :ok
   defp validate_synlit({:s_float, value}, _path) when is_float(value), do: :ok
   defp validate_synlit({:s_str, value}, _path) when is_binary(value), do: :ok
   defp validate_synlit({:s_bool, value}, _path) when is_boolean(value), do: :ok
@@ -984,9 +1153,15 @@ defmodule Cure.Compiler.MacroSyntax do
        when is_atom(tag) and is_list(attrs),
        do: validate_reflected_attrs(attrs, path) |> then(&validate_reflected_literal(&1, lit, path))
 
-  defp validate_reflected_node({:syn_raw, _lit}, _path), do: :ok
-  defp validate_reflected_node({:syn_quoted, _syntax}, _path), do: :ok
-  defp validate_reflected_node({:syn_failure, _name, _args}, _path), do: :ok
+  defp validate_reflected_node({:syn_raw, lit}, path),
+    do: validate_reflected_literal(:ok, lit, [{:raw_literal} | path])
+
+  defp validate_reflected_node({:syn_quoted, syntax}, path),
+    do: validate_reflected_node(syntax, [{:quoted_syntax} | path])
+
+  defp validate_reflected_node({:syn_failure, name, args}, path) when is_atom(name) and is_list(args),
+    do: validate_reflected_children(args, [{:failure_arguments} | path])
+
   defp validate_reflected_node(_other, path), do: {:error, {:malformed_reflected_syntax, path}}
 
   defp validate_reflected_children(children, path) do
@@ -1025,6 +1200,11 @@ defmodule Cure.Compiler.MacroSyntax do
     do: Enum.reduce_while(pairs, :ok, &validate_reflected_pair(&1, &2, path))
 
   defp validate_reflected_literal(:ok, {:s_int, value}, _path) when is_integer(value), do: :ok
+
+  defp validate_reflected_literal(:ok, {:s_char, value}, _path)
+       when is_integer(value) and value >= 0 and value <= 0x10FFFF,
+       do: :ok
+
   defp validate_reflected_literal(:ok, {:s_float, value}, _path) when is_float(value), do: :ok
   defp validate_reflected_literal(:ok, {:s_str, value}, _path) when is_binary(value), do: :ok
   defp validate_reflected_literal(:ok, {:s_bool, value}, _path) when is_boolean(value), do: :ok
@@ -1061,7 +1241,7 @@ defmodule Cure.Compiler.MacroSyntax do
 
   defp canonical_ctor(name), do: Cure.Elab.Name.qualify("Std.Syntax", name)
 
-  defp canonicalize_core({:ctor, name, args}) do
+  defp canonicalize_core({:ctor, name, args}) when is_atom(name) and is_list(args) do
     base = Cure.Elab.Name.base(name) |> String.to_atom()
     canonical_name = if syntax_ctor?(base), do: canonical_ctor(base), else: name
     {:ctor, canonical_name, Enum.map(args, &canonicalize_core/1)}
@@ -1071,7 +1251,7 @@ defmodule Cure.Compiler.MacroSyntax do
   defp canonicalize_core({:lam, g, d, b}), do: {:lam, g, canonicalize_core(d), canonicalize_core(b)}
   defp canonicalize_core({:pi, g, d, c}), do: {:pi, g, canonicalize_core(d), canonicalize_core(c)}
 
-  defp canonicalize_core({:data, n, ps, is}),
+  defp canonicalize_core({:data, n, ps, is}) when is_list(ps) and is_list(is),
     do: {:data, n, Enum.map(ps, &canonicalize_core/1), Enum.map(is, &canonicalize_core/1)}
 
   defp canonicalize_core(other), do: other
@@ -1086,6 +1266,7 @@ defmodule Cure.Compiler.MacroSyntax do
         :Failure,
         :KV,
         :SInt,
+        :SChar,
         :SFloat,
         :SStr,
         :SBool,
@@ -1109,6 +1290,7 @@ defmodule Cure.Compiler.MacroSyntax do
   defp to_core_list(items), do: Enum.reduce(Enum.reverse(items), ctor(:Nil, []), &ctor(:Cons, [&1, &2]))
 
   defp to_core_synlit({:s_int, n}), do: ctor(:SInt, [{:int_lit, n}])
+  defp to_core_synlit({:s_char, n}), do: ctor(:SChar, [{:bounded_lit, n}])
   defp to_core_synlit({:s_float, f}), do: ctor(:SFloat, [{:float_lit, f}])
 
   defp to_core_synlit({:s_str, s}),
@@ -1152,6 +1334,7 @@ defmodule Cure.Compiler.MacroSyntax do
   defp from_core_list(_), do: {:error, :invalid_syntax_list}
 
   defp from_core_synlit({:ctor, :"Std.Syntax#SInt", [{:int_lit, n}]}), do: {:ok, {:s_int, n}}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SChar", [{:bounded_lit, n}]}), do: {:ok, {:s_char, n}}
   defp from_core_synlit({:ctor, :"Std.Syntax#SFloat", [{:float_lit, f}]}), do: {:ok, {:s_float, f}}
 
   defp from_core_synlit({:ctor, :"Std.Syntax#SStr", [chars]}) do

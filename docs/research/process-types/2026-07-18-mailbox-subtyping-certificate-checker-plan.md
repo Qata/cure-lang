@@ -7,7 +7,7 @@ Presburger/Z3 backend for the commutative-regular mailbox domain — see §2.
 ## 0. Goal
 
 Decide **semantic subtyping** `E ⊆ F` for mailbox types (the commutative-regex
-`Pat` algebra in `test/oracle/otp/mailbox_pattern.cure`: `PZero | POne | PAtom | PPlus
+`Pat` algebra in `metatheory/otp/oracle/otp/mailbox_pattern.cure`: `PZero | POne | PAtom | PPlus
 | PTimes | PStar`), where `E ⊆ F` means *every message multiset accepted by `E` is
 also accepted by `F`* (`∀m. Accepts(E, m) → Accepts(F, m)`).
 

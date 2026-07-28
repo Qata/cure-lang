@@ -1,5 +1,11 @@
 # Dependent Type Slices
 
+> Historical implementation plan. The classic pipeline described in this file
+> has since been deleted, `Std.Equivalent` replaced the temporary
+> `Std.Equal`/runtime-token surface, and all accepted programs now use the
+> dependent kernel. See `docs/TYPE_SYSTEM.md`, `docs/DEPENDENT_TYPES.md`, and
+> `ROADMAP-0.34.md` for current behavior.
+
 This note lays out the dependent typing slices as they stand on this branch.
 Only Slice 1 is formally specified in the current design document; later slices
 below are pragmatic widening slices derived from the roadmap and from the

@@ -74,6 +74,17 @@ defmodule Cure.DiagnosticExerciserTest do
       {"relevant use of erased value", "E104",
        "mod DiagnosticRelevance\n  type Nat = Z | S(Nat)\n  type SNat indices (n: Nat)\n    szero : SNat(Z)\n    ssuc : SNat(n) -> SNat(S(n))\n  type NV indices (n: Nat)\n    vz : NV(Z)\n    vs : SNat(n) -> NV(S(n))\n  fn bad({n: Nat}, value: NV(n)) -> Nat = n\nend\n",
        :erased_value_used_relevantly},
+      {"resource usage violation", "E117",
+       "mod DiagnosticUsage\n  fn consume(value: Int) -> Int = value\n  fn bad(value :linear Int) -> Int = consume(value)\nend\n",
+       :resource_usage_violation},
+      {"pattern coverage", "E118",
+       "mod DiagnosticCoverage\n  type Choice = First | Second\n  fn choose(value: Choice) -> Choice = match value\n    First() -> First()\nend\n",
+       :pattern_coverage},
+      {"pattern structure", "E119",
+       "mod DiagnosticPatternStructure\n  use Std.Binary\n  fn first(value: Binary) -> Int = match value\n    <<byte, _rest::binary>> -> byte\nend\n",
+       :pattern_structure},
+      {"primitive declaration", "E120", "mod DiagnosticPrimitive\n  @builtin(:sparkle) primitive Sparkle\nend\n",
+       :primitive_declaration},
       {"non-positive recursive type", "E103",
        "mod DiagnosticPositivity\n  type Nat = Z | S(Nat)\n  type Bad = MkBad((Bad) -> Nat)\nend\n",
        :non_strictly_positive_type},
@@ -120,7 +131,7 @@ defmodule Cure.DiagnosticExerciserTest do
       {"union runtime collision", "E105", {:same_runtime_shape, [:Left, :Right]}},
       {"deriving failure", "E105", {:cannot_derive, :Show}},
       {"kernel index mismatch", "E093", {:index_mismatch, :different_index}},
-      {"kernel inference hole", "E093", {:hole_in_inference_position, "h"}},
+      {"kernel inference hole", "E014", {:hole_in_inference_position, "h"}},
       {"constructor needs checking", "E093", {:ctor_requires_checking_mode, :Nat}},
       {"non-concrete bound", "E093", {:bounded_bound_not_concrete, {:var, 0}}},
       {"cyclic type aliases", "E105", {:cyclic_typealiases, ["A", "B", "A"]}},
@@ -129,15 +140,14 @@ defmodule Cure.DiagnosticExerciserTest do
       {"character range failure", "E093", {:char_literal_out_of_range, 0x110000}},
       {"extern returns union", "E093", {:extern_returns_union, :foreign, {:union, []}}},
       {"dependent match inference", "E093", {:cannot_infer_dependent_match, :branch}},
-      {"erased field inference", "E093", {:bidirectional_erased_field, :Ctor}},
       {"unbound kernel variable", "E091", {:unbound_var, :missing}},
       {"unknown type family", "E091", {:unknown_family, :Missing}},
       {"unknown constructor", "E091", {:unknown_ctor, :Missing}},
       {"foreign constructor", "E091", {:foreign_ctor, :Missing}},
-      {"missing primitive builtin", "E092", {:primitive_missing_builtin, :Int}},
-      {"unknown primitive tag", "E092", {:unknown_primitive_tag, :future_primitive}},
-      {"primitive floor mismatch", "E092", {:primitive_floor_mismatch, :Int, :node, :floor}},
-      {"unsupported declaration", "E092", {:unsupported_declaration, :future_declaration}},
+      {"missing primitive builtin", "E120", {:primitive_missing_builtin, :Int}},
+      {"unknown primitive tag", "E120", {:unknown_primitive_tag, :future_primitive}},
+      {"primitive floor mismatch", "E120", {:primitive_floor_mismatch, :Binary, {:float_type}, {:binary_type}}},
+      {"unsupported declaration", "E120", {:unsupported_declaration, :future_declaration}},
       {"generated hole validation", "E092", {:generated_hole_not_well_typed, :term}},
       {"duplicate macro unit", "E092", {:duplicate_unit, "ms"}},
       {"overload has no match", "E093", {:no_matching_overload, :map, [:Int, :String]}},
@@ -150,7 +160,6 @@ defmodule Cure.DiagnosticExerciserTest do
        {:invalid_macro_family,
         %{reason: {:syntax_family_cycle, ["A", "B", "A"]}, related_spans: [], line: 1, column: 1}}},
       {"missing stdlib source", "E095", {:missing_stdlib_source, "Std.Missing", "/tmp/Std/Missing.cure"}},
-      {"operator conflict", "E106", {:builtin_operator_not_overloadable, :|>}},
       {"unsupported async", "E107", {:unsupported_async, "async primitive is unavailable", [line: 2]}},
       {"splice outside quote", "E108", {:splice_outside_quote, :splice, [line: 2]}},
       {"proof chain syntax", "E109",
@@ -213,7 +222,6 @@ defmodule Cure.DiagnosticExerciserTest do
       {"invalid board buses", "E092", :invalid_board_buses},
       {"invalid board flash", "E092", :invalid_board_flash},
       {"board flash offset", "E092", :flash_offset_out_of_bounds},
-      {"unsupported macro hole arity", "E092", {:unsupported_hole_arity, 3}},
       {"invalid Core grade", "E100", {:bad_grade, :not_a_grade}},
       {"unknown Core symbol", "E100", {:unknown_symbol, "not_loaded"}},
       {"ill-formed Core term", "E100", {:ill_formed_term, {:not_core, 1}}},
@@ -263,7 +271,8 @@ defmodule Cure.DiagnosticExerciserTest do
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))
     compiler_fixture_ids = Enum.flat_map(compiler_cases, &compiler_case_fixture_ids/1)
 
-    Enum.each(compiler_cases, fn compiler_case ->
+    Enum.with_index(compiler_cases, 1)
+    |> Enum.each(fn {compiler_case, audit_index} ->
       {label, expected_code, source, fixture_id} = compiler_case_parts(compiler_case)
 
       case Cure.Compiler.compile_string(source, emit_events: false) do
@@ -295,12 +304,22 @@ defmodule Cure.DiagnosticExerciserTest do
             )
 
           assert Enum.any?(String.split(source, "\n"), &(&1 != "" and String.contains?(terminal, &1)))
-          IO.puts(:stderr, "[#{label}]\n" <> terminal)
+
+          if audit?() do
+            print_audit_case(audit_index, label, expected_code, fixture_id, diagnostic, registry)
+          else
+            IO.puts(:stderr, "[#{label}]\n" <> terminal)
+          end
       end
     end)
 
     compiler_fixture_ids =
-      [exercise_ambiguous_name_fixture(), exercise_kernel_type_mismatch_fixture() | compiler_fixture_ids]
+      [
+        exercise_ambiguous_name_fixture(),
+        exercise_kernel_type_mismatch_fixture(),
+        exercise_computed_macro_internal_fixture()
+        | compiler_fixture_ids
+      ]
 
     assert :ok =
              Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
@@ -342,8 +361,9 @@ defmodule Cure.DiagnosticExerciserTest do
                only_producers: [:pattern_checker, :proof_checker]
              )
 
-    Enum.each(boundary_cases, fn {label, expected_code, reason} ->
-      {diagnostic, _registry} =
+    Enum.with_index(boundary_cases, length(compiler_cases) + 1)
+    |> Enum.each(fn {{label, expected_code, reason}, audit_index} ->
+      {diagnostic, registry} =
         Cure.Compiler.Errors.to_diagnostic(reason, "#{label}.cure", "fn run() -> Int = 1\n")
 
       assert diagnostic.code == expected_code
@@ -352,6 +372,9 @@ defmodule Cure.DiagnosticExerciserTest do
       assert Cure.Compiler.Errors.format_with_source(reason, "#{label}.cure", "fn run() -> Int = 1\n") =~
                expected_code,
              "#{label} still uses the legacy source formatter path"
+
+      if audit?(),
+        do: print_audit_case(audit_index, label, expected_code, nil, diagnostic, registry)
     end)
 
     diagnostics = [
@@ -384,18 +407,25 @@ defmodule Cure.DiagnosticExerciserTest do
 
     fixture_inventory = Cure.Diagnostic.Registry.producer_fixture_inventory()
 
-    Enum.each(diagnostics, fn {fixture_id, diagnostic} ->
+    operational_offset = length(compiler_cases) + length(boundary_cases) + 1
+
+    Enum.with_index(diagnostics, operational_offset)
+    |> Enum.each(fn {{fixture_id, diagnostic}, audit_index} ->
       assert {expected_code, _producer} = Map.fetch!(fixture_inventory, fixture_id)
       assert diagnostic.code == expected_code
 
-      IO.puts(
-        :stderr,
-        Renderer.terminal(
-          diagnostic,
-          nil,
-          Keyword.merge(render_options(), output_device: :standard_error)
+      if audit?() do
+        print_audit_case(audit_index, Atom.to_string(fixture_id), expected_code, fixture_id, diagnostic, nil)
+      else
+        IO.puts(
+          :stderr,
+          Renderer.terminal(
+            diagnostic,
+            nil,
+            Keyword.merge(render_options(), output_device: :standard_error)
+          )
         )
-      )
+      end
     end)
 
     operational_codes = Enum.map(diagnostics, fn {_fixture_id, diagnostic} -> diagnostic.code end)
@@ -421,8 +451,18 @@ defmodule Cure.DiagnosticExerciserTest do
     IO.puts(:stderr, "UNCOVERED REGISTERED CODES: " <> Enum.join(missing_codes, ", "))
     assert MapSet.subset?(covered_codes, registered_codes)
 
-    if Keyword.get(Application.get_env(:cure, :diagnostics_exerciser, []), :coverage, false) do
+    config = Application.get_env(:cure, :diagnostics_exerciser, [])
+
+    if Keyword.get(config, :coverage, false) or audit?() do
       assert missing_codes == [], "diagnostic coverage is incomplete"
+    end
+
+    if audit?() do
+      IO.puts(
+        :stderr,
+        "DIAGNOSTIC AUDIT COMPLETE: #{length(compiler_cases) + length(boundary_cases) + length(diagnostics)} cases; " <>
+          "#{MapSet.size(registered_codes)} registered codes covered"
+      )
     end
   end
 
@@ -434,6 +474,34 @@ defmodule Cure.DiagnosticExerciserTest do
     refute plain =~ "** ("
     refute plain =~ "lib/cure/"
     refute plain =~ "#Function<"
+  end
+
+  defp audit? do
+    Keyword.get(Application.get_env(:cure, :diagnostics_exerciser, []), :audit, false)
+  end
+
+  defp print_audit_case(index, label, expected_code, fixture_id, diagnostic, registry) do
+    entry = Cure.Diagnostic.Registry.fetch!(expected_code)
+
+    fixture =
+      case fixture_id do
+        nil -> "-"
+        fixture_id -> Atom.to_string(fixture_id)
+      end
+
+    IO.puts(
+      :stderr,
+      "\n=== DIAGNOSTIC AUDIT #{index} ===\n" <>
+        "label=#{label} code=#{diagnostic.code} key=#{diagnostic.key} " <>
+        "subsystem=#{entry.subsystem} fixture=#{fixture} " <>
+        "producers=#{Enum.join(Enum.map(entry.producers, &Atom.to_string/1), ",")}\n" <>
+        "payload_keys=#{diagnostic.payload |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort() |> Enum.join(",")}\n" <>
+        Renderer.terminal(
+          diagnostic,
+          registry,
+          Keyword.merge(render_options(), output_device: :standard_error)
+        )
+    )
   end
 
   defp compiler_case_parts({label, code, source}), do: {label, code, source, nil}
@@ -552,5 +620,22 @@ defmodule Cure.DiagnosticExerciserTest do
     assert_no_raw_diagnostic_leaks(plain, "kernel type mismatch")
 
     :type_mismatch_kernel
+  end
+
+  defp exercise_computed_macro_internal_fixture do
+    source = "mod M\n  fn result() -> Int = broken\nend\n"
+    file = "computed macro internal failure.cure"
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic(
+        {:computed_macro_error, [keyword: "broken", line: 2, col: 24], {:host_exception, RuntimeError}},
+        file,
+        source
+      )
+
+    assert diagnostic.code == "E101"
+    assert diagnostic.primary.span.start_line == 2
+    assert Renderer.plain(diagnostic, registry) =~ "this invocation reached the failing compiler path"
+    :internal_failure_macro_expansion
   end
 end

@@ -24,7 +24,7 @@ defmodule Cure.Compiler.DepGraph do
   emit the W086 warning. Duplicate module names remain a hard error.
   """
 
-  defstruct nodes: %{}, modules: %{}
+  defstruct nodes: %{}, modules: %{}, module_index: nil
 
   @type node_info :: %{
           path: Path.t(),
@@ -32,13 +32,17 @@ defmodule Cure.Compiler.DepGraph do
           line: pos_integer() | nil,
           blank?: boolean(),
           parse_error: term() | nil,
+          source_hash: binary(),
+          provided_modules: [String.t()],
           order_deps: [%{target: String.t(), line: pos_integer()}],
+          qualified_deps: [%{target: String.t(), line: pos_integer()}],
           closure_deps: [String.t()]
         }
 
   @type t :: %__MODULE__{
           nodes: %{Path.t() => node_info()},
-          modules: %{String.t() => Path.t()}
+          modules: %{String.t() => Path.t()},
+          module_index: Cure.Compiler.ModuleIndex.t() | nil
         }
 
   # Behavior-shaped declarations are standard-library syntax macros and arrive
@@ -49,30 +53,103 @@ defmodule Cure.Compiler.DepGraph do
           {:ok, t()} | {:error, {:duplicate_module, String.t(), [Path.t()]}}
   def scan(paths, opts \\ []) do
     known = MapSet.new(Keyword.get(opts, :known_modules, []))
-    nodes = paths |> Enum.sort() |> Map.new(fn path -> {path, scan_file(path)} end)
+    expanded_paths = paths |> Enum.map(&Path.expand/1) |> Enum.uniq() |> Enum.sort()
+    nodes = expanded_paths |> Map.new(fn path -> {path, scan_file(path)} end)
 
-    case duplicate_module(nodes) do
-      {name, dup_paths} ->
-        {:error, {:duplicate_module, name, Enum.sort(dup_paths)}}
+    with {:ok, module_index} <-
+           Cure.Compiler.ModuleIndex.from_entries(module_index_entries(nodes),
+             validate_dependencies: false
+           ),
+         :ok <- maybe_validate_dependencies(module_index, opts) do
+      modules =
+        Map.new(module_index.providers, fn {provided_name, owner} ->
+          {provided_name, module_index.entries[owner].source_path}
+        end)
 
-      nil ->
-        modules =
-          for {path, %{module: m}} <- nodes, is_binary(m), into: %{}, do: {m, path}
+      universe = MapSet.union(known, MapSet.new(Map.keys(modules)))
 
-        universe = MapSet.union(known, MapSet.new(Map.keys(modules)))
+      prelude_modules = module_index.prelude_providers
 
-        prelude_modules =
-          nodes
+      nodes =
+        Map.new(nodes, fn {path, node} ->
+          {path, finalize_node(node, modules, universe, prelude_modules)}
+        end)
+
+      {:ok, %__MODULE__{nodes: nodes, modules: modules, module_index: module_index}}
+    end
+  end
+
+  defp maybe_validate_dependencies(module_index, opts) do
+    if Keyword.get(opts, :validate_dependencies, false) do
+      known =
+        opts
+        |> Keyword.get(:known_modules, [])
+        |> MapSet.new()
+        |> MapSet.union(Cure.Compiler.ModuleIndex.compiler_modules())
+        |> MapSet.union(MapSet.new(Map.keys(module_index.entries)))
+        |> MapSet.union(
+          module_index.entries
           |> Map.values()
-          |> Enum.filter(&Map.get(&1, :prelude_provider?, false))
-          |> MapSet.new(& &1.module)
+          |> Enum.flat_map(& &1.provided_modules)
+          |> MapSet.new()
+        )
 
-        nodes =
-          Map.new(nodes, fn {path, node} ->
-            {path, finalize_node(node, modules, universe, prelude_modules)}
+      missing =
+        module_index.entries
+        |> Map.keys()
+        |> Enum.sort()
+        |> Enum.find_value(fn module_name ->
+          module_index
+          |> Cure.Compiler.ModuleIndex.edges(module_name)
+          |> Enum.find(fn edge ->
+            not MapSet.member?(known, edge.target) and
+              Cure.Compiler.SourceResolver.module_path(edge.target) == :not_found
           end)
+        end)
 
-        {:ok, %__MODULE__{nodes: nodes, modules: modules}}
+      if missing, do: {:error, {:module_dependency_missing, missing}}, else: :ok
+    else
+      :ok
+    end
+  end
+
+  defp module_index_entries(nodes) do
+    for {path, %{module: module_name} = node} <- nodes,
+        is_binary(module_name) do
+      use_targets = MapSet.new(node.order_deps, & &1.target)
+
+      use_edges =
+        Enum.map(node.order_deps, fn dependency ->
+          %{
+            kind: :use_import,
+            source_module: module_name,
+            target: dependency.target,
+            source_path: path,
+            line: dependency.line
+          }
+        end)
+
+      qualified_edges =
+        node.qualified_deps
+        |> Enum.reject(&MapSet.member?(use_targets, &1.target))
+        |> Enum.map(fn reference ->
+          %{
+            kind: :qualified_reference,
+            source_module: module_name,
+            target: reference.target,
+            source_path: path,
+            line: reference.line
+          }
+        end)
+
+      %Cure.Compiler.ModuleIndex.Entry{
+        module_name: module_name,
+        source_path: path,
+        source_hash: node.source_hash,
+        direct_edges: use_edges ++ qualified_edges,
+        provided_modules: node.provided_modules,
+        prelude_provider?: Map.get(node, :prelude_provider?, false)
+      }
     end
   end
 
@@ -106,12 +183,14 @@ defmodule Cure.Compiler.DepGraph do
 
   @doc "In-set `use` deps by module name (values sorted). Baking input for Preload."
   @spec order_deps_map(t()) :: %{String.t() => [String.t()]}
-  def order_deps_map(%__MODULE__{nodes: nodes, modules: modules}) do
+  def order_deps_map(%__MODULE__{nodes: nodes, modules: modules, module_index: module_index}) do
     for {_path, %{module: m} = node} <- nodes, is_binary(m), into: %{} do
       deps =
         node.order_deps
         |> Enum.map(& &1.target)
         |> Enum.filter(&(Map.has_key?(modules, &1) and &1 != m))
+        |> Enum.map(&(Cure.Compiler.ModuleIndex.provider_owner(module_index, &1) || &1))
+        |> Enum.reject(&(&1 == m))
         |> Enum.uniq()
         |> Enum.sort()
 
@@ -142,22 +221,36 @@ defmodule Cure.Compiler.DepGraph do
   """
   @spec toposort(%{k => [k]}, [k]) :: [k] when k: term()
   def toposort(dep_map, keys) do
+    toposort(dep_map, keys, [])
+  end
+
+  @doc "Deterministic topological sort, preferring ready keys in `priority_keys`."
+  @spec toposort(%{k => [k]}, [k], [k]) :: [k] when k: term()
+  def toposort(dep_map, keys, priority_keys) do
     keyset = MapSet.new(keys)
+    priority = closure(dep_map, priority_keys) |> MapSet.new()
 
     edges =
       Map.new(keys, fn k ->
         {k, dep_map |> Map.get(k, []) |> Enum.filter(&(MapSet.member?(keyset, &1) and &1 != k))}
       end)
 
-    {ordered, _sccs} = kahn(edges)
+    {ordered, _sccs} = kahn(edges, priority)
     ordered
   end
 
   @doc "Per-module closure deps (in-universe filtered, sorted). Baking input for Preload."
   @spec closure_deps_map(t()) :: %{String.t() => [String.t()]}
-  def closure_deps_map(%__MODULE__{nodes: nodes}) do
+  def closure_deps_map(%__MODULE__{nodes: nodes, module_index: module_index}) do
     for {_path, %{module: m} = node} <- nodes, is_binary(m), into: %{} do
-      {m, node.closure_deps}
+      deps =
+        node.closure_deps
+        |> Enum.map(&(Cure.Compiler.ModuleIndex.provider_owner(module_index, &1) || &1))
+        |> Enum.reject(&(&1 == m))
+        |> Enum.uniq()
+        |> Enum.sort()
+
+      {m, deps}
     end
   end
 
@@ -177,21 +270,6 @@ defmodule Cure.Compiler.DepGraph do
 
   # -- scanning ---------------------------------------------------------------
 
-  defp duplicate_module(nodes) do
-    nodes
-    |> Enum.reduce_while(%{}, fn {path, %{module: m}}, acc ->
-      cond do
-        not is_binary(m) -> {:cont, acc}
-        Map.has_key?(acc, m) -> {:halt, {m, [Map.fetch!(acc, m), path]}}
-        true -> {:cont, Map.put(acc, m, path)}
-      end
-    end)
-    |> case do
-      {name, dup_paths} -> {name, dup_paths}
-      _map -> nil
-    end
-  end
-
   defp scan_file(path) do
     base = %{
       path: path,
@@ -199,7 +277,10 @@ defmodule Cure.Compiler.DepGraph do
       line: nil,
       blank?: false,
       parse_error: nil,
+      source_hash: <<>>,
+      provided_modules: [],
       order_deps: [],
+      qualified_deps: [],
       closure_deps: []
     }
 
@@ -208,6 +289,8 @@ defmodule Cure.Compiler.DepGraph do
         %{base | parse_error: {:file_error, posix}}
 
       {:ok, source} ->
+        base = %{base | source_hash: :crypto.hash(:sha256, source)}
+
         if String.trim(source) == "" do
           %{base | blank?: true}
         else
@@ -234,22 +317,29 @@ defmodule Cure.Compiler.DepGraph do
                 | parse_error: reason,
                   module: scan.module,
                   line: base.line,
-                  order_deps: Enum.map(scan.uses, fn u -> %{target: u.target, line: u.line} end)
+                  provided_modules: List.wrap(scan.module),
+                  order_deps: Enum.map(scan.uses, fn u -> %{target: u.target, line: u.line} end),
+                  qualified_deps:
+                    Enum.map(scan.qualified_targets, fn reference ->
+                      %{target: reference.target, line: reference.line}
+                    end)
               }
               |> Map.put(:prelude_provider?, scan.prelude?)
 
             {:ok, ast} ->
               {module, line} = find_module(ast)
               uses = collect_uses(ast)
-              qualified = collect_qualified_targets(ast)
+              qualified = Cure.Compiler.Parser.FixityScan.collect_qualified_targets(ast, uses)
 
               base
               |> Map.put(:prelude_provider?, prelude_decorated?(ast))
               |> Map.merge(%{
                 module: module,
                 line: line,
+                provided_modules: collect_declared_modules(ast),
                 order_deps: uses,
-                closure_deps: Enum.map(uses, & &1.target) ++ qualified
+                qualified_deps: qualified,
+                closure_deps: Enum.map(uses ++ qualified, & &1.target)
               })
           end
         end
@@ -318,6 +408,23 @@ defmodule Cure.Compiler.DepGraph do
 
   defp find_module(_other), do: {nil, nil}
 
+  defp collect_declared_modules(ast) do
+    walk(ast, [], fn
+      {:container, meta, _body}, acc when is_list(meta) ->
+        if Keyword.get(meta, :container_type) in @module_container_types,
+          do: [Keyword.get(meta, :name) | acc],
+          else: acc
+
+      {:lift_module, meta, _body}, acc when is_list(meta) ->
+        [Keyword.get(meta, :module) | acc]
+
+      _node, acc ->
+        acc
+    end)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+  end
+
   defp collect_uses(ast), do: walk(ast, [], &use_collector/2) |> Enum.reverse()
 
   defp use_collector({:import, meta, _}, acc) when is_list(meta) do
@@ -331,22 +438,6 @@ defmodule Cure.Compiler.DepGraph do
   end
 
   defp use_collector(_node, acc), do: acc
-
-  defp collect_qualified_targets(ast) do
-    walk(ast, [], fn
-      {:function_call, meta, _args}, acc when is_list(meta) ->
-        name = Keyword.get(meta, :name, "")
-
-        case String.split(name, ".") do
-          parts when length(parts) > 1 -> [Enum.join(Enum.drop(parts, -1), ".") | acc]
-          _ -> acc
-        end
-
-      _node, acc ->
-        acc
-    end)
-    |> Enum.uniq()
-  end
 
   defp walk({_tag, _meta, children} = node, acc, fun) do
     acc = fun.(node, acc)
@@ -371,17 +462,18 @@ defmodule Cure.Compiler.DepGraph do
   # deadlock), the source SCC of the remaining subgraph is emitted as a
   # group (alphabetical within it) and its internal edge map is collected
   # so order/1 can report the closed cycle walk. Never errors.
-  defp kahn(edges), do: do_kahn(edges, [], [])
+  defp kahn(edges), do: kahn(edges, MapSet.new())
+  defp kahn(edges, priority), do: do_kahn(edges, [], [], priority)
 
-  defp do_kahn(edges, acc, sccs) when map_size(edges) == 0,
+  defp do_kahn(edges, acc, sccs, _priority) when map_size(edges) == 0,
     do: {Enum.reverse(acc), Enum.reverse(sccs)}
 
-  defp do_kahn(edges, acc, sccs) do
+  defp do_kahn(edges, acc, sccs, priority) do
     ready =
       edges
       |> Enum.filter(fn {_path, deps} -> deps == [] end)
       |> Enum.map(&elem(&1, 0))
-      |> Enum.sort()
+      |> Enum.sort_by(fn key -> {not MapSet.member?(priority, key), key} end)
 
     case ready do
       [] ->
@@ -395,7 +487,7 @@ defmodule Cure.Compiler.DepGraph do
           |> Map.drop(members)
           |> Map.new(fn {p, deps} -> {p, deps -- members} end)
 
-        do_kahn(edges, Enum.reverse(members) ++ acc, [scc_edges | sccs])
+        do_kahn(edges, Enum.reverse(members) ++ acc, [scc_edges | sccs], priority)
 
       [next | _] ->
         edges =
@@ -403,7 +495,7 @@ defmodule Cure.Compiler.DepGraph do
           |> Map.delete(next)
           |> Map.new(fn {p, deps} -> {p, List.delete(deps, next)} end)
 
-        do_kahn(edges, [next | acc], sccs)
+        do_kahn(edges, [next | acc], sccs, priority)
     end
   end
 

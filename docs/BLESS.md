@@ -70,7 +70,7 @@ patches for five patterns:
 | `:type_mismatch` (declared return type) | Remove or widen the return-type annotation |
 | `:type_mismatch` (argument) | Inspect the call site |
 | `:constraint_violation` | Add a `when` guard at the call site |
-| `:unbound_variable` | Insert a `let` binding; or use `Cure.Types.Synth` to find a well-typed replacement from context |
+| `:unbound_variable` | Insert a `let` binding or choose a name from the diagnostic's in-scope candidates |
 | `:arity_mismatch` | Explain the expected argument count |
 | `:non_exhaustive_match` | Insert a wildcard `_ -> throw "unhandled case"` arm |
 

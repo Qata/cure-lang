@@ -25,7 +25,7 @@ defmodule Cure.Elab.InstanceWhnfKeyTest do
 
     # Std.Equatable already provides `Equatable for Int`. Registering a second
     # anonymous instance for `MyInt` (which whnf's to Int) must collide.
-    assert {:error, {:overlapping_instance, :Equatable, :"Std.Int#Int"}} =
+    assert {:error, {:overlapping_instance, %{interface: :Equatable, head: :"Std.Int#Int"}}} =
              Program.elaborate(src)
   end
 
@@ -60,7 +60,7 @@ defmodule Cure.Elab.InstanceWhnfKeyTest do
     end
     """
 
-    assert {:error, {:overlapping_instance, :Equatable, :"Std.Int#Int"}} =
+    assert {:error, {:overlapping_instance, %{interface: :Equatable, head: :"Std.Int#Int"}}} =
              Program.elaborate(src)
   end
 

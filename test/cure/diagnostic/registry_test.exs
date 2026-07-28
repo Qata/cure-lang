@@ -38,7 +38,7 @@ defmodule Cure.Diagnostic.RegistryTest do
   test "registry records the operational producer for documentation warnings" do
     assert {:ok, entry} = Registry.fetch("E008")
     assert entry.producers == [:operational]
-    assert entry.converter == Cure.Diagnostic.Operational
+    assert entry.converter == Cure.Diagnostic.Adapter.Operational
   end
 
   test "optimistic legacy ownership is retired or narrowed to source-backed producers" do
@@ -58,7 +58,7 @@ defmodule Cure.Diagnostic.RegistryTest do
     e090 = Registry.fetch!("E090")
     assert e090.producers == [:elaboration]
     assert e090.producer_fixtures == %{elaboration: :unrecognized_pattern_elaboration}
-    assert File.read!("lib/cure/elab/elaborator.ex") =~ "{:error, {:unsupported_pattern"
+    assert File.read!("lib/cure/elab/elaborator.ex") =~ "{:unsupported_pattern,"
   end
 
   test "retired codes remain explainable but are excluded from reachable coverage" do
@@ -116,6 +116,16 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert {:error, {:missing_converter_function, ^code}} =
              Registry.validate([%{entry | converter_function: :does_not_exist}])
 
+    assert {:error, {:missing_producer_converter, ^code}} =
+             Registry.validate([%{entry | producer_converters: %{}}])
+
+    [producer | _] = entry.producers
+
+    assert {:error, {:missing_producer_converter_function, ^code}} =
+             Registry.validate([
+               %{entry | producer_converters: Map.put(entry.producer_converters, producer, {String, :does_not_exist})}
+             ])
+
     assert {:error, {:reachable_without_catalog_case, ^code}} =
              Registry.validate([%{entry | catalog_case: nil}])
 
@@ -140,6 +150,73 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert :ok = Registry.validate_producer_coverage()
     assert :ok = Registry.validate_producer_catalog()
     assert :ok = Cure.Diagnostic.Registry.Inventory.validate(inventory)
+  end
+
+  test "E101 records the converter for every trusted producer boundary" do
+    entry = Registry.fetch!("E101")
+
+    assert entry.producer_converters == %{
+             beam_writer: {Cure.Diagnostic.Adapter.Codegen, :from_error},
+             macro_expansion: {Cure.Diagnostic.Adapter, :from_error},
+             operational: {Cure.Diagnostic.Adapter.Operational, :from_error}
+           }
+  end
+
+  test "E091 names its exhaustive family converter for both producer branches" do
+    entry = Registry.fetch!("E091")
+
+    assert entry.converter == Cure.Diagnostic.Adapter.Name
+
+    assert entry.producer_converters == %{
+             name_resolution: {Cure.Diagnostic.Adapter.Name, :from_error},
+             pattern_checker: {Cure.Diagnostic.Adapter.Name, :from_error}
+           }
+  end
+
+  test "E103 is owned by the exhaustive kernel family converter" do
+    entry = Registry.fetch!("E103")
+    assert entry.converter == Cure.Diagnostic.Adapter.Kernel
+    assert entry.producer_converters == %{kernel: {Cure.Diagnostic.Adapter.Kernel, :from_error}}
+  end
+
+  test "kernel conversion failures use the contextual type converter" do
+    entry = Registry.fetch!("E093")
+    assert entry.producer_converters.kernel == {Cure.Diagnostic.Adapter.Type, :from_error}
+    assert entry.producer_converters.elaboration == {Cure.Diagnostic.Adapter, :from_error}
+  end
+
+  test "E104 is owned by the exhaustive static-analysis converter" do
+    entry = Registry.fetch!("E104")
+    assert entry.converter == Cure.Diagnostic.Adapter.StaticAnalysis
+
+    assert entry.producer_converters == %{
+             elaboration: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
+           }
+  end
+
+  test "E117 shares the static-analysis converter without sharing a generic fallback" do
+    entry = Registry.fetch!("E117")
+    assert entry.converter == Cure.Diagnostic.Adapter.StaticAnalysis
+
+    assert entry.producer_converters == %{
+             elaboration: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
+           }
+  end
+
+  test "totality and pattern coverage have exhaustive static-analysis ownership" do
+    for {code, producer} <- [
+          {"E013", :totality_checker},
+          {"E102", :elaboration},
+          {"E118", :elaboration},
+          {"E119", :elaboration}
+        ] do
+      entry = Registry.fetch!(code)
+      assert entry.converter == Cure.Diagnostic.Adapter.StaticAnalysis
+
+      assert entry.producer_converters == %{
+               producer => {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
+             }
+    end
   end
 
   test "producer catalog validation requires every code and producer branch independently" do

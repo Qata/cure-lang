@@ -22,7 +22,7 @@ negative.
 ## Promotion checklist (probe → shipped)
 
 1. Probe elaborates clean here.
-2. Mirror the core lemmas into an Idris oracle pair under `test/oracle/otp/`; `mix cure.oracle otp`
+2. Mirror the core lemmas into an Idris oracle pair under `metatheory/otp/oracle/otp/`; `mix cure.oracle otp`
    shows `rel=same`.
 3. Write the module into `lib/std/otp_<name>.cure` (`@group(:concurrency)`), add a
    `test/cure/stdlib/otp_<name>_test.exs`.

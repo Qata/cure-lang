@@ -27,7 +27,7 @@ Cure has only two constructor-field categories, and they are welded to quantity:
 There is **no way to spell the fourth quadrant** — implicit *and* ω. So a
 constructor index that is (a) determined by the result index (redundant to pass
 positionally) yet (b) needed at runtime must be written as an **explicit**
-`(k: T)` field: the live workaround in `lib/std/otp_conversation.cure`
+`(k: T)` field: the live workaround in `metatheory/otp/src/otp_conversation.cure`
 (`CRStep : (t: Tag) -> …`, comment line 32 "carried explicitly … so the ordering
 proof can name it"). Idris writes it `{t : Tag}`.
 
@@ -108,7 +108,7 @@ inferred index. Erased-implicit surface syntax is out of scope.)
 - **Antibody** `relevant_implicit_ctor_index_antibody_test.exs`: REACH (relevant
   implicit retained + usable) + CONTROL (erased index used relevantly still rejected +
   plicity does not leak into the kernel's convertibility).
-- **Workaround removal**: rewrite `lib/std/otp_conversation.cure` `CRStep` to `{t: Tag}`
+- **Workaround removal**: rewrite `metatheory/otp/src/otp_conversation.cure` `CRStep` to `{t: Tag}`
   and `conv_order` to bind `t` by named implicit; regenerate `priv/std`.
 - **Gate**: full Antigen suite + full test suite (TCB-adjacent record change).
 

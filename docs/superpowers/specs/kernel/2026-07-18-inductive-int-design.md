@@ -267,7 +267,7 @@ or #4's bridge.
 
 - **Phase 1 correctness gate = the existing full suite, byte-identical green**
   (§5). This is the primary and non-negotiable check for the substrate.
-- **Differential oracle:** paired `.cure`/`.idr` probes under `test/oracle/otp/`
+- **Differential oracle:** paired `.cure`/`.idr` probes under `metatheory/otp/oracle/otp/`
   (e.g. `int_inductive.{cure,idr}`), `mix cure.oracle otp` + the replay check,
   `rel=same` before each commit. Idris2 at `~/Develop/Idris2/build/exec/idris2`.
   Phase 1 probe: `match` on `Int` + the induction smoke-test compute/prove as
@@ -302,7 +302,7 @@ or #4's bridge.
   refresh the two stale "`Int` is primitive" comments; no semantic change.
 - **Steer:** work in `lib/cure/core/*` + `lib/cure/elab/*`. IGNORE
   `lib/cure/compiler/*` and `lib/cure/types/*` (non-dependent decoys).
-- **Tests:** `test/oracle/otp/int_inductive.{cure,idr}` (+ Phase-2 probes).
+- **Tests:** `metatheory/otp/oracle/otp/int_inductive.{cure,idr}` (+ Phase-2 probes).
 - **Ghost commits:** author as the user only (`--author="Made In Heaven
   <madeinheaven@madeinheaven.com>"`), no `Co-Authored-By`, explicit-pathspec
   staging.

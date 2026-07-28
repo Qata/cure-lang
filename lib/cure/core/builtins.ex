@@ -14,6 +14,7 @@ defmodule Cure.Core.Builtins do
 
   # key => list of {ctor_name, arity}. Names are load-bearing.
   @schemas %{
+    any: [],
     bool: [{:False, 0}, {:True, 0}],
     nat: [{:Z, 0}, {:S, 1}],
     eq: [{:reflexive, 1}],
@@ -132,6 +133,7 @@ defmodule Cure.Core.Builtins do
   @spec seed(Env.t(), MapSet.t()) :: Env.t()
   def seed(%Env{} = env, exclude \\ MapSet.new()) do
     env
+    |> seed_builtin(:any, exclude)
     |> seed_builtin(:bool, exclude)
     |> seed_builtin(:nat, exclude)
     |> seed_builtin(:int, exclude)
@@ -160,7 +162,7 @@ defmodule Cure.Core.Builtins do
   end
 
   @doc """
-  Seed the 31 builtin-op globals (16 int binary [11 arith/cmp + 5 bitwise] +
+  Seed the 32 builtin-op globals (16 int binary [11 arith/cmp + 5 bitwise] +
   10 float binary + int_neg/int_bnot/float_neg + the A1 polymorphic
   struct_eq/struct_ne) as body-less defs carrying a `builtin_op` marker. Public
   so the Antigen generator envs (SigMenu v1, Generators.Totality) can reuse it.
@@ -178,6 +180,20 @@ defmodule Cure.Core.Builtins do
     |> seed_unops(@int_unops, int_ty)
     |> seed_unops(@float_unops, {:float_type})
     |> seed_struct_ops(bool_ty)
+    |> seed_run()
+  end
+
+  # `run : {a : Type} -> Effect(a) -> a` is the one deliberate escape from
+  # direct-style effects. The type parameter is erased, and the operation is
+  # lowered by the emitter to its sole present argument.
+  defp seed_run(env) do
+    ty =
+      {:pi, :erased, {:type, 0}, {:pi, Grade.unrestricted(), {:effect_type, {:var, 0}}, {:var, 1}}}
+
+    env
+    |> Env.add_def(:run, ty, nil, [:erased, :unrestricted])
+    |> Env.register_builtin_op(:run, :effect_run)
+    |> Env.put_unsafe(:run)
   end
 
   # The family id to bake into every comparison / structural-equality codomain.
@@ -204,6 +220,15 @@ defmodule Cure.Core.Builtins do
   # domain. Mirrors bool_family_id/1's canonical-name snapshot under either seed order.
   defp int_family_id(env),
     do: Inductive.builtin(env, :int) || int_family(Env.with_owner(env, "Std.Int")).name
+
+  # `Std.Nat` excludes its own family while its source declaration is being
+  # elaborated. Int is nevertheless seeded into that working environment, so
+  # its constructors must use Nat's canonical identity even before the builtin
+  # registry can contain the source-declared family. Baking the raw lookup here
+  # produced `{:data, nil, ...}` in FromNat/NegativeSuccessor and poisoned every
+  # transitive interface compiled through the Nat bootstrap.
+  defp nat_family_id(env),
+    do: Inductive.builtin(env, :nat) || nat_family(Env.with_owner(env, "Std.Nat")).name
 
   # struct_eq/struct_ne : Pi(a: Type0). Pi(_: a). Pi(_: a). Bool — under the
   # second binder the type param a is {:var, 0}; under the third it is {:var, 1}.
@@ -268,6 +293,16 @@ defmodule Cure.Core.Builtins do
         exclude
       )
 
+  defp seed_builtin(env, :any, exclude),
+    do:
+      seed_builtin(
+        env,
+        :any,
+        any_family(Env.with_owner(env, "Std.Any")),
+        [],
+        exclude
+      )
+
   defp seed_builtin(env, :nat, exclude),
     do:
       seed_builtin(
@@ -327,6 +362,11 @@ defmodule Cure.Core.Builtins do
     Inductive.register_builtin(env, key, fid)
   end
 
+  # `Any` is an opaque top type: every value can be checked at it through the
+  # kernel's subtyping rule, but it has no eliminator and therefore cannot be
+  # abused as an empty inductive after widening.
+  defp any_family(env), do: Inductive.opaque_family(Env.owned_name(env, :Any), [], 0)
+
   # Bool : Type0 = False | True  (both nullary)
   defp bool_family(env), do: Inductive.family(Env.owned_name(env, :Bool), [], [], 0)
 
@@ -342,7 +382,7 @@ defmodule Cure.Core.Builtins do
   defp nat_ctors(env),
     do: [
       Inductive.ctor(Env.owned_name(env, :Z), [], []),
-      Inductive.ctor(Env.owned_name(env, :S), [{:n, {:data, Env.owned_name(env, :Nat), [], []}}], [])
+      Inductive.ctor(Env.owned_name(env, :S), [{:_a0, {:data, Env.owned_name(env, :Nat), [], []}}], [])
     ]
 
   # Int : Type0 = FromNat(Nat) | NegativeSuccessor(Nat). Both fields reference the
@@ -357,11 +397,11 @@ defmodule Cure.Core.Builtins do
   # to unify n's Nat against the prelude Nat. Nat is seeded before Int, so the
   # builtin lookup resolves here.
   defp int_ctors(env) do
-    nat = {:data, Inductive.builtin(env, :nat), [], []}
+    nat = {:data, nat_family_id(env), [], []}
 
     [
-      Inductive.ctor(Env.owned_name(env, :FromNat), [{:n, nat}], []),
-      Inductive.ctor(Env.owned_name(env, :NegativeSuccessor), [{:n, nat}], [])
+      Inductive.ctor(Env.owned_name(env, :FromNat), [{:_a0, nat}], []),
+      Inductive.ctor(Env.owned_name(env, :NegativeSuccessor), [{:_a0, nat}], [])
     ]
   end
 

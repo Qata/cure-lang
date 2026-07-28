@@ -70,6 +70,69 @@ defmodule Cure.CLITest do
       assert File.exists?(Path.join(output_dir, "Cure.CureCliDirectory.beam"))
     end
 
+    @tag :tmp_dir
+    @tag timeout: 600_000
+    test "compiles imports from an installed path dependency", %{tmp_dir: tmp} do
+      dependency = Path.join(tmp, "external_math")
+      project_root = Path.join(tmp, "consumer")
+      output_dir = Path.join(project_root, "_build/cure/ebin")
+      dependency_ebin = Path.join(project_root, "_build/deps/external_math")
+
+      File.mkdir_p!(Path.join(dependency, "lib"))
+      File.mkdir_p!(Path.join(project_root, "lib"))
+
+      File.write!(Path.join(dependency, "Cure.toml"), """
+      [project]
+      name = "external_math"
+      version = "0.1.0"
+      edition = "2026"
+      """)
+
+      File.write!(Path.join(dependency, "lib/math.cure"), """
+      mod External.Math
+        fn external_answer() -> Int = 42
+      """)
+
+      File.write!(Path.join(project_root, "Cure.toml"), """
+      [project]
+      name = "consumer"
+      version = "0.1.0"
+      edition = "2026"
+
+      [dependencies]
+      external_math = { path = "../external_math" }
+      """)
+
+      source = Path.join(project_root, "lib/main.cure")
+
+      File.write!(source, """
+      mod UsesExternal
+        use External.Math
+        fn answer() -> Int = external_answer()
+      """)
+
+      {:ok, project} = Cure.Project.load(project_root)
+      assert :ok = Cure.Project.resolve_deps(project)
+
+      on_exit(fn ->
+        :code.del_path(String.to_charlist(Path.expand(dependency_ebin)))
+        :code.purge(:"Cure.External.Math")
+        :code.delete(:"Cure.External.Math")
+        :code.purge(:"Cure.UsesExternal")
+        :code.delete(:"Cure.UsesExternal")
+      end)
+
+      output =
+        File.cd!(project_root, fn ->
+          capture_io(fn ->
+            Cure.CLI.main(["compile", "lib/main.cure", "--output-dir", output_dir])
+          end)
+        end)
+
+      assert output =~ "Cure.UsesExternal"
+      assert File.exists?(Path.join(output_dir, "Cure.UsesExternal.beam"))
+    end
+
     test "no path shows a usage error and exits nonzero" do
       output =
         capture_io(:stderr, fn ->
@@ -214,20 +277,29 @@ defmodule Cure.CLITest do
   end
 
   describe "cure stdlib" do
-    # :slow — asserts CLI wiring only, but pays a full 81-module stdlib compile
-    # (~21s) to do it. This is the only test of `cure stdlib`, and `cmd_stdlib`
+    # :slow — asserts CLI wiring but pays a full 126-module dependent stdlib
+    # compile to do it. This is the only test of `cure stdlib`, and `cmd_stdlib`
     # shares no code with the `mix cure.compile_stdlib` task the rest of the
-    # suite leans on, so it must keep running on CI.
+    # suite leans on, so it must keep running on CI. Its cold public-path build
+    # legitimately exceeds ExUnit's default 60-second wall budget; retain a
+    # finite test-local ceiling without weakening the rest of the suite.
     @tag :slow
+    @tag timeout: 600_000
     test "compiles stdlib" do
-      output =
-        capture_io(fn ->
-          Cure.CLI.main(["stdlib", "-o", "_build/test_stdlib_ebin"])
-        end)
+      output_dir =
+        Path.join(System.tmp_dir!(), "cure_cli_stdlib_#{System.unique_integer([:positive])}")
 
+      on_exit(fn -> File.rm_rf!(output_dir) end)
+
+      # The suite deliberately keeps the canonical Std modules loaded and
+      # sticky. Exercise the built CLI in its own VM so this public-path test
+      # cannot mistake that test-only protection for a compiler load failure.
+      {output, status} =
+        System.cmd(Path.expand("cure"), ["stdlib", "-o", output_dir], stderr_to_stdout: true)
+
+      assert status == 0, output
       assert output =~ "Compiling Cure standard library"
       assert output =~ "Output:"
-      File.rm_rf!("_build/test_stdlib_ebin")
     end
   end
 
@@ -538,6 +610,26 @@ defmodule Cure.CLITest do
   end
 
   describe "cure test" do
+    test "does not compile intentionally invalid oracle and fixture sources" do
+      root = Path.join(System.tmp_dir!(), "cure_cli_negative_corpus_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(root, "test/oracle"))
+      File.mkdir_p!(Path.join(root, "test/fixtures"))
+
+      invalid = "mod Negative\n  fn broken() -> Int = missing_name\n"
+      File.write!(Path.join(root, "test/oracle/broken.cure"), invalid)
+      File.write!(Path.join(root, "test/fixtures/broken.cure"), invalid)
+      on_exit(fn -> File.rm_rf!(root) end)
+
+      output =
+        capture_io(fn ->
+          File.cd!(root, fn -> Cure.CLI.main(["test"]) end)
+        end)
+
+      assert output =~ "No runnable test files found"
+      assert output =~ "0 passed, 0 failed"
+      refute output =~ "UNKNOWN VALUE [E091]"
+    end
+
     test "runtime failures use an operational diagnostic" do
       root = Path.join(System.tmp_dir!(), "cure_cli_test_#{System.unique_integer([:positive])}")
       test_dir = Path.join(root, "test")

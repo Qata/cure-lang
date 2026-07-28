@@ -45,6 +45,7 @@ defmodule Cure.Elab.ErasureRelevanceTest do
   use ExUnit.Case, async: false
   alias Cure.Elab.{Program, Erase, Emit}
   alias Cure.Core.Env
+  alias Cure.Diagnostic.Renderer
 
   # Nat, the singleton family SNat(n), the indexed family NV(n) (so `v : NV(n)`
   # makes `n` genuinely occur only in a TYPE position in the signature), plus the
@@ -76,14 +77,25 @@ defmodule Cure.Elab.ErasureRelevanceTest do
       assert {:erased_used_relevantly, _} = Program.semantic_error(error)
 
       {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "relevance.cure", src)
-      rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80)
 
-      assert diagnostic.code == "E104"
-      assert diagnostic.primary.span.start_line == 12
-      assert diagnostic.primary.span.end_byte - diagnostic.primary.span.start_byte == 1
-      assert rendered =~ "12 |   fn f({n: Nat}, v: NV(n)) -> Nat = n"
-      assert rendered =~ "^ remove this runtime use or make the binding relevant"
-      assert rendered =~ "Hint: Pass a runtime value here"
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- ERASED VALUE USED RELEVANTLY [E104] -------------------------- relevance.cure
+
+               The erased parameter `n` is used as the function's runtime result, but erased
+               parameters do not exist at runtime.
+
+               at relevance.cure:12:37
+               12 |   fn f({n: Nat}, v: NV(n)) -> Nat = n
+                  |         -                           ^ `n` is erased here; this returns an erased value at runtime
+
+               Hint: Declare `n` as a runtime parameter, or keep it out of runtime expressions
+               """)
+
+      assert_relevance_lsp(Renderer.lsp(diagnostic, registry),
+        primary: {11, 36, 37},
+        binder: {11, 8, 9}
+      )
     end
 
     test "(b) erased implicit `n` passed in a PRESENT argument position" do
@@ -95,8 +107,29 @@ defmodule Cure.Elab.ErasureRelevanceTest do
           fn f({n: Nat}, v: NV(n)) -> Nat = g(n)
         """)
 
-      assert {:error, error} = Program.elaborate(src)
+      assert {:error, error} = Program.elaborate(src, file: "relevance_arg.cure")
       assert {:erased_used_relevantly, _} = Program.semantic_error(error)
+
+      {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "relevance_arg.cure", src)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- ERASED VALUE USED RELEVANTLY [E104] ---------------------- relevance_arg.cure
+
+               The erased parameter `n` is used as an argument that exists at runtime, but
+               erased parameters do not exist at runtime.
+
+               at relevance_arg.cure:13:39
+               13 |   fn f({n: Nat}, v: NV(n)) -> Nat = g(n)
+                  |         -                             ^ `n` is erased here; this passes an erased value to a runtime argument
+
+               Hint: Declare `n` as a runtime parameter, or keep it out of runtime expressions
+               """)
+
+      assert_relevance_lsp(Renderer.lsp(diagnostic, registry),
+        primary: {12, 38, 39},
+        binder: {12, 8, 9}
+      )
     end
 
     test "(c) body SCRUTINISES the erased implicit `n`" do
@@ -109,9 +142,51 @@ defmodule Cure.Elab.ErasureRelevanceTest do
               S(k) -> Z()
         """)
 
-      assert {:error, error} = Program.elaborate(src)
+      assert {:error, error} = Program.elaborate(src, file: "relevance_match.cure")
       assert {:erased_used_relevantly, _} = Program.semantic_error(error)
+
+      {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "relevance_match.cure", src)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- ERASED VALUE USED RELEVANTLY [E104] -------------------- relevance_match.cure
+
+               The erased parameter `n` is used as the value inspected by a runtime match, but
+               erased parameters do not exist at runtime.
+
+               at relevance_match.cure:13:11
+               12 |   fn f({n: Nat}, v: NV(n)) -> Nat =
+                  |         - `n` is erased here
+               13 |     match n
+                  |           ^ this match inspects an erased value at runtime
+
+               Hint: Declare `n` as a runtime parameter, or keep it out of runtime expressions
+               """)
+
+      assert_relevance_lsp(Renderer.lsp(diagnostic, registry),
+        primary: {12, 10, 11},
+        binder: {11, 8, 9}
+      )
     end
+  end
+
+  defp assert_relevance_lsp(lsp, primary: {line, start_char, end_char}, binder: binder) do
+    assert lsp["code"] == "E104"
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => line, "character" => start_char},
+             "end" => %{"line" => line, "character" => end_char}
+           }
+
+    assert [%{"message" => "`n` is erased here", "location" => %{"range" => range}}] =
+             lsp["relatedInformation"]
+
+    {binder_line, binder_start, binder_end} = binder
+
+    assert range == %{
+             "start" => %{"line" => binder_line, "character" => binder_start},
+             "end" => %{"line" => binder_line, "character" => binder_end}
+           }
   end
 
   describe "erased implicit used only irrelevantly — must be accepted (controls)" do

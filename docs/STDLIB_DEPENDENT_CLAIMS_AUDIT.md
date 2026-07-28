@@ -1,5 +1,11 @@
 # Stdlib Dependent-Type Claims Audit
 
+> Historical audit, now resolved. Its `Std.Equal` runtime-token and classic
+> checker findings describe the pre-0.34 state. Current proof equality is the
+> kernel-recognised inductive `Std.Equivalent.Equivalent` family with
+> `reflexive`; `Std.Proof` elaborates through the dependent pipeline. See
+> `docs/PROOFS.md` and `docs/STDLIB.md`.
+
 This note records stdlib-facing APIs and documentation that currently claim,
 imply, or rely on dependent typing without being checked by the trusted
 dependent kernel.

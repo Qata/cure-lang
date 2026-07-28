@@ -38,7 +38,7 @@ Most of the kernel's machinery exists to make that safe.
 #### Why we tolerate the complexity
 
 Once types can talk about values, a type can state a *claim*.
-`Eq(Nat, plus(n, Z), n)` is the statement "n plus zero equals n".
+`Equivalent(Nat, plus(n, Z), n)` is the statement "n plus zero equals n".
 A function returning that type, for every possible `n`, is a *proof* of
 the statement.
 
@@ -211,16 +211,17 @@ head. Is `plus(2, 3)` the same as `5`? Run it. Done. Silent, automatic,
 no paperwork.
 
 **Propositional equality** is equality you argue for in writing.
-`Eq(T, a, b)` is a *type* — the claim "a equals b" — and its values are
-proofs. You need it the moment computing isn't enough: `plus(n, Z) = n`
+`Equivalent(T, a, b)` is a *type* — the claim "a equals b" — and its
+values are proofs. You need it the moment computing isn't enough:
+`plus(n, Z) = n`
 is true, but if `plus` recurses on its first argument, the checker can't
 run its way there while `n` is unknown. Somebody has to do induction.
 
 That somebody is you.
 
-`refl` is the bridge between the two worlds: it proves `Eq(T, a, b)`
-precisely when `a` and `b` are already *definitionally* equal. It's the
-proof that says: **"just look."**
+`reflexive` is the bridge between the two worlds: it constructs
+`Equivalent(T, a, b)` precisely when `a` and `b` are already
+*definitionally* equal. It's the proof that says: **"just look."**
 
 ### Normalization and neutral terms
 
@@ -322,11 +323,11 @@ that matched `S(k)`. Real checkers layer cleverer analyses on top
 must stay conservative: better to reject some perfectly fine programs
 than to ever, even once, accept a loop.
 
-### Transport (rewrite)
+### Transport by identity elimination
 
-You hold a proof of `Eq(T, x, y)`. So... now what? The checker doesn't
-spontaneously care — a propositional proof is just a value in your
-pocket until you spend it.
+You hold a proof of `Equivalent(T, x, y)`. So... now what? The checker
+doesn't spontaneously care — a propositional proof is just a value in
+your pocket until you eliminate it.
 
 **Transport** is how you spend it: given the proof, convert something
 whose type mentions `x` into the same type with `y` in its place.
@@ -335,10 +336,10 @@ explicit: the only equality the checker applies on its own is the
 definitional, run-the-programs kind — your `Eq` proof is precisely the
 certificate for an equality that computation couldn't see.
 
-In Cure surface syntax: `rewrite proof in body`. In the kernel:
-`{:rewrite, proof, motive, body}` — and yes, that's the same **motive**
-as in case analysis, here pinning down exactly *which* occurrences of
-`x` you're swapping out.
+`Equivalent` is an ordinary indexed family recognised by the kernel. Transport
+is a single-branch dependent `case`: matching `proof` against `reflexive`
+identifies `x` and `y`, after which the branch body checks at the transported
+goal. The former primitive `{:rewrite, ...}` node is rejected from final Core.
 
 ## The Split: Elaborator vs. Kernel
 
@@ -369,15 +370,15 @@ is textbook dependent type theory:
 | Node | Meaning |
 |------|---------|
 | `{:type, l}` | universe; fixed hierarchy `Type 0 : Type 1 : Type 2` |
-| `{:pi, dom, cod}` / `{:lam, dom, body}` / `{:app, f, a}` | dependent functions |
-| `{:sigma, a, b}` / `{:pair, a, b}` / `{:fst, p}` / `{:snd, p}` | dependent pairs |
+| `{:pi, grade, dom, cod}` / `{:lam, grade, dom, body}` / `{:app, f, a}` | graded dependent functions |
+| `{:let, grade, type, value, body}` | graded, definitionally transparent local binding |
 | `{:data, name, params, indices}` | inductive family applied to params + indices |
 | `{:ctor, name, args}` | constructor application |
 | `{:case, scrut, motive, branches}` | dependent eliminator |
-| `{:eq, ty, a, b}` / `{:refl, a}` / `{:rewrite, p, m, b}` | propositional equality |
 | `{:global, name}` | reference to a global definition |
-| `{:int_type}` / `{:int_lit, n}`, `{:float_type}` / `{:float_lit, f}` | native machine numbers |
-| `{:prim, op, args}` | primitive operations over them |
+| `{:int_type}` / `{:int_lit, n}`, `{:float_type}` / `{:float_lit, f}` | numeric facade/literal nodes |
+| `{:binary_type}`, `{:atom_type}` / `{:atom_lit, a}` | BEAM primitive homes |
+| `{:effect_type, t}` / `{:effect_pure, a}` / `{:effect_bind, e, k}` | inert effect terms |
 | `{:hole, name}` | a typed gap: checks against anything, blocks codegen (see the TCB note above) |
 
 The universe ceiling is hard: `Type 3` is not even a well-formed term
@@ -471,7 +472,7 @@ the elimination dependent.
 
 The interesting question is: **which branches are even possible?** It is
 decided purely by talking about indices. For each constructor,
-`Kernel.branch_unify/4` unifies the scrutinee's type indices with that
+The kernel's branch unifier compares the scrutinee's type indices with that
 constructor's result index terms. If the scrutinee is `Vector(a, Z)`:
 
 - `empty` claims result index `Z`. Unify `Z ~ Z`: succeeds. Branch
@@ -507,19 +508,21 @@ This one mechanism is what makes indexed programming pleasant: coverage
 checking, impossible-branch discharge, and in-branch type refinement all
 fall out of unifying index expressions.
 
-## Propositional Equality and Rewrite
+## Propositional equality
 
-`{:eq, T, a, b}` is the equality type `Eq(T, a, b)`; `{:refl, a}` proves
-it when both sides are convertible (the check literally runs the
-evaluator on both sides). `{:rewrite, proof, motive, body}` is transport:
-given a proof of `Eq(T, x, y)`, it turns something typed "…x…" into
-something typed "…y…". That powers proofs like:
+`Std.Equivalent` is a genuine indexed family in Core:
 
 ```cure
-fn plus_zero_right(n: Nat) -> Eq(Nat, plus(n, Z), n) = match n
-  Z() -> refl(Z)
-  S(k) -> rewrite plus_zero_right(k) in refl(S(k))
+@builtin(:eq)
+type Equivalent(a: Type) indices (x: a, y: a)
+  reflexive : Equivalent(a, w, w)
 ```
+
+The builtin marker ties the authored declaration to the kernel's canonical
+family and constructor identities. Construction checks endpoint conversion;
+elimination is ordinary dependent `case`. Primitive `{:eq}`, `{:refl}`, and
+`{:rewrite}` nodes have no live producer and the release validator rejects
+them.
 
 ## Totality: the Gatekeeper for Computation
 
@@ -567,6 +570,5 @@ three components have already been made less conservative without
 becoming unsound: termination (structural-single-argument → size-change
 with mutual recursion), positivity (shallow → nested), and unification
 (occurs-as-undecided → the Cycle rule). The remaining frontier is
-tracked in the peerness roadmap — notably retiring the primitive
-`Eq`/`refl`/`rewrite` nodes in favour of a genuine inductive identity
-type, and discharging more `:undecided` index equations.
+tracked in the peerness roadmap, including discharging more
+`:undecided` index equations without expanding the trusted base.

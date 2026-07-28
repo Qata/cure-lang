@@ -64,7 +64,13 @@ defmodule Cure.Compiler.MacroExpansionClassicSoundnessTest do
   end
 
   test "classic compilation rejects a macro with an ill-typed generated expansion" do
-    assert {:reject, {:expansion_ill_typed, _}} =
-             verdict("mod M\n  macro Bad\n    syntax bad <n: Nat> becomes n + true\n  fn f() -> Int = 0\n")
+    source = "mod M\n  macro Bad\n    syntax bad <n: Nat> becomes n + true\n  fn f() -> Int = 0\n"
+
+    assert {:reject, {:expansion_ill_typed, _}} = verdict(source)
+
+    assert {:error,
+            {:source_context, {:expansion_ill_typed, %{keyword: "bad"}},
+             %{span: %Cure.Diagnostic.Span{start_line: 3, start_column: 33}}}} =
+             Compiler.compile_string(source, [])
   end
 end

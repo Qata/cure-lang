@@ -18,7 +18,8 @@ defmodule Cure.Elab.PolymorphicFunctionTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cure.Elab.{Program, Emit}
+  alias Cure.Diagnostic.Renderer
+  alias Cure.Elab.{Emit, Program}
 
   @nat "mod M\n  type Nat = Z | S(Nat)\n"
 
@@ -58,8 +59,45 @@ defmodule Cure.Elab.PolymorphicFunctionTest do
   test "an untyped explicit (non-implicit) parameter is still rejected" do
     # The Type-default applies ONLY to implicit `{a}`; a bare value parameter with
     # no type annotation remains an error.
-    assert {:error, {:untyped_parameter, _}} =
-             Program.elaborate(@nat <> "  fn f(x) -> Nat = Z()\nend\n")
+    source = @nat <> "  fn f(x) -> Nat = Z()\nend\n"
+
+    assert {:error, {:untyped_parameter, %{name: "x"}} = error} = Program.elaborate(source)
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic(error, "untyped_parameter.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- I NEED A TYPE FOR `X` [E093] ------------------------- untyped_parameter.cure
+
+             Cure cannot tell what values `x` may receive from its name alone. Every ordinary
+             function parameter needs a type annotation.
+
+             at untyped_parameter.cure:3:8
+             3 |   fn f(x) -> Nat = Z()
+               |        ^ this parameter needs a type after its name
+
+             Hint: Add a type annotation, such as `x: Int`; write `{x}` only for an implicit type parameter
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 2, "character" => 7},
+             "end" => %{"line" => 2, "character" => 8}
+           }
+
+    assert lsp["data"]["payload"] == %{
+             "kind" => "untyped_parameter",
+             "name" => "x"
+           }
+
+    assert [%{"applicability" => "manual", "edits" => []}] = lsp["data"]["suggestions"]
+
+    assert {:ok, _environment} =
+             source
+             |> String.replace("f(x)", "f(x: Nat)")
+             |> Program.elaborate(file: "fixed_parameter.cure")
   end
 
   @lst "mod M\n  type Nat = Z | S(Nat)\n  type Lst(a) = Nil | Cons(a, Lst(a))\n"

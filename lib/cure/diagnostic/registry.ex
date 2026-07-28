@@ -12,6 +12,7 @@ defmodule Cure.Diagnostic.Registry.Entry do
     :schema_version,
     :producers,
     :producer_fixtures,
+    :producer_converters,
     :converter,
     :converter_function,
     :catalog_case,
@@ -33,6 +34,7 @@ defmodule Cure.Diagnostic.Registry.Entry do
           schema_version: pos_integer(),
           producers: [atom(), ...],
           producer_fixtures: %{optional(atom()) => atom()},
+          producer_converters: %{optional(atom()) => {module(), atom()}},
           converter: module(),
           converter_function: atom(),
           catalog_case: atom() | nil,
@@ -48,7 +50,7 @@ defmodule Cure.Diagnostic.Registry do
 
   alias Cure.Diagnostic.Registry.Entry
 
-  @retired ~w[E001 E002 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E063 E064 E071 E072 E073 E074 E075 E079 E080 E085 E086 H083 H084 W081 W082 W088]
+  @retired ~w[E001 E002 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E063 E071 E072 E073 E074 E075 E079 E080 E085 E086 H083 H084 W081 W082 W088]
   @operational ~w[E008 E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002 W003]
   @retirement_reasons %{
     "E001" => "No first-party producer remains; contextual E093 is the active type-mismatch path.",
@@ -80,7 +82,6 @@ defmodule Cure.Diagnostic.Registry do
     "E037" => "No first-party producer remains; binary segment failures use generic type checking.",
     "E063" =>
       "No first-party producer remains; parser recovery retains and reports the original contextual E094 error.",
-    "E064" => "No first-party producer remains; monomorphisation budget warnings are not emitted.",
     "E071" => "No first-party producer remains; function payload failures use name/type diagnostics.",
     "E072" => "No first-party producer remains; multiline type layout failures use syntax diagnostics.",
     "E073" => "No first-party producer remains; empty pickup blocks use E076.",
@@ -98,7 +99,7 @@ defmodule Cure.Diagnostic.Registry do
     "W088" =>
       "The dependent-only pipeline rejects unresolved imported names as E091 before the classic codegen fallback can occur."
   }
-  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E112 E113 E114 E115 E116 W086 W088]
+  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E112 E113 E114 E115 E116 E117 E118 E119 E120 W086 W088]
   @known_producers ~w[
     beam_writer dependency_graph elaboration kernel lexer macro_expansion
     name_resolution operational parser pattern_checker proof_checker
@@ -112,7 +113,7 @@ defmodule Cure.Diagnostic.Registry do
     lexer: Cure.Compiler.Lexer,
     macro_expansion: Cure.Elab.MacroExpand,
     name_resolution: Cure.Elab.Resolution,
-    operational: Cure.Diagnostic.Operational,
+    operational: Cure.Diagnostic.Adapter.Operational,
     parser: Cure.Compiler.Parser,
     pattern_checker: Cure.Elab.Elaborator,
     proof_checker: Cure.Elab.ProofSearch,
@@ -176,6 +177,10 @@ defmodule Cure.Diagnostic.Registry do
     "E114" => :defining_equation_unavailable,
     "E115" => :named_argument_mismatch,
     "E116" => :implementation_scope,
+    "E117" => :resource_usage_violation,
+    "E118" => :pattern_coverage,
+    "E119" => :pattern_structure,
+    "E120" => :primitive_declaration,
     "W000" => :compiler_warning,
     "W001" => :migration_warning,
     "W002" => :configuration_warning,
@@ -331,12 +336,12 @@ defmodule Cure.Diagnostic.Registry do
     "E014" => """
     E014: Unfilled Hole
 
-    The compiler reached a `?name` or `??` placeholder. This is
-    informational by default; when running `cure check --strict`
-    every hole becomes an error.
+    The compiler reached a `?name`, `??`, or generated `???` placeholder that
+    must not cross the emission boundary. If the surrounding expression has no
+    expected type, Cure cannot report a useful goal until one is declared.
 
-    Fix: replace the hole with a real expression of the reported
-    goal type.
+    Fix: add a type annotation when needed, then replace the hole with a real
+    expression of the reported goal type.
     """,
     "E015" => """
     E015: Refinement Counterexample (retired)
@@ -1016,33 +1021,6 @@ defmodule Cure.Diagnostic.Registry do
     Fix: address the root syntax error. E063 diagnostics are
     informational and do not indicate a new, independent bug.
     """,
-    "E064" => """
-    E064: Monomorphisation Budget Exhausted
-
-    The optimiser's monomorphisation pass synthesises one specialised
-    clone of a polymorphic function per unique call-site type
-    substitution. To keep BEAM bytecode size bounded, the pass caps
-    the number of specialisations at `[compiler].monomorph_budget`
-    (default 16) per source function.
-
-    When a function has more than the configured number of distinct
-    concrete call shapes in a single compilation unit, the pass keeps
-    the first N specialisations, falls back to the original generic
-    clone for the rest, and emits this warning. Calls that fell back
-    are still correct -- they just dispatch through the generic
-    function instead of a tighter clone.
-
-    Example:
-      fn id(x: T) -> T = x
-      # 17 distinct concrete types call id/1 -> the 17th and beyond
-      # use the generic implementation; the warning lists the count.
-
-    Fix: either accept the generic fallback (it is fully correct), or
-    raise the budget in `Cure.toml`:
-
-      [compiler]
-      monomorph_budget = 32
-    """,
     "E065" => """
     E065: Proof File Missing
 
@@ -1347,18 +1325,23 @@ defmodule Cure.Diagnostic.Registry do
     "E107" => """
     E107: Unsupported Asynchronous Primitive
 
-    This asynchronous primitive is not available in the current Cure
-    runtime or execution context.
+    An asynchronous primitive such as `spawn` cannot be lowered by the
+    dependent runtime while preserving Cure's checked process and message
+    types. The diagnostic identifies the authored operation and the runtime
+    stage that rejected it.
 
-    Fix: use a supported actor or supervisor operation, or move the work to
-    an explicit asynchronous boundary.
+    Fix: express managed concurrency with an actor, FSM, or supervisor
+    declaration.
     """,
     "E108" => """
     E108: Splice Outside Quote
 
-    A splice was used where no quote exists to receive the generated syntax.
+    A scalar `$()` or repeated `$(... ...)` splice was used where no `quote`
+    exists to receive generated syntax. The parser-owned range includes the
+    splice opener, body, optional ellipsis, and closing parenthesis.
 
-    Fix: place the splice inside a quote or use an ordinary expression.
+    Fix: move the splice inside `quote ...`, or remove `$()` to evaluate an
+    ordinary expression.
     """,
     "E109" => """
     E109: Proof Chain Syntax Error
@@ -1443,6 +1426,47 @@ defmodule Cure.Diagnostic.Registry do
     when the following function is the likely member.
 
     Indent every implementation member beneath its `implementation` declaration.
+    """,
+    "E117" => """
+    E117: Resource Usage Violation
+
+    A linear value is not consumed exactly once, or an affine value may be
+    consumed more than once. The diagnostic identifies the authored binding and
+    every unambiguous use that contributes to the violation.
+
+    Keep linear ownership on exactly one path and affine ownership on at most
+    one path. Pass restricted values only to parameters with compatible grades.
+    """,
+    "E118" => """
+    E118: Pattern Coverage
+
+    A pattern match omits a reachable constructor, repeats a constructor, or
+    marks a reachable constructor as impossible. Coverage is checked against the
+    matched type and its refined indices.
+
+    Add every reachable constructor exactly once. Use `impossible` only when the
+    constructor is ruled out by the matched indices.
+    """,
+    "E119" => """
+    E119: Pattern Structure
+
+    A pattern binds one name more than once, contains more than one catch-all,
+    marks a catch-all impossible, or leaves an open binary/map match without a
+    fallback.
+
+    Bind each name once and keep one final catch-all for open pattern families.
+    Use explicit comparisons when two bound values must be equal.
+    """,
+    "E120" => """
+    E120: Invalid Primitive Declaration
+
+    A primitive declaration is missing its `@builtin` marker, names an unknown
+    primitive representation, contradicts the compiler's seeded primitive
+    floor, or otherwise has an unsupported declaration shape. The diagnostic
+    points at the primitive name or exact marker argument responsible.
+
+    Use only the supported `:float`, `:binary`, and `:atom` builtin tags, and
+    keep seeded primitive names paired with their established representation.
     """,
     "W000" => """
     W000: Compiler Warning
@@ -1535,6 +1559,7 @@ defmodule Cure.Diagnostic.Registry do
         schema_version: 1,
         producers: producers(code),
         producer_fixtures: producer_fixtures(code),
+        producer_converters: producer_converters(code),
         converter: converter(code),
         converter_function: converter_function(code),
         catalog_case: Map.get(@catalog_cases, code),
@@ -1785,6 +1810,10 @@ defmodule Cure.Diagnostic.Registry do
   defp stable_key("E114", _title), do: :defining_equation_unavailable
   defp stable_key("E115", _title), do: :named_argument_mismatch
   defp stable_key("E116", _title), do: :implementation_scope
+  defp stable_key("E117", _title), do: :resource_usage_violation
+  defp stable_key("E118", _title), do: :pattern_coverage
+  defp stable_key("E119", _title), do: :pattern_structure
+  defp stable_key("E120", _title), do: :primitive_declaration
 
   defp stable_key(_code, title) do
     title
@@ -1794,13 +1823,70 @@ defmodule Cure.Diagnostic.Registry do
     |> String.to_atom()
   end
 
-  defp converter(code) when code in @operational, do: Cure.Diagnostic.Operational
+  defp converter(code) when code in @operational, do: Cure.Diagnostic.Adapter.Operational
+  defp converter("E091"), do: Cure.Diagnostic.Adapter.Name
+  defp converter("E013"), do: Cure.Diagnostic.Adapter.StaticAnalysis
+  defp converter("E102"), do: Cure.Diagnostic.Adapter.StaticAnalysis
+  defp converter("E103"), do: Cure.Diagnostic.Adapter.Kernel
+  defp converter("E104"), do: Cure.Diagnostic.Adapter.StaticAnalysis
+  defp converter("E117"), do: Cure.Diagnostic.Adapter.StaticAnalysis
+  defp converter("E118"), do: Cure.Diagnostic.Adapter.StaticAnalysis
+  defp converter("E119"), do: Cure.Diagnostic.Adapter.StaticAnalysis
   defp converter(code) when code in @structured, do: Cure.Diagnostic.Adapter
   defp converter(_code), do: Cure.Compiler.Errors
 
   defp converter_function(code) when code in @operational, do: :from_error
   defp converter_function(code) when code in @structured, do: :from_error
   defp converter_function(_code), do: :format_error
+
+  defp producer_converters(code) do
+    Map.new(producers(code), fn producer ->
+      {producer, producer_converter(code, producer)}
+    end)
+  end
+
+  defp producer_converter("E101", :beam_writer),
+    do: {Cure.Diagnostic.Adapter.Codegen, :from_error}
+
+  defp producer_converter("E101", :macro_expansion),
+    do: {Cure.Diagnostic.Adapter, :from_error}
+
+  defp producer_converter("E091", producer)
+       when producer in [:name_resolution, :pattern_checker],
+       do: {Cure.Diagnostic.Adapter.Name, :from_error}
+
+  defp producer_converter("E013", :totality_checker),
+    do: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
+
+  defp producer_converter("E102", :elaboration),
+    do: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
+
+  defp producer_converter("E103", :kernel),
+    do: {Cure.Diagnostic.Adapter.Kernel, :from_error}
+
+  defp producer_converter("E093", :kernel),
+    do: {Cure.Diagnostic.Adapter.Type, :from_error}
+
+  defp producer_converter("E104", :elaboration),
+    do: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
+
+  defp producer_converter("E117", :elaboration),
+    do: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
+
+  defp producer_converter("E118", :elaboration),
+    do: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
+
+  defp producer_converter("E119", :elaboration),
+    do: {Cure.Diagnostic.Adapter.StaticAnalysis, :from_error}
+
+  defp producer_converter(_code, :operational),
+    do: {Cure.Diagnostic.Adapter.Operational, :from_error}
+
+  defp producer_converter(code, _producer) when code in @structured,
+    do: {Cure.Diagnostic.Adapter, :from_error}
+
+  defp producer_converter(_code, _producer),
+    do: {Cure.Compiler.Errors, :format_error}
 
   defp producers(code) when code in @retired, do: []
 
@@ -1831,7 +1917,7 @@ defmodule Cure.Diagnostic.Registry do
   # The kernel is pure and returns domain errors; it does not construct internal
   # compiler diagnostics. E101 is owned by the BEAM boundary and the host crash
   # boundary, which are the two places that add stage/reason fingerprints.
-  defp producers("E101"), do: [:beam_writer, :operational]
+  defp producers("E101"), do: [:beam_writer, :macro_expansion, :operational]
   defp producers("E102"), do: [:elaboration]
   defp producers("E103"), do: [:kernel]
   defp producers("E104"), do: [:elaboration]
@@ -1850,6 +1936,10 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E113"), do: [:elaboration]
   defp producers("E115"), do: [:elaboration]
   defp producers("E116"), do: [:elaboration]
+  defp producers("E117"), do: [:elaboration]
+  defp producers("E118"), do: [:elaboration]
+  defp producers("E119"), do: [:elaboration]
+  defp producers("E120"), do: [:elaboration]
   defp producers("E008"), do: [:operational]
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
@@ -1881,6 +1971,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producer_fixtures("E101"),
     do: %{
       beam_writer: :internal_failure_beam_writer,
+      macro_expansion: :internal_failure_macro_expansion,
       operational: :internal_failure_operational
     }
 
@@ -1912,6 +2003,10 @@ defmodule Cure.Diagnostic.Registry do
   defp subsystem("E113"), do: :elaboration
   defp subsystem("E115"), do: :elaboration
   defp subsystem("E116"), do: :elaboration
+  defp subsystem("E117"), do: :elaboration
+  defp subsystem("E118"), do: :elaboration
+  defp subsystem("E119"), do: :elaboration
+  defp subsystem("E120"), do: :elaboration
   defp subsystem("E091"), do: :resolution
   defp subsystem("E092"), do: :macros
   defp subsystem("E093"), do: :elaboration
@@ -1974,6 +2069,17 @@ defmodule Cure.Diagnostic.Registry do
       entry.status == :reachable and
           Enum.any?(entry.producers, &(not producer_loaded?(&1))) ->
         {:error, {:unreachable_producer, entry.code}}
+
+      entry.status == :reachable and
+          MapSet.new(Map.keys(entry.producer_converters)) != MapSet.new(entry.producers) ->
+        {:error, {:missing_producer_converter, entry.code}}
+
+      entry.status == :reachable and
+          Enum.any?(entry.producer_converters, fn {_producer, {module, function}} ->
+            not is_atom(module) or not is_atom(function) or
+              not Code.ensure_loaded?(module) or not function_exported?(module, function, 2)
+          end) ->
+        {:error, {:missing_producer_converter_function, entry.code}}
 
       entry.status == :reachable and entry.converter == Cure.Compiler.Errors ->
         {:error, {:legacy_converter, entry.code}}

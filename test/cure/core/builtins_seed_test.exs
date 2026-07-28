@@ -21,4 +21,13 @@ defmodule Cure.Core.BuiltinsSeedTest do
     ctors = env |> Inductive.ctors_of(:"Std.Nat#Nat") |> Enum.map(fn c -> {c.name, length(c.args)} end) |> Enum.sort()
     assert ctors == [{:"Std.Nat#S", 1}, {:"Std.Nat#Z", 0}]
   end
+
+  test "Int constructor fields retain canonical Nat when Nat is excluded" do
+    env = Builtins.seed(Env.empty(), MapSet.new([:Nat]))
+
+    for constructor <- [:FromNat, :NegativeSuccessor] do
+      assert %{args: [{:_a0, {:data, :"Std.Nat#Nat", [], []}}]} =
+               Inductive.get_ctor(env, constructor)
+    end
+  end
 end

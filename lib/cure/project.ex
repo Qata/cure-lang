@@ -317,6 +317,55 @@ defmodule Cure.Project do
     end
   end
 
+  @doc """
+  Return the source roots of installed dependencies.
+
+  Path dependencies resolve directly from their package `lib/` directory.
+  Git and registry dependencies resolve from their installed `_build/deps`
+  trees. The result is deterministic and contains only existing directories.
+  """
+  @spec dependency_source_paths(t()) :: [Path.t()]
+  def dependency_source_paths(%__MODULE__{dependencies: deps, root: root}) do
+    deps
+    |> Enum.flat_map(fn dep ->
+      name = Map.get(dep, :name, "")
+
+      cond do
+        is_binary(Map.get(dep, :path)) and String.trim(dep.path) != "" ->
+          [Path.join(Path.expand(dep.path, root), "lib")]
+
+        is_binary(Map.get(dep, :git)) and String.trim(dep.git) != "" ->
+          [Path.join([root, "_build", "deps", name, "lib"])]
+
+        true ->
+          Path.wildcard(Path.join([root, "_build", "deps", "#{name}-*", "**", "lib"]))
+      end
+    end)
+    |> Enum.map(&Path.expand/1)
+    |> Enum.filter(&File.dir?/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  @doc "Return installed dependency BEAM directories for runtime/codegen loading."
+  @spec dependency_ebin_paths(t()) :: [Path.t()]
+  def dependency_ebin_paths(%__MODULE__{dependencies: deps, root: root}) do
+    deps
+    |> Enum.flat_map(fn dep ->
+      name = Map.get(dep, :name, "")
+
+      if is_binary(Map.get(dep, :path)) or is_binary(Map.get(dep, :git)) do
+        [Path.join([root, "_build", "deps", name])]
+      else
+        Path.wildcard(Path.join([root, "_build", "deps", "#{name}-*", "ebin"]))
+      end
+    end)
+    |> Enum.map(&Path.expand/1)
+    |> Enum.filter(&File.dir?/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
   # Compile a dependency's sources, each under its OWN edition (dep_project_dir,
   # bounded at `base`, so it honours the dep's own Cure.toml — nested or not — yet
   # never inherits the consumer's edition). Most compile errors stay non-fatal (a
@@ -325,19 +374,25 @@ defmodule Cure.Project do
   # dep edition must brick the build, not silently emit no beams and surface later
   # as opaque missing-module errors.
   defp compile_dep_files(cure_files, name, dep_ebin, base) do
-    Enum.reduce_while(cure_files, :ok, fn file, :ok ->
-      case Cure.Compiler.compile_file(file,
-             output_dir: dep_ebin,
-             emit_events: false,
-             project_dir: dep_project_dir(file, base)
-           ) do
-        {:error, {:edition_error, reason}} ->
-          {:halt, {:error, {:dependency_edition_error, name, reason}}}
+    case Cure.Compiler.compile_files(cure_files,
+           output_dir: dep_ebin,
+           emit_events: false,
+           source_roots: [Path.join(base, "lib")],
+           continue_on_error: true,
+           file_options: fn file -> [project_dir: dep_project_dir(file, base)] end
+         ) do
+      {:ok, %{errors: errors}} ->
+        case Enum.find_value(errors, fn
+               {_file, {:edition_error, reason}} -> reason
+               _ -> nil
+             end) do
+          nil -> :ok
+          reason -> {:error, {:dependency_edition_error, name, reason}}
+        end
 
-        _ ->
-          {:cont, :ok}
-      end
-    end)
+      {:error, reason} ->
+        {:error, {:dependency_compile_graph_error, name, reason}}
+    end
   end
 
   defp resolve_registry_dep(name, constraint, root, reuse_lock?) do
@@ -761,17 +816,17 @@ defmodule Cure.Project do
         if File.dir?(dir), do: Path.wildcard(Path.join(dir, "**/*.cure")), else: []
       end)
 
-    {cure_files_result, providers} =
+    {cure_files_result, compile_plan} =
       case Cure.Compiler.prepare_files(discovered) do
-        {:ok, %{ordered: ordered, providers: providers, cycles: cycles}} ->
+        {:ok, %{ordered: ordered, cycles: cycles} = plan} ->
           Enum.each(cycles, fn walk ->
             Logger.warning(render_host_diagnostic({:import_cycle, walk}, project.root))
           end)
 
-          {{:ok, ordered}, providers}
+          {{:ok, ordered}, plan}
 
         {:error, _} = err ->
-          {err, []}
+          {err, nil}
       end
 
     with {:ok, cure_files} <- cure_files_result,
@@ -785,7 +840,7 @@ defmodule Cure.Project do
              check?,
              declared_phases(project),
              extra_paths,
-             providers
+             compile_plan
            ),
          :ok <- maybe_write_app_resource(app_info, modules, project, output_dir) do
       {:ok, %{modules: modules, app_module: app_module(app_info)}}
@@ -943,7 +998,15 @@ defmodule Cure.Project do
 
   defp declared_phases(_), do: nil
 
-  defp compile_all_files(files, output_dir, emit?, check?, declared_phases, source_roots, prelude_providers) do
+  defp compile_all_files(
+         files,
+         output_dir,
+         emit?,
+         check?,
+         declared_phases,
+         source_roots,
+         compile_plan
+       ) do
     base_opts = [
       output_dir: output_dir,
       emit_events: emit?,
@@ -955,29 +1018,20 @@ defmodule Cure.Project do
         do: Keyword.put(base_opts, :declared_phases, declared_phases),
         else: base_opts
 
-    opts = Keyword.put(opts, :source_roots, source_roots)
+    opts =
+      opts
+      |> Keyword.put(:source_roots, source_roots)
+      |> Keyword.put(:plan, compile_plan)
 
-    # A user `@prelude` module reached by the project scan contributes its
-    # operators to every file compiled in this run (see `:prelude_providers`).
-    opts = Keyword.put(opts, :prelude_providers, prelude_providers)
+    case Cure.Compiler.compile_files(files, opts) do
+      {:ok, %{compiled: compiled}} ->
+        {:ok, Enum.map(compiled, fn {_path, module, _warnings} -> module end)}
 
-    result =
-      Enum.reduce_while(files, {:ok, []}, fn file, {:ok, acc} ->
-        case Cure.Compiler.compile_file(file, opts) do
-          {:ok, module, _warnings} ->
-            # Best-effort: lifted behavior modules load themselves during
-            # codegen and may have no beam on disk.
-            _ = Cure.Compiler.load_emitted(module, output_dir)
-            {:cont, {:ok, [module | acc]}}
+      {:error, {_path, reason}} ->
+        {:error, {:compile_failed, reason}}
 
-          {:error, _} = err ->
-            {:halt, err}
-        end
-      end)
-
-    case result do
-      {:ok, modules} -> {:ok, Enum.reverse(modules)}
-      {:error, reason} -> {:error, {:compile_failed, reason}}
+      {:error, reason} ->
+        {:error, {:compile_failed, reason}}
     end
   end
 

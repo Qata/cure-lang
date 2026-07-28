@@ -85,7 +85,7 @@ defmodule Cure.Elab.AutoDeriveEquatableTest do
     end
     """
 
-    assert {:error, {:overlapping_instance, :Equatable, :"Std.Int#Int"}} =
+    assert {:error, {:overlapping_instance, %{interface: :Equatable, head: :"Std.Int#Int"}}} =
              Program.elaborate(src)
   end
 end

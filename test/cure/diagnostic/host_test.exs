@@ -335,16 +335,61 @@ defmodule Cure.Diagnostic.HostTest do
   end
 
   test "renders trusted Final-Core rejection paths as structured internal diagnostics" do
-    rendered =
-      Host.render(
-        {:final_core_violation, :run, [%{clause: :no_hole, message: "hole present in Core term"}]},
-        "demo.cure",
-        "fn run() -> Int = 1\nfn other() -> Int = 2\n"
-      )
+    source = "fn run() -> Int = 1\n"
 
-    assert rendered =~ "[E101]"
-    assert rendered =~ "FINAL-CORE VALIDATION FAILED"
-    assert rendered =~ "hole"
+    span = %Cure.Diagnostic.Span{
+      source_id: "demo.cure",
+      path: "demo.cure",
+      start_byte: 0,
+      end_byte: 19,
+      start_line: 1,
+      start_column: 1,
+      end_line: 1,
+      end_column: 20
+    }
+
+    error =
+      {:source_context,
+       {:final_core_violation, :"Demo#run", [%{clause: :no_hole, message: "hole present in Core term"}]},
+       %{
+         span: span,
+         checking: :"Demo#run",
+         codegen_stage: :final_core_validation,
+         codegen_module: :"Cure.Demo"
+       }}
+
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80)
+    fingerprint = diagnostic.payload.fingerprint
+
+    assert fingerprint =~ ~r/^[0-9a-f]{12}$/
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- FINAL-CORE VALIDATION FAILED [E101] ------------------------------- demo.cure
+
+             The compiler rejected an internal Core term at the trusted boundary (hole
+             present in Core term).
+
+             Stage: `final_core_validation`. Module: `Cure.Demo`. Source: `demo.cure`.
+             Diagnostic fingerprint: `#{fingerprint}`.
+
+             at demo.cure:1:1
+             1 | fn run() -> Int = 1
+               | ^^^^^^^^^^^^^^^^^^^ this definition produced invalid internal Core
+
+             Note: This is an internal compiler failure; report it with the diagnostic
+                   fingerprint.
+             """)
+
+    assert Cure.Diagnostic.Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 0, "character" => 0},
+             "end" => %{"line" => 0, "character" => 19}
+           }
+
+    assert diagnostic.payload.stage == :final_core_validation
+    assert diagnostic.payload.module == :"Cure.Demo"
+    assert diagnostic.payload.file == "demo.cure"
     refute rendered =~ ":final_core_violation"
     refute rendered =~ "{:hole"
   end
@@ -422,7 +467,8 @@ defmodule Cure.Diagnostic.HostTest do
 
     relevance = Host.render({:erased_used_relevantly, %{binder: 0, site: :returned}}, "demo.cure")
     assert relevance =~ "[E104]"
-    assert relevance =~ "returned"
+    assert relevance =~ "function's runtime result"
+    refute relevance =~ "``"
   end
 
   test "renders ambiguous proof search with proof-specific context" do
@@ -444,9 +490,11 @@ defmodule Cure.Diagnostic.HostTest do
         "demo.cure"
       )
 
-    assert rendered =~ "[E104]"
+    assert rendered =~ "[E117]"
     assert rendered =~ "linear"
-    assert rendered =~ "unrestricted"
+    assert rendered =~ "may consume it"
+    assert rendered =~ "number of times"
+    refute rendered =~ "this binding"
     refute rendered =~ ":usage_violation"
   end
 
@@ -458,9 +506,11 @@ defmodule Cure.Diagnostic.HostTest do
       )
 
     assert rendered =~ "[E093]"
-    assert rendered =~ "NO INSTANCE FOUND"
+    assert rendered =~ "NO `COMPARABLE` IMPLEMENTATION FOUND"
     assert rendered =~ "Comparable"
-    assert rendered =~ "{:rigid, 0}"
+    assert rendered =~ "type variable"
+    assert rendered =~ "where Comparable(...)"
+    refute rendered =~ "{:rigid, 0}"
     refute rendered =~ ":no_instance"
   end
 
@@ -526,9 +576,10 @@ defmodule Cure.Diagnostic.HostTest do
     meaning = Host.render({:no_operator_meaning, :<<<}, "demo.cure")
 
     assert operand =~ "[E093]"
-    assert operand =~ "OPERATOR OPERAND TYPE MISMATCH"
+    assert operand =~ "`+` DOES NOT SUPPORT THESE OPERANDS"
     assert operand =~ "`+`"
     assert meaning =~ "[E093]"
+    assert meaning =~ "`<<<` HAS NO DEFINITION"
     assert meaning =~ "<<<"
     refute operand =~ ":unsupported_operand_type"
     refute meaning =~ ":no_operator_meaning"
@@ -540,8 +591,9 @@ defmodule Cure.Diagnostic.HostTest do
 
     assert match =~ "[E093]"
     assert match =~ "CANNOT INFER MATCH TYPE"
+    assert match =~ "Add a result annotation"
     assert lambda =~ "[E093]"
-    assert lambda =~ "LAMBDA USED WHERE A FUNCTION WAS NOT EXPECTED"
+    assert lambda =~ "LAMBDA NEEDS A FUNCTION TYPE"
     assert lambda =~ "Int"
     refute match =~ ":cannot_infer_match_type"
     refute lambda =~ ":lambda_expected_pi"
@@ -550,14 +602,18 @@ defmodule Cure.Diagnostic.HostTest do
   test "renders pattern coverage failures with branch identity" do
     missing = Host.render({:source_context, {:missing_branch, :None}, %{}}, "match.cure")
     impossible = Host.render({:source_context, {:reachable_impossible, :Some}, %{}}, "match.cure")
+    duplicate = Host.render({:source_context, {:duplicate_branch, :Some}, %{}}, "match.cure")
 
-    assert missing =~ "[E093]"
-    assert missing =~ "INCOMPLETE PATTERN MATCH"
+    assert missing =~ "[E118]"
+    assert missing =~ "PATTERN MATCH IS MISSING `NONE`"
     assert missing =~ "None"
-    assert impossible =~ "[E093]"
-    assert impossible =~ "IMPOSSIBLE PATTERN BRANCH"
+    assert impossible =~ "[E118]"
+    assert impossible =~ "`SOME` IS REACHABLE HERE"
+    assert duplicate =~ "[E118]"
+    assert duplicate =~ "`SOME` HAS MORE THAN ONE BRANCH"
     refute missing =~ ":missing_branch"
     refute impossible =~ ":reachable_impossible"
+    refute duplicate =~ ":duplicate_branch"
   end
 
   test "renders forced and rematched pattern failures contextually" do
@@ -658,7 +714,7 @@ defmodule Cure.Diagnostic.HostTest do
 
     assert derive =~ "[E105]"
     assert derive =~ "CANNOT DERIVE INTERFACE"
-    assert constraints =~ "DERIVING CONSTRAINTS ARE NOT SATISFIED"
+    assert constraints =~ "CANNOT DERIVE `BEAMDECODE` FOR `PACKET`"
     assert method =~ "CANNOT DERIVE INTERFACE METHOD"
     assert missing =~ "[E095]"
     assert missing =~ "Cannot read"
@@ -675,8 +731,11 @@ defmodule Cure.Diagnostic.HostTest do
     occurs = Host.render({:occurs_check, 1, {:var, 1}}, "types.cure")
 
     assert overload =~ "[E093]"
-    assert overload =~ "NO MATCHING OVERLOAD"
-    assert ambiguous =~ "OVERLOAD RESOLUTION IS AMBIGUOUS"
+    assert overload =~ "NO OVERLOAD OF `MAP` MATCHES"
+    assert overload =~ "Int, String"
+    assert ambiguous =~ "CALL TO `MAP` IS AMBIGUOUS"
+    assert ambiguous =~ "List.map/2"
+    assert ambiguous =~ "Seq.map/2"
     assert projection =~ "RECORD PROJECTION REQUIRES A RECORD"
     assert pattern =~ "[E003]"
     assert index =~ "UNRESOLVED INDEX"
@@ -693,13 +752,29 @@ defmodule Cure.Diagnostic.HostTest do
 
     assert expression =~ "EXPRESSION IS NOT SUPPORTED"
     assert annotation =~ "BINDING NEEDS AN ANNOTATION"
-    assert pattern =~ "PATTERN BINDS A NAME TWICE"
+    assert pattern =~ "[E119]"
+    assert pattern =~ "PATTERN BINDS `X` MORE THAN ONCE"
     assert alias_error =~ "TYPE ALIAS DOES NOT NAME A TYPE"
     assert effect =~ "EFFECT OPERATION ARITY MISMATCH"
 
-    for output <- [expression, annotation, pattern, alias_error, effect] do
+    for output <- [expression, annotation, alias_error, effect] do
       assert output =~ "[E093]"
       refute output =~ "INTERNAL COMPILER ERROR"
+    end
+
+    refute pattern =~ "INTERNAL COMPILER ERROR"
+  end
+
+  test "locationless name and module errors do not blame the start of an unrelated source" do
+    source = "mod Unrelated\n  fn complete() -> Int = 1\nend\n"
+
+    for reason <- [
+          {:ambiguous_name, :shared, ["Left", "Right"]},
+          {:duplicate_module, "Repeated", ["one.cure", "two.cure"]}
+        ] do
+      {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, "unrelated.cure", source)
+      assert diagnostic.primary == nil
+      refute Cure.Diagnostic.Renderer.plain(diagnostic, registry) =~ "1 | mod Unrelated"
     end
   end
 
@@ -760,13 +835,6 @@ defmodule Cure.Diagnostic.HostTest do
     assert rematch =~ "2 pattern(s)"
     refute pattern =~ ":typed_pattern_type_mismatch"
     refute rematch =~ ":with_rematch_arity_mismatch"
-  end
-
-  test "renders operator declaration conflicts" do
-    rendered = Host.render({:builtin_operator_not_overloadable, :|>}, "demo.cure")
-
-    assert rendered =~ "[E106]"
-    assert rendered =~ "cannot be overloaded"
   end
 
   test "renders unsupported async and quote-boundary failures" do
@@ -877,16 +945,5 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "[E101]"
     assert rendered =~ "fingerprint"
     refute rendered =~ ":unregistered_compiler_reason"
-  end
-
-  test "simple name-resolution families use structured host output" do
-    assert Cure.Compiler.Errors.format_with_source({:unknown_type, "Missing"}, "demo.cure", "type Use = Missing\n") =~
-             "[E091]"
-
-    assert Cure.Compiler.Errors.format_with_source({:unknown_module, "Missing"}, "demo.cure", "use Missing\n") =~
-             "[E091]"
-
-    assert Cure.Compiler.Errors.format_with_source({:unknown_member, "Demo", "missing"}, "demo.cure", "Demo.missing\n") =~
-             "[E091]"
   end
 end

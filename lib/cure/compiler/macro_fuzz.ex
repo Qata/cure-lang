@@ -299,7 +299,6 @@ defmodule Cure.Compiler.MacroFuzz do
           :ok
           | {:error, {:expansion_ill_typed, map()}}
           | {:error, {:unsupported_hole_type, String.t()}}
-          | {:error, {:unsupported_hole_arity, non_neg_integer()}}
           | {:error, term()}
   def check_expansion_proof(macro_def, env, opts \\ []) do
     {result, _manifest, _cached?} = cached_proof(macro_def, env, opts)
@@ -464,6 +463,11 @@ defmodule Cure.Compiler.MacroFuzz do
             end)
 
           {:cont, {:ok, next}}
+
+        {:error, {:generated_hole_not_well_typed, term}} ->
+          {:halt,
+           {:error,
+            {:generated_hole_not_well_typed, %{term: term, category: kind, hole: name, generator_invariant: true}}}}
 
         {:error, _} = error ->
           {:halt, error}
@@ -658,7 +662,7 @@ defmodule Cure.Compiler.MacroFuzz do
   @spec assemble_use_site(map(), %{String.t() => Cure.Core.Term.t()}) ::
           {:ok, [Token.t()]} | {:error, {:unsupported_surface_filler, term()}} | {:error, term()}
   def assemble_use_site(%{keyword: keyword, segments: segments}, bindings)
-      when is_binary(keyword) and is_map(bindings) do
+      when is_binary(keyword) and is_list(segments) and is_map(bindings) do
     with {:ok, words} <- assemble_words(segments, bindings) do
       line = Enum.join([keyword | words], " ")
 
@@ -684,6 +688,12 @@ defmodule Cure.Compiler.MacroFuzz do
     end
   end
 
+  def assemble_use_site(%{keyword: keyword, segments: segments}, _bindings)
+      when is_binary(keyword) and is_list(segments),
+      do: {:error, :invalid_macro_fuzz_bindings}
+
+  def assemble_use_site(_rule, _bindings), do: {:error, :invalid_macro_fuzz_rule}
+
   defp declarations_hole?(segments) when is_list(segments) do
     Enum.any?(segments, fn
       {:declarations_hole, _meta} -> true
@@ -698,7 +708,7 @@ defmodule Cure.Compiler.MacroFuzz do
       else: tokens
   end
 
-  defp assemble_words(segments, bindings) do
+  defp assemble_words(segments, bindings) when is_list(segments) and is_map(bindings) do
     Enum.reduce_while(segments, {:ok, []}, fn
       {:lit, word}, {:ok, acc} ->
         {:cont, {:ok, acc ++ [word]}}
@@ -742,6 +752,9 @@ defmodule Cure.Compiler.MacroFuzz do
 
           :error ->
             {:halt, {:error, {:missing_hole_filler, name}}}
+
+          {:ok, _other} ->
+            {:halt, {:error, {:invalid_repeated_hole_filler, name}}}
         end
 
       {:optional, group}, {:ok, acc} ->
@@ -759,6 +772,8 @@ defmodule Cure.Compiler.MacroFuzz do
         {:halt, {:error, {:invalid_macro_segment, other}}}
     end)
   end
+
+  defp assemble_words(segments, _bindings), do: {:error, {:invalid_macro_segment, segments}}
 
   defp surface_filler(term) do
     case surface_filler_normal(term) do

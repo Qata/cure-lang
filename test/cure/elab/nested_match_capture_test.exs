@@ -20,6 +20,8 @@ defmodule Cure.Elab.NestedMatchCaptureTest do
   """
   use ExUnit.Case, async: true
 
+  alias Cure.Compiler.Errors
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.Program
 
   test "inner match body references outer nested-pattern binder" do
@@ -96,5 +98,74 @@ defmodule Cure.Elab.NestedMatchCaptureTest do
     """
 
     assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "a branch binder shadowing a nested-pattern variable gets exact source roles" do
+    src = """
+    mod N
+      type Nat = Z | S(Nat)
+      fn f(x: Nat) -> Nat = match x
+        S(S(n)) ->
+          let g : (Nat) -> Nat = fn(n) -> n
+          g(n)
+        S(Z()) -> Z()
+        Z() -> Z()
+    end
+    """
+
+    assert {:error,
+            {:source_context, {:unsupported_pattern, %{reason: :shadowed_nested, name: "n", shadow_span: shadow_span}},
+             _} = error} =
+             Program.elaborate(src)
+
+    assert shadow_span.start_line == 5
+    assert shadow_span.start_column == 33
+
+    {diagnostic, registry} = Errors.to_diagnostic(error, "nested_shadow.cure", src)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- NESTED PATTERN SHADOWS `N` [E090] ------------------------ nested_shadow.cure
+
+             This nested constructor pattern binds `n`. A binder inside its branch uses the
+             same name, so lowering the nested pattern could capture the inner value.
+
+             at nested_shadow.cure:5:33
+             4 |     S(S(n)) ->
+               |     ------- this nested pattern is lowered before its branch is checked
+               |         - this outer pattern binds `n`
+             5 |       let g : (Nat) -> Nat = fn(n) -> n
+               |                                 ^ rename this inner binder so it does not shadow `n`
+
+             Hint: Give the nested binder a different name and update its branch body
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 4, "character" => 32},
+             "end" => %{"line" => 4, "character" => 33}
+           }
+
+    assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+             %{
+               "start" => %{"line" => 3, "character" => 8},
+               "end" => %{"line" => 3, "character" => 9}
+             },
+             %{
+               "start" => %{"line" => 3, "character" => 4},
+               "end" => %{"line" => 3, "character" => 11}
+             }
+           ]
+
+    assert lsp["data"]["payload"] == %{
+             "checking" => "f",
+             "kind" => "unsupported_pattern",
+             "name" => "n",
+             "reason" => "shadowed_nested"
+           }
+
+    fixed = String.replace(src, "fn(n) -> n", "fn(value) -> value")
+    assert {:ok, _environment} = Program.elaborate(fixed, file: "nested_shadow_fixed.cure")
   end
 end

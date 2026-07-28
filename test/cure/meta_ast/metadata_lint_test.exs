@@ -21,6 +21,14 @@ defmodule Cure.MetaAST.MetadataLintTest do
     assert site.node == :variable
   end
 
+  test "identifies legacy source keys in semantic metadata patterns" do
+    source = "def bad({:variable, [span: span], name}), do: {span, name}\n"
+    [site] = MetadataLint.scan_source(source, "legacy.ex")
+
+    assert site.node == :variable
+    assert site.legacy_source_keys == [:span]
+  end
+
   test "accepts metadata bindings and ignores construction sites" do
     source = """
     def good({:sigma_type, meta, children}), do: {Keyword.fetch!(meta, :binder), children}

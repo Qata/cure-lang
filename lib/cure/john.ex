@@ -179,11 +179,7 @@ defmodule Cure.John do
           fn -> Registry.count(Cure.Pipeline.Events.Registry) end,
           :unavailable
         ),
-      protocol_registry_size:
-        safe(
-          fn -> length(:ets.tab2list(Cure.Types.ProtocolRegistry)) end,
-          :unavailable
-        )
+      type_system: "dependent Core"
     }
   end
 
@@ -195,7 +191,7 @@ defmodule Cure.John do
       kv("application started", bool(cure.app_started?)),
       kv("stdlib modules loaded", inspect(cure.stdlib_loaded_modules)),
       kv("pipeline event bus", inspect(cure.pipeline_event_bus)),
-      kv("protocol registry", inspect(cure.protocol_registry_size)),
+      kv("type system", cure.type_system),
       kv("snapshot taken", DateTime.to_iso8601(at))
     ]
 

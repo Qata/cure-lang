@@ -1,6 +1,6 @@
 ## Branching (BSeq) coverage for mailbox-inference adequacy — VALIDATED probe.
 ##
-## Extends the sequential `coverage` (proved in lib/std/otp_inference_adequacy.cure) to the
+## Extends the sequential `coverage` (proved in metatheory/otp/src/otp_inference_adequacy.cure) to the
 ## BRANCHING behaviour `BSeq(l, r)`. The theorem: every tag a behaviour SENDS is a member of
 ## its inferred interface `infer(b)` — `SendsIn(b, t) -> Member(t, infer(b))`.
 ##
@@ -8,7 +8,7 @@
 ## theorem (Curry-Howard). The technique for BSeq is the ergonomics catalog's E1 workaround —
 ## match the DATA `b` before the EVIDENCE `s`, so the sub-behaviours l/r/k are bound by name and
 ## the impossible evidence constructors are pruned. Validated 2026-07-17; to be promoted into
-## lib/std/otp_inference_adequacy.cure with an Idris oracle pair.
+## metatheory/otp/src/otp_inference_adequacy.cure with an Idris oracle pair.
 
 mod BranchingCoverage
   type Tag = TA | TB

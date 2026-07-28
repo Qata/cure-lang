@@ -39,7 +39,7 @@ siblings: motive `λw. Π(s₁: H₁[e↦w]) … Π(sₘ: Hₘ[e↦w]). G[e↦w]
 +(j-1), G shifted +m), branches `λs₁'.…λsₘ'. body`, case applied to all siblings in
 Π-order. The relevance convoy rule already handled n-ary convoys. Verified: a
 two-linear-sibling `with` handler accepts, dropping/dup'ing a sibling rejects, all
-`rel=same` vs Idris (`test/oracle/otp/ob1_two_sib*`), tests in
+`rel=same` vs Idris (`metatheory/otp/oracle/otp/ob1_two_sib*`), tests in
 `linear_sibling_refinement_test.exs`. NOTE (not a bug): combining two linear
 consumptions in an ω-field ctor (`MkPair(use1(c1), use2(c2))`) is rejected by BOTH
 Cure and Idris — ω fields force ω-usage; consume to a value via a linear-slotted
@@ -51,7 +51,7 @@ deliberately when landed.
 **What works now:** a `with r` handler with EXACTLY ONE scrutinee-dependent sibling
 and no user `proof` refines that sibling by motive-generalization and keeps it linear
 (e.g. `with r … reply(cap, …)`). See `test/cure/elab/linear_sibling_refinement_test.exs`
-and oracle `test/oracle/otp/ob1_branching*`.
+and oracle `metatheory/otp/oracle/otp/ob1_branching*`.
 
 **What's restricted:** the guard in `elaborate_with_value`
 (`lib/cure/elab/elaborator.ex`) is
@@ -73,7 +73,7 @@ ALREADY handles n-ary convoys (`peel_lambdas`, `x_levels = [depth+arity+j …]`)
 relevance change is needed — verify with the multi-sibling gates below.
 
 **Red gates:** two-linear-sibling `with` handler ACCEPTS; dropping/dup'ing EITHER
-sibling in a branch REJECTS. Mirror in Idris (`test/oracle/otp/`, native `match`
+sibling in a branch REJECTS. Mirror in Idris (`metatheory/otp/oracle/otp/`, native `match`
 refines multiple siblings for free) → `rel=same`.
 
 **Risk:** medium. E-layer only (kernel re-checks). The de Bruijn shifts are the trap.
@@ -207,7 +207,7 @@ wanted. No code risk.
 ## G. Obligation (2) effect-honesty (scoped out by the parent brief)
 
 **Disposition (2026-07-16): DONE (the valuable slice) — `Std.Otp.SendEffect`
-(`lib/std/otp_send_effect.cure`).** Rather than re-flavour the pure obligation-(2)
+(`metatheory/otp/src/otp_send_effect.cure`).** Rather than re-flavour the pure obligation-(2)
 exemplar (which deliberately stays pure to isolate the send-safety argument, and is
 pinned by the `ob2_*` oracle), added an effect-honest COMPANION that proves the
 interesting property: the clause-DERIVED message index survives the `Effect` discipline.
@@ -215,8 +215,8 @@ interesting property: the clause-DERIVED message index survives the `Effect` dis
 with monadic `let` (`effect_bind`), the bind refines `m := Msg` from the handler's
 domain, and the effectful `post` still forces `msg : Msg`. Negatives (wrong-typed message,
 non-total handler) reject under the effect discipline. Kernel-checked; Idris-mirrored with
-a user `Eff` monad (`test/oracle/otp/ob2_eff_send_safe` + `ob2_eff_neg_wrong_msg`,
-rel=same); tests in `test/cure/stdlib/otp_send_effect_test.exs`; build-out map G5 marked
+a user `Eff` monad (`metatheory/otp/oracle/otp/ob2_eff_send_safe` + `ob2_eff_neg_wrong_msg`,
+rel=same); tests in `metatheory/otp/test/otp_send_effect_test.exs`; build-out map G5 marked
 done for the send algebra. The `Effect` former turned out to already carry `effect_pure`/
 `effect_bind` in the kernel (more than "inert slice 1"), so no former work was needed.
 Original note below.
@@ -233,12 +233,12 @@ parent brief explicitly deferred this (§9 "out of scope"). Not a roadblock.
 
 | Path | What |
 |------|------|
-| `lib/std/otp_proof.cure` | `Std.Otp.Proof` — both obligations, kernel-checked |
+| `metatheory/otp/src/otp_proof.cure` | `Std.Otp.Proof` — both obligations, kernel-checked |
 | `lib/cure/elab/elaborator.ex` | `elaborate_with_value` (guard for A), `elaborate_with_motivegen_branch(es)`, `elaborate_with_eq_branch` (B), `collect_with_siblings`, `eq_arrow_motive`, `abstract_term`, `resplit_data` (E) |
 | `lib/cure/elab/relevance.ex` | `:let` `:not_join` (D), `walk_convoy`/`walk_convoy_branches`/`peel_lambdas`/`scale_by_uses`/`lambda_depth` (convoy rule) |
 | `lib/cure/compiler/parser.ex` | `parse_type_atom` `:lparen`, `parse_paren_arrow_tail`, `collect_paren_arrow` (F) |
 | `lib/cure/core/quote.ex` | `reify`/`split_data_args` (E) |
-| `test/oracle/otp/`, `test/oracle/let_linear/` | differential clusters (accept + negatives) |
+| `metatheory/otp/oracle/otp/`, `test/oracle/let_linear/` | differential clusters (accept + negatives) |
 | `test/cure/elab/{linear_sibling_refinement,let_linear_soundness,higher_order_ctor_field,pi_grade_source}_test.exs` | behavioral tests |
 | `docs/research/process-types/2026-07-16-*.md` | brief, findings, soundness-fix, this work order |
 

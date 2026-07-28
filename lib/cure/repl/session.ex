@@ -45,7 +45,7 @@ defmodule Cure.REPL.Session do
   module is `:"Cure.Repl.Session"`; `Cure.REPL` adds `Repl.Session` to
   the `use`-list of every expression module it compiles while any
   entries are present, so unqualified calls like `add(2, 3)` resolve
-  via the normal import path in `Cure.Compiler.Codegen`.
+  through the same canonical module interface as ordinary source imports.
   """
 
   alias Cure.Compiler

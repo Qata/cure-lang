@@ -1,6 +1,6 @@
 mod InferenceAdequacy
   ## STATUS (2026-07-17): the SEQUENTIAL and BRANCHING (`BSeq`) fragment is now PROVED, no
-  ## holes, in the shipped `lib/std/otp_inference_adequacy.cure` (Idris rel=same). The `BSeq`
+  ## holes, in the shipped `metatheory/otp/src/otp_inference_adequacy.cure` (Idris rel=same). The `BSeq`
   ## coverage that this scaffold's `?coverage`/`?adequacy` notes call erasure-blocked was
   ## resolved by matching the DATA before the EVIDENCE (E1 structure), no TCB change. What this
   ## scaffold still stands for is the RECURSION (`BRec`) frontier, which genuinely needs the

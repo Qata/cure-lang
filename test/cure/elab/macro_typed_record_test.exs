@@ -1,6 +1,8 @@
 defmodule Cure.Elab.MacroTypedRecordTest do
   use ExUnit.Case, async: true
 
+  alias Cure.Compiler.Errors
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.Program
 
   test "a computed rule exposes its derived record type to ordinary signatures" do
@@ -119,7 +121,77 @@ defmodule Cure.Elab.MacroTypedRecordTest do
       fn f(n: Int) -> Int = mk n
     """
 
-    assert {:error, {:computed_macro_error, _, {:author_failure, "BadInput", [_]}}} =
+    assert {:error, {:computed_macro_error, _meta, {:author_failure, "BadInput", [_]}} = reason} =
              Program.elaborate(source)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "author_failure.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- COMPUTED MACRO EXPANSION FAILED [E092] ------------------ author_failure.cure
+
+             The `mk` computed macro could not produce valid Cure syntax: macro rejected
+             expansion: the macro reported `BadInput`
+
+             at author_failure.cure:20:25
+             20 |   fn f(n: Int) -> Int = mk n
+                |                         ^^^^ this macro invocation generated the failing syntax
+
+             Note: Edit the authored macro invocation or its rule; generated syntax is not
+                   the user-facing source.
+
+             Hint: Fix the `BadInput` condition reported by this macro
+
+             expansion: mk
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 19, "character" => 24},
+             "end" => %{"line" => 19, "character" => 28}
+           }
+  end
+
+  test "a rejected MacroResult preserves the authored diagnostic name" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro Mk
+        syntax mk computed by build_it
+
+      fn build_it(input: Syntax) -> MacroResult = reject(Failure(:missing_state, []))
+
+      fn f() -> Int = mk
+    """
+
+    assert {:error,
+            {:computed_macro_error, _meta, {:author_diagnostics, [{:macro_failure, :missing_state, []}]}} = reason} =
+             Program.elaborate(source)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "author_diagnostic.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- COMPUTED MACRO EXPANSION FAILED [E092] --------------- author_diagnostic.cure
+
+             The `mk` computed macro could not produce valid Cure syntax: macro rejected
+             expansion: it reported `missing_state`
+
+             at author_diagnostic.cure:9:19
+             9 |   fn f() -> Int = mk
+               |                   ^^ this macro invocation generated the failing syntax
+
+             Note: Edit the authored macro invocation or its rule; generated syntax is not
+                   the user-facing source.
+
+             Hint: Address the macro's `missing_state` diagnostic at this invocation
+
+             expansion: mk
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 8, "character" => 18},
+             "end" => %{"line" => 8, "character" => 20}
+           }
   end
 end

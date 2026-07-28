@@ -59,31 +59,33 @@ defmodule Cure.Elab.Elaborator do
         {:error, {:unknown_record, atom}}
 
       ctor ->
-        order = Enum.map(ctor.args, fn {n, _t} -> n end)
-        defaults = Map.get(ctor, :field_defaults, %{})
-        provided = Map.new(field_pairs, fn {:pair, _m, [{:literal, _s, f}, val]} -> {f, val} end)
+        with :ok <- reject_duplicate_record_fields(field_pairs, atom, :construction) do
+          order = Enum.map(ctor.args, fn {n, _t} -> n end)
+          defaults = Map.get(ctor, :field_defaults, %{})
+          provided = Map.new(field_pairs, fn {:pair, _m, [{:literal, _s, f}, val]} -> {f, val} end)
 
-        cond do
-          # A named field is not a field of this record.
-          not Enum.all?(Map.keys(provided), &(&1 in order)) ->
-            {:error, record_field_mismatch(atom, order, defaults, Map.keys(provided))}
+          cond do
+            # A named field is not a field of this record.
+            not Enum.all?(Map.keys(provided), &(&1 in order)) ->
+              {:error, record_field_mismatch(atom, order, defaults, Map.keys(provided))}
 
-          # Every field must be supplied by the caller or carry a declared default
-          # (`name: String = "Anonymous"`); an omitted field with no default is a
-          # genuine mismatch.
-          not Enum.all?(order, &(Map.has_key?(provided, &1) or Map.has_key?(defaults, &1))) ->
-            {:error, record_field_mismatch(atom, order, defaults, Map.keys(provided))}
+            # Every field must be supplied by the caller or carry a declared default
+            # (`name: String = "Anonymous"`); an omitted field with no default is a
+            # genuine mismatch.
+            not Enum.all?(order, &(Map.has_key?(provided, &1) or Map.has_key?(defaults, &1))) ->
+              {:error, record_field_mismatch(atom, order, defaults, Map.keys(provided))}
 
-          true ->
-            values =
-              Enum.map(order, fn f ->
-                case Map.fetch(provided, f) do
-                  {:ok, val} -> val
-                  :error -> Map.fetch!(defaults, f)
-                end
-              end)
+            true ->
+              values =
+                Enum.map(order, fn f ->
+                  case Map.fetch(provided, f) do
+                    {:ok, val} -> val
+                    :error -> Map.fetch!(defaults, f)
+                  end
+                end)
 
-            {:ok, {:function_call, [name: name], values}}
+              {:ok, {:function_call, [name: name], values}}
+          end
         end
     end
   end
@@ -101,21 +103,23 @@ defmodule Cure.Elab.Elaborator do
         {:error, {:unknown_record, atom}}
 
       ctor ->
-        order = Enum.map(ctor.args, fn {n, _t} -> n end)
-        overrides = Map.new(field_pairs, fn {:pair, _m, [{:literal, _s, f}, val]} -> {f, val} end)
+        with :ok <- reject_duplicate_record_fields(field_pairs, atom, :update) do
+          order = Enum.map(ctor.args, fn {n, _t} -> n end)
+          overrides = Map.new(field_pairs, fn {:pair, _m, [{:literal, _s, f}, val]} -> {f, val} end)
 
-        if Enum.all?(Map.keys(overrides), &(&1 in order)) do
-          values =
-            Enum.map(order, fn f ->
-              case Map.fetch(overrides, f) do
-                {:ok, val} -> val
-                :error -> {:attribute_access, [attribute: Atom.to_string(f)], [base]}
-              end
-            end)
+          if Enum.all?(Map.keys(overrides), &(&1 in order)) do
+            values =
+              Enum.map(order, fn f ->
+                case Map.fetch(overrides, f) do
+                  {:ok, val} -> val
+                  :error -> {:attribute_access, [attribute: Atom.to_string(f)], [base]}
+                end
+              end)
 
-          {:ok, {:function_call, [name: name], values}}
-        else
-          {:error, record_field_mismatch(atom, order, Map.new(order, &{&1, :from_base}), Map.keys(overrides))}
+            {:ok, {:function_call, [name: name], values}}
+          else
+            {:error, record_field_mismatch(atom, order, Map.new(order, &{&1, :from_base}), Map.keys(overrides))}
+          end
         end
     end
   end
@@ -129,6 +133,51 @@ defmodule Cure.Elab.Elaborator do
       missing: Enum.reject(declared, &(Enum.member?(provided, &1) or Map.has_key?(defaults, &1)))
     }
     |> then(&{:record_field_mismatch, &1})
+  end
+
+  defp reject_duplicate_record_fields(field_pairs, record, operation) do
+    occurrences =
+      Enum.map(field_pairs, fn {:pair, meta, [{:literal, _symbol_meta, field}, _value]} ->
+        source_info = Cure.MetaAST.Metadata.source_info(meta)
+        {field, source_info && source_info.name}
+      end)
+
+    case Enum.find(occurrences, fn {field, _span} -> Enum.count(occurrences, &(elem(&1, 0) == field)) > 1 end) do
+      nil ->
+        :ok
+
+      {duplicate, _span} ->
+        spans = for {^duplicate, %Cure.Diagnostic.Span{} = span} <- occurrences, do: span
+
+        {:error, {:duplicate_field, %{name: duplicate, record: record, operation: operation, spans: spans}}}
+    end
+  end
+
+  defp validate_record_update_base(meta, [base | _fields], names, ctx, env) do
+    record = meta |> Keyword.fetch!(:name) |> String.to_atom()
+    expected = Inductive.ctor_family(env, record)
+
+    with {:ok, _term, type} <- elaborate_expr_typed(base, names, ctx, env) do
+      actual = Quote.reify(type, Context.length(ctx))
+
+      case actual do
+        {:data, ^expected, _parameters, _indices} ->
+          :ok
+
+        {:data, actual_record, _parameters, _indices} ->
+          {:error, {:record_update_base_mismatch, %{record: expected || record, actual: actual_record}}}
+
+        other ->
+          {:error, {:record_update_base_mismatch, %{record: expected || record, actual: other}}}
+      end
+    end
+  end
+
+  defp available_record_names(%Env{} = env) do
+    env.ctors
+    |> Map.keys()
+    |> Enum.filter(&(Map.get(env.ctor_to_family, &1) == &1))
+    |> Enum.sort_by(&Atom.to_string/1)
   end
 
   # Normalize a constructor atom to a registry key via the resolution layer:
@@ -186,11 +235,38 @@ defmodule Cure.Elab.Elaborator do
           ]}}
 
       :error ->
-        {:error, {:foreign_ctor, cname}}
+        {:error,
+         {:source_context, {:foreign_ctor, cname},
+          %{
+            constructor: cname,
+            actual_family: Inductive.ctor_family(sig, cname),
+            expected_family: dname,
+            expected_constructors: Enum.map(Inductive.ctors_of(sig, dname), & &1.name),
+            expectation_origin: :pattern_constructor,
+            expression_category: :constructor_pattern
+          }}}
+    end
+  end
+
+  # In a Type-returning expression body the parser represents `Tuple(A, B)` as
+  # an ordinary call rather than the annotation-only `:tuple_type` node. Lower
+  # it through the canonical tuple-type path and synthesize `Type`, just as we
+  # already do for first-class primitive and inductive types.
+  defp elaborate_named_call([{:name, "Tuple"} | _], args, names, ctx, env) do
+    tuple_ast =
+      {:tuple_type, [arity: length(args), binders: List.duplicate("_", length(args))], args}
+
+    with {:ok, term} <- elaborate_type(tuple_ast, names, env),
+         {:ok, type} <- Kernel.infer(ctx, term) do
+      {:ok, term, type}
     end
   end
 
   defp elaborate_named_call(meta, args, names, ctx, env) do
+    elaborate_named_call_regular(meta, args, names, ctx, env)
+  end
+
+  defp elaborate_named_call_regular(meta, args, names, ctx, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
 
@@ -323,6 +399,13 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_named_call_resolved(meta, name, atom, args, names, resolved, ctx, env) do
+    case require_unsafe_call(meta, name, resolved, env) do
+      :ok -> elaborate_named_call_resolved_unchecked(meta, name, atom, args, names, resolved, ctx, env)
+      {:error, _} = error -> error
+    end
+  end
+
+  defp elaborate_named_call_resolved_unchecked(meta, name, atom, args, names, resolved, ctx, env) do
     cond do
       # An interface-method call (`eqs(x, y)`) resolves to a concrete instance
       # from the head-positioned argument's type — inlined at a concrete head,
@@ -614,7 +697,7 @@ defmodule Cure.Elab.Elaborator do
         end
 
       _ ->
-        {:error, :applied_non_function}
+        {:error, {:applied_non_function, %{actual: Quote.reify(type, Context.length(ctx)), argument_index: index}}}
     end
   end
 
@@ -643,7 +726,33 @@ defmodule Cure.Elab.Elaborator do
     }
   end
 
+  defp surface_expression_span({:union_type, _meta, children}) when is_list(children) do
+    spans = children |> Enum.map(&surface_expression_span/1) |> Enum.reject(&is_nil/1)
+
+    case spans do
+      [%Cure.Diagnostic.Span{} = first | _] ->
+        last = List.last(spans)
+
+        %Cure.Diagnostic.Span{
+          first
+          | end_byte: last.end_byte,
+            end_line: last.end_line,
+            end_column: last.end_column
+        }
+
+      [] ->
+        nil
+    end
+  end
+
   defp surface_expression_span({_kind, meta, _children}) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: span} -> span
+      _ -> nil
+    end
+  end
+
+  defp surface_expression_span({_kind, meta, _left, _right}) when is_list(meta) do
     case Cure.MetaAST.Metadata.source_info(meta) do
       %Cure.MetaAST.SourceInfo{whole: span} -> span
       _ -> nil
@@ -707,14 +816,16 @@ defmodule Cure.Elab.Elaborator do
   # before the catch-all so this precise error, not `{:unsupported_expression,…}`,
   # is reported.
   def elaborate_expr_typed({:forced_pattern, meta, _children}, _names, _ctx, _env),
-    do: {:error, {:forced_pattern_not_in_pattern, meta}}
+    do: {:error, {:source_context, {:forced_pattern_not_in_pattern, meta}, pattern_only_context(meta, :forced_pattern)}}
 
   # A named-implicit dot pattern `{ name = <expr> }` is only meaningful as a
   # constructor-argument PATTERN position (annotating an erased index by name).
   # Reaching ordinary expression elaboration means it was used outside a pattern
   # — reject it with a precise error (mirrors the forced-pattern guard above).
   def elaborate_expr_typed({:named_implicit_pat, meta, _children}, _names, _ctx, _env),
-    do: {:error, {:named_implicit_not_in_pattern, meta}}
+    do:
+      {:error,
+       {:source_context, {:named_implicit_not_in_pattern, meta}, pattern_only_context(meta, :named_implicit_pattern)}}
 
   def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
     cond do
@@ -724,9 +835,13 @@ defmodule Cure.Elab.Elaborator do
       # elaboration, never a runtime crash. `t.i` is sugar for this (both share
       # `positional_projection`). `i` must be a static positive integer literal —
       # the bounds check is only meaningful for a statically-known index.
-      Keyword.get(meta, :name) == "element" and element_projection?(args) ->
-        [t_arg, {:literal, _, i}] = args
+      Keyword.get(meta, :name) == "element" and
+        is_nil(Env.get_def(env, :element)) and
+          element_projection?(args) ->
+        [t_arg, {:literal, _, i} = index_arg] = args
+
         positional_projection(i, t_arg, names, ctx, env)
+        |> attach_element_projection_context(meta, t_arg, index_arg)
 
       # Record construction `Point{x: .., y: ..}` desugars to the positional
       # constructor `Point(.., ..)` (fields ordered by the record's telescope).
@@ -735,22 +850,28 @@ defmodule Cure.Elab.Elaborator do
           {:ok, positional} ->
             elaborate_expr_typed(positional, names, ctx, env)
             |> attach_record_field_context(meta, args, env)
-            |> attach_record_context(meta, args)
+            |> attach_record_context(meta, args, env)
 
           {:error, reason} ->
-            attach_record_context({:error, reason}, meta, args)
+            attach_record_context({:error, reason}, meta, args, env)
         end
 
       # `f(x)(y)` parses with the inner call preserved as `:callee` (and `name`
       # left "unknown"): elaborate the callee expression, then apply the outer
       # arguments to its (function-typed) result.
       callee = Keyword.get(meta, :callee) ->
-        with {:ok, head, head_type} <- elaborate_expr_typed(callee, names, ctx, env) do
-          check_app_args(head, head_type, args, names, ctx, env)
-        end
+        result =
+          with {:ok, head, head_type} <- elaborate_expr_typed(callee, names, ctx, env) do
+            check_app_args(head, head_type, args, names, ctx, env)
+          end
+
+        attach_application_context(result, meta, callee, args)
 
       true ->
         case elaborate_named_call(meta, args, names, ctx, env) do
+          {:error, {:applied_non_function, _details}} = error ->
+            attach_application_context(error, meta, nil, args)
+
           {:error, reason} when is_tuple(reason) ->
             if unresolved_call_reason?(reason) do
               {:error, attach_unresolved_call_context(reason, {:function_call, meta, args}, env)}
@@ -765,11 +886,11 @@ defmodule Cure.Elab.Elaborator do
   end
 
   def elaborate_expr_typed({:record_update, meta, children}, names, ctx, env) do
-    case desugar_record_update(meta, children, env) do
-      {:ok, positional} ->
-        elaborate_expr_typed(positional, names, ctx, env)
-        |> attach_record_update_context(meta, children, env)
-
+    with {:ok, positional} <- desugar_record_update(meta, children, env),
+         :ok <- validate_record_update_base(meta, children, names, ctx, env) do
+      elaborate_expr_typed(positional, names, ctx, env)
+      |> attach_record_update_context(meta, children, env)
+    else
       {:error, reason} ->
         attach_record_update_context({:error, reason}, meta, children, env)
     end
@@ -780,12 +901,25 @@ defmodule Cure.Elab.Elaborator do
   # and the kernel is never asked to infer a bare pair. This is what makes a
   # let-bound pair work: `let p = %[a, b]` is substitution-based, so `p.1`/`p.2`
   # become `%[a, b].1`/`.2` after inlining.
-  def elaborate_expr_typed({:attribute_access, meta, [{:tuple, _tm, [a, b]}]} = expr, names, ctx, env) do
-    case Keyword.fetch!(meta, :attribute) do
-      "1" -> elaborate_expr_typed(a, names, ctx, env)
-      "2" -> elaborate_expr_typed(b, names, ctx, env)
-      _ -> {:error, {:unsupported_expression, expr}}
-    end
+  def elaborate_expr_typed({:attribute_access, meta, [{:tuple, _tm, [a, b]} = pair]}, names, ctx, env) do
+    field = Keyword.fetch!(meta, :attribute)
+
+    result =
+      case field do
+        "1" ->
+          elaborate_expr_typed(a, names, ctx, env)
+
+        "2" ->
+          elaborate_expr_typed(b, names, ctx, env)
+
+        _ ->
+          case parse_positional_index(field) do
+            {:ok, index} -> {:error, {:telescope_index_out_of_bounds, index, 2}}
+            :error -> record_projection(pair, field, names, ctx, env)
+          end
+      end
+
+    attach_projection_context(result, meta, pair, field)
   end
 
   def elaborate_expr_typed({:attribute_access, meta, [inner]} = expr, names, ctx, env) do
@@ -796,18 +930,22 @@ defmodule Cure.Elab.Elaborator do
         equation
 
       :not_equation ->
-        case parse_positional_index(attr) do
-          {:ok, i} -> positional_projection(i, inner, names, ctx, env)
-          :error -> record_projection(inner, attr, names, ctx, env)
-        end
+        result =
+          case parse_positional_index(attr) do
+            {:ok, i} -> positional_projection(i, inner, names, ctx, env)
+            :error -> record_projection(inner, attr, names, ctx, env)
+          end
+
+        attach_projection_context(result, meta, inner, attr)
 
       {:error, _} = error ->
         error
     end
   end
 
-  def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
-    do: {:error, :rewrite_requires_expected_type}
+  def elaborate_expr_typed({:rewrite_expr, meta, [proof_ast, body_ast]}, _names, _ctx, _env) do
+    {:error, {:source_context, :rewrite_requires_expected_type, rewrite_source_context(meta, proof_ast, body_ast)}}
+  end
 
   def elaborate_expr_typed({:proof_chain, _meta, _children} = chain, names, ctx, env),
     do: Cure.Elab.ProofChain.elaborate(chain, names, ctx, env)
@@ -893,7 +1031,7 @@ defmodule Cure.Elab.Elaborator do
 
             case elaborate_expr_checked(e, t_type_core, names, ctx, env) do
               {:error, reason} ->
-                {:error, attach_expectation_context(reason, e, :branch, :if, 1)}
+                {:error, normalize_branch_check_error(reason, e, t_type_core, names, ctx, env, :if, 1)}
 
               {:ok, e_core} ->
                 {:ok, bool_case(c_core, t_type_core, t_core, e_core, ctx), t_type}
@@ -908,10 +1046,14 @@ defmodule Cure.Elab.Elaborator do
   # There is no `:let` desugaring to guess a type for: build the `:let` Core chain
   # by inferring each binding's rhs, then let the kernel infer the whole term's type
   # (which sidesteps hand-managing the de Bruijn depth of the body's type).
-  def elaborate_expr_typed({:block, _meta, stmts}, names, ctx, env) do
-    with {:ok, term} <- infer_block_term(stmts, names, ctx, env),
-         {:ok, type} <- Kernel.infer(ctx, term) do
-      {:ok, term, type}
+  def elaborate_expr_typed({:block, meta, stmts} = block, names, ctx, env) do
+    if Keyword.get(meta, :do, false) do
+      infer_do_block(block, stmts, names, ctx, env)
+    else
+      with {:ok, term} <- infer_block_term(stmts, names, ctx, env),
+           {:ok, type} <- Kernel.infer(ctx, term) do
+        {:ok, term, type}
+      end
     end
   end
 
@@ -928,12 +1070,12 @@ defmodule Cure.Elab.Elaborator do
   # benefit and would change its Core lowering (breaking the parity with the
   # `and`/`or` connectives, which stay `{:global, :and/:or}`). It keeps its direct
   # application of the `Std.Bool` prelude def, unchanged.
-  def elaborate_expr_typed({:unary_op, meta, [operand]} = expr, names, ctx, env) do
+  def elaborate_expr_typed({:unary_op, meta, [operand]}, names, ctx, env) do
     case Keyword.fetch!(meta, :operator) do
       :not ->
         result =
           with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
-               term = {:app, {:global, :not}, o_core},
+               term = {:app, {:global, Cure.Elab.Name.qualify("Std.Bool", :not)}, o_core},
                {:ok, type} <- Kernel.infer(ctx, term) do
             {:ok, term, type}
           end
@@ -982,8 +1124,13 @@ defmodule Cure.Elab.Elaborator do
           attach_unary_operand_context(result, operand, :-)
         end
 
-      _ ->
-        {:error, {:unsupported_expression, expr}}
+      op ->
+        elaborate_expr_typed(
+          {:function_call, [name: Atom.to_string(op)], [operand]},
+          names,
+          ctx,
+          env
+        )
     end
   end
 
@@ -1012,7 +1159,7 @@ defmodule Cure.Elab.Elaborator do
       # desugar to a call on the function named by its lexeme, exactly as the
       # built-in overloads route (`<>`→combine, non-primitive `==`/`<`→method).
       Keyword.get(meta, :category) == :overloaded ->
-        overloaded_op_call(op, l, r, names, ctx, env)
+        overloaded_op_call(op, l, r, expr, names, ctx, env)
 
       op == :<> ->
         combine_call(l, r, names, ctx, env)
@@ -1064,19 +1211,15 @@ defmodule Cure.Elab.Elaborator do
            :ok <- Kernel.check(ctx, term, result_type_val) do
         {:ok, term, result_type_val}
       else
-        {:ok, _term, _non_data_type} -> {:error, {:cannot_infer_match_type, expr}}
-        {:error, _} = err -> err
-      end
-    end
-  end
+        {:ok, _term, _non_data_type} ->
+          {:error, cannot_infer_match_type(expr, arms, :scrutinee_not_data)}
 
-  # `pickup` predicate dispatch (value-surface Wave 1). Pure syntactic
-  # desugaring to a right-nested `:conditional` chain; reuses the conditional
-  # path's Bool-guard and branch-join checks verbatim. No kernel change.
-  # See docs/superpowers/specs/2026-07-09-wave1-pickup-design.md.
-  def elaborate_expr_typed({:pickup, _meta, clauses}, names, ctx, env) do
-    with {:ok, desugared} <- desugar_pickup(clauses) do
-      elaborate_expr_typed(desugared, names, ctx, env)
+        {:error, {:cannot_infer_match_type, :no_constructor_arm}} ->
+          {:error, cannot_infer_match_type(expr, arms, :no_constructor_arm)}
+
+        {:error, _} = err ->
+          err
+      end
     end
   end
 
@@ -1086,7 +1229,7 @@ defmodule Cure.Elab.Elaborator do
   # nullary `unit` constructor of the seeded `Unit` family; the same node emit
   # already understands as the empty-telescope terminator.
   def elaborate_expr_typed({:unit_value, _meta}, _names, _ctx, env) do
-    {:ok, {:ctor, unit_ctor_name(env), []}, {:data, unit_family_name(env), [], []}}
+    {:ok, {:ctor, unit_ctor_name(env), []}, {:vdata, unit_family_name(env), []}}
   end
 
   def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
@@ -1170,12 +1313,141 @@ defmodule Cure.Elab.Elaborator do
     do: elaborate_expr_typed(Cure.Compiler.MacroSyntax.lower_quote(inner), names, ctx, env)
 
   def elaborate_expr_typed({:async_operation, meta, _children}, _names, _ctx, _env),
-    do: {:error, {:unsupported_async, "`spawn` is not supported by the dependent runtime yet.", meta}}
+    do: {:error, unsupported_async_error(meta)}
 
   def elaborate_expr_typed({tag, meta, _}, _names, _ctx, _env) when tag in [:splice, :splice_group],
-    do: {:error, {:splice_outside_quote, tag, meta}}
+    do: {:error, splice_outside_quote_error(tag, meta)}
+
+  # `pickup` predicate dispatch (value-surface Wave 1). Pure syntactic
+  # desugaring to a right-nested `:conditional` chain; reuses the conditional
+  # path's Bool-guard and branch-join checks verbatim. No kernel change.
+  # See docs/superpowers/specs/2026-07-09-wave1-pickup-design.md.
+  def elaborate_expr_typed({:pickup, _meta, clauses}, names, ctx, env) do
+    with {:ok, desugared} <- desugar_pickup(clauses) do
+      elaborate_expr_typed(desugared, names, ctx, env)
+    end
+  end
 
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  # A do block is commonly supplied as an argument to `run`, where ordinary
+  # application elaboration initially asks for an inferred argument type. Its
+  # effectful first bind gives us the payload type needed to switch to the
+  # checking path; that path then constructs the complete bind chain and keeps
+  # the Effect wrapper visible until the explicit unsafe boundary.
+  defp infer_do_block({:block, _meta, _stmts} = block, [first | _], names, ctx, env) do
+    with {:assignment, _assignment_meta, [_pattern, rhs]} <- first,
+         {:ok, _rhs_core, {:veffect_type, result_type}} <- elaborate_expr_typed(rhs, names, ctx, env),
+         result_core = Quote.reify(result_type, Context.length(ctx), Context.signature(ctx)),
+         expected = {:effect_type, result_core},
+         {:ok, term} <- elaborate_expr_checked(block, expected, names, ctx, env),
+         {:ok, type} <- Kernel.infer(ctx, term) do
+      {:ok, term, type}
+    else
+      _ -> {:error, {:do_requires_effectful_bind, first}}
+    end
+  end
+
+  defp infer_do_block(_block, _stmts, _names, _ctx, _env),
+    do: {:error, {:do_requires_effectful_bind, :empty}}
+
+  defp require_unsafe_call(meta, name, resolved, env) do
+    required? =
+      name == "run" or
+        case Env.get_def(env, resolved) do
+          %{unsafe: true} -> true
+          _ -> false
+        end
+
+    if required? and not Keyword.get(meta, :unsafe, false) do
+      {:error,
+       {:unsafe_call_required,
+        %{callee: name, resolved: resolved, span: surface_expression_span({:function_call, meta, []})}}}
+    else
+      :ok
+    end
+  end
+
+  defp pattern_only_context(meta, category) do
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+
+    %{
+      span: source_info && source_info.whole,
+      opener_span: source_info && source_info.opener,
+      name_span: source_info && source_info.name,
+      body_span: source_info && source_info.body,
+      expectation_origin: :pattern,
+      expression_category: category
+    }
+  end
+
+  defp attach_application_context(
+         {:error, {:applied_non_function, details} = reason},
+         meta,
+         callee,
+         args
+       ) do
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+    index = Map.get(details, :argument_index, 0)
+    callee_span = if(callee, do: surface_expression_span(callee), else: source_info && source_info.callee)
+    argument_span = args |> Enum.at(index) |> surface_expression_span()
+
+    {:error,
+     {:source_context, reason,
+      %{
+        span: if(index == 0, do: callee_span || argument_span, else: argument_span || callee_span),
+        application_span: source_info && source_info.whole,
+        callee_span: callee_span,
+        callee_name: Keyword.get(meta, :name),
+        argument_span: argument_span,
+        argument_index: index,
+        expectation_origin: :application,
+        expression_category: :function_call
+      }}}
+  end
+
+  defp attach_application_context(result, _meta, _callee, _args), do: result
+
+  defp attach_projection_context({:error, {:source_context, reason, context}}, meta, inner, field) do
+    {:error, {:source_context, reason, Map.merge(projection_context(meta, inner, field), context)}}
+  end
+
+  defp attach_projection_context({:error, reason}, meta, inner, field) do
+    {:error, {:source_context, reason, projection_context(meta, inner, field)}}
+  end
+
+  defp attach_projection_context(result, _meta, _inner, _field), do: result
+
+  defp attach_element_projection_context({:error, reason}, meta, receiver, index) do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+
+    {:error,
+     {:source_context, reason,
+      %{
+        span: info && info.whole,
+        receiver_span: surface_expression_span(receiver),
+        index_span: surface_expression_span(index),
+        callee_span: info && info.callee,
+        expression_category: :function_call,
+        expectation_origin: :projection,
+        projection_syntax: :element
+      }}}
+  end
+
+  defp attach_element_projection_context(result, _meta, _receiver, _index), do: result
+
+  defp projection_context(meta, inner, field) do
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+
+    %{
+      span: source_info && source_info.whole,
+      receiver_span: surface_expression_span(inner),
+      field_span: source_info && source_info.name,
+      field: field,
+      expression_category: :attribute_access,
+      expectation_origin: :projection
+    }
+  end
 
   defp equation_member(inner, member_name, use_span, ctx, env) do
     with {:ok, function_name, members} <- equation_reference(inner, member_name) do
@@ -1313,48 +1585,86 @@ defmodule Cure.Elab.Elaborator do
   # typeclass method desugar (Phase 2). Extracted verbatim from the former
   # `{:binary_op}` body so the `:overloaded` and `<>` routes sit beside it.
   defp elaborate_binop(op, l, r, expr, names, ctx, env) do
-    case elaborate_expr_typed(l, names, ctx, env) do
-      {:error, reason} ->
-        {:error, attach_operator_operand_context(reason, l, 0, op)}
+    case elaborate_binop_operands(l, r, names, ctx, env) do
+      {:error, index, reason} ->
+        operand = if index == 0, do: l, else: r
+        {:error, attach_operator_operand_context(reason, operand, index, op)}
 
-      {:ok, l_core, l_type} ->
-        case elaborate_expr_typed(r, names, ctx, env) do
+      {:ok, l_core, l_type, r_core} ->
+        with {:ok, term} <- build_binop(op, l_core, r_core, l_type, ctx),
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        else
+          {:error, {:unsupported_operand_type, :+}} ->
+            combine_call(l, r, names, ctx, env)
+
+          {:error, {:unsupported_operand_type, cmp}}
+          when cmp in [:<, :>, :<=, :>=] ->
+            op_method_call(cmp, l, r, names, ctx, env)
+
+          # `==`/`!=` on a non-primitive operand (String, ADT, abstract/rigid type
+          # variable) — `build_binop`'s `{:==,:!=}` clause reports the operand has no
+          # primitive twin, and the SOLE route is the `Equatable` method desugar. A
+          # rigid type variable with no in-scope dictionary rejects here as
+          # `{:no_instance, :Equatable, {:rigid, _}}`, the intended sole-route error.
+          {:error, {:unsupported_operand_type, eq}}
+          when eq in [:==, :!=] ->
+            op_method_call(eq, l, r, names, ctx, env)
+
+          :unsupported_op ->
+            overloaded_op_call(op, l, r, expr, names, ctx, env)
+
+          {:error, {:unsupported_operand_type, failed_op} = reason} ->
+            {:error,
+             {:source_context, reason, operator_expression_context(expr, l, r, failed_op, [l_type, l_type], ctx)}}
+
           {:error, reason} ->
             {:error, attach_operator_operand_context(reason, r, 1, op)}
 
-          {:ok, r_core, _rt} ->
-            with {:ok, term} <- build_binop(op, l_core, r_core, l_type, ctx),
-                 {:ok, type} <- Kernel.infer(ctx, term) do
-              {:ok, term, type}
-            else
-              {:error, {:unsupported_operand_type, :+}} ->
-                combine_call(l, r, names, ctx, env)
-
-              {:error, {:unsupported_operand_type, cmp}}
-              when cmp in [:<, :>, :<=, :>=] ->
-                op_method_call(cmp, l, r, names, ctx, env)
-
-              # `==`/`!=` on a non-primitive operand (String, ADT, abstract/rigid type
-              # variable) — `build_binop`'s `{:==,:!=}` clause reports the operand has no
-              # primitive twin, and the SOLE route is the `Equatable` method desugar. A
-              # rigid type variable with no in-scope dictionary rejects here as
-              # `{:no_instance, :Equatable, {:rigid, _}}`, the intended sole-route error.
-              {:error, {:unsupported_operand_type, eq}}
-              when eq in [:==, :!=] ->
-                op_method_call(eq, l, r, names, ctx, env)
-
-              :unsupported_op ->
-                {:error, {:unsupported_expression, expr}}
-
-              {:error, reason} ->
-                {:error, attach_operator_operand_context(reason, r, 1, op)}
-
-              other ->
-                other
-            end
+          other ->
+            other
         end
     end
   end
+
+  # Binary operators are homogeneous. Infer one operand, then CHECK the other at
+  # that type so contextual literal protocols participate (`char == 12`). If the
+  # left operand is itself an integer spelling and the right is not, infer from
+  # the right instead (`12 == char`); two bare numerals retain the Int default.
+  defp elaborate_binop_operands(l, r, names, ctx, env) do
+    if integer_literal_ast?(l) and not integer_literal_ast?(r) do
+      case elaborate_expr_typed(r, names, ctx, env) do
+        {:ok, r_core, r_type} ->
+          expected = r_type |> Quote.reify(Context.length(ctx)) |> resplit_data(env)
+
+          case elaborate_expr_checked(l, expected, names, ctx, env) do
+            {:ok, l_core} -> {:ok, l_core, r_type, r_core}
+            {:error, reason} -> {:error, 0, reason}
+          end
+
+        {:error, reason} ->
+          {:error, 1, reason}
+      end
+    else
+      case elaborate_expr_typed(l, names, ctx, env) do
+        {:ok, l_core, l_type} ->
+          expected = l_type |> Quote.reify(Context.length(ctx)) |> resplit_data(env)
+
+          case elaborate_expr_checked(r, expected, names, ctx, env) do
+            {:ok, r_core} -> {:ok, l_core, l_type, r_core}
+            {:error, reason} -> {:error, 1, reason}
+          end
+
+        {:error, reason} ->
+          {:error, 0, reason}
+      end
+    end
+  end
+
+  defp integer_literal_ast?({:literal, meta, value}),
+    do: Keyword.get(meta, :subtype) == :integer and is_integer(value)
+
+  defp integer_literal_ast?(_), do: false
 
   defp attach_operator_operand_context({:source_context, reason, context}, operand, index, op)
        when is_map(context) do
@@ -1394,12 +1704,35 @@ defmodule Cure.Elab.Elaborator do
   # with `{:no_operator_meaning, op}` rather than letting it dissolve into a
   # generic `:unknown_global`. Otherwise route through the ordinary
   # function-call path, so real type errors in the operands still surface.
-  defp overloaded_op_call(op, l, r, names, ctx, env) do
+  defp overloaded_op_call(op, l, r, expr, names, ctx, env) do
     if operator_meaning?(env, op) do
       elaborate_expr_typed({:function_call, [name: Atom.to_string(op)], [l, r]}, names, ctx, env)
     else
-      {:error, {:no_operator_meaning, op}}
+      {:error, {:source_context, {:no_operator_meaning, op}, operator_expression_context(expr, l, r, op, [], ctx)}}
     end
+  end
+
+  defp operator_expression_context({:binary_op, meta, _children}, left, right, op, types, ctx)
+       when is_list(meta) do
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+    operator_span = source_info && source_info.operator
+    operand_spans = if source_info, do: source_info.operands, else: []
+
+    operand_spans =
+      if operand_spans == [], do: [surface_expression_span(left), surface_expression_span(right)], else: operand_spans
+
+    %{
+      line: operator_span && operator_span.start_line,
+      column: operator_span && operator_span.start_column,
+      length: operator_span && max(1, operator_span.end_byte - operator_span.start_byte),
+      span: operator_span,
+      operator_span: operator_span,
+      operand_spans: Enum.reject(operand_spans, &is_nil/1),
+      operand_types: Enum.map(types, &Quote.reify(&1, Context.length(ctx), Context.signature(ctx))),
+      checking: op,
+      expression_category: :binary_operator,
+      expectation_origin: :operator
+    }
   end
 
   # True when `atom` names anything callable: a top-level definition, an
@@ -1481,6 +1814,30 @@ defmodule Cure.Elab.Elaborator do
     end)
   end
 
+  defp cannot_infer_match_type(expr, arms, reason) do
+    %{
+      reason: reason,
+      span: surface_expression_span(expr),
+      scrutinee_span: match_scrutinee_span(expr),
+      branch_spans: Enum.map(arms, &match_arm_pattern_span/1) |> Enum.reject(&is_nil/1),
+      expression_category: :pattern_match
+    }
+    |> then(&{:cannot_infer_match_type, &1})
+  end
+
+  defp match_scrutinee_span({:pattern_match, _meta, [scrutinee | _arms]}),
+    do: surface_expression_span(scrutinee)
+
+  defp match_scrutinee_span(_expression), do: nil
+
+  defp match_arm_pattern_span({:match_arm, arm_meta, _body}) when is_list(arm_meta) do
+    arm_meta
+    |> Keyword.get(:pattern)
+    |> surface_expression_span()
+  end
+
+  defp match_arm_pattern_span(_arm), do: nil
+
   # Strengthen a branch-body type out of the constructor's `arity` bound vars (de
   # Bruijn 0..arity-1, most-recently bound). If any of those occur the type is
   # genuinely dependent — reject (needs an annotation); otherwise shift the free
@@ -1519,8 +1876,8 @@ defmodule Cure.Elab.Elaborator do
 
   defp occurs_below?(_other, _arity, _depth), do: false
 
-  # Surface operator symbols (from `Precedence.operator_symbol/1`) to the
-  # builtin-op key the type-directed dispatch maps onto a monomorphic global
+  # Authored operator names to the builtin-op key the type-directed dispatch
+  # maps onto a monomorphic global
   # (K2). Only the ops with registered globals are mapped; `<>` (string
   # concat), `..`, and the like are left unsupported here.
   defp prim_op(:+), do: {:ok, :add}
@@ -1576,13 +1933,17 @@ defmodule Cure.Elab.Elaborator do
     ge: :float_ge
   }
 
-  defp build_binop(:and, l, r, _l_type, _ctx), do: {:ok, app2(:and, l, r)}
-  defp build_binop(:or, l, r, _l_type, _ctx), do: {:ok, app2(:or, l, r)}
+  defp build_binop(:and, l, r, _l_type, _ctx),
+    do: {:ok, app2(Cure.Elab.Name.qualify("Std.Bool", :and), l, r)}
+
+  defp build_binop(:or, l, r, _l_type, _ctx),
+    do: {:ok, app2(Cure.Elab.Name.qualify("Std.Bool", :or), l, r)}
 
   defp build_binop(op_sym, l, r, l_type, ctx) when op_sym in [:==, :!=] do
     case primitive_scrut_kind(l_type, Context.signature(ctx)) do
       {:ok, :bool} ->
-        {:ok, app2(if(op_sym == :==, do: :eq, else: :ne), l, r)}
+        name = if(op_sym == :==, do: :eq, else: :ne)
+        {:ok, app2(Cure.Elab.Name.qualify("Std.Bool", name), l, r)}
 
       {:ok, :int} ->
         {:ok, app2(builtin_op_global(if(op_sym == :==, do: :int_eq, else: :int_ne)), l, r)}
@@ -1593,7 +1954,7 @@ defmodule Cure.Elab.Elaborator do
       # An indexed family (Bounded — Char) erases to a native int but is not a
       # monomorphic twin, so it takes the polymorphic struct_eq path directly. This
       # is a concrete-type primitive fast path (Bounded erases to a BEAM int, so
-      # struct_eq IS its native equality), monomorphising to the identical spine
+      # struct_eq IS its native equality), lowering to the identical spine
       # the `Equatable for Char` (keyed `:Bounded`) instance would — kept as an
       # optimisation of the single route. It is NOT routed to the method because
       # that instance is index-specialised to Char's `Bounded(1114112)` and would
@@ -1604,7 +1965,7 @@ defmodule Cure.Elab.Elaborator do
       # `Atom` is a sealed Int-tier primitive base type (`{:vatom_type}`): a BEAM
       # atom is its own canonical value, so `:ok == :ok` is native primitive
       # equality, no more a typeclass obligation than `1 == 1`. This concrete fast
-      # path monomorphises to the identical `struct_eq(Atom, ·, ·)` spine the
+      # path lowers to the identical `struct_eq(Atom, ·, ·)` spine the
       # `Equatable for Atom` instance emits — an optimisation of the single route,
       # never reached for an abstract/rigid/ADT operand (those fall to `:error`).
       # It is required for the bootstrap-closure OTP/syntax modules, which compare
@@ -1721,8 +2082,9 @@ defmodule Cure.Elab.Elaborator do
 
   # `element(t, i)` is the dependent n-ary projection form iff called with exactly
   # two arguments and a STATIC positive-integer literal index — the only shape for
-  # which the compile-time bounds check is meaningful. Any other `element(…)` call
-  # falls through to ordinary name resolution.
+  # which the compile-time bounds check is meaningful. Any other `element(…)`
+  # call falls through to ordinary name resolution. A visible definition named
+  # `element` also wins, preserving ordinary local/import shadowing.
   defp element_projection?([_t_arg, {:literal, _meta, i}]) when is_integer(i) and i >= 1, do: true
   defp element_projection?(_), do: false
 
@@ -1749,7 +2111,7 @@ defmodule Cure.Elab.Elaborator do
   defp positional_projection(i, inner, names, ctx, env) do
     case telescope_arity_of(inner, names, ctx, env) do
       {:telescope, n} when i <= n and i >= 2 ->
-        elaborate_implicit_global_app(env, :"tproj#{i}", [inner], names, ctx)
+        elaborate_telescope_projection(i, inner, names, ctx, env)
 
       {:telescope, n} when i <= n ->
         sigma_projection(:fst, inner, names, ctx, env)
@@ -1767,6 +2129,47 @@ defmodule Cure.Elab.Elaborator do
           2 -> sigma_projection(:snd, inner, names, ctx, env)
           _ -> record_projection(inner, Integer.to_string(i), names, ctx, env)
         end
+    end
+  end
+
+  # The `tprojN` result is inferable from the tuple's telescope, but ordinary
+  # implicit insertion sees its erased component types only through a nested
+  # Sigma codomain. In synthesis mode that used to leave the trailing `r`
+  # metavariable unsolved, making `let x = tuple.2` spuriously check-only.
+  # Read the already-inferred telescope once and supply the erased arguments
+  # explicitly. These are ordinary canonical `Std.Sigma.tprojN` applications;
+  # no projection or tuple type is special-cased in the kernel.
+  defp elaborate_telescope_projection(i, inner, names, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+    unit_ctor = unit_ctor_name(env)
+
+    with {:ok, inner_term, type_value} <- elaborate_expr_typed(inner, names, ctx, env),
+         type_term =
+           type_value
+           |> Quote.reify(Context.length(ctx), Context.signature(ctx))
+           |> resplit_data(env),
+         {:ok, components, tail} <-
+           telescope_prefix(type_term, i, ctx, sigma_fam, unit_ctor, []) do
+      name = Env.resolve_key(env, env.defs, :"tproj#{i}")
+      args = components ++ [tail, inner_term]
+      term = Enum.reduce(args, {:global, name}, fn argument, application -> {:app, application, argument} end)
+      result_type = Enum.at(components, i - 1) |> Eval.eval(Context.env(ctx))
+      {:ok, term, result_type}
+    end
+  end
+
+  defp telescope_prefix(type, 0, _ctx, _sigma_fam, _unit_ctor, components),
+    do: {:ok, Enum.reverse(components), type}
+
+  defp telescope_prefix(type, remaining, ctx, sigma_fam, unit_ctor, components)
+       when remaining > 0 do
+    case Kernel.normalize(ctx, type) do
+      {:data, ^sigma_fam, [domain, codomain], []} ->
+        tail = Kernel.normalize(ctx, {:app, codomain, {:ctor, unit_ctor, []}})
+        telescope_prefix(tail, remaining - 1, ctx, sigma_fam, unit_ctor, [domain | components])
+
+      _ ->
+        {:error, {:not_a_telescope_projection, remaining}}
     end
   end
 
@@ -1861,7 +2264,18 @@ defmodule Cure.Elab.Elaborator do
                   {:error, {:unknown_field, rec, field, Enum.map(fields, &elem(&1, 0))}}
 
                 mentions_prior_field?(ftype) ->
-                  {:error, {:dependent_record_projection, rec, field}}
+                  dependencies = dependent_record_field_names(fields, idx)
+                  field_sites = Cure.Elab.SourceMetadata.record_field_sites(rec)
+
+                  {:error,
+                   {:source_context, {:dependent_record_projection, rec, field},
+                    %{
+                      record: rec,
+                      projected_field: field,
+                      dependent_fields: dependencies,
+                      projected_field_declaration: Map.get(field_sites, field),
+                      dependent_field_declarations: Map.take(field_sites, dependencies)
+                    }}}
 
                 true ->
                   binders = for i <- 0..(length(fields) - 1), do: {:variable, [scope: :local], "$proj#{i}"}
@@ -1888,6 +2302,7 @@ defmodule Cure.Elab.Elaborator do
   # binder crossed, so its distance from the current frame stays constant, while a
   # genuine context/parameter reference stays far below the threshold.
   defp mentions_prior_field?(term), do: mentions_prior_field?(term, 0)
+
   defp mentions_prior_field?({:var, k}, depth), do: k - depth >= @proj_field_sentinel
 
   defp mentions_prior_field?({:lam, _g, d, b}, depth),
@@ -1902,6 +2317,19 @@ defmodule Cure.Elab.Elaborator do
   defp mentions_prior_field?(list, depth) when is_list(list), do: Enum.any?(list, &mentions_prior_field?(&1, depth))
   defp mentions_prior_field?(_other, _depth), do: false
 
+  defp dependent_record_field_names(fields, index) do
+    previous = fields |> Enum.take(index) |> Enum.map(&elem(&1, 0)) |> Enum.reverse()
+    {_name, type} = Enum.at(fields, index)
+
+    type
+    |> free_indices(0)
+    |> Enum.filter(&(&1 < index))
+    |> Enum.sort()
+    |> Enum.map(&Enum.at(previous, &1))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&Atom.to_string/1)
+  end
+
   defp attach_unary_operand_context({:error, reason}, operand, operator),
     do: {:error, attach_operator_operand_context(reason, operand, 0, operator)}
 
@@ -1913,12 +2341,34 @@ defmodule Cure.Elab.Elaborator do
   """
   @spec elaborate_expr_checked(term(), term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
-  def elaborate_expr_checked({:record_update, meta, children}, expected_core, names, ctx, env) do
-    case desugar_record_update(meta, children, env) do
-      {:ok, positional} ->
-        elaborate_expr_checked(positional, expected_core, names, ctx, env)
-        |> attach_record_update_context(meta, children, env)
+  def elaborate_expr_checked(
+        {:unary_op, meta, [{:literal, literal_meta, value}]},
+        expected_core,
+        names,
+        ctx,
+        env
+      )
+      when is_integer(value) and value >= 0 do
+    if Keyword.get(meta, :operator) == :- and Keyword.get(literal_meta, :subtype) == :integer and
+         literal_protocol_available?(env) do
+      elaborate_contextual_integer_literal(-value, expected_core, names, ctx, env)
+    else
+      elaborate_expr_checked_fallback(
+        {:unary_op, meta, [{:literal, literal_meta, value}]},
+        expected_core,
+        names,
+        ctx,
+        env
+      )
+    end
+  end
 
+  def elaborate_expr_checked({:record_update, meta, children}, expected_core, names, ctx, env) do
+    with {:ok, positional} <- desugar_record_update(meta, children, env),
+         :ok <- validate_record_update_base(meta, children, names, ctx, env) do
+      elaborate_expr_checked(positional, expected_core, names, ctx, env)
+      |> attach_record_update_context(meta, children, env)
+    else
       {:error, reason} ->
         attach_record_update_context({:error, reason}, meta, children, env)
     end
@@ -1941,10 +2391,10 @@ defmodule Cure.Elab.Elaborator do
           {:ok, positional} ->
             elaborate_expr_checked(positional, expected_core, names, ctx, env)
             |> attach_record_field_context(meta, args, env)
-            |> attach_record_context(meta, args)
+            |> attach_record_context(meta, args, env)
 
           {:error, reason} ->
-            attach_record_context({:error, reason}, meta, args)
+            attach_record_context({:error, reason}, meta, args, env)
         end
 
       name == "reflexive" and length(args) == 1 ->
@@ -1999,8 +2449,14 @@ defmodule Cure.Elab.Elaborator do
                   # constructor). Keep the fallback around the whole inference
                   # attempt, not only elaborate_ctor_app/5.
                   case elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core) do
-                    {:ok, _} = ok -> ok
-                    {:error, _} -> orig
+                    {:ok, _} = ok ->
+                      ok
+
+                    {:error, {:constructor_result_mismatch, details}} ->
+                      attach_constructor_result_mismatch(orig, details, meta, args)
+
+                    {:error, _} ->
+                      attach_nested_constructor_context(orig, aligned_args, cres)
                   end
               end
           end
@@ -2121,21 +2577,24 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr_checked({:rewrite_expr, _meta, [proof_ast, body_ast]}, expected_core, names, ctx, env) do
+  def elaborate_expr_checked({:rewrite_expr, meta, [proof_ast, body_ast]}, expected_core, names, ctx, env) do
     depth = Context.length(ctx)
 
-    with {:ok, proof_term, proof_type} <- elaborate_expr_typed(proof_ast, names, ctx, env),
-         {:ok, ty_value, a_value, b_value} <- Rewrite.eq_parts(proof_type, Context.signature(ctx)),
-         ty = Kernel.normalize(ctx, Quote.reify(ty_value, depth)),
-         a = Kernel.normalize(ctx, Quote.reify(a_value, depth)),
-         b = Kernel.normalize(ctx, Quote.reify(b_value, depth)),
-         normalized_expected = Kernel.normalize(ctx, expected_core),
-         {:ok, build, body_expected} <- Rewrite.legacy_plan(proof_term, ty, a, b, normalized_expected),
-         {:ok, body_term} <- elaborate_expr_checked(body_ast, body_expected, names, ctx, env),
-         term = build.(body_term),
-         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-      {:ok, term}
-    end
+    result =
+      with {:ok, proof_term, proof_type} <- elaborate_expr_typed(proof_ast, names, ctx, env),
+           {:ok, ty_value, a_value, b_value} <- Rewrite.eq_parts(proof_type, Context.signature(ctx)),
+           ty = Kernel.normalize(ctx, Quote.reify(ty_value, depth)),
+           a = Kernel.normalize(ctx, Quote.reify(a_value, depth)),
+           b = Kernel.normalize(ctx, Quote.reify(b_value, depth)),
+           normalized_expected = Kernel.normalize(ctx, expected_core),
+           {:ok, build, body_expected} <- Rewrite.legacy_plan(proof_term, ty, a, b, normalized_expected),
+           {:ok, body_term} <- elaborate_expr_checked(body_ast, body_expected, names, ctx, env),
+           term = build.(body_term),
+           :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+        {:ok, term}
+      end
+
+    attach_rewrite_context(result, meta, proof_ast, body_ast)
   end
 
   def elaborate_expr_checked({:proof_chain, _meta, _children} = chain, expected_core, names, ctx, env) do
@@ -2283,12 +2742,12 @@ defmodule Cure.Elab.Elaborator do
       {:ok, c_core} ->
         case branch.(t) do
           {:error, reason} ->
-            {:error, attach_expectation_context(reason, t, :branch, :if, 0)}
+            {:error, normalize_branch_check_error(reason, t, expected_core, names, ctx, env, :if, 0)}
 
           {:ok, t_core} ->
             case branch.(e) do
               {:error, reason} ->
-                {:error, attach_expectation_context(reason, e, :branch, :if, 1)}
+                {:error, normalize_branch_check_error(reason, e, expected_core, names, ctx, env, :if, 1)}
 
               {:ok, e_core} ->
                 {:ok, bool_case(c_core, expected_core, t_core, e_core, ctx)}
@@ -2346,6 +2805,8 @@ defmodule Cure.Elab.Elaborator do
   # one becomes compact. Every other case defers to the ordinary checked path.
   def elaborate_expr_checked({:literal, meta, value} = expr, expected_core, names, ctx, env) do
     int? = Keyword.get(meta, :subtype) == :integer and is_integer(value) and value >= 0
+    signed_int? = Keyword.get(meta, :subtype) == :integer and is_integer(value)
+    literal_protocol = Keyword.get(meta, :literal_protocol)
     string? = Keyword.get(meta, :subtype) == :string and is_binary(value)
     bytes? = Keyword.get(meta, :subtype) == :bytes and is_list(value)
     union_ctor = union_literal_ctor(meta, value, expected_core, ctx, env)
@@ -2360,6 +2821,13 @@ defmodule Cure.Elab.Elaborator do
       union_ctor != nil ->
         {:ok, {:ctor, union_ctor, []}}
 
+      # A literal whose TYPE is a union member is an ordinary union injection,
+      # not an attempt to invoke the literal protocol on the union itself. Infer
+      # the literal's normal type first, then let the shared checked fallback
+      # inject it. Exact literal members were handled by the nullary case above.
+      union_goal?(expected_core) ->
+        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
       # A string literal checks as its `List(Char)` desugaring (see the typed
       # clause), so the expected `List(Char)`/`String` type drives each char.
       string? ->
@@ -2371,21 +2839,31 @@ defmodule Cure.Elab.Elaborator do
           elaborate_expr_checked(surface, expected_core, names, ctx, env)
         end
 
-      int? and nat_expected?(expected_core, ctx) ->
+      signed_int? and refinement_return?(expected_core, ctx, env) ->
+        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
+      literal_protocol == :natural_argument and int? and nat_expected?(expected_core, ctx) ->
         {:ok, {:nat_lit, value}}
 
-      # Type-directed compact-Bounded literal: an integer literal checked against a
-      # `Bounded(n)` type (e.g. `Char = Bounded(0x110000)`) is the value `k` itself,
-      # a single compact node, iff `0 <= k < n`. This is the surface `let c: Char =
-      # 97` — a codepoint is ONE integer, never a `Next(...First)` tower. The kernel
-      # independently re-checks the bound (`check/3`), so this early check is only for
-      # a clear error message.
-      int? ->
-        case bounded_expected(expected_core, ctx) do
-          {:ok, n} when value < n -> {:ok, {:bounded_lit, value}}
-          {:ok, n} -> {:error, {:bounded_lit_out_of_range, value, n}}
-          :no -> elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
-        end
+      literal_protocol == :integer_argument and signed_int? and int_expected?(expected_core, ctx) ->
+        {:ok, {:int_lit, value}}
+
+      not literal_protocol_available?(env) and int? and nat_expected?(expected_core, ctx) ->
+        {:ok, {:nat_lit, value}}
+
+      not literal_protocol_available?(env) and signed_int? and int_expected?(expected_core, ctx) ->
+        {:ok, {:int_lit, value}}
+
+      # Contextual numerals are language-level conversions. A non-negative
+      # spelling first asks `ExpressibleByNaturalLiteral`; if that expected type
+      # has no natural implementation, it falls back to
+      # `ExpressibleByIntegerLiteral`. Negative spellings use only the signed
+      # interface. The selected total initializer returns `LiteralResult(t)`;
+      # normalization must expose `LiteralValue(value)` or `InvalidLiteral` at
+      # compile time, so no dictionary or conversion wrapper reaches emitted
+      # runtime code.
+      signed_int? and literal_protocol_available?(env) ->
+        elaborate_contextual_integer_literal(value, expected_core, names, ctx, env)
 
       true ->
         elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
@@ -2446,6 +2924,42 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
 
+  defp attach_rewrite_context({:error, {:source_context, _, _}} = error, _meta, _proof, _body), do: error
+
+  defp attach_rewrite_context({:error, reason}, meta, proof_ast, body_ast)
+       when reason == :rewrite_proof_not_equality or
+              (is_tuple(reason) and elem(reason, 0) == :rewrite_no_match) do
+    {:error, {:source_context, reason, rewrite_source_context(meta, proof_ast, body_ast)}}
+  end
+
+  defp attach_rewrite_context(result, _meta, _proof, _body), do: result
+
+  defp rewrite_source_context(meta, proof_ast, body_ast) do
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+    opener_span = if(source_info, do: source_info.opener || source_info.whole)
+    body_span = surface_expression_span(body_ast)
+
+    %{
+      span: rewrite_span(opener_span, body_span),
+      opener_span: opener_span,
+      proof_span: surface_expression_span(proof_ast),
+      body_span: body_span,
+      expectation_origin: :rewrite,
+      expression_category: :rewrite_expr
+    }
+  end
+
+  defp rewrite_span(%Cure.Diagnostic.Span{} = opener, %Cure.Diagnostic.Span{} = body) do
+    %Cure.Diagnostic.Span{
+      opener
+      | end_byte: body.end_byte,
+        end_line: body.end_line,
+        end_column: body.end_column
+    }
+  end
+
+  defp rewrite_span(opener, _body), do: opener
+
   defp attach_expectation_context({:source_context, reason, context}, expression, origin, owner, index)
        when is_map(context) do
     {:source_context, reason, Map.merge(context, expectation_context(expression, origin, owner, index))}
@@ -2453,6 +2967,64 @@ defmodule Cure.Elab.Elaborator do
 
   defp attach_expectation_context(reason, expression, origin, owner, index) do
     {:source_context, reason, expectation_context(expression, origin, owner, index)}
+  end
+
+  # A conditional checks each branch against one shared result type. Constructor
+  # syntax can make a perfectly valid branch fail that check at a low level as
+  # `:foreign_ctor` (notably String, which elaborates to the List constructors
+  # Nil/Cons). At this boundary that is a branch-type mismatch, not a name error.
+  #
+  # Infer the branch independently after the failed check. If it is valid on its
+  # own, report its actual type against the branch goal through the contextual
+  # E093 route. If independent inference also fails, preserve that authored
+  # branch error instead of hiding it behind a synthetic mismatch.
+  defp normalize_branch_check_error(reason, expression, expected_core, names, ctx, env, owner, index) do
+    normalized_reason =
+      case elaborate_expr_typed(expression, names, ctx, env) do
+        {:ok, _term, actual_type} ->
+          actual_core = Quote.reify(actual_type, Context.length(ctx), Context.signature(ctx))
+          actual_diagnostic = diagnostic_type_alias(expression, actual_core, ctx, env)
+          expected_diagnostic = diagnostic_type_alias(nil, expected_core, ctx, env)
+          {:cannot_unify, actual_diagnostic, expected_diagnostic}
+
+        {:error, _independent_reason} ->
+          reason
+      end
+
+    attach_expectation_context(normalized_reason, expression, :branch, owner, index)
+  end
+
+  defp diagnostic_type_alias(expression, core, ctx, env) do
+    alias_name =
+      case expression do
+        {:literal, _meta, value} when is_binary(value) -> resolve_typealias_name(env, :String)
+        _ -> typealias_head(core, env)
+      end
+
+    case alias_name && Env.get_def(env, alias_name) do
+      %{typealias: true, body: body} ->
+        original = Cure.Core.Normalise.nf(ctx, body)
+        {:diagnostic_alias, Cure.Elab.Name.base(alias_name), original}
+
+      _ ->
+        core
+    end
+  end
+
+  defp typealias_head({:global, name}, env) do
+    case Env.get_def(env, name) do
+      %{typealias: true} -> name
+      _ -> nil
+    end
+  end
+
+  defp typealias_head(_core, _env), do: nil
+
+  defp resolve_typealias_name(env, name) do
+    case Env.get_def(env, name) do
+      %{typealias: true, name: resolved} -> resolved
+      _ -> nil
+    end
   end
 
   defp expectation_context(expression, origin, owner, index) do
@@ -2538,25 +3110,28 @@ defmodule Cure.Elab.Elaborator do
   defp attach_record_context(
          {:error, {:source_context, _reason, %{expectation_origin: origin} = _context}} = result,
          _meta,
-         _args
+         _args,
+         _env
        )
        when origin in [:record_field, :constructor_argument],
        do: result
 
-  defp attach_record_context({:error, {:source_context, reason, context}}, meta, args)
+  defp attach_record_context({:error, {:source_context, reason, context}}, meta, args, env)
        when is_map(context),
-       do: {:error, {:source_context, reason, Map.merge(record_context(meta, args), context)}}
+       do: {:error, {:source_context, reason, Map.merge(record_context(meta, args, env), context)}}
 
-  defp attach_record_context({:error, reason}, meta, args),
-    do: {:error, {:source_context, reason, record_context(meta, args)}}
+  defp attach_record_context({:error, reason}, meta, args, env),
+    do: {:error, {:source_context, reason, record_context(meta, args, env)}}
 
-  defp attach_record_context(result, _meta, _args), do: result
+  defp attach_record_context(result, _meta, _args, _env), do: result
 
-  defp record_context(meta, args) do
+  defp record_context(meta, args, env) do
     expression = {:function_call, meta, args}
 
     expectation_context(expression, :record, Keyword.get(meta, :name, :record), nil)
     |> Map.put(:field_spans, record_field_spans(meta))
+    |> Map.put(:available_records, available_record_names(env))
+    |> Map.merge(record_delimiter_context(meta))
   end
 
   defp record_field_spans(meta) do
@@ -2575,20 +3150,34 @@ defmodule Cure.Elab.Elaborator do
         field_result
 
       {:error, {:source_context, _reason, field_context}} ->
-        {:error, {:source_context, reason, Map.merge(field_context, record_update_context(meta, children, context))}}
+        {:error,
+         {:source_context, reason, Map.merge(field_context, record_update_context(meta, children, context, env))}}
     end
   end
 
-  defp attach_record_update_context({:error, reason}, meta, children, _env),
-    do: {:error, {:source_context, reason, record_update_context(meta, children, %{})}}
+  defp attach_record_update_context({:error, reason}, meta, children, env),
+    do: {:error, {:source_context, reason, record_update_context(meta, children, %{}, env)}}
 
   defp attach_record_update_context(result, _meta, _children, _env), do: result
 
-  defp record_update_context(meta, children, context) do
+  defp record_update_context(meta, children, context, env) do
     expression = {:record_update, meta, children}
 
     Map.merge(context, expectation_context(expression, :record_update, Keyword.get(meta, :name, :record_update), nil))
     |> Map.put(:field_spans, record_field_spans(meta))
+    |> Map.put(:available_records, available_record_names(env))
+    |> Map.merge(record_delimiter_context(meta))
+    |> Map.put(:base_span, children |> List.first() |> surface_expression_span())
+  end
+
+  defp record_delimiter_context(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{} = info ->
+        %{record_name_span: info.name, opener_span: info.opener, closer_span: info.closer}
+
+      _ ->
+        %{}
+    end
   end
 
   defp attach_record_field_reason({:source_context, reason, context}, meta, field_pairs, env)
@@ -2777,6 +3366,91 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # True iff the (meta-free) expected type evaluates to the canonical `Nat` family.
+  defp elaborate_contextual_integer_literal(value, expected_core, names, ctx, env) when value >= 0 do
+    case elaborate_literal_protocol(:from_natural_literal, :natural_argument, value, expected_core, names, ctx, env) do
+      {:error, {:no_instance, :ExpressibleByNaturalLiteral, _}} ->
+        case elaborate_literal_protocol(:from_integer_literal, :integer_argument, value, expected_core, names, ctx, env) do
+          {:error, {:no_instance, :ExpressibleByIntegerLiteral, _}} ->
+            elaborate_bounded_literal_fallback(value, expected_core, ctx, env)
+
+          result ->
+            result
+        end
+
+      result ->
+        result
+    end
+  end
+
+  defp elaborate_contextual_integer_literal(value, expected_core, names, ctx, env),
+    do: elaborate_literal_protocol(:from_integer_literal, :integer_argument, value, expected_core, names, ctx, env)
+
+  # Prelude bootstrap modules are elaborated before the literal interfaces can
+  # be ambiently imported. Preserve the ordinary infer-and-convert path there;
+  # once the provider is in scope every contextual numeral routes through the
+  # language-level protocols below.
+  defp literal_protocol_available?(env) do
+    result_family = Env.resolve_key(env, env.families, :LiteralResult)
+
+    Map.has_key?(env.families, result_family) and
+      Cure.Elab.Resolve.method?(env, :from_integer_literal) and
+      Cure.Elab.Resolve.method?(env, :from_natural_literal)
+  end
+
+  # Compatibility for indexed `Bounded(n)` until coherence keys retain indices
+  # (today every `Bounded(n)` implementation shares the `Bounded` head). Char's
+  # ordinary protocol instance wins before this path; arbitrary bounds keep the
+  # existing compact representation and range check instead of materializing a
+  # constructor tower or silently selecting Char's differently-indexed instance.
+  defp elaborate_bounded_literal_fallback(value, expected_core, ctx, _env) do
+    bounded_family = Inductive.builtin(Context.signature(ctx), :bounded)
+
+    case Kernel.normalize(ctx, expected_core) do
+      {:data, ^bounded_family, [], [{:nat_lit, bound}]} when value < bound ->
+        {:ok, {:bounded_lit, value}}
+
+      {:data, ^bounded_family, [], [{:nat_lit, bound}]} ->
+        {:error, {:bounded_lit_out_of_range, value, bound}}
+
+      _ ->
+        case Kernel.check(ctx, {:int_lit, value}, Eval.eval(expected_core, Context.env(ctx))) do
+          :ok -> {:ok, {:int_lit, value}}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp elaborate_literal_protocol(method, argument_kind, value, expected_core, names, ctx, env) do
+    result_family = Env.resolve_key(env, env.families, :LiteralResult)
+
+    if Map.has_key?(env.families, result_family) and Cure.Elab.Resolve.method?(env, method) do
+      result_type = {:data, result_family, [expected_core], []}
+      argument = {:literal, [subtype: :integer, literal_protocol: argument_kind], value}
+      value_ctor = resolve_ctor_key(env, :LiteralValue)
+      invalid_ctor = resolve_ctor_key(env, :InvalidLiteral)
+
+      with {:ok, conversion} <-
+             Cure.Elab.Resolve.method_call_checked(env, method, [argument], result_type, names, ctx) do
+        case Normalise.nf(ctx, conversion, delta: :certified, fuel: 5_000_000) do
+          {:ctor, ^value_ctor, [literal]} ->
+            case Kernel.check(ctx, literal, Eval.eval(expected_core, Context.env(ctx))) do
+              :ok -> {:ok, literal}
+              {:error, reason} -> {:error, {:invalid_literal_implementation, method, reason}}
+            end
+
+          {:ctor, ^invalid_ctor, []} ->
+            {:error, {:literal_out_of_range, method, value, expected_core}}
+
+          other ->
+            {:error, {:literal_initializer_not_compile_time_value, method, other}}
+        end
+      end
+    else
+      iface = if method == :from_natural_literal, do: :ExpressibleByNaturalLiteral, else: :ExpressibleByIntegerLiteral
+      {:error, {:no_instance, iface, expected_core}}
+    end
+  end
+
   defp nat_expected?(expected_core, ctx) do
     sig = Context.signature(ctx)
     nat_fid = Cure.Core.Inductive.builtin(sig, :nat)
@@ -2785,45 +3459,13 @@ defmodule Cure.Elab.Elaborator do
       match?({:vdata, ^nat_fid, []}, Eval.eval(expected_core, Context.env(ctx)))
   end
 
-  # `{:ok, n}` iff the expected type δ-unfolds to the `Bounded` family with a
-  # concrete bound `n` (a full `Bounded(n)` with `n` a closed Nat) — `:no`
-  # otherwise (metavariable, non-Bounded, or symbolic bound). Sees through a
-  # `typealias` (e.g. `Char`) because `whnf_value` δ-unfolds the certified alias.
-  defp bounded_expected(expected_core, ctx) do
+  defp int_expected?(expected_core, ctx) do
     sig = Context.signature(ctx)
-    bounded_fid = Inductive.builtin(sig, :bounded)
+    int_fid = Cure.Core.Inductive.builtin(sig, :int)
 
-    if is_nil(bounded_fid) or Unify.has_meta?(expected_core) do
-      :no
-    else
-      value = Normalise.whnf_value(Eval.eval(expected_core, Context.env(ctx)), sig)
-
-      case value do
-        {:vdata, ^bounded_fid, [bound_val]} ->
-          case bound_to_int(Normalise.whnf_value(bound_val, sig)) do
-            {:ok, n} -> {:ok, n}
-            :error -> :no
-          end
-
-        _ ->
-          :no
-      end
-    end
+    not is_nil(int_fid) and not Unify.has_meta?(expected_core) and
+      match?({:vdata, ^int_fid, []}, Eval.eval(expected_core, Context.env(ctx)))
   end
-
-  # Peel a concrete Nat bound value (compact `{:vnat, _}` or `Z`/`S` tower) to an
-  # integer; `:error` for a symbolic/neutral bound.
-  defp bound_to_int({:vnat, n}) when is_integer(n) and n >= 0, do: {:ok, n}
-  defp bound_to_int({:vctor, :Z, []}), do: {:ok, 0}
-
-  defp bound_to_int({:vctor, :S, [pred]}) do
-    case bound_to_int(pred) do
-      {:ok, n} -> {:ok, n + 1}
-      :error -> :error
-    end
-  end
-
-  defp bound_to_int(_other), do: :error
 
   # The type of every character literal: Char = Bounded(0x110000). A char literal
   # is a codepoint value; the bound 0x110000 (= 1_114_112) is intrinsic, not from
@@ -2839,19 +3481,39 @@ defmodule Cure.Elab.Elaborator do
   defp elaborate_lambda([], body_expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked(body_expr, expected_core, names, ctx, env)
 
-  defp elaborate_lambda([{:param, _pm, pname} | rest], body_expr, expected_core, names, ctx, env) do
+  defp elaborate_lambda(params, body_expr, expected_core, names, ctx, env),
+    do: elaborate_lambda(params, body_expr, expected_core, names, ctx, env, 0)
+
+  defp elaborate_lambda([], body_expr, expected_core, names, ctx, env, _index),
+    do: elaborate_expr_checked(body_expr, expected_core, names, ctx, env)
+
+  defp elaborate_lambda(
+         [{:param, param_meta, pname} | rest],
+         body_expr,
+         expected_core,
+         names,
+         ctx,
+         env,
+         index
+       ) do
     case Kernel.normalize(ctx, expected_core) do
       {:pi, _g, dom_term, cod_term} ->
         dom_value = Eval.eval(dom_term, Context.env(ctx))
         ctx1 = Context.extend(ctx, dom_value)
 
         with {:ok, body_term} <-
-               elaborate_lambda(rest, body_expr, cod_term, [pname | names], ctx1, env) do
+               elaborate_lambda(rest, body_expr, cod_term, [pname | names], ctx1, env, index + 1) do
           {:ok, {:lam, Cure.Core.Grade.unrestricted(), dom_term, body_term}}
         end
 
       _ ->
-        {:error, {:lambda_expected_pi, expected_core}}
+        {:error,
+         {:lambda_expected_pi,
+          %{
+            expected: expected_core,
+            parameter_index: index,
+            parameter_span: surface_expression_span({:param, param_meta, []})
+          }}}
     end
   end
 
@@ -3607,7 +4269,15 @@ defmodule Cure.Elab.Elaborator do
             {:ok, term, type}
 
           [] ->
-            {:error, {:no_matching_overload, atom, []}}
+            argument_types = infer_overload_argument_types(args, names, ctx, env)
+
+            {:error,
+             {:no_matching_overload,
+              %{
+                name: atom,
+                arguments: argument_types,
+                candidates: Cure.Elab.Overload.candidate_signatures(env, candidates)
+              }}}
 
           many ->
             keys = Enum.map(many, &elem(&1, 0))
@@ -3635,6 +4305,15 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  defp infer_overload_argument_types(args, names, ctx, env) do
+    Enum.map(args, fn argument ->
+      case elaborate_expr_typed(argument, names, ctx, env) do
+        {:ok, _term, type} -> Quote.reify(type, Context.length(ctx))
+        {:error, _reason} -> nil
+      end
+    end)
+  end
+
   defp map_present_args(args, names, ctx, env) do
     depth = Context.length(ctx)
 
@@ -3647,8 +4326,8 @@ defmodule Cure.Elab.Elaborator do
         {:ok, term, type} ->
           {:cont, {:ok, acc ++ [{term, Quote.reify(type, depth, env)}]}}
 
-        {:error, _} = err ->
-          {:halt, err}
+        {:error, _} = error ->
+          {:halt, error}
       end
     end)
   end
@@ -3666,6 +4345,14 @@ defmodule Cure.Elab.Elaborator do
   @spec elaborate_match(term(), [tuple()], term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
   def elaborate_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
+    with :ok <- validate_positional_forced_patterns(arms0) do
+      elaborate_validated_match(scrut_expr, arms0, result_type_term, names, ctx, env)
+    end
+  end
+
+  defp elaborate_validated_match(scrut_expr, arms0, result_type_term, names, ctx, env) do
+    authored_arms = arms0
+
     # A tuple SCRUTINEE (`match %[xs, ys] | %[C(…), D(…)] -> …`) is lowered to a
     # nested single-scrutinee match (`match xs | C(…) -> match ys | D(…) -> …`),
     # so the existing dependent single-scrutinee machinery handles it — absurd
@@ -3675,17 +4362,163 @@ defmodule Cure.Elab.Elaborator do
     # Wave-2 List sugar in pattern position: rewrite each arm's `[]`/`[h|t]`
     # `:pattern` meta to Nil/Cons ctor-call form BEFORE any downstream pass, so
     # rekey/refine/constructor_pattern all see the uniform function_call shape and
-    # no `:list` node survives. One-deep only; a nested list pattern desugars to a
-    # nested ctor pattern that `constructor_pattern/1` rejects (:nested_constructor_arg).
-    arms0 = arms0 |> desugar_list_patterns() |> desugar_typed_constructor_args()
+    # no `:list` node survives. Nested list patterns continue through the general
+    # constructor-pattern matrix.
+    arms0 =
+      arms0
+      |> desugar_negative_patterns()
+      |> desugar_record_patterns(env)
+      |> desugar_list_patterns()
+      |> desugar_typed_constructor_args()
+
+    {scrut_expr, arms0} = desugar_single_refutable_tuple_column(scrut_expr, arms0)
     {scrut_expr, arms0} = desugar_tuple_scrutinee(scrut_expr, arms0)
 
-    if hoist_named_default?(scrut_expr, arms0) do
-      hoist_named_default_scrutinee(scrut_expr, arms0, result_type_term, names, ctx, env)
+    result =
+      if hoist_named_default?(scrut_expr, arms0) do
+        hoist_named_default_scrutinee(scrut_expr, arms0, result_type_term, names, ctx, env)
+      else
+        elaborate_match_dispatch(scrut_expr, arms0, result_type_term, names, ctx, env)
+      end
+
+    contextualize_authored_tuple_pattern_result(result, authored_arms, env)
+  end
+
+  # Unary minus is an expression node in the parser, including in pattern
+  # position. Normalize it to the corresponding signed integer literal before
+  # shape dispatch so a chain containing `-1` remains a literal-pattern chain
+  # instead of falling through to constructor matching.
+  defp desugar_negative_patterns(arms) do
+    Enum.map(arms, fn
+      {:match_arm, meta, body} ->
+        {:match_arm, Keyword.update!(meta, :pattern, &desugar_negative_pattern/1), body}
+
+      arm ->
+        arm
+    end)
+  end
+
+  defp desugar_negative_pattern({:unary_op, meta, [{:literal, literal_meta, value}]})
+       when is_integer(value) and value >= 0 do
+    if Keyword.get(meta, :operator) == :- and Keyword.get(literal_meta, :subtype) == :integer do
+      {:literal, Keyword.merge(literal_meta, Keyword.take(meta, [:line, :col])), -value}
     else
-      elaborate_match_dispatch(scrut_expr, arms0, result_type_term, names, ctx, env)
+      {:unary_op, meta, [{:literal, literal_meta, value}]}
     end
   end
+
+  defp desugar_negative_pattern({:literal, meta, value}) when is_binary(value),
+    do: desugar_string(value, meta)
+
+  defp desugar_negative_pattern({tag, meta, children}) when is_list(children),
+    do: {tag, meta, Enum.map(children, &desugar_negative_pattern/1)}
+
+  defp desugar_negative_pattern(pattern), do: pattern
+
+  # Record patterns are open and name-directed. Convert
+  # `Person{age: a}` to the ordinary positional constructor pattern
+  # `Person(_, a)` using the registered field telescope; omitted fields become
+  # wildcards. Nested records recurse through the same conversion.
+  defp desugar_record_patterns(arms, env) do
+    Enum.map(arms, fn
+      {:match_arm, meta, body} ->
+        {:match_arm, Keyword.update!(meta, :pattern, &desugar_record_pattern(&1, env)), body}
+
+      arm ->
+        arm
+    end)
+  end
+
+  defp desugar_record_pattern({:function_call, meta, field_pairs}, env) do
+    if Keyword.get(meta, :record, false) do
+      name = Keyword.fetch!(meta, :name)
+
+      case Inductive.get_ctor(env, String.to_atom(name)) do
+        %{args: fields} ->
+          provided =
+            Map.new(field_pairs, fn
+              {:pair, _pair_meta, [{:literal, _field_meta, field}, value]} ->
+                {field, value}
+            end)
+
+          positional =
+            Enum.map(fields, fn {field, _type} ->
+              provided
+              |> Map.get(field, {:variable, generated_meta(meta), "_"})
+              |> desugar_record_pattern(env)
+            end)
+
+          {:function_call, Keyword.delete(meta, :record), positional}
+
+        nil ->
+          {:function_call, meta, Enum.map(field_pairs, &desugar_record_pattern(&1, env))}
+      end
+    else
+      {:function_call, meta, Enum.map(field_pairs, &desugar_record_pattern(&1, env))}
+    end
+  end
+
+  defp desugar_record_pattern({tag, meta, children}, env) when is_list(children),
+    do: {tag, meta, Enum.map(children, &desugar_record_pattern(&1, env))}
+
+  defp desugar_record_pattern(pattern, _env), do: pattern
+
+  defp validate_positional_forced_patterns(arms) do
+    Enum.reduce_while(arms, :ok, fn
+      {:match_arm, meta, _body}, :ok ->
+        case positional_forced_pattern(Keyword.get(meta, :pattern)) do
+          nil ->
+            {:cont, :ok}
+
+          {forced_meta, constructor_meta, argument_index} ->
+            forced_info = Cure.MetaAST.Metadata.source_info(forced_meta)
+            constructor_info = Cure.MetaAST.Metadata.source_info(constructor_meta)
+            span = forced_info && forced_info.whole
+
+            {:halt,
+             {:error,
+              {:source_context, {:forced_pattern_not_in_pattern, forced_meta},
+               %{
+                 line: span && span.start_line,
+                 column: span && span.start_column,
+                 length: span && max(1, span.end_column - span.start_column),
+                 span: span,
+                 constructor: Keyword.get(constructor_meta, :name),
+                 constructor_span: constructor_info && (constructor_info.callee || constructor_info.name),
+                 argument_index: argument_index,
+                 expectation_origin: :pattern,
+                 expression_category: :forced_pattern,
+                 forced_pattern_position: :positional_constructor_argument
+               }}}}
+        end
+
+      _arm, :ok ->
+        {:cont, :ok}
+    end)
+  end
+
+  defp positional_forced_pattern({:function_call, meta, args}) do
+    args
+    |> Enum.with_index()
+    |> Enum.find_value(fn
+      {{:forced_pattern, forced_meta, _children}, index} ->
+        {forced_meta, meta, index}
+
+      {{:named_implicit_pat, _named_meta, _children}, _index} ->
+        nil
+
+      {argument, _index} ->
+        positional_forced_pattern(argument)
+    end)
+  end
+
+  defp positional_forced_pattern({_tag, _meta, children}) when is_list(children),
+    do: Enum.find_value(children, &positional_forced_pattern/1)
+
+  defp positional_forced_pattern(children) when is_list(children),
+    do: Enum.find_value(children, &positional_forced_pattern/1)
+
+  defp positional_forced_pattern(_pattern), do: nil
 
   # A *named* default (`… | other -> body`) binds the WHOLE scrutinee value, but
   # `desugar_with_default` can only do so when the scrutinee is already a
@@ -3699,7 +4532,7 @@ defmodule Cure.Elab.Elaborator do
   defp hoist_named_default?(scrut_expr, arms) do
     not match?({:variable, _m, _n}, scrut_expr) and
       Enum.any?(arms, &named_default_arm?/1) and
-      Enum.any?(arms, &arm_has_nested?/1)
+      Enum.any?(arms, &(arm_has_nested?(&1) or guarded_arm?(&1)))
   end
 
   defp named_default_arm?({:match_arm, meta, _body}) do
@@ -3858,7 +4691,13 @@ defmodule Cure.Elab.Elaborator do
           end
 
         _ ->
-          {:error, :match_scrutinee_not_data}
+          {:error,
+           {:source_context, :match_scrutinee_not_data,
+            %{
+              span: surface_expression_span(scrut_expr),
+              scrutinee_span: surface_expression_span(scrut_expr),
+              actual_type: scrut_type
+            }}}
       end
     end
   end
@@ -3954,7 +4793,18 @@ defmodule Cure.Elab.Elaborator do
       # exactly as the sub-union branch substitutes its fresh payload binder. And run the
       # SAME capture guard: this branch was skipping it entirely.
       m.payload == nil and binds_any?(body, [name]) ->
-        {:error, {:unsupported_pattern, :shadowed_literal_member}}
+        pattern_info = Cure.MetaAST.Metadata.source_info(pm)
+
+        {:error,
+         {:unsupported_pattern,
+          %{
+            reason: :shadowed_literal_member,
+            name: name,
+            member: m.key,
+            span: pattern_info && (pattern_info.name || pattern_info.whole),
+            type_span: (pattern_info && pattern_info.annotation) || surface_expression_span(type_ast),
+            shadow_span: first_binding_span(body, name)
+          }}}
 
       m.payload == nil ->
         pattern = {:function_call, [name: Atom.to_string(cname)], []}
@@ -3972,7 +4822,17 @@ defmodule Cure.Elab.Elaborator do
         {:ok, {:match_arm, Keyword.put(meta, :pattern, pattern), rebound}}
 
       sub_union? and binds_any?(body, [name]) ->
-        {:error, {:unsupported_pattern, :shadowed_sub_union}}
+        pattern_info = Cure.MetaAST.Metadata.source_info(pm)
+
+        {:error,
+         {:unsupported_pattern,
+          %{
+            reason: :shadowed_sub_union,
+            name: name,
+            span: pattern_info && (pattern_info.name || pattern_info.whole),
+            type_span: (pattern_info && pattern_info.annotation) || surface_expression_span(type_ast),
+            shadow_span: first_binding_span(body, name)
+          }}}
 
       sub_union? ->
         fresh = "__u" <> Integer.to_string(:erlang.phash2({name, m.key}))
@@ -4033,7 +4893,12 @@ defmodule Cure.Elab.Elaborator do
         if Enum.all?(arms, &with_rematch_arm?/1) do
           elaborate_with_rematch(scrut_expr, arms, original_params, result_type_term, names, ctx, env)
         else
-          {:error, :with_mixed_rematch_arms}
+          {:error,
+           {:source_context, :with_mixed_rematch_arms,
+            %{
+              span: mixed_with_primary_span(arms),
+              with_arms: Enum.map(arms, &with_arm_context/1)
+            }}}
         end
 
       true ->
@@ -4043,6 +4908,36 @@ defmodule Cure.Elab.Elaborator do
 
   defp with_rematch_arm?({:with_rematch_arm, _, _}), do: true
   defp with_rematch_arm?(_), do: false
+
+  defp with_arm_context({:with_rematch_arm, meta, _children}) do
+    %{style: :rematch, span: surface_expression_span({:with_rematch_arm, meta, []})}
+  end
+
+  defp with_arm_context({:match_arm, meta, _children}) do
+    pattern = Keyword.get(meta, :pattern)
+
+    %{
+      style: :ordinary,
+      span: surface_expression_span({:match_arm, meta, []}),
+      pattern_span: surface_expression_span(pattern),
+      pattern_kind: if(match?({:variable, _, _}, pattern), do: :catch_all, else: :constructor)
+    }
+  end
+
+  defp with_arm_context(arm), do: %{style: :unknown, span: surface_expression_span(arm)}
+
+  defp mixed_with_primary_span(arms) do
+    contexts = Enum.map(arms, &with_arm_context/1)
+    frequencies = Enum.frequencies_by(contexts, & &1.style)
+
+    outlier =
+      Enum.find(contexts, fn context ->
+        Map.get(frequencies, context.style) == 1 and map_size(frequencies) > 1 and
+          Enum.any?(frequencies, fn {style, count} -> style != context.style and count > 1 end)
+      end)
+
+    Map.get(outlier || List.first(contexts) || %{}, :span)
+  end
 
   # Capability A/B (no LHS re-match): value-abstracting motive + eq-arrow sibling
   # transport, restricted to a NON-indexed scrutinee family. This is the original
@@ -4132,7 +5027,7 @@ defmodule Cure.Elab.Elaborator do
           end
 
         _ ->
-          {:error, :with_scrutinee_not_data}
+          with_scrutinee_not_data(scrut_expr, scrut_type, arms)
       end
     end
   end
@@ -4182,9 +5077,23 @@ defmodule Cure.Elab.Elaborator do
           end
 
         _ ->
-          {:error, :with_scrutinee_not_data}
+          with_scrutinee_not_data(scrut_expr, scrut_type, arms)
       end
     end
+  end
+
+  defp with_scrutinee_not_data(scrutinee, actual_type, arms) do
+    arm_contexts = Enum.map(arms, &with_arm_context/1)
+
+    {:error,
+     {:source_context, :with_scrutinee_not_data,
+      %{
+        span: surface_expression_span(scrutinee),
+        scrutinee_span: surface_expression_span(scrutinee),
+        actual_type: actual_type,
+        with_form: if(Enum.any?(arms, &with_rematch_arm?/1), do: :rematch, else: :ordinary),
+        with_arms: arm_contexts
+      }}}
   end
 
   # Build `cname => {:matched, with_pattern, body} | {:impossible_marked, ...}`,
@@ -4200,7 +5109,7 @@ defmodule Cure.Elab.Elaborator do
       parent_patterns = Keyword.fetch!(arm_meta, :parent_patterns)
 
       with {:ok, {cname0, _vars}} <- constructor_pattern(with_pattern),
-           {:ok, _subst} <- match_parent_lhs(original_params, parent_patterns) do
+           {:ok, _subst} <- match_parent_lhs_at_arm(original_params, parent_patterns, arm_meta) do
         cname = resolve_ctor_key(env, cname0)
         with_pattern = rekey_pattern_name(with_pattern, cname)
 
@@ -4222,6 +5131,120 @@ defmodule Cure.Elab.Elaborator do
       end
     end)
   end
+
+  defp match_parent_lhs_at_arm(originals, restated, arm_meta) do
+    case match_parent_lhs(originals, restated) do
+      {:ok, _subst} = ok ->
+        ok
+
+      {:error, reason} ->
+        info = Cure.MetaAST.Metadata.source_info(arm_meta)
+        original_spans = Enum.map(originals, &surface_expression_span/1)
+        restated_spans = Enum.map(restated, &surface_expression_span/1)
+
+        context = %{
+          span: rematch_lhs_failure_span(reason, originals, restated, info),
+          rematch_arm_span: info && info.whole,
+          rematch_separator_span: info && Map.get(info.fields, :rematch_separator),
+          with_pattern_span: info && info.pattern,
+          original_pattern_spans: original_spans,
+          restated_pattern_spans: restated_spans,
+          original_patterns_span: rematch_spans_through(original_spans),
+          restated_patterns_span: rematch_spans_through(restated_spans),
+          original_pattern_count: length(originals),
+          restated_pattern_count: length(restated)
+        }
+
+        {:error, {:source_context, reason, context}}
+    end
+  end
+
+  defp rematch_lhs_failure_span({:with_rematch_non_constructor_pattern, _}, _originals, restated, info) do
+    restated
+    |> Enum.find_value(&first_invalid_restated_pattern/1)
+    |> surface_expression_span()
+    |> rematch_span_or(info && info.whole)
+  end
+
+  defp rematch_lhs_failure_span({:with_rematch_ctor_mismatch, _, _}, originals, restated, info) do
+    case first_rematch_difference(originals, restated) do
+      {_original, authored} -> surface_expression_span(authored) || (info && info.whole)
+      nil -> info && info.whole
+    end
+  end
+
+  defp rematch_lhs_failure_span({:with_rematch_inconsistent_binding, name}, originals, restated, info) do
+    originals
+    |> Enum.zip(restated)
+    |> Enum.find_value(fn {original, authored} ->
+      if pattern_binds_name?(original, name), do: surface_expression_span(authored)
+    end)
+    |> rematch_span_or(info && info.whole)
+  end
+
+  defp rematch_lhs_failure_span(_reason, _originals, restated, info) do
+    restated
+    |> Enum.map(&surface_expression_span/1)
+    |> rematch_spans_through()
+    |> rematch_span_or(info && info.whole)
+  end
+
+  defp rematch_span_or(nil, fallback), do: fallback
+  defp rematch_span_or(span, _fallback), do: span
+
+  defp rematch_spans_through(spans) do
+    spans = Enum.reject(spans, &is_nil/1)
+
+    case {List.first(spans), List.last(spans)} do
+      {nil, nil} ->
+        nil
+
+      {first, last} ->
+        case Cure.Compiler.Parser.Range.through(first, last) do
+          {:ok, span} -> span
+          _ -> last || first
+        end
+    end
+  end
+
+  defp first_invalid_restated_pattern({:variable, _, _}), do: nil
+
+  defp first_invalid_restated_pattern({:function_call, _meta, args}),
+    do: Enum.find_value(args, &first_invalid_restated_pattern/1)
+
+  defp first_invalid_restated_pattern(pattern), do: pattern
+
+  defp first_rematch_difference(originals, restated) when is_list(originals) and is_list(restated) do
+    originals
+    |> Enum.zip(restated)
+    |> Enum.find_value(fn {original, authored} -> first_rematch_difference(original, authored) end)
+  end
+
+  defp first_rematch_difference(
+         {:function_call, original_meta, original_args} = original,
+         {
+           :function_call,
+           authored_meta,
+           authored_args
+         } = authored
+       ) do
+    if Keyword.get(original_meta, :name) != Keyword.get(authored_meta, :name) or
+         length(original_args) != length(authored_args) do
+      {original, authored}
+    else
+      first_rematch_difference(original_args, authored_args)
+    end
+  end
+
+  defp first_rematch_difference(_original, _authored), do: nil
+
+  defp pattern_binds_name?({:variable, _, name}, name), do: true
+  defp pattern_binds_name?({:param, _, name}, name), do: true
+
+  defp pattern_binds_name?({:function_call, _meta, args}, name),
+    do: Enum.any?(args, &pattern_binds_name?(&1, name))
+
+  defp pattern_binds_name?(_pattern, _name), do: false
 
   # One Core branch per declared constructor (coverage), mirroring
   # `elaborate_branches`: an omitted/impossible constructor is discharged with
@@ -4383,24 +5406,46 @@ defmodule Cure.Elab.Elaborator do
 
     gen_set = gen |> Enum.map(& &1.index) |> MapSet.new()
 
-    cond do
-      Enum.any?(gen, fn %{type_term: t, index: idx} ->
-        not MapSet.disjoint?(free_indices(t, 0), MapSet.delete(gen_set, idx))
-      end) ->
-        {:error, {:with_sibling_dependency_unsupported, :sibling_references_sibling}}
-
-      Enum.any?(0..(depth - 1)//1, fn i ->
-        not MapSet.member?(gen_set, i) and
-            not MapSet.disjoint?(
-              free_indices(resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env), 0),
-              gen_set
-            )
-      end) ->
-        {:error, {:with_sibling_dependency_unsupported, :kept_references_sibling}}
-
-      true ->
+    case sibling_dependency(gen, gen_set, names, ctx, env, depth) do
+      nil ->
         {:ok, gen}
+
+      %{reason: reason} = details ->
+        {:error, {:source_context, {:with_sibling_dependency_unsupported, reason}, Map.delete(details, :reason)}}
     end
+  end
+
+  defp sibling_dependency(gen, gen_set, names, ctx, env, depth) do
+    generated_dependency =
+      Enum.find_value(gen, fn %{type_term: type, index: index, name: dependent} ->
+        dependencies = MapSet.intersection(free_indices(type, 0), MapSet.delete(gen_set, index))
+
+        case Enum.find(gen, &MapSet.member?(dependencies, &1.index)) do
+          nil -> nil
+          dependency -> %{reason: :sibling_references_sibling, dependent: dependent, dependency: dependency.name}
+        end
+      end)
+
+    generated_dependency ||
+      Enum.find_value(0..(depth - 1)//1, fn index ->
+        dependencies =
+          ctx
+          |> Context.lookup(index)
+          |> Quote.reify(depth)
+          |> resplit_data(env)
+          |> free_indices(0)
+          |> MapSet.intersection(gen_set)
+
+        if not MapSet.member?(gen_set, index) and MapSet.size(dependencies) > 0 do
+          dependency = Enum.find(gen, &MapSet.member?(dependencies, &1.index))
+
+          %{
+            reason: :kept_references_sibling,
+            dependent: Enum.at(names, index),
+            dependency: dependency && dependency.name
+          }
+        end
+      end)
   end
 
   # Emit one Core branch per surface arm. Reuses partition_arms (same validation
@@ -4424,10 +5469,10 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A `with`/`with`-rematch clause refines by restating constructor patterns; a
-  # bare variable/wildcard catch-all has no refinement to offer here.
   defp reject_with_default(nil), do: :ok
-  defp reject_with_default({vname, _body}), do: {:error, {:unsupported_pattern, {:default_in_with, vname}}}
+
+  defp reject_with_default({name, _body}),
+    do: {:error, {:unsupported_pattern, %{reason: :default_in_with, name: name}}}
 
   defp elaborate_with_branch(cname, pattern, body_expr, cfg) do
     %{
@@ -5047,12 +6092,28 @@ defmodule Cure.Elab.Elaborator do
       pattern = Keyword.fetch!(meta, :pattern)
       {clean, subs} = strip_as_patterns(pattern)
 
+      shadowed =
+        Enum.find(subs, fn {name, _reconstruction} ->
+          binds_any?(single_body(body), [name])
+        end)
+
       cond do
         subs == [] ->
           {:cont, {:ok, acc ++ [arm]}}
 
-        binds_any?(single_body(body), Enum.map(subs, &elem(&1, 0))) ->
-          {:halt, {:error, {:unsupported_pattern, :shadowed_as}}}
+        shadowed != nil ->
+          {name, reconstruction} = shadowed
+
+          {:halt,
+           {:error,
+            {:unsupported_pattern,
+             %{
+               reason: :shadowed_as,
+               name: name,
+               span: as_pattern_binding_span(pattern, name),
+               type_span: surface_expression_span(reconstruction),
+               shadow_span: first_binding_span(body, name)
+             }}}}
 
         true ->
           b2 =
@@ -5064,6 +6125,22 @@ defmodule Cure.Elab.Elaborator do
       end
     end)
   end
+
+  defp as_pattern_binding_span({:as_pattern, meta, [name, _subpattern]}, name) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp as_pattern_binding_span({_tag, _meta, children}, name) when is_list(children),
+    do: Enum.find_value(children, &as_pattern_binding_span(&1, name))
+
+  defp as_pattern_binding_span(list, name) when is_list(list),
+    do: Enum.find_value(list, &as_pattern_binding_span(&1, name))
+
+  defp as_pattern_binding_span(_other, _name), do: nil
 
   # Strip inline as-patterns from a pattern tree → `{cleaned_pattern, [{name,
   # reconstruction}]}`. The reconstruction is the cleaned sub-pattern (valid as an
@@ -5096,6 +6173,15 @@ defmodule Cure.Elab.Elaborator do
   # rewritten; a top-level tuple pattern is left for `try_tuple_match`, and a tuple
   # nested inside a *nested* constructor falls through to that path's clean error.
   defp desugar_tuple_args(arms) do
+    arms
+    |> desugar_refutable_tuple_arg_groups()
+    |> case do
+      {:ok, grouped} -> desugar_irrefutable_tuple_args(grouped)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp desugar_irrefutable_tuple_args(arms) do
     Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, meta, body} = arm, {:ok, acc} ->
       case strip_tuple_args_in_ctor(Keyword.fetch!(meta, :pattern)) do
         {:ok, _clean, []} ->
@@ -5104,18 +6190,216 @@ defmodule Cure.Elab.Elaborator do
         {:ok, clean, subs} ->
           b = single_body(body)
 
-          if binds_any?(b, Enum.map(subs, &elem(&1, 0))) do
-            {:halt, {:error, {:unsupported_pattern, :shadowed_tuple_arg}}}
-          else
-            b2 = Enum.reduce(subs, b, fn {n, r}, acc_b -> subst_surface_var(acc_b, n, r) end)
-            {:cont, {:ok, acc ++ [{:match_arm, Keyword.put(meta, :pattern, clean), b2}]}}
+          case Enum.find(subs, fn {name, _projection} -> binds_any?(b, [name]) end) do
+            {name, _projection} ->
+              pattern = Keyword.fetch!(meta, :pattern)
+
+              {:halt,
+               {:error,
+                {:unsupported_pattern,
+                 %{
+                   reason: :shadowed_tuple_arg,
+                   name: name,
+                   span: pattern_binder_span(pattern, name),
+                   type_span: tuple_pattern_span_for_name(pattern, name),
+                   shadow_span: first_binding_span(body, name)
+                 }}}}
+
+            nil ->
+              b2 = Enum.reduce(subs, b, fn {n, r}, acc_b -> subst_surface_var(acc_b, n, r) end)
+              {:cont, {:ok, acc ++ [{:match_arm, Keyword.put(meta, :pattern, clean), b2}]}}
           end
 
-        {:error, _} = err ->
-          {:halt, err}
+        {:error, :refutable_tuple_element} ->
+          # A refutable tuple combined with another nested constructor column is
+          # left intact for the general pattern matrix, which expands tuple
+          # columns into projection scrutinees.
+          {:cont, {:ok, acc ++ [arm]}}
+
+        {:error, _reason} = error ->
+          {:halt, error}
       end
     end)
   end
+
+  defp desugar_refutable_tuple_arg_groups(arms) do
+    order =
+      arms
+      |> Enum.map(fn arm ->
+        case arm_pattern(arm) do
+          {:function_call, meta, _arguments} -> {:constructor, Keyword.fetch!(meta, :name)}
+          pattern -> {:other, pattern}
+        end
+      end)
+      |> Enum.uniq()
+
+    grouped =
+      Enum.group_by(arms, fn arm ->
+        case arm_pattern(arm) do
+          {:function_call, meta, _arguments} -> {:constructor, Keyword.fetch!(meta, :name)}
+          pattern -> {:other, pattern}
+        end
+      end)
+
+    Enum.reduce_while(order, {:ok, []}, fn key, {:ok, accumulated} ->
+      group = Map.fetch!(grouped, key)
+
+      case desugar_refutable_tuple_arg_group(group) do
+        {:ok, rewritten} -> {:cont, {:ok, accumulated ++ rewritten}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp desugar_refutable_tuple_arg_group([{:match_arm, meta, _body} | _rest] = arms) do
+    case Keyword.fetch!(meta, :pattern) do
+      {:function_call, function_meta, arguments} ->
+        case refutable_tuple_argument_index(arms) do
+          nil ->
+            {:ok, arms}
+
+          tuple_index ->
+            if refutable_tuple_group_supported?(arms, tuple_index) do
+              lower_refutable_tuple_argument_group(arms, function_meta, arguments, tuple_index)
+            else
+              {:ok, arms}
+            end
+        end
+
+      _other ->
+        {:ok, arms}
+    end
+  end
+
+  defp refutable_tuple_argument_index(arms) do
+    Enum.find_value(arms, fn arm ->
+      case arm_pattern(arm) do
+        {:function_call, _meta, arguments} ->
+          Enum.find_index(arguments, fn
+            {:tuple, _tuple_meta, elements} ->
+              match?(
+                {:error, :refutable_tuple_element},
+                tuple_subs(elements, {:variable, [], "$p"})
+              )
+
+            _other ->
+              false
+          end)
+
+        _other ->
+          nil
+      end
+    end)
+  end
+
+  defp refutable_tuple_group_supported?(arms, tuple_index) do
+    Enum.all?(arms, fn arm ->
+      case arm_pattern(arm) do
+        {:function_call, _meta, arguments} ->
+          match?({:tuple, _tuple_meta, _elements}, Enum.at(arguments, tuple_index)) and
+            arguments
+            |> List.delete_at(tuple_index)
+            |> Enum.all?(fn
+              {:variable, _meta, _name} -> true
+              {:named_implicit_pat, _meta, _children} -> true
+              _other -> false
+            end)
+
+        _other ->
+          false
+      end
+    end)
+  end
+
+  defp lower_refutable_tuple_argument_group(arms, function_meta, arguments, tuple_index) do
+    tag = fresh_tag()
+
+    fresh_arguments =
+      arguments
+      |> Enum.with_index()
+      |> Enum.map(fn
+        {{:named_implicit_pat, _meta, _children} = pattern, _index} -> pattern
+        {_argument, index} -> {:variable, [], "$tuple_arg_" <> tag <> Integer.to_string(index)}
+      end)
+
+    inner_arms =
+      Enum.reduce_while(arms, {:ok, []}, fn {:match_arm, meta, body}, {:ok, accumulated} ->
+        {:function_call, _call_meta, row_arguments} = Keyword.fetch!(meta, :pattern)
+
+        substitutions =
+          row_arguments
+          |> Enum.with_index()
+          |> Enum.flat_map(fn
+            {{:variable, _variable_meta, "_"}, _index} ->
+              []
+
+            {{:variable, _variable_meta, name}, index} when index != tuple_index ->
+              [{name, Enum.at(fresh_arguments, index)}]
+
+            _other ->
+              []
+          end)
+
+        expressions = [single_body(body) | List.wrap(Keyword.get(meta, :guard))]
+
+        case Enum.find(substitutions, fn {name, _replacement} ->
+               Enum.any?(expressions, &binds_any?(&1, [name]))
+             end) do
+          {name, _replacement} ->
+            pattern = Keyword.fetch!(meta, :pattern)
+
+            {:halt,
+             {:error,
+              {:unsupported_pattern,
+               %{
+                 reason: :shadowed_nested,
+                 name: name,
+                 span: pattern_binder_span(pattern, name),
+                 type_span: surface_expression_span(pattern),
+                 shadow_span: first_binding_span(expressions, name)
+               }}}}
+
+          nil ->
+            rewrite = fn expression ->
+              Enum.reduce(substitutions, expression, fn {name, replacement}, rewritten ->
+                subst_surface_var(rewritten, name, replacement)
+              end)
+            end
+
+            inner_meta =
+              meta
+              |> Keyword.put(:pattern, Enum.at(row_arguments, tuple_index))
+              |> then(fn inner_meta ->
+                case Keyword.fetch(inner_meta, :guard) do
+                  {:ok, guard} -> Keyword.put(inner_meta, :guard, rewrite.(guard))
+                  :error -> inner_meta
+                end
+              end)
+
+            inner_arm = {:match_arm, inner_meta, [rewrite.(single_body(body))]}
+            {:cont, {:ok, accumulated ++ [inner_arm]}}
+        end
+      end)
+
+    with {:ok, inner_arms} <- inner_arms do
+      tuple_scrutinee = Enum.at(fresh_arguments, tuple_index)
+      inner_match = {:pattern_match, [], [tuple_scrutinee | inner_arms]}
+      outer_pattern = {:function_call, function_meta, fresh_arguments}
+      {:ok, [{:match_arm, [pattern: outer_pattern], [inner_match]}]}
+    end
+  end
+
+  defp tuple_pattern_span_for_name({:tuple, _meta, children} = tuple, name) do
+    if name in pattern_binders(children), do: surface_expression_span(tuple), else: nil
+  end
+
+  defp tuple_pattern_span_for_name({_tag, _meta, children}, name) when is_list(children),
+    do: Enum.find_value(children, &tuple_pattern_span_for_name(&1, name))
+
+  defp tuple_pattern_span_for_name(list, name) when is_list(list),
+    do: Enum.find_value(list, &tuple_pattern_span_for_name(&1, name))
+
+  defp tuple_pattern_span_for_name(_other, _name), do: nil
 
   defp strip_tuple_args_in_ctor({:function_call, m, args}) do
     args
@@ -5143,6 +6427,108 @@ defmodule Cure.Elab.Elaborator do
   defp strip_tuple_args_in_ctor(other), do: {:ok, other, []}
 
   # --- tuple-scrutinee matching (parity #6) ----------------------------------
+  # Multi-parameter function clauses are represented as a match over a flat
+  # tuple of arguments. When exactly one parameter column contains structural
+  # patterns, project that column and turn the rows into an ordinary
+  # single-scrutinee match. The other columns are irrefutable variables or
+  # wildcards; substitute their tuple projections into each body. This preserves
+  # source-order fallthrough and lets the existing List/constructor/literal
+  # match machinery handle the selected column without teaching tuple matching
+  # every data family.
+  defp desugar_single_refutable_tuple_column(
+         {:variable, _meta, _name} = scrut,
+         [{:match_arm, _, _} | _] = arms
+       ) do
+    with {:ok, rows, arity} <- flat_tuple_rows(arms),
+         [column] <- refutable_tuple_columns(rows, arity),
+         projections = Enum.map(1..arity, &tuple_proj(scrut, Integer.to_string(&1))),
+         {:ok, projected_arms} <- project_tuple_column_rows(rows, projections, column) do
+      {tuple_proj(scrut, Integer.to_string(column + 1)), desugar_list_patterns(projected_arms)}
+    else
+      _ -> {scrut, arms}
+    end
+  end
+
+  defp desugar_single_refutable_tuple_column(
+         {:tuple, _meta, elems} = scrut,
+         [{:match_arm, _, _} | _] = arms
+       )
+       when length(elems) >= 2 do
+    with {:ok, rows, arity} <- flat_tuple_rows(arms),
+         true <- arity == length(elems),
+         true <- Enum.all?(elems, &match?({:variable, _, _}, &1)),
+         [column] <- refutable_tuple_columns(rows, arity),
+         {:ok, projected_arms} <- project_tuple_column_rows(rows, elems, column) do
+      {Enum.at(elems, column), desugar_list_patterns(projected_arms)}
+    else
+      _ -> {scrut, arms}
+    end
+  end
+
+  defp desugar_single_refutable_tuple_column(scrut, arms), do: {scrut, arms}
+
+  defp flat_tuple_rows(arms) do
+    Enum.reduce_while(arms, {:ok, [], nil}, fn
+      {:match_arm, meta, body}, {:ok, rows, arity} ->
+        case Keyword.fetch!(meta, :pattern) do
+          {:tuple, _tm, pats} when length(pats) >= 2 and (is_nil(arity) or length(pats) == arity) ->
+            {:cont, {:ok, rows ++ [{pats, meta, body}], length(pats)}}
+
+          _ ->
+            {:halt, :not_applicable}
+        end
+
+      _other, _acc ->
+        {:halt, :not_applicable}
+    end)
+  end
+
+  # Columns carrying structural patterns, excluding those whose pattern is
+  # itself a tuple. Projecting such a column would hand a tuple pattern to
+  # single-scrutinee matching, which cannot destructure one — that is
+  # `desugar_tuple_scrutinee`'s job, and it needs the tuple still in place.
+  defp refutable_tuple_columns(rows, arity) do
+    Enum.filter(0..(arity - 1), fn column ->
+      patterns = Enum.map(rows, fn {pats, _meta, _body} -> Enum.at(pats, column) end)
+
+      Enum.any?(patterns, &(not catchall_pat?(&1))) and
+        not Enum.any?(patterns, &match?({:tuple, _meta, _elems}, &1))
+    end)
+  end
+
+  defp project_tuple_column_rows(rows, projections, selected) do
+    Enum.reduce_while(rows, {:ok, []}, fn {pats, meta, body}, {:ok, acc} ->
+      other_refutable? =
+        pats
+        |> Enum.with_index()
+        |> Enum.any?(fn {pat, column} -> column != selected and not catchall_pat?(pat) end)
+
+      if other_refutable? do
+        {:halt, :not_applicable}
+      else
+        subs =
+          pats
+          |> Enum.with_index(1)
+          |> Enum.flat_map(fn
+            {{:variable, _m, "_"}, _column} -> []
+            {{:variable, _m, name}, column} -> [{name, Enum.at(projections, column - 1)}]
+            {_structural, _column} -> []
+          end)
+
+        b = single_body(body)
+
+        if binds_any?(b, Enum.map(subs, &elem(&1, 0))) do
+          {:halt, {:error, {:unsupported_pattern, :shadowed_tuple}}}
+        else
+          b2 = Enum.reduce(subs, b, fn {name, replacement}, expr -> subst_surface_var(expr, name, replacement) end)
+          selected_pat = Enum.at(pats, selected)
+          meta2 = Keyword.put(meta, :pattern, selected_pat)
+          {:cont, {:ok, acc ++ [{:match_arm, meta2, [b2]}]}}
+        end
+      end
+    end)
+  end
+
   #
   # `match %[e₀, e₁, …] | %[p₀, p₁, …] -> body` (simultaneous / Idris'
   # `case (e₀, e₁) of`) is desugared, ONE column at a time, into a nested
@@ -5204,17 +6590,27 @@ defmodule Cure.Elab.Elaborator do
   defp split_first_tuple_column([e0 | erest], rows) do
     col0 = Enum.map(rows, fn {[p0 | _], _} -> p0 end)
 
-    heads =
-      Enum.map(col0, fn
-        {:function_call, fm, _} -> {:ok, Keyword.fetch!(fm, :name)}
-        _ -> :error
+    constructor_heads =
+      Enum.flat_map(col0, fn
+        {:function_call, fm, _} -> [Keyword.fetch!(fm, :name)]
+        _ -> []
       end)
 
     cond do
-      not Enum.all?(heads, &match?({:ok, _}, &1)) ->
+      not Enum.all?(col0, fn
+        {:function_call, _meta, _arguments} -> true
+        {:variable, _meta, _name} -> true
+        _ -> false
+      end) ->
         :not_applicable
 
-      not distinct?(Enum.map(heads, fn {:ok, h} -> h end)) ->
+      not distinct?(constructor_heads) ->
+        :not_applicable
+
+      Enum.count(col0, &match?({:variable, _meta, _name}, &1)) > 1 ->
+        :not_applicable
+
+      Enum.any?(Enum.drop(col0, -1), &match?({:variable, _meta, _name}, &1)) ->
         :not_applicable
 
       true ->
@@ -5249,19 +6645,83 @@ defmodule Cure.Elab.Elaborator do
   # tuple of variables/wildcards. The scrutinee type owns the arity: checking it
   # here prevents unused extra binders from making a malformed pattern appear to
   # work merely because their out-of-bounds projections are never elaborated.
+  defp try_tuple_match(
+         {:variable, _sm, _sn} = scrut,
+         [
+           {:match_arm, tuple_meta, tuple_body},
+           {:match_arm, fallback_meta, fallback_body}
+         ],
+         expected,
+         names,
+         ctx,
+         env
+       ) do
+    pattern = Keyword.fetch!(tuple_meta, :pattern)
+    fallback_pattern = Keyword.fetch!(fallback_meta, :pattern)
+
+    case {pattern, fallback_pattern} do
+      {{:tuple, _tm, elements}, {:variable, _fm, fallback_name}} ->
+        with {:ok, tuple_arity} <- tuple_pattern_arity(scrut, names, ctx, env),
+             :ok <- validate_tuple_pattern_arity(pattern, tuple_arity, length(elements)) do
+          fallback =
+            if fallback_name == "_",
+              do: single_body(fallback_body),
+              else: subst_surface_var(single_body(fallback_body), fallback_name, scrut)
+
+          projections = Enum.map(1..tuple_arity, &tuple_proj(scrut, Integer.to_string(&1)))
+
+          {success, structural, equalities} =
+            compile_tuple_row(elements, projections, single_body(tuple_body))
+
+          success =
+            Enum.reduce(Enum.reverse(equalities), success, fn {left, right}, body ->
+              condition =
+                {:binary_op, [category: :comparison, operator: :==], [left, right]}
+
+              {:conditional, [], [condition, body, fallback]}
+            end)
+
+          decision =
+            Enum.reduce(Enum.reverse(structural), success, fn {projection, nested_pattern}, body ->
+              nested_pattern_decision(projection, nested_pattern, body, fallback)
+            end)
+
+          elaborate_expr_checked(decision, expected, names, ctx, env)
+        end
+
+      _ ->
+        :not_applicable
+    end
+  end
+
   defp try_tuple_match({:variable, _sm, _sn} = scrut, [{:match_arm, meta, body}], expected, names, ctx, env) do
     case Keyword.fetch!(meta, :pattern) do
       {:tuple, _tm, elems} = pattern when is_list(elems) ->
         with {:ok, tuple_arity} <- tuple_pattern_arity(scrut, names, ctx, env),
-             :ok <- validate_tuple_pattern_arity(pattern, tuple_arity, length(elems)),
-             {:ok, subs} <- tuple_subs(elems, scrut) do
-          b = single_body(body)
+             :ok <- validate_tuple_pattern_arity(pattern, tuple_arity, length(elems)) do
+          case tuple_subs(elems, scrut) do
+            {:ok, subs} ->
+              b = single_body(body)
 
-          if binds_any?(b, Enum.map(subs, &elem(&1, 0))) do
-            {:error, {:unsupported_pattern, :shadowed_tuple}}
-          else
-            b2 = Enum.reduce(subs, b, fn {n, r}, acc -> subst_surface_var(acc, n, r) end)
-            elaborate_expr_checked(b2, expected, names, ctx, env)
+              case Enum.find(subs, fn {name, _projection} -> binds_any?(b, [name]) end) do
+                {name, _projection} ->
+                  {:error,
+                   {:unsupported_pattern,
+                    %{
+                      reason: :shadowed_tuple,
+                      name: name,
+                      span: pattern_binder_span(pattern, name),
+                      type_span: surface_expression_span(pattern),
+                      shadow_span: first_binding_span(body, name)
+                    }}}
+
+                nil ->
+                  b2 = Enum.reduce(subs, b, fn {n, r}, acc -> subst_surface_var(acc, n, r) end)
+                  elaborate_expr_checked(b2, expected, names, ctx, env)
+              end
+
+            {:error, :refutable_tuple_element} ->
+              lower_refutable_tuple_match(scrut, [{:match_arm, meta, body}], tuple_arity, expected, names, ctx, env)
           end
         end
 
@@ -5270,7 +6730,250 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  defp try_tuple_match({:variable, _sm, _sn} = scrut, arms, expected, names, ctx, env)
+       when length(arms) >= 2 do
+    patterns = Enum.map(arms, fn {:match_arm, meta, _body} -> Keyword.fetch!(meta, :pattern) end)
+
+    if Enum.all?(patterns, &match?({:tuple, _meta, _elements}, &1)) do
+      with {:ok, tuple_arity} <- tuple_pattern_arity(scrut, names, ctx, env),
+           :ok <- validate_tuple_pattern_arities(patterns, tuple_arity) do
+        lower_refutable_tuple_match(scrut, arms, tuple_arity, expected, names, ctx, env)
+      end
+    else
+      :not_applicable
+    end
+  end
+
   defp try_tuple_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
+
+  defp compile_tuple_row(patterns, projections, body) do
+    {substitutions, structural, _first_occurrences, equalities} =
+      Enum.zip(patterns, projections)
+      |> Enum.reduce({[], [], %{}, []}, fn
+        {{:variable, _meta, "_"}, _projection}, acc ->
+          acc
+
+        {{:variable, _meta, name}, projection}, {subs, nested, first, equalities} ->
+          case Map.fetch(first, name) do
+            {:ok, original} ->
+              {subs, nested, first, equalities ++ [{original, projection}]}
+
+            :error ->
+              {subs ++ [{name, projection}], nested, Map.put(first, name, projection), equalities}
+          end
+
+        {nested_pattern, projection}, {subs, nested, first, equalities} ->
+          {subs, nested ++ [{projection, nested_pattern}], first, equalities}
+      end)
+
+    success =
+      Enum.reduce(substitutions, body, fn {name, projection}, expression ->
+        subst_surface_var(expression, name, projection)
+      end)
+
+    {success, structural, equalities}
+  end
+
+  defp nested_pattern_decision(value, pattern, success, fallback) do
+    arms = [
+      {:match_arm, [pattern: pattern], [success]},
+      {:match_arm, [pattern: {:variable, [], "_"}], [fallback]}
+    ]
+
+    if special_match_arms?(arms) do
+      case desugar_special_match(value, arms, 0) do
+        {:ok, decision} -> decision
+        {:error, _reason} -> {:pattern_match, [], [value | arms]}
+      end
+    else
+      {:pattern_match, [], [value | arms]}
+    end
+  end
+
+  defp validate_tuple_pattern_arities(patterns, tuple_arity) do
+    Enum.reduce_while(patterns, :ok, fn {:tuple, _meta, elements} = pattern, :ok ->
+      case validate_tuple_pattern_arity(pattern, tuple_arity, length(elements)) do
+        :ok -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp lower_refutable_tuple_match(scrut, arms, tuple_arity, expected, names, ctx, env) do
+    projections = for index <- 1..tuple_arity, do: tuple_proj(scrut, Integer.to_string(index))
+    position = tuple_refutable_position(arms, tuple_arity)
+    reordered_projections = move_tuple_position_first(projections, position)
+
+    reordered_arms =
+      Enum.map(arms, fn {:match_arm, meta, body} ->
+        {:tuple, tuple_meta, elements} = Keyword.fetch!(meta, :pattern)
+        pattern = {:tuple, tuple_meta, move_tuple_position_first(elements, position)}
+        {:match_arm, Keyword.put(meta, :pattern, pattern), body}
+      end)
+
+    synthetic_scrutinee = {:tuple, [], reordered_projections}
+    {lowered_scrutinee, lowered_arms} = desugar_tuple_scrutinee(synthetic_scrutinee, reordered_arms)
+
+    if lowered_scrutinee == synthetic_scrutinee do
+      {:error,
+       {:unsupported_pattern,
+        %{
+          reason: :tuple_pattern_matrix,
+          span: arms |> hd() |> arm_pattern() |> surface_expression_span()
+        }}}
+    else
+      lowered_scrutinee
+      |> elaborate_match(lowered_arms, expected, names, ctx, env)
+      |> contextualize_tuple_pattern_result(arms, tuple_arity, position)
+    end
+  end
+
+  defp tuple_refutable_position(arms, tuple_arity) do
+    Enum.find(1..tuple_arity, 1, fn position ->
+      Enum.any?(arms, fn arm ->
+        element = arm |> arm_pattern() |> elem(2) |> Enum.at(position - 1)
+        not match?({:variable, _meta, _name}, element)
+      end)
+    end)
+  end
+
+  defp move_tuple_position_first(elements, 1), do: elements
+
+  defp move_tuple_position_first(elements, position) do
+    {selected, rest} = List.pop_at(elements, position - 1)
+    [selected | rest]
+  end
+
+  defp contextualize_tuple_pattern_result(
+         {:error, {:source_context, {:missing_branch, branch}, context}},
+         arms,
+         tuple_arity,
+         position
+       ) do
+    details =
+      arms
+      |> tuple_pattern_error_context(tuple_arity, position)
+      |> Map.put(:branch, branch)
+
+    {:error,
+     {:source_context, {:tuple_missing_branch, details},
+      context
+      |> Map.merge(details)}}
+  end
+
+  defp contextualize_tuple_pattern_result({:error, {:missing_branch, branch}}, arms, tuple_arity, position),
+    do:
+      {:error,
+       {:tuple_missing_branch, Map.put(tuple_pattern_error_context(arms, tuple_arity, position), :branch, branch)}}
+
+  defp contextualize_tuple_pattern_result(result, _arms, _tuple_arity, _position), do: result
+
+  defp contextualize_authored_tuple_pattern_result(result, authored_arms, env) do
+    case missing_branch_reason(result) do
+      {:ok, branch, existing_context} ->
+        case authored_tuple_arms(authored_arms, branch, env) do
+          [] ->
+            result
+
+          tuple_arms ->
+            {:tuple, _meta, elements} = tuple_arms |> hd() |> arm_pattern()
+            tuple_arity = length(elements)
+            position = tuple_refutable_position(tuple_arms, tuple_arity)
+
+            details =
+              tuple_arms
+              |> tuple_pattern_error_context(tuple_arity, position)
+              |> Map.put(:branch, branch)
+
+            reason = {:tuple_missing_branch, details}
+
+            case existing_context do
+              nil -> {:error, reason}
+              context -> {:error, {:source_context, reason, Map.merge(context, details)}}
+            end
+        end
+
+      :error ->
+        result
+    end
+  end
+
+  defp missing_branch_reason({:error, {:missing_branch, branch}}), do: {:ok, branch, nil}
+
+  defp missing_branch_reason({:error, {:source_context, {:missing_branch, branch}, context}})
+       when is_map(context),
+       do: {:ok, branch, context}
+
+  defp missing_branch_reason(_result), do: :error
+
+  defp authored_tuple_arms(arms, branch, env) do
+    branch_family = Inductive.ctor_family(env, branch)
+
+    arms
+    |> Enum.flat_map(fn {:match_arm, meta, body} ->
+      pattern = Keyword.fetch!(meta, :pattern)
+
+      case refutable_tuple_for_family(pattern, branch_family, env) do
+        nil -> []
+        tuple -> [{:match_arm, Keyword.put(meta, :pattern, tuple), body}]
+      end
+    end)
+  end
+
+  defp refutable_tuple_for_family({:tuple, _meta, elements} = tuple, branch_family, env) do
+    if Enum.any?(elements, &pattern_from_family?(&1, branch_family, env)) do
+      tuple
+    else
+      Enum.find_value(elements, &refutable_tuple_for_family(&1, branch_family, env))
+    end
+  end
+
+  defp refutable_tuple_for_family({:function_call, _meta, arguments}, branch_family, env),
+    do: Enum.find_value(arguments, &refutable_tuple_for_family(&1, branch_family, env))
+
+  defp refutable_tuple_for_family({_tag, _meta, children}, branch_family, env) when is_list(children),
+    do: Enum.find_value(children, &refutable_tuple_for_family(&1, branch_family, env))
+
+  defp refutable_tuple_for_family(_pattern, _branch_family, _env), do: nil
+
+  defp pattern_from_family?({:function_call, meta, _arguments}, branch_family, env) do
+    name =
+      case Keyword.fetch!(meta, :name) do
+        name when is_binary(name) -> String.to_atom(name)
+        name -> name
+      end
+
+    key = resolve_ctor_key(env, name)
+    Inductive.ctor_family(env, key) == branch_family
+  end
+
+  defp pattern_from_family?(_pattern, _branch_family, _env), do: false
+
+  defp tuple_pattern_error_context(arms, tuple_arity, position) do
+    element_spans =
+      Enum.flat_map(arms, fn arm ->
+        case arm |> arm_pattern() |> elem(2) |> Enum.at(position - 1) |> surface_expression_span() do
+          %Cure.Diagnostic.Span{} = span -> [span]
+          _ -> []
+        end
+      end)
+
+    insertion_span =
+      case arms |> List.last() |> elem(2) |> single_body() |> surface_expression_span() do
+        %Cure.Diagnostic.Span{} = span ->
+          %{span | start_byte: span.end_byte, start_line: span.end_line, start_column: span.end_column}
+
+        _ ->
+          nil
+      end
+
+    %{
+      tuple_pattern_position: position,
+      tuple_pattern_arity: tuple_arity,
+      tuple_pattern_element_spans: element_spans,
+      tuple_pattern_insertion_span: insertion_span
+    }
+  end
 
   defp tuple_pattern_arity(scrut, names, ctx, env) do
     with {:ok, _term, type_value} <- elaborate_expr_typed(scrut, names, ctx, env),
@@ -5316,17 +7019,37 @@ defmodule Cure.Elab.Elaborator do
   defp try_trivial_match(scrut_expr, [{:match_arm, meta, body}], expected, names, ctx, env) do
     case Keyword.fetch!(meta, :pattern) do
       {:variable, _m, "_"} ->
-        elaborate_expr_checked(single_body(body), expected, names, ctx, env)
+        if Keyword.get(meta, :impossible) do
+          {:error, {:impossible_default_pattern, "_"}}
+        else
+          elaborate_expr_checked(single_body(body), expected, names, ctx, env)
+        end
 
-      {:variable, _m, name} ->
+      {:variable, _m, name} = pattern ->
         b = single_body(body)
 
         cond do
+          Keyword.get(meta, :impossible) ->
+            {:error, {:impossible_default_pattern, name}}
+
           # A complex scrutinee would be duplicated by substitution; leave those to
           # the ordinary path (which binds via the case machinery).
-          not match?({:variable, _sm, _sn}, scrut_expr) -> :not_applicable
-          binds_any?(b, [name]) -> {:error, {:unsupported_pattern, :shadowed_catchall}}
-          true -> elaborate_expr_checked(subst_surface_var(b, name, scrut_expr), expected, names, ctx, env)
+          not match?({:variable, _sm, _sn}, scrut_expr) ->
+            :not_applicable
+
+          binds_any?(b, [name]) ->
+            {:error,
+             {:unsupported_pattern,
+              %{
+                reason: :shadowed_catchall,
+                name: name,
+                span: pattern_binder_span(pattern, name),
+                type_span: surface_expression_span(scrut_expr),
+                shadow_span: first_binding_span(body, name)
+              }}}
+
+          true ->
+            elaborate_expr_checked(subst_surface_var(b, name, scrut_expr), expected, names, ctx, env)
         end
 
       _ ->
@@ -5349,9 +7072,18 @@ defmodule Cure.Elab.Elaborator do
   # `bool_case/5`; no kernel change. Returns `:not_applicable` only when NO arm
   # is guarded.
   defp try_guard_match(scrut_expr, arms, expected, names, ctx, env) do
+    {unguarded_prefix, guarded_suffix} = Enum.split_while(arms, &(not guarded_arm?(&1)))
+
     cond do
       not Enum.any?(arms, &guarded_arm?/1) ->
         :not_applicable
+
+      unguarded_prefix != [] and guarded_suffix != [] and
+          Enum.all?(unguarded_prefix, &(not catchall_pat?(arm_pattern(&1)))) ->
+        fallback =
+          {:match_arm, [pattern: {:variable, [], "_"}], [{:pattern_match, [], [scrut_expr | guarded_suffix]}]}
+
+        elaborate_match(scrut_expr, unguarded_prefix ++ [fallback], expected, names, ctx, env)
 
       # A variable scrutinee is substituted into the guard chain as-is: only a
       # variable is duplicated (no recomputation), so the surface path is safe.
@@ -5482,39 +7214,39 @@ defmodule Cure.Elab.Elaborator do
   defp bind_catchall_body(_scrut, {:variable, _m, "_"}, body, expected, names, ctx, env),
     do: elaborate_expr_checked(body, expected, names, ctx, env)
 
-  defp bind_catchall_body(scrut_expr, {:variable, _m, name}, body, expected, names, ctx, env) do
+  defp bind_catchall_body(scrut_expr, {:variable, _m, name} = pattern, body, expected, names, ctx, env) do
     cond do
-      not match?({:variable, _sm, _sn}, scrut_expr) -> {:error, {:unsupported_guard, :complex_scrutinee}}
-      binds_any?(body, [name]) -> {:error, {:unsupported_guard, :shadowed}}
+      not match?({:variable, _sm, _sn}, scrut_expr) -> complex_guard_scrutinee_error(scrut_expr)
+      binds_any?(body, [name]) -> shadowed_guard_error(pattern, name, body, :body)
       true -> elaborate_expr_checked(subst_surface_var(body, name, scrut_expr), expected, names, ctx, env)
     end
   end
 
-  defp bind_catchall_body(scrut_expr, {:tuple, _m, pats}, body, expected, names, ctx, env) do
-    with {:ok, body_expr} <- tuple_guard_bind(scrut_expr, pats, body) do
+  defp bind_catchall_body(scrut_expr, {:tuple, _m, pats} = pattern, body, expected, names, ctx, env) do
+    with {:ok, body_expr} <- tuple_guard_bind(scrut_expr, pats, body, pattern) do
       elaborate_expr_checked(body_expr, expected, names, ctx, env)
     end
   end
 
-  defp bind_catchall_body(_scrut, _pat, _body, _expected, _names, _ctx, _env),
-    do: {:error, {:unsupported_guard, :non_catchall_pattern}}
+  defp bind_catchall_body(_scrut, pattern, _body, _expected, _names, _ctx, _env),
+    do: guarded_pattern_shape_error(pattern)
 
   # Substitute the pattern variable with the (variable) scrutinee in a guard or
   # body expression, guarding against complex scrutinees and shadow-capture.
   defp guard_bind(_scrut, {:variable, _m, "_"}, expr), do: {:ok, expr}
 
-  defp guard_bind(scrut_expr, {:variable, _m, name}, expr) do
+  defp guard_bind(scrut_expr, {:variable, _m, name} = pattern, expr) do
     cond do
-      not match?({:variable, _sm, _sn}, scrut_expr) -> {:error, {:unsupported_guard, :complex_scrutinee}}
-      binds_any?(expr, [name]) -> {:error, {:unsupported_guard, :shadowed}}
+      not match?({:variable, _sm, _sn}, scrut_expr) -> complex_guard_scrutinee_error(scrut_expr)
+      binds_any?(expr, [name]) -> shadowed_guard_error(pattern, name, expr, :guard_or_body)
       true -> {:ok, subst_surface_var(expr, name, scrut_expr)}
     end
   end
 
-  defp guard_bind(scrut_expr, {:tuple, _m, pats}, expr),
-    do: tuple_guard_bind(scrut_expr, pats, expr)
+  defp guard_bind(scrut_expr, {:tuple, _m, pats} = pattern, expr),
+    do: tuple_guard_bind(scrut_expr, pats, expr, pattern)
 
-  defp guard_bind(_scrut, _pat, _expr), do: {:error, {:unsupported_guard, :non_catchall_pattern}}
+  defp guard_bind(_scrut, pattern, _expr), do: guarded_pattern_shape_error(pattern)
 
   # Multi-parameter function clauses desugar to a match over a flat tuple of
   # formal arguments. Such a tuple pattern is irrefutable when every leaf is a
@@ -5522,25 +7254,59 @@ defmodule Cure.Elab.Elaborator do
   # elaborating the guard/body. This is the guarded counterpart of
   # `try_tuple_match/6`; constructor/literal leaves remain deliberately outside
   # the catch-all guard chain and are rejected by `tuple_subs/2`.
-  defp tuple_guard_bind(scrut_expr, pats, expr) do
+  defp tuple_guard_bind(scrut_expr, pats, expr, pattern) do
     if match?({:variable, _sm, _sn}, scrut_expr) do
       with {:ok, subs} <- tuple_subs(pats, scrut_expr) do
         bound_names = Enum.map(subs, &elem(&1, 0))
 
-        if binds_any?(expr, bound_names) do
-          {:error, {:unsupported_guard, :shadowed}}
-        else
-          {:ok,
-           Enum.reduce(subs, expr, fn {name, replacement}, acc ->
-             subst_surface_var(acc, name, replacement)
-           end)}
+        case Enum.find(bound_names, &binds_any?(expr, [&1])) do
+          nil ->
+            {:ok,
+             Enum.reduce(subs, expr, fn {name, replacement}, acc ->
+               subst_surface_var(acc, name, replacement)
+             end)}
+
+          name ->
+            shadowed_guard_error(pattern, name, expr, :guard_or_body)
         end
       else
-        {:error, _} -> {:error, {:unsupported_guard, :non_catchall_pattern}}
+        {:error, _reason} -> guarded_pattern_shape_error(pattern)
       end
     else
-      {:error, {:unsupported_guard, :complex_scrutinee}}
+      complex_guard_scrutinee_error(scrut_expr)
     end
+  end
+
+  defp shadowed_guard_error(pattern, name, expression, site) do
+    {:error,
+     {:unsupported_guard,
+      %{
+        reason: :shadowed,
+        name: name,
+        site: site,
+        span: pattern_binder_span(pattern, name),
+        pattern_span: surface_expression_span(pattern),
+        shadow_span: first_binding_span(expression, name)
+      }}}
+  end
+
+  defp guarded_pattern_shape_error(pattern) do
+    {:error,
+     {:unsupported_guard,
+      %{
+        reason: :refutable_pattern,
+        shape: pattern_shape(pattern),
+        span: surface_expression_span(pattern)
+      }}}
+  end
+
+  defp complex_guard_scrutinee_error(scrutinee) do
+    {:error,
+     {:unsupported_guard,
+      %{
+        reason: :complex_scrutinee,
+        span: surface_expression_span(scrutinee)
+      }}}
   end
 
   # Literal patterns on a PRIMITIVE scrutinee (Int/Bool/Float) desugar to a chain
@@ -5673,6 +7439,7 @@ defmodule Cure.Elab.Elaborator do
   defp literal_of?({:literal, _m, v}, :int), do: is_integer(v)
   defp literal_of?({:literal, _m, v}, :float), do: is_float(v)
   defp literal_of?({:literal, _m, v}, :bool), do: is_boolean(v)
+  defp literal_of?({:literal, _m, v}, :atom), do: is_atom(v)
   # A char literal `'a'` carries its integer codepoint (subtype `:char`).
   defp literal_of?({:literal, _m, v}, :bounded), do: is_integer(v)
   defp literal_of?(_p, _prim), do: false
@@ -5682,6 +7449,7 @@ defmodule Cure.Elab.Elaborator do
 
   defp lit_core(v, :int), do: {:int_lit, v}
   defp lit_core(v, :float), do: {:float_lit, v}
+  defp lit_core(v, :atom), do: {:atom_lit, v}
   defp lit_core(v, :bounded), do: {:bounded_lit, v}
 
   defp lit_core(v, :bool, env), do: {:ctor, resolve_ctor_key(env, if(v, do: :True, else: :False)), []}
@@ -5693,11 +7461,24 @@ defmodule Cure.Elab.Elaborator do
       {:variable, _m, "_"} ->
         elaborate_match_body(body, expected, names, ctx, env)
 
-      {:variable, _m, name} ->
+      {:variable, _m, name} = pattern ->
         cond do
-          not match?({:variable, _sm, _sn}, scrut_expr) -> :not_applicable
-          binds_any?(body, [name]) -> {:error, {:unsupported_pattern, :shadowed_literal_catchall}}
-          true -> elaborate_match_body(subst_surface_var(body, name, scrut_expr), expected, names, ctx, env)
+          not match?({:variable, _sm, _sn}, scrut_expr) ->
+            :not_applicable
+
+          binds_any?(body, [name]) ->
+            {:error,
+             {:unsupported_pattern,
+              %{
+                reason: :shadowed_literal_catchall,
+                name: name,
+                span: pattern_binder_span(pattern, name),
+                type_span: surface_expression_span(scrut_expr),
+                shadow_span: first_binding_span(body, name)
+              }}}
+
+          true ->
+            elaborate_match_body(subst_surface_var(body, name, scrut_expr), expected, names, ctx, env)
         end
     end
   end
@@ -5760,7 +7541,7 @@ defmodule Cure.Elab.Elaborator do
   # variable's term for a pin arm). A `:bounded` scrutinee (Char) has no monomorphic
   # eq twin, so it uses the polymorphic `struct_eq` applied to the signature-aware
   # readback of the scrutinee type (its type argument is erased at emit).
-  defp eq_test_core(:bounded, scrut_term, rhs_core, scrut_type, ctx) do
+  defp eq_test_core(prim, scrut_term, rhs_core, scrut_type, ctx) when prim in [:bounded, :atom] do
     ty = Quote.reify(scrut_type, Context.length(ctx), Context.signature(ctx))
     {:app, app2(builtin_op_global(:struct_eq), ty, scrut_term), rhs_core}
   end
@@ -5796,7 +7577,7 @@ defmodule Cure.Elab.Elaborator do
   defp tuple_elem_sub({:variable, _m, "_"}, _proj), do: {:ok, []}
   defp tuple_elem_sub({:variable, _m, name}, proj), do: {:ok, [{name, proj}]}
   defp tuple_elem_sub({:tuple, _m, [_, _ | _] = sub_elems}, proj), do: tuple_subs(sub_elems, proj)
-  defp tuple_elem_sub(_other, _proj), do: {:error, {:unsupported_pattern, :nested_tuple_element}}
+  defp tuple_elem_sub(_other, _proj), do: {:error, :refutable_tuple_element}
 
   # --- nested-pattern desugaring (parity #3) ---------------------------------
   #
@@ -5871,15 +7652,24 @@ defmodule Cure.Elab.Elaborator do
   defp default_closer([], _scrut), do: {:ok, :none}
 
   defp default_closer([{:match_arm, dmeta, dbody0}], scrut_expr) do
-    {:variable, _m, dvname} = Keyword.fetch!(dmeta, :pattern)
+    {:variable, _m, dvname} = pattern = Keyword.fetch!(dmeta, :pattern)
+    body = single_body(dbody0)
 
-    case resolve_default_body(dvname, single_body(dbody0), scrut_expr) do
-      {:ok, db} -> {:ok, {:some, db}}
-      {:error, reason} -> {:error, {:unsupported_guard, reason}}
+    if dvname != "_" and binds_any?(body, [dvname]) do
+      shadowed_guard_error(pattern, dvname, body, :body)
+    else
+      case resolve_default_body(dvname, body, scrut_expr) do
+        {:ok, db} -> {:ok, {:some, db}}
+        {:error, :nonvariable_scrutinee} -> complex_guard_scrutinee_error(scrut_expr)
+      end
     end
   end
 
-  defp default_closer(_multi, _scrut), do: {:error, {:unsupported_guard, :multiple_defaults}}
+  defp default_closer(defaults, _scrut) do
+    {:match_arm, meta, _body} = List.last(defaults)
+    {:variable, _variable_meta, name} = Keyword.fetch!(meta, :pattern)
+    {:error, {:duplicate_default_pattern, name}}
+  end
 
   # Fold one constructor group's rows (each `C(v…) [when g] -> body`, all single
   # level and sharing arity k) into a single `C(w₁..w_k) -> <if-chain>`.
@@ -5942,9 +7732,20 @@ defmodule Cure.Elab.Elaborator do
     guard = Keyword.get(meta, :guard)
     exprs = [single_body(body) | if(guard, do: [guard], else: [])]
 
-    if Enum.any?(exprs, fn e -> binds_any?(e, oldnames) end),
-      do: {:error, {:unsupported_guard, :shadowed}},
-      else: {:ok, subs}
+    shadowed =
+      Enum.find_value(oldnames, fn name ->
+        Enum.find_value(exprs, fn expression ->
+          if binds_any?(expression, [name]), do: {name, expression}, else: nil
+        end)
+      end)
+
+    case shadowed do
+      {name, expression} ->
+        shadowed_guard_error(Keyword.fetch!(meta, :pattern), name, expression, :constructor_branch)
+
+      nil ->
+        {:ok, subs}
+    end
   end
 
   defp rename_all(expr, subs) do
@@ -5984,15 +7785,59 @@ defmodule Cure.Elab.Elaborator do
   defp desugar_with_default(arms, scrut_expr) do
     {ctor_arms, defaults} = Enum.split_with(arms, &(not default_arm?(&1)))
 
-    with [{:match_arm, dmeta, dbody0}] <- defaults,
-         true <- default_arm?(List.last(arms)) or :not_last,
-         {:variable, _m, dvname} <- Keyword.fetch!(dmeta, :pattern),
-         {:ok, dbody} <- resolve_default_body(dvname, single_body(dbody0), scrut_expr) do
-      with {:ok, compiled} <- compile_nested_groups(weave_default(ctor_arms, dbody)) do
-        {:ok, compiled ++ [{:match_arm, [pattern: {:variable, [], "_"}], dbody}]}
-      end
-    else
-      _ -> {:error, {:unsupported_pattern, :catchall_with_nesting}}
+    case defaults do
+      [{:match_arm, dmeta, dbody0} = default] ->
+        pattern = Keyword.fetch!(dmeta, :pattern)
+        {:variable, _m, dvname} = pattern
+
+        cond do
+          default != List.last(arms) ->
+            next_arm = Enum.at(arms, Enum.find_index(arms, &(&1 == default)) + 1)
+
+            {:error,
+             {:unreachable_after_default_pattern,
+              %{
+                name: dvname,
+                span: surface_expression_span(arm_pattern(next_arm)),
+                default_span: surface_expression_span(pattern)
+              }}}
+
+          dvname != "_" and binds_any?(dbody0, [dvname]) ->
+            {:error,
+             {:unsupported_pattern,
+              %{
+                reason: :shadowed_default,
+                name: dvname,
+                span: pattern_binder_span(pattern, dvname),
+                shadow_span: first_binding_span(dbody0, dvname)
+              }}}
+
+          true ->
+            case resolve_default_body(dvname, single_body(dbody0), scrut_expr) do
+              {:ok, dbody} ->
+                with {:ok, compiled} <- compile_nested_groups(weave_default(ctor_arms, dbody)) do
+                  {:ok, compiled ++ [{:match_arm, [pattern: {:variable, [], "_"}], dbody}]}
+                end
+
+              {:error, :nonvariable_scrutinee} ->
+                {:error,
+                 {:unsupported_pattern,
+                  %{
+                    reason: :named_default_nonvariable,
+                    name: dvname,
+                    span: pattern_binder_span(pattern, dvname),
+                    type_span: surface_expression_span(scrut_expr)
+                  }}}
+            end
+        end
+
+      [_first | _rest] ->
+        {:match_arm, meta, _body} = List.last(defaults)
+        {:variable, _m, name} = Keyword.fetch!(meta, :pattern)
+        {:error, {:duplicate_default_pattern, name}}
+
+      [] ->
+        compile_nested_groups(arms)
     end
   end
 
@@ -6091,45 +7936,73 @@ defmodule Cure.Elab.Elaborator do
       end)
       |> Enum.uniq()
 
-    if Enum.any?(arms, fn {:match_arm, m, b} ->
-         binds_any?(single_body(b), pvars) or
-           (Keyword.get(m, :guard) && binds_any?(Keyword.get(m, :guard), pvars))
-       end) do
-      {:error, {:unsupported_pattern, :shadowed_nested}}
-    else
-      # Seed the fresh scrutinee names with a per-invocation unique tag. Every
-      # deeper name (`split_ctor_arms`, `split_default`) derives from these, so a
-      # unique seed makes the WHOLE lowered subtree's names unique. Without it,
-      # two independently-desugared nested matches — an outer arm whose body is
-      # itself a nested match — regenerate identical names (`$nSome1_Y1`) and the
-      # inner binder captures a reference the outer desugaring baked into the
-      # body (variable capture → spurious `:branch_type`). See
-      # nested_match_capture_test.exs.
-      tag = fresh_tag()
-      fresh = for i <- 1..k//1, do: "$n" <> tag <> cname <> Integer.to_string(i)
+    case nested_pattern_shadow(arms, pvars) do
+      %{name: name, pattern: pattern, shadow_span: shadow_span} ->
+        {:error,
+         {:unsupported_pattern,
+          %{
+            reason: :shadowed_nested,
+            name: name,
+            span: pattern_binder_span(pattern, name),
+            type_span: surface_expression_span(pattern),
+            shadow_span: shadow_span
+          }}}
 
-      rows =
-        Enum.map(arms, fn {:match_arm, m, b} ->
-          {:function_call, _fm, as} = Keyword.fetch!(m, :pattern)
-          {as, Keyword.get(m, :guard), single_body(b)}
-        end)
+      nil ->
+        # Seed the fresh scrutinee names with a per-invocation unique tag. Every
+        # deeper name (`split_ctor_arms`, `split_default`) derives from these, so a
+        # unique seed makes the WHOLE lowered subtree's names unique. Without it,
+        # two independently-desugared nested matches — an outer arm whose body is
+        # itself a nested match — regenerate identical names (`$nSome1_Y1`) and the
+        # inner binder captures a reference the outer desugaring baked into the
+        # body (variable capture → spurious `:branch_type`). See
+        # nested_match_capture_test.exs.
+        tag = fresh_tag()
+        fresh = for i <- 1..k//1, do: "$n" <> tag <> cname <> Integer.to_string(i)
 
-      case compile_matrix(fresh, rows) do
-        {:ok, inner} ->
-          outer_pat = {:function_call, fmeta, Enum.map(fresh, &{:variable, [], &1})}
-          {:ok, [{:match_arm, [pattern: outer_pat], inner}]}
+        rows =
+          Enum.map(arms, fn {:match_arm, m, b} ->
+            {:function_call, _fm, as} = Keyword.fetch!(m, :pattern)
+            {as, Keyword.get(m, :guard), single_body(b)}
+          end)
 
-        {:error, _} = err ->
-          err
-      end
+        case compile_matrix(fresh, rows) do
+          {:ok, inner} ->
+            outer_pat = {:function_call, fmeta, Enum.map(fresh, &{:variable, [], &1})}
+            {:ok, [{:match_arm, [pattern: outer_pat], inner}]}
+
+          {:error, _} = err ->
+            err
+        end
     end
+  end
+
+  defp nested_pattern_shadow(arms, pattern_vars) do
+    Enum.find_value(arms, fn {:match_arm, meta, body} ->
+      pattern = Keyword.fetch!(meta, :pattern)
+      guard = Keyword.get(meta, :guard)
+
+      Enum.find_value(pattern_vars, fn name ->
+        cond do
+          binds_any?(single_body(body), [name]) ->
+            %{name: name, pattern: pattern, shadow_span: first_binding_span(body, name)}
+
+          guard && binds_any?(guard, [name]) ->
+            %{name: name, pattern: pattern, shadow_span: first_binding_span(guard, name)}
+
+          true ->
+            nil
+        end
+      end)
+    end)
   end
 
   defp pattern_vars_deep({:variable, _m, v}), do: [v]
   defp pattern_vars_deep({:function_call, _m, args}), do: Enum.flat_map(args, &pattern_vars_deep/1)
   defp pattern_vars_deep(_), do: []
 
-  # Pattern-matrix compilation. `scruts` are fresh scrutinee variable NAMES; each
+  # Pattern-matrix compilation. `scruts` are fresh scrutinee variable names or
+  # projection expressions; each
   # row is `{[pattern…], guard, body}` (guard is `nil` or a surface expr) with one
   # pattern per remaining scrutinee. Emits a tree of single-scrutinee
   # `{:pattern_match}` nodes; every emitted match is single-level, so it re-uses
@@ -6143,19 +8016,135 @@ defmodule Cure.Elab.Elaborator do
   defp compile_matrix([v | vs], rows) do
     col = Enum.map(rows, fn {[p | _ps], _g, _b} -> p end)
 
-    if Enum.all?(col, &match?({:variable, _m, _n}, &1)) do
-      # All-variable column: bind each row's variable to `v`, drop the column.
-      rows2 =
-        Enum.map(rows, fn {[{:variable, _m, x} | ps], g, body} ->
-          repl = {:variable, [], v}
-          {ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}
-        end)
+    case tuple_matrix_arity(col) do
+      arity when is_integer(arity) ->
+        expand_tuple_matrix_column(v, vs, rows, arity)
 
-      compile_matrix(vs, rows2)
-    else
-      compile_matrix_split(v, vs, rows, col)
+      nil ->
+        cond do
+          Enum.all?(col, &match?({:variable, _m, _n}, &1)) ->
+            replacement = matrix_scrutinee(v)
+
+            rows2 =
+              Enum.map(rows, fn {[{:variable, _m, x} | ps], g, body} ->
+                {ps, subst_guard(g, x, replacement), subst_surface_var(body, x, replacement)}
+              end)
+
+            compile_matrix(vs, rows2)
+
+          Enum.all?(col, &match?({kind, _m, _v} when kind in [:literal, :variable], &1)) ->
+            compile_matrix_literal_split(v, vs, rows, col)
+
+          true ->
+            compile_matrix_split(v, vs, rows, col)
+        end
     end
   end
+
+  # Literal columns cannot become Core constructor branches, but an ordinary
+  # surface `match` already has a checked literal-dispatch path.
+  defp compile_matrix_literal_split(v, vs, rows, col) do
+    literals =
+      col
+      |> Enum.filter(&match?({:literal, _m, _value}, &1))
+      |> Enum.uniq_by(fn {:literal, meta, value} -> {Keyword.get(meta, :subtype), value} end)
+
+    with {:ok, literal_arms} <- split_literal_arms(literals, v, vs, rows) do
+      if Enum.any?(col, &match?({:variable, _m, _name}, &1)) do
+        with {:ok, default_inner} <- split_default(matrix_scrutinee(v), vs, rows) do
+          default = {:match_arm, [pattern: {:variable, [], "#{matrix_name(v)}_d"}], default_inner}
+          {:ok, {:pattern_match, [], [matrix_scrutinee(v) | literal_arms ++ [default]]}}
+        end
+      else
+        {:ok, {:pattern_match, [], [matrix_scrutinee(v) | literal_arms]}}
+      end
+    end
+  end
+
+  defp split_literal_arms(literals, v, vs, rows) do
+    Enum.reduce_while(literals, {:ok, []}, fn literal, {:ok, acc} ->
+      {:literal, literal_meta, literal_value} = literal
+      literal_key = {Keyword.get(literal_meta, :subtype), literal_value}
+
+      sub_rows =
+        Enum.flat_map(rows, fn {[p | ps], guard, body} ->
+          case p do
+            {:literal, meta, value} ->
+              if {Keyword.get(meta, :subtype), value} == literal_key,
+                do: [{ps, guard, body}],
+                else: []
+
+            {:variable, _meta, name} ->
+              replacement = matrix_scrutinee(v)
+              [{ps, subst_guard(guard, name, replacement), subst_surface_var(body, name, replacement)}]
+          end
+        end)
+
+      case compile_matrix(vs, sub_rows) do
+        {:ok, inner} ->
+          arm = {:match_arm, [pattern: literal], inner}
+          {:cont, {:ok, acc ++ [arm]}}
+
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
+  end
+
+  defp matrix_name(name) when is_binary(name), do: name
+  defp matrix_name(_expression), do: "$projection"
+
+  defp tuple_matrix_arity(column) do
+    arities =
+      Enum.flat_map(column, fn
+        {:tuple, _meta, elements} -> [length(elements)]
+        _other -> []
+      end)
+      |> Enum.uniq()
+
+    cond do
+      arities == [] ->
+        nil
+
+      length(arities) != 1 ->
+        nil
+
+      Enum.all?(column, fn
+        {:tuple, _meta, _elements} -> true
+        {:variable, _meta, _name} -> true
+        _other -> false
+      end) ->
+        hd(arities)
+
+      true ->
+        nil
+    end
+  end
+
+  defp expand_tuple_matrix_column(v, vs, rows, arity) do
+    scrutinee = matrix_scrutinee(v)
+
+    projections =
+      for index <- 1..arity do
+        tuple_proj(scrutinee, Integer.to_string(index))
+      end
+
+    expanded_rows =
+      Enum.map(rows, fn
+        {[{:tuple, _meta, elements} | patterns], guard, body} ->
+          {elements ++ patterns, guard, body}
+
+        {[{:variable, _meta, name} | patterns], guard, body} ->
+          wildcards = for _index <- 1..arity, do: {:variable, [], "_"}
+
+          {wildcards ++ patterns, subst_guard(guard, name, scrutinee), subst_surface_var(body, name, scrutinee)}
+      end)
+
+    compile_matrix(projections ++ vs, expanded_rows)
+  end
+
+  defp matrix_scrutinee(name) when is_binary(name), do: {:variable, [], name}
+  defp matrix_scrutinee(expression), do: expression
 
   # Fold the rows reaching a matrix leaf into an `if`-chain. An unguarded row is
   # an unconditional match: it terminates the chain (identical to the previous
@@ -6186,24 +8175,26 @@ defmodule Cure.Elab.Elaborator do
       |> Enum.uniq()
 
     has_var = Enum.any?(col, &match?({:variable, _m, _n}, &1))
+    seed = if is_binary(v), do: v, else: "$matrix_" <> fresh_tag()
+    scrutinee = matrix_scrutinee(v)
 
-    with {:ok, ctor_arms} <- split_ctor_arms(ctors, v, vs, rows) do
+    with {:ok, ctor_arms} <- split_ctor_arms(ctors, seed, scrutinee, vs, rows) do
       arms =
         if has_var do
-          {:ok, default_inner} = split_default(v, vs, rows)
-          ctor_arms ++ [{:match_arm, [pattern: {:variable, [], v <> "_d"}], default_inner}]
+          {:ok, default_inner} = split_default(scrutinee, vs, rows)
+          ctor_arms ++ [{:match_arm, [pattern: {:variable, [], seed <> "_d"}], default_inner}]
         else
           ctor_arms
         end
 
-      {:ok, {:pattern_match, [], [{:variable, [], v} | arms]}}
+      {:ok, {:pattern_match, [], [scrutinee | arms]}}
     end
   end
 
-  defp split_ctor_arms(ctors, v, vs, rows) do
+  defp split_ctor_arms(ctors, seed, scrutinee, vs, rows) do
     Enum.reduce_while(ctors, {:ok, []}, fn cname, {:ok, acc} ->
       arity = split_arity(cname, rows)
-      ws = for i <- 1..arity//1, do: v <> "_" <> cname <> Integer.to_string(i)
+      ws = for i <- 1..arity//1, do: seed <> "_" <> cname <> Integer.to_string(i)
 
       sub_rows =
         Enum.flat_map(rows, fn {[p | ps], g, body} ->
@@ -6213,8 +8204,7 @@ defmodule Cure.Elab.Elaborator do
 
             {:variable, _m, x} ->
               wilds = for w <- ws, do: {:variable, [], w <> "_x"}
-              repl = {:variable, [], v}
-              [{wilds ++ ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}]
+              [{wilds ++ ps, subst_guard(g, x, scrutinee), subst_surface_var(body, x, scrutinee)}]
           end
         end)
 
@@ -6241,13 +8231,12 @@ defmodule Cure.Elab.Elaborator do
 
   # Catch-all sub-matrix for constructors not explicitly listed: only the
   # variable rows survive (each binding its variable to `v`), column dropped.
-  defp split_default(v, vs, rows) do
+  defp split_default(scrutinee, vs, rows) do
     default_rows =
       Enum.flat_map(rows, fn {[p | ps], g, body} ->
         case p do
           {:variable, _m, x} ->
-            repl = {:variable, [], v}
-            [{ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}]
+            [{ps, subst_guard(g, x, scrutinee), subst_surface_var(body, x, scrutinee)}]
 
           _ ->
             []
@@ -6302,6 +8291,17 @@ defmodule Cure.Elab.Elaborator do
 
             default != nil ->
               {:halt, {:error, {:duplicate_default_pattern, vname}}}
+
+            vname != "_" and binds_any?(body, [vname]) ->
+              {:halt,
+               {:error,
+                {:unsupported_pattern,
+                 %{
+                   reason: :shadowed_default,
+                   name: vname,
+                   span: pattern_binder_span(pattern, vname),
+                   shadow_span: first_binding_span(body, vname)
+                 }}}}
 
             true ->
               {:cont, {:ok, {acc, {vname, single_body(body)}}}}
@@ -6457,11 +8457,6 @@ defmodule Cure.Elab.Elaborator do
           carried
         )
 
-      binds_any?(body_expr, [vname]) ->
-        # The catch-all's name is rebound inside its own body; a naive surface
-        # substitution would capture. Reject rather than miscompile.
-        {:error, {:unsupported_pattern, :shadowed_default}}
-
       true ->
         body2 = subst_surface_var(body_expr, vname, syn_pattern)
 
@@ -6542,7 +8537,9 @@ defmodule Cure.Elab.Elaborator do
 
         tele_names =
           Enum.reduce(bindings, branch_scope(telescope, quantities, plicities, pattern_vars), fn {name,
-                                                                                                  {:variable, _, vname}},
+                                                                                                  {:variable, _, vname},
+                                                                                                  _named_meta,
+                                                                                                  _constructor_meta},
                                                                                                  acc ->
             p = Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end)
             List.replace_at(acc, arity - 1 - p, to_string(vname))
@@ -6616,7 +8613,7 @@ defmodule Cure.Elab.Elaborator do
   # the index instead.
   defp check_named_implicits(checks, subst, arity, telescope, branch_ctx, branch_names, env) do
     checks
-    |> Enum.reduce_while(:ok, fn {name, inner}, :ok ->
+    |> Enum.reduce_while(:ok, fn {name, inner, named_meta, constructor_meta}, :ok ->
       case named_implicit_forced_value(name, subst, arity, telescope) do
         {:ok, d} ->
           expr = forced_inner_expr(inner)
@@ -6632,7 +8629,17 @@ defmodule Cure.Elab.Elaborator do
                  ) do
                 {:cont, :ok}
               else
-                {:halt, {:error, {:forced_pattern_mismatch, t_term, d}}}
+                {:halt,
+                 {:error,
+                  forced_pattern_mismatch_error(
+                    name,
+                    inner,
+                    named_meta,
+                    constructor_meta,
+                    t_term,
+                    d,
+                    branch_names
+                  )}}
               end
 
             {:error, _} = err ->
@@ -6640,7 +8647,14 @@ defmodule Cure.Elab.Elaborator do
           end
 
         :error ->
-          {:halt, {:error, {:named_implicit_unforced, name}}}
+          {:halt,
+           {:error,
+            named_implicit_unforced_error(
+              name,
+              inner,
+              named_meta,
+              constructor_meta
+            )}}
       end
     end)
   end
@@ -6668,6 +8682,89 @@ defmodule Cure.Elab.Elaborator do
   # elaborate the underlying expression. A non-dot inner is elaborated as-is.
   defp forced_inner_expr({:forced_pattern, _m, [inner]}), do: inner
   defp forced_inner_expr(other), do: other
+
+  defp forced_pattern_mismatch_error(
+         name,
+         inner,
+         named_meta,
+         constructor_meta,
+         written,
+         expected,
+         branch_names
+       ) do
+    forced_info =
+      case inner do
+        {:forced_pattern, meta, _children} -> Cure.MetaAST.Metadata.source_info(meta)
+        _ -> nil
+      end
+
+    named_info = Cure.MetaAST.Metadata.source_info(named_meta)
+    constructor_info = Cure.MetaAST.Metadata.source_info(constructor_meta)
+    span = (forced_info && forced_info.whole) || (named_info && named_info.whole)
+
+    {:source_context, {:forced_pattern_mismatch, written, expected},
+     %{
+       line: span && span.start_line,
+       column: span && span.start_column,
+       length: span && max(1, span.end_column - span.start_column),
+       span: span,
+       forced_pattern_span: forced_info && forced_info.whole,
+       forced_value_span: forced_info && (forced_info.body || List.first(forced_info.operands)),
+       named_implicit_span: named_info && named_info.whole,
+       named_implicit_name_span: named_info && named_info.name,
+       constructor_span: constructor_info && constructor_info.whole,
+       constructor_name_span: constructor_info && (constructor_info.callee || constructor_info.name),
+       constructor: Keyword.get(constructor_meta, :name),
+       implicit_name: name,
+       written: written,
+       expected: expected,
+       written_surface: forced_term_surface(written, branch_names),
+       expected_surface: forced_term_surface(expected, branch_names),
+       expectation_origin: :pattern,
+       expression_category: :forced_pattern
+     }}
+  end
+
+  defp named_implicit_unforced_error(name, inner, named_meta, constructor_meta) do
+    forced_info =
+      case inner do
+        {:forced_pattern, meta, _children} -> Cure.MetaAST.Metadata.source_info(meta)
+        _ -> nil
+      end
+
+    named_info = Cure.MetaAST.Metadata.source_info(named_meta)
+    constructor_info = Cure.MetaAST.Metadata.source_info(constructor_meta)
+    span = (forced_info && forced_info.whole) || (named_info && named_info.whole)
+
+    {:source_context, {:named_implicit_unforced, name},
+     %{
+       line: span && span.start_line,
+       column: span && span.start_column,
+       length: span && max(1, span.end_column - span.start_column),
+       span: span,
+       forced_pattern_span: forced_info && forced_info.whole,
+       named_implicit_span: named_info && named_info.whole,
+       named_implicit_name_span: named_info && named_info.name,
+       constructor_span: constructor_info && constructor_info.whole,
+       constructor_name_span: constructor_info && (constructor_info.callee || constructor_info.name),
+       constructor: Keyword.get(constructor_meta, :name),
+       implicit_name: name,
+       expectation_origin: :pattern,
+       expression_category: :named_implicit_pattern,
+       named_implicit_status: :unforced
+     }}
+  end
+
+  defp forced_term_surface({:var, index}, names),
+    do: Enum.at(names, index) || "?"
+
+  defp forced_term_surface({:ctor, constructor, arguments}, names) do
+    name = constructor |> Cure.Elab.Name.base() |> to_string()
+    arguments = Enum.map(arguments, &forced_term_surface(&1, names))
+    if arguments == [], do: name, else: "#{name}(#{Enum.join(arguments, ", ")})"
+  end
+
+  defp forced_term_surface(_term, _names), do: nil
 
   @doc """
   Public soundness-probe shim for the forced-annotation check of ONE named
@@ -6848,7 +8945,8 @@ defmodule Cure.Elab.Elaborator do
         name == "reflexive" ->
           elaborate_expr_checked(expr, expected, names, ctx, env)
 
-        is_binary(name) and Inductive.get_ctor(env, String.to_atom(name)) != nil ->
+        is_binary(name) and
+            Inductive.get_ctor(env, resolve_ctor_key(env, String.to_atom(name))) != nil ->
           # A constructor branch body. Infer FIRST — this preserves every case that
           # already worked, including a reconstruction whose indices the present
           # arguments determine and the carried-index-Eq transport (which wraps an
@@ -7195,14 +9293,14 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_let_block(
-         [{:assignment, meta, [{:variable, _, name}, rhs]} | rest],
+         [{:assignment, meta, [{:variable, _, name}, rhs]} = assignment | rest],
          expected_core,
          names,
          ctx,
          env
        ) do
     if not Keyword.get(meta, :let, false) do
-      {:error, {:unsupported_block_statement, meta}}
+      {:error, {:unsupported_block_statement, assignment}}
     else
       # A surface grade (`let c :linear = e`, plan slice 5b); absent means ω.
       grade = Keyword.get(meta, :grade, Grade.unrestricted())
@@ -7211,6 +9309,30 @@ defmodule Cure.Elab.Elaborator do
         nil -> let_inferred(name, rhs, meta, grade, rest, expected_core, names, ctx, env)
         ann -> let_ascribed(name, rhs, ann, meta, grade, rest, expected_core, names, ctx, env)
       end
+    end
+  end
+
+  # A pattern-valued let is the single-arm form of the ordinary typed pattern
+  # eliminator. Keeping the authored pattern intact means constructor, tuple,
+  # list, record, map, binary, pin, and nested patterns all take the same path as
+  # `match`; the match checker also supplies the structured impossible-pattern
+  # and missing-branch diagnostics. The scrutinee remains a single Core `case`
+  # input, so an effectful initializer is evaluated exactly once.
+  defp elaborate_let_block(
+         [{:assignment, meta, [pattern, rhs]} = assignment | rest],
+         expected_core,
+         names,
+         ctx,
+         env
+       )
+       when rest != [] do
+    if Keyword.get(meta, :let, false) do
+      body = {:block, Keyword.take(meta, [:line, :col]), rest}
+      arm = {:match_arm, Keyword.put([], :pattern, pattern), [body]}
+      match = {:pattern_match, Keyword.take(meta, [:line, :col]), [rhs, arm]}
+      elaborate_expr_checked(match, expected_core, names, ctx, env)
+    else
+      {:error, {:unsupported_block_statement, assignment}}
     end
   end
 
@@ -7248,13 +9370,13 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp infer_block_term(
-         [{:assignment, meta, [{:variable, _, name}, rhs]} | rest],
+         [{:assignment, meta, [{:variable, _, name}, rhs]} = assignment | rest],
          names,
          ctx,
          env
        ) do
     if not Keyword.get(meta, :let, false) do
-      {:error, {:unsupported_block_statement, meta}}
+      {:error, {:unsupported_block_statement, assignment}}
     else
       grade = Keyword.get(meta, :grade, Grade.unrestricted())
 
@@ -7369,14 +9491,27 @@ defmodule Cure.Elab.Elaborator do
           # `getNumberOfParameters` / Lean `inductive_val.get_nparams`.
           _ ->
             ty_core = Quote.reify(rhs_type, Context.length(ctx), Context.signature(ctx))
-            bind_once_let(name, rhs_core, ty_core, rhs_type, grade, rest, expected_core, names, ctx, env)
+
+            bind_once_let(
+              name,
+              rhs_core,
+              ty_core,
+              rhs_type,
+              grade,
+              rest,
+              expected_core,
+              names,
+              ctx,
+              env,
+              Keyword.get(meta, :opaque, false)
+            )
         end
 
       # The rhs has no INFERABLE type — a bare lambda, an `if`/`pickup`, any
       # check-only shape. Surface substitution never had to infer it: it
       # re-elaborated the rhs in CHECKING mode at each use site. A `:let` must
       # commit to one type up front, so it needs `let x : T = e` (`let_ascribed/8`).
-      {:error, _} = err ->
+      {:error, _} ->
         cond do
           # A GRADE cannot survive this branch. Every path below abandons the `:let`
           # node and surface-substitutes the rhs, so there is nowhere to record the
@@ -7384,12 +9519,30 @@ defmodule Cure.Elab.Elaborator do
           # and lie about its linearity. A graded `let` must produce a real `:let`.
           # Ascribing the binding gives `let_ascribed/9`, which always builds one.
           Keyword.has_key?(meta, :grade) ->
-            {:error, {:graded_let_needs_annotation, name, meta}}
+            {:error,
+             local_binding_annotation_error(
+               :graded_let_needs_annotation,
+               name,
+               meta,
+               rhs,
+               count_surface_uses(rest, name)
+             )}
 
           # Shadowing + non-inferable is unrepresentable: substitution would
-          # capture and `:let` cannot be built. Surface the inference error.
+          # capture and an unannotated `:let` cannot be built. Report the
+          # actionable local-binding problem rather than leaking the rhs's
+          # infer-only `:unsupported_expression` failure.
           Enum.any?(rest, &binds_any?(&1, [name])) ->
-            err
+            {:error,
+             local_binding_annotation_error(
+               :let_needs_annotation,
+               name,
+               meta,
+               rhs,
+               count_surface_uses(rest, name),
+               :shadowed_before_use,
+               first_binding_span(rest, name)
+             )}
 
           # Substitution is only safe at EXACTLY ONE use:
           #
@@ -7403,7 +9556,14 @@ defmodule Cure.Elab.Elaborator do
           # Both are refused, and the message says how to fix it: ascribe the
           # binding (`let x : T = e`) and it binds once, checked.
           count_surface_uses(rest, name) != 1 ->
-            {:error, {:let_needs_annotation, name, meta}}
+            {:error,
+             local_binding_annotation_error(
+               :let_needs_annotation,
+               name,
+               meta,
+               rhs,
+               count_surface_uses(rest, name)
+             )}
 
           # Exactly one use: the rhs is elaborated once, in checking mode, at that
           # use site. No duplication, and it IS type-checked.
@@ -7415,15 +9575,112 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  defp local_binding_annotation_error(
+         kind,
+         name,
+         meta,
+         rhs,
+         use_count,
+         reason \\ :initializer_not_inferable,
+         shadow_span \\ nil
+       ) do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+
+    details = %{
+      name: name,
+      grade: Keyword.get(meta, :grade),
+      use_count: use_count,
+      reason: reason,
+      span: info && info.whole,
+      name_span: info && info.name,
+      grade_span: info && info.annotation,
+      initializer_span: surface_expression_span(rhs),
+      shadow_span: shadow_span
+    }
+
+    {kind, details}
+  end
+
+  defp first_binding_span(list, name) when is_list(list) do
+    Enum.find_value(list, &first_binding_span(&1, name))
+  end
+
+  defp first_binding_span({:match_arm, meta, body}, name) do
+    pattern = Keyword.get(meta, :pattern)
+    pattern_binder_span(pattern, name) || first_binding_span(body, name)
+  end
+
+  defp first_binding_span({:lambda, meta, children}, name) do
+    parameter_span =
+      Enum.find_value(Keyword.get(meta, :params, []), fn
+        {:param, pmeta, ^name} ->
+          case Cure.MetaAST.Metadata.source_info(pmeta) do
+            %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+            %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end)
+
+    parameter_span || first_binding_span(List.wrap(children), name)
+  end
+
+  defp first_binding_span({_tag, _meta, children}, name) when is_list(children),
+    do: first_binding_span(children, name)
+
+  defp first_binding_span(_other, _name), do: nil
+
+  defp pattern_binder_span({:variable, meta, name}, name) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp pattern_binder_span({:typed_pattern, meta, [name, _type]}, name) when is_binary(name) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp pattern_binder_span({_tag, _meta, children}, name) when is_list(children),
+    do: Enum.find_value(children, &pattern_binder_span(&1, name))
+
+  defp pattern_binder_span(list, name) when is_list(list),
+    do: Enum.find_value(list, &pattern_binder_span(&1, name))
+
+  defp pattern_binder_span(_other, _name), do: nil
+
   # `let x : T = e ⏎ rest`  ⟶  `{:let, Cure.Core.Grade.unrestricted(), T, e, rest}` with `x := e` in the context.
-  defp bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env) do
+  defp bind_once_let(
+         name,
+         rhs_core,
+         ty_core,
+         ty_value,
+         grade,
+         rest,
+         expected_core,
+         names,
+         ctx,
+         env,
+         opaque \\ false
+       ) do
     rhs_value = Eval.eval(rhs_core, Context.env(ctx))
 
     # `extend_def/3`, not `extend/2`: the binder is definitionally its value (ζ),
     # so a later `SNat(k)` sees `k`'s concrete value — the one thing a β-redex
     # cannot give. A shadowing binder deeper in `rest` correctly shadows this de
     # Bruijn binder, so no capture guard is needed on this path.
-    ctx1 = Context.extend_def(ctx, ty_value, rhs_value)
+    ctx1 =
+      if opaque,
+        do: Context.extend(ctx, ty_value),
+        else: Context.extend_def(ctx, ty_value, rhs_value)
+
     names1 = [name | names]
     expected1 = Subst.shift(expected_core, 1, 0)
 
@@ -7747,12 +10004,31 @@ defmodule Cure.Elab.Elaborator do
 
   def desugar_special_match(scrut, arms, line) do
     cond do
-      map_match_arms?(arms) -> desugar_map_arms(scrut, arms, line)
+      map_match_arms?(arms) -> desugar_map_match_once(scrut, arms, line)
       binary_match_arms?(arms) -> desugar_binary_arms(scrut, arms, line)
     end
   end
 
-  def desugar_map_match(scrut, arms, line), do: desugar_map_arms(scrut, arms, line)
+  def desugar_map_match(scrut, arms, line), do: desugar_map_match_once(scrut, arms, line)
+
+  # `has_key` and `get` both inspect the map scrutinee. Repeating an arbitrary
+  # dependent expression beneath both helpers can make implicit insertion solve
+  # a projection metavariable under a helper-local Π binder. Bind a non-variable
+  # scrutinee once, opaquely, before building those calls. The emitted Core let
+  # still evaluates the expression once; opacity only prevents ζ-reduction while
+  # elaborating the let body.
+  defp desugar_map_match_once({:variable, _meta, _name} = scrut, arms, line),
+    do: desugar_map_arms(scrut, arms, line)
+
+  defp desugar_map_match_once(scrut, arms, line) do
+    name = "$map_scrutinee_" <> fresh_tag()
+    variable = {:variable, [], name}
+
+    with {:ok, body} <- desugar_map_arms(variable, arms, line) do
+      binding = {:assignment, [let: true, opaque: true, line: line], [variable, scrut]}
+      {:ok, {:block, [line: line], [binding, body]}}
+    end
+  end
 
   # A wildcard/variable arm terminates the chain: `_` yields its body directly, a
   # named binder binds the whole scrutinee first.
@@ -7761,13 +10037,26 @@ defmodule Cure.Elab.Elaborator do
   defp desugar_map_arms(scrut, [{:match_arm, meta, [body]} | rest], line) do
     case Keyword.get(meta, :pattern) do
       {:map, _mm, pairs} ->
-        with {:ok, presence, value_eqs, binds} <- map_arm_guard_binds(scrut, pairs, line),
+        with {:ok, presence, value_eqs, binds, nested} <- map_arm_guard_binds(scrut, pairs, line),
              {:ok, else_expr} <- desugar_map_arms(scrut, rest, line) do
           # Cure's `and` is strict, so a value `get` must never run on an absent
           # key: gate all `get`s behind the (total) presence guard structurally.
           # Only once every listed key is present are the value-equality checks
           # and the binding `get`s evaluated.
-          then_body = if binds == [], do: body, else: {:block, [line: line], binds ++ [body]}
+          matched_body =
+            Enum.reduce(Enum.reverse(nested), body, fn {value, pattern}, success ->
+              {:pattern_match, [line: line],
+               [
+                 value,
+                 {:match_arm, [pattern: pattern], [success]},
+                 {:match_arm, [pattern: {:variable, [], "_"}], [else_expr]}
+               ]}
+            end)
+
+          then_body =
+            if binds == [],
+              do: matched_body,
+              else: {:block, [line: line], binds ++ [matched_body]}
 
           inner =
             case value_eqs do
@@ -7795,8 +10084,8 @@ defmodule Cure.Elab.Elaborator do
   # (`get(k) == lit`, evaluated only after presence holds), and (c) the `let`
   # bindings for variable value positions.
   defp map_arm_guard_binds(scrut, pairs, line) do
-    Enum.reduce_while(pairs, {:ok, [], [], []}, fn
-      {:pair, _pm, [{:literal, kmeta, key}, valpat]}, {:ok, presence, value_eqs, binds}
+    Enum.reduce_while(pairs, {:ok, [], [], [], []}, fn
+      {:pair, _pm, [{:literal, kmeta, key}, valpat]}, {:ok, presence, value_eqs, binds, nested}
       when is_atom(key) ->
         if Keyword.get(kmeta, :subtype) in [:symbol, :atom] do
           key_lit = {:literal, [subtype: :symbol], key}
@@ -7804,23 +10093,25 @@ defmodule Cure.Elab.Elaborator do
 
           case valpat do
             {:variable, _vm, "_"} ->
-              {:cont, {:ok, presence ++ [present], value_eqs, binds}}
+              {:cont, {:ok, presence ++ [present], value_eqs, binds, nested}}
 
             {:variable, _vm, _name} ->
               bind =
                 {:assignment, [let: true, line: line], [valpat, mk_call("get", [key_lit, scrut], line)]}
 
-              {:cont, {:ok, presence ++ [present], value_eqs, binds ++ [bind]}}
+              {:cont, {:ok, presence ++ [present], value_eqs, binds ++ [bind], nested}}
 
             {:literal, _lm, _lv} = lit ->
               eq =
                 {:binary_op, [category: :comparison, operator: :==, line: line],
                  [mk_call("get", [key_lit, scrut], line), lit]}
 
-              {:cont, {:ok, presence ++ [present], value_eqs ++ [eq], binds}}
+              {:cont, {:ok, presence ++ [present], value_eqs ++ [eq], binds, nested}}
 
             other ->
-              {:halt, {:error, {:unsupported_map_value_pattern, other}}}
+              value = mk_call("get", [key_lit, scrut], line)
+
+              {:cont, {:ok, presence ++ [present], value_eqs, binds, nested ++ [{value, other}]}}
           end
         else
           {:halt, {:error, {:unsupported_map_key_pattern, key}}}
@@ -7830,8 +10121,11 @@ defmodule Cure.Elab.Elaborator do
         {:halt, {:error, {:unsupported_map_key_pattern, other_key}}}
     end)
     |> case do
-      {:ok, presence, value_eqs, binds} -> {:ok, presence, value_eqs, binds}
-      {:error, _} = e -> e
+      {:ok, presence, value_eqs, binds, nested} ->
+        {:ok, presence, value_eqs, binds, nested}
+
+      {:error, _} = e ->
+        e
     end
   end
 
@@ -7847,10 +10141,10 @@ defmodule Cure.Elab.Elaborator do
   # Byte-binary patterns, the destructuring twin of `desugar_map_arms`. A match
   # whose arms are `<<…>>` patterns desugars to `byte_size`-guarded conditionals
   # over `Std.Binary`: the length guard (`==` for a fixed pattern, `>=` when a
-  # `rest/binary` tail is present) gates the byte reads, then literal byte
+  # `rest::binary` tail is present) gates the byte reads, then literal byte
   # positions add `byte_at(b, i) == lit` guards and variable positions bind
   # `byte_at(b, i)` / `drop_bytes(b, k)`. Open-ended, so a trailing default arm is
-  # required. Sized/typed segments (`x/float`) are rejected, not mislowered.
+  # required. Sized/typed segments (`x::float`) are rejected, not mislowered.
   defp desugar_binary_arms(_scrut, [], _line), do: {:error, {:binary_match_needs_default}}
 
   defp desugar_binary_arms(scrut, [{:match_arm, meta, [body]} | rest], line) do
@@ -7887,7 +10181,7 @@ defmodule Cure.Elab.Elaborator do
 
   # Split a byte pattern's segments into (a) the length guard, (b) literal-byte
   # equality guards, and (c) the variable/tail `let` bindings. The optional
-  # `rest/binary` tail must come last; any other typed segment is rejected.
+  # `rest::binary` tail must come last; any other typed segment is rejected.
   defp binary_arm_guard_binds(scrut, segs, line) do
     {fixed, tail} = split_binary_tail(segs)
 
@@ -7903,12 +10197,13 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # The last segment is a tail iff it is a `_v/binary` (division-marker) segment.
+  # The last segment is a tail iff it is an unsized binary-family segment.
   defp split_binary_tail(segs) do
     case List.last(segs) do
-      {:bin_segment, _sm, [{:binary_op, opm, [v, {:variable, _tm, "binary"}]}]} = seg ->
-        if Keyword.get(opm, :operator) == :/ do
-          {segs |> Enum.reverse() |> tl() |> Enum.reverse(), {:tail, v, seg}}
+      {:bin_segment, meta, [v]} = seg ->
+        if Keyword.get(meta, :type) in [:binary, :bytes, :bitstring, :bits] and
+             is_nil(Keyword.get(meta, :size)) do
+          {Enum.drop(segs, -1), {:tail, v, seg}}
         else
           {segs, :none}
         end
@@ -7963,7 +10258,7 @@ defmodule Cure.Elab.Elaborator do
 
   # `<<b1, b2, …>>` → `Std.Binary.of_bytes([b1, b2, …])`: a byte binary literal is
   # a list of byte values packed into a BEAM binary. Only default 8-bit-integer
-  # segments are supported here; a `/type` segment (`x/float`, `x/binary`) is a
+  # segments are supported here; a typed segment (`x::float`, `x::binary`) is a
   # deferred rich-bit-syntax case and is rejected rather than mislowered. The
   # module must `use Std.Binary`.
   # `"a#{e}b"` → `str_concat("a", str_concat(e, "b"))`: a right fold over the
@@ -7982,7 +10277,7 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # Rich bit-syntax specifiers (`::16`, `/float`, `::size(n)`, unit/signedness/
+  # Rich bit-syntax specifiers (`::16`, `::float`, `::size(n)`, unit/signedness/
   # endianness) live in the segment meta after parsing. `of_bytes` packs a list
   # of 8-bit bytes and cannot express any of them, so a sized/typed segment is
   # REJECTED here rather than silently mislowered — dropping a `::16` size would
@@ -7996,9 +10291,6 @@ defmodule Cure.Elab.Elaborator do
         cond do
           Enum.any?(@rich_segment_keys, &(Keyword.get(sm, &1) != nil)) ->
             {:halt, {:error, {:unsupported_binary_segment, seg}}}
-
-          typed_segment?(expr) ->
-            {:halt, {:error, {:unsupported_binary_segment, expr}}}
 
           true ->
             {:cont, {:ok, acc ++ [expr]}}
@@ -8015,13 +10307,6 @@ defmodule Cure.Elab.Elaborator do
         e
     end
   end
-
-  # A `/type` segment parses as a division `value / type_name` (`<<x/float>>`,
-  # `<<rest/binary>>`); the sole surface marker for a non-default segment.
-  defp typed_segment?({:binary_op, meta, [_v, {:variable, _vm, _type}]}),
-    do: Keyword.get(meta, :operator) == :/
-
-  defp typed_segment?(_), do: false
 
   # `"abc"` → the `:list` literal `['a', 'b', 'c']`: one char-literal element per
   # Unicode codepoint (`String.to_charlist` decodes UTF-8), so a string is exactly
@@ -8060,19 +10345,31 @@ defmodule Cure.Elab.Elaborator do
   # downstream pattern pass runs (the pattern-position half of desugar_list/1).
   defp desugar_list_patterns(arms) do
     Enum.map(arms, fn
-      {:match_arm, meta, body} = arm ->
-        case Keyword.get(meta, :pattern) do
-          {:list, _, _} = lp ->
-            {:match_arm, Keyword.put(meta, :pattern, desugar_list(lp)), body}
-
-          _ ->
-            arm
-        end
+      {:match_arm, meta, body} ->
+        pattern = meta |> Keyword.fetch!(:pattern) |> desugar_pattern_lists()
+        {:match_arm, Keyword.put(meta, :pattern, pattern), body}
 
       other ->
         other
     end)
   end
+
+  # List sugar may occur at any depth in a constructor pattern. Rewriting only
+  # a top-level `:list` leaves e.g. `Parsed(_, ['*' | _])` opaque to the pattern
+  # matrix: it sees neither a constructor nor a variable in that column and
+  # drops the row while constructing the fallback branch. Normalize recursively
+  # so every downstream pattern pass receives the same Cons/Nil representation.
+  defp desugar_pattern_lists({:list, _, _} = pattern), do: desugar_list(pattern)
+
+  defp desugar_pattern_lists({:function_call, meta, args}) do
+    {:function_call, meta, Enum.map(args, &desugar_pattern_lists/1)}
+  end
+
+  defp desugar_pattern_lists({:named_implicit_pat, meta, children}) do
+    {:named_implicit_pat, meta, Enum.map(children, &desugar_pattern_lists/1)}
+  end
+
+  defp desugar_pattern_lists(pattern), do: pattern
 
   # Typed constructor payloads (`Some(value: Int)`) are a surface ascription on
   # an ordinary constructor binder. Remove the annotation before the existing
@@ -8110,7 +10407,7 @@ defmodule Cure.Elab.Elaborator do
       rest,
       index + 1,
       [{:variable, pattern_meta, name} | args],
-      [{index, type_ast} | annotations]
+      [{index, name, type_ast, pattern_meta} | annotations]
     )
   end
 
@@ -8134,7 +10431,17 @@ defmodule Cure.Elab.Elaborator do
             with {:ok, {cname, _pattern_vars}} <- constructor_pattern(pattern),
                  %{args: telescope, quantities: quantities} <- Inductive.get_ctor(env, cname),
                  branch_ctx <- extend_context(ctx, telescope, param_vals),
-                 :ok <- validate_constructor_payload_types(annotations, telescope, quantities, branch_ctx, names, env) do
+                 :ok <-
+                   validate_constructor_payload_types(
+                     annotations,
+                     telescope,
+                     quantities,
+                     branch_ctx,
+                     names,
+                     env,
+                     cname,
+                     pattern
+                   ) do
               {:cont, :ok}
             else
               {:error, _} = error -> {:halt, error}
@@ -8153,50 +10460,80 @@ defmodule Cure.Elab.Elaborator do
 
   defp validate_typed_pattern_annotations(_arms, _scrut_type, _names, _ctx, _env), do: :ok
 
-  defp validate_constructor_payload_types(annotations, telescope, quantities, branch_ctx, names, env) do
+  defp validate_constructor_payload_types(
+         annotations,
+         telescope,
+         quantities,
+         branch_ctx,
+         names,
+         env,
+         constructor,
+         pattern
+       ) do
     present_positions =
       quantities
       |> Enum.with_index()
       |> Enum.filter(fn {quantity, _index} -> Grade.present?(quantity) end)
       |> Enum.map(&elem(&1, 1))
 
-    Enum.reduce_while(annotations, :ok, fn {position, type_ast}, :ok ->
+    Enum.reduce_while(annotations, :ok, fn {position, binder, type_ast, pattern_meta}, :ok ->
       case Enum.at(present_positions, position) do
         nil ->
-          {:halt, {:error, {:typed_pattern_arity, position}}}
+          {:halt,
+           typed_pattern_arity_error(
+             position,
+             binder,
+             type_ast,
+             pattern_meta,
+             constructor,
+             pattern,
+             length(present_positions)
+           )}
 
         telescope_position ->
           branch_index = length(telescope) - 1 - telescope_position
           actual = Context.lookup(branch_ctx, branch_index)
 
-          with {:ok, annotated} <- elaborate_type(type_ast, names, env),
-               actual when not is_nil(actual) <- actual,
-               actual_term <- Quote.reify(actual, Context.length(branch_ctx)),
-               expected_term <- Subst.shift(annotated, length(telescope), 0),
-               true <-
-                 Conv.conv?(
+          case elaborate_type(type_ast, names, env) do
+            {:ok, annotated} when not is_nil(actual) ->
+              actual_term = Quote.reify(actual, Context.length(branch_ctx))
+              expected_term = Subst.shift(annotated, length(telescope), 0)
+
+              if Conv.conv?(
                    expected_term,
                    actual_term,
                    Context.env(branch_ctx),
                    Context.length(branch_ctx),
                    Context.signature(branch_ctx)
                  ) do
-            {:cont, :ok}
-          else
-            false ->
-              {:halt,
-               typed_pattern_annotation_error(
-                 {:typed_pattern_type_mismatch, type_ast},
-                 type_ast,
-                 position
-               )}
+                {:cont, :ok}
+              else
+                {:halt,
+                 typed_pattern_annotation_error(
+                   {:typed_pattern_type_mismatch, type_ast},
+                   type_ast,
+                   position,
+                   binder,
+                   pattern_meta,
+                   constructor,
+                   pattern,
+                   actual_term,
+                   expected_term
+                 )}
+              end
 
-            nil ->
+            {:ok, annotated} ->
               {:halt,
                typed_pattern_annotation_error(
                  {:typed_pattern_type_mismatch, type_ast},
                  type_ast,
-                 position
+                 position,
+                 binder,
+                 pattern_meta,
+                 constructor,
+                 pattern,
+                 nil,
+                 annotated
                )}
 
             {:error, reason} ->
@@ -8204,16 +10541,66 @@ defmodule Cure.Elab.Elaborator do
                typed_pattern_annotation_error(
                  {:typed_pattern_type_error, reason},
                  type_ast,
-                 position
+                 position,
+                 binder,
+                 pattern_meta,
+                 constructor,
+                 pattern,
+                 nil,
+                 nil
                )}
           end
       end
     end)
   end
 
-  defp typed_pattern_annotation_error(reason, type_ast, position) do
+  defp typed_pattern_arity_error(position, binder, type_ast, pattern_meta, constructor, pattern, visible_arity) do
+    pattern_info = Cure.MetaAST.Metadata.source_info(pattern_meta)
+    constructor_info = pattern |> elem(1) |> Cure.MetaAST.Metadata.source_info()
+    supplied_arity = pattern |> elem(2) |> length()
+    annotation_span = surface_expression_span(type_ast)
+    typed_pattern_span = rewrite_span(pattern_info && pattern_info.whole, annotation_span)
+    span = typed_pattern_span || (constructor_info && constructor_info.whole)
+
+    {:error,
+     {:source_context, {:typed_pattern_arity, position},
+      %{
+        line: span && span.start_line,
+        column: span && span.start_column,
+        length: span && max(1, span.end_byte - span.start_byte),
+        span: span,
+        typed_pattern_span: typed_pattern_span,
+        binder_span: pattern_info && pattern_info.name,
+        annotation_span: annotation_span,
+        constructor_pattern_span: constructor_info && constructor_info.whole,
+        constructor_name_span: constructor_info && (constructor_info.name || constructor_info.callee),
+        constructor: constructor,
+        binder: binder,
+        argument_index: position,
+        supplied_arity: supplied_arity,
+        visible_arity: visible_arity,
+        checking: :pattern,
+        expression_category: :pattern,
+        expectation_origin: :pattern
+      }}}
+  end
+
+  defp typed_pattern_annotation_error(
+         reason,
+         type_ast,
+         position,
+         binder,
+         pattern_meta,
+         constructor,
+         pattern,
+         actual_type,
+         annotated_type
+       ) do
     case surface_expression_span(type_ast) do
       %Cure.Diagnostic.Span{} = span ->
+        pattern_info = Cure.MetaAST.Metadata.source_info(pattern_meta)
+        constructor_info = pattern |> elem(1) |> Cure.MetaAST.Metadata.source_info()
+
         {:error,
          {:source_context, reason,
           %{
@@ -8225,7 +10612,16 @@ defmodule Cure.Elab.Elaborator do
             checking: :pattern,
             expression_category: :pattern,
             expectation_origin: :pattern,
-            argument_index: position
+            argument_index: position,
+            binder: binder,
+            typed_pattern_span: pattern_info && pattern_info.whole,
+            binder_span: pattern_info && pattern_info.name,
+            annotation_span: pattern_info && pattern_info.annotation,
+            constructor_pattern_span: constructor_info && constructor_info.whole,
+            constructor_name_span: constructor_info && constructor_info.name,
+            constructor: constructor,
+            annotated_type: annotated_type,
+            field_type: actual_type
           }}}
 
       _ ->
@@ -8262,7 +10658,15 @@ defmodule Cure.Elab.Elaborator do
         [dup | _] -> {:error, {:nonlinear_pattern, String.to_atom(dup)}}
       end
     else
-      {:error, {:unsupported_pattern, :nested_constructor_arg}}
+      offending = Enum.find(positional, &(not match?({:variable, _meta, _name}, &1)))
+
+      {:error,
+       {:unsupported_pattern,
+        %{
+          reason: :unlowered_nested_constructor_argument,
+          shape: pattern_shape(offending),
+          span: surface_expression_span(offending)
+        }}}
     end
   end
 
@@ -8387,8 +10791,12 @@ defmodule Cure.Elab.Elaborator do
   # The named-implicit annotations of a constructor pattern, as `{name, inner}`
   # pairs (empty for a pattern without any). Used by `elaborate_matched_branch`
   # to run the forced-index convertibility check.
-  defp constructor_named_implicits({:function_call, _meta, args}),
-    do: for({:named_implicit_pat, m, [inner]} <- args, do: {Keyword.get(m, :name), inner})
+  defp constructor_named_implicits({:function_call, constructor_meta, args}),
+    do:
+      for(
+        {:named_implicit_pat, m, [inner]} <- args,
+        do: {Keyword.get(m, :name), inner, m, constructor_meta}
+      )
 
   defp constructor_named_implicits(_), do: []
 
@@ -8400,7 +10808,7 @@ defmodule Cure.Elab.Elaborator do
   defp split_named_implicits(pattern, subst, arity, telescope, quantities) do
     pattern
     |> constructor_named_implicits()
-    |> Enum.split_with(fn {name, inner} ->
+    |> Enum.split_with(fn {name, inner, _named_meta, _constructor_meta} ->
       position = Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end)
 
       match?({:variable, _, _}, inner) and position != nil and
@@ -8502,17 +10910,13 @@ defmodule Cure.Elab.Elaborator do
   # arithmetic, …) is a non-constructor expression — the deferred forced case.
   defp valid_restated_pattern?({:variable, _, _}), do: true
 
-  defp valid_restated_pattern?({:function_call, meta, args}) do
-    constructor_name?(Keyword.get(meta, :name)) and Enum.all?(args, &valid_restated_pattern?/1)
-  end
+  # A call-shaped node in pattern position is a constructor candidate regardless
+  # of capitalization. Indexed GADT constructors are commonly lowercase
+  # (`szero`, `ssuc`); branch elaboration validates their identity later.
+  defp valid_restated_pattern?({:function_call, _meta, args}),
+    do: Enum.all?(args, &valid_restated_pattern?/1)
 
   defp valid_restated_pattern?(_), do: false
-
-  # Cure constructors are capitalised; ordinary identifiers/operators are not.
-  defp constructor_name?(name) when is_binary(name) and name != "",
-    do: String.first(name) =~ ~r/[A-Z]/
-
-  defp constructor_name?(_), do: false
 
   # Structural equality of surface patterns, ignoring meta.
   defp strip_pattern_meta({:variable, _, n}), do: {:variable, n}
@@ -9489,7 +11893,11 @@ defmodule Cure.Elab.Elaborator do
             # metavariable or a kernel type error, never silent acceptance.
             case partial_pin_result(result_term, expected_core, mctx, env) do
               :mismatch ->
-                {:error, {:constructor_result_mismatch, cname}}
+                {:error,
+                 {:constructor_result_mismatch, %{constructor: cname, actual: result_term, expected: expected_core}}}
+
+              :not_applicable ->
+                {:error, :constructor_result_not_applicable}
 
               {mctx, deferred} ->
                 # Params that pinned structurally are passed for the de Bruijn frame;
@@ -9500,6 +11908,90 @@ defmodule Cure.Elab.Elaborator do
             end
         end
     end
+  end
+
+  defp attach_constructor_result_mismatch({:error, {:source_context, reason, existing}}, details, meta, args) do
+    {:error, {:source_context, reason, Map.merge(constructor_result_mismatch_context(details, meta, args), existing)}}
+  end
+
+  defp attach_constructor_result_mismatch({:error, reason}, details, meta, args) do
+    {:error, {:source_context, reason, constructor_result_mismatch_context(details, meta, args)}}
+  end
+
+  defp attach_nested_constructor_context(
+         {:error, {:unsolved_metavariables, name} = reason},
+         args,
+         owner
+       ) do
+    case nested_constructor_site(args, name) do
+      {argument_index, expression} ->
+        span = surface_expression_span(expression)
+
+        {:error,
+         {:source_context, reason,
+          %{
+            line: span && span.start_line,
+            column: span && span.start_column,
+            length: span && max(1, span.end_column - span.start_column),
+            span: span,
+            checking: owner,
+            expression_category: :function_call,
+            expectation_origin: :constructor_argument,
+            argument_index: argument_index
+          }}}
+
+      nil ->
+        {:error, reason}
+    end
+  end
+
+  defp attach_nested_constructor_context(error, _args, _owner), do: error
+
+  defp nested_constructor_site(args, target) do
+    target = target |> Cure.Elab.Name.base() |> to_string()
+
+    args
+    |> Enum.with_index()
+    |> Enum.find_value(fn {argument, index} ->
+      case nested_named_call(argument, target) do
+        nil -> nil
+        expression -> {index, expression}
+      end
+    end)
+  end
+
+  defp nested_named_call({:function_call, meta, children} = expression, target)
+       when is_list(meta) do
+    if Keyword.get(meta, :name) |> to_string() == target do
+      expression
+    else
+      Enum.find_value(children, &nested_named_call(&1, target))
+    end
+  end
+
+  defp nested_named_call({_tag, _meta, children}, target) when is_list(children),
+    do: Enum.find_value(children, &nested_named_call(&1, target))
+
+  defp nested_named_call(children, target) when is_list(children),
+    do: Enum.find_value(children, &nested_named_call(&1, target))
+
+  defp nested_named_call(_expression, _target), do: nil
+
+  defp constructor_result_mismatch_context(details, meta, args) do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+
+    %{
+      span: info && info.whole,
+      application_span: info && info.whole,
+      callee_span: info && info.callee,
+      argument_spans: Enum.map(args, &surface_expression_span/1),
+      constructor: Map.get(details, :constructor),
+      constructor_actual_type: Map.get(details, :actual),
+      constructor_expected_type: Map.get(details, :expected),
+      constructor_result_mismatch: true,
+      expectation_origin: :annotation,
+      expression_category: :constructor_application
+    }
   end
 
   # Assemble a constructor's argument list against the solved parameters and the
@@ -9621,15 +12113,59 @@ defmodule Cure.Elab.Elaborator do
   defp partial_pin_result({:data, fam, ap, ai}, {:data, fam, ep, ei}, mctx, env)
        when length(ap) == length(ep) and length(ai) == length(ei) do
     Enum.zip(ap ++ ai, ep ++ ei)
-    |> Enum.reduce({mctx, []}, fn {actual, expected}, {m, deferred} ->
+    |> Enum.reduce_while({mctx, []}, fn {actual, expected}, {m, deferred} ->
       case Unify.unify(actual, expected, m, env) do
-        {:ok, m2} -> {m2, deferred}
-        {:error, _} -> {m, [{actual, expected} | deferred]}
+        {:ok, m2} ->
+          {:cont, {m2, deferred}}
+
+        {:error, _} ->
+          if definite_constructor_result_clash?(Unify.zonk(actual, m), Unify.zonk(expected, m)) do
+            {:halt, :mismatch}
+          else
+            {:cont, {m, [{actual, expected} | deferred]}}
+          end
       end
     end)
   end
 
-  defp partial_pin_result(_actual, _expected, _mctx, _env), do: :mismatch
+  # A goal with a different outer type is not an indexed-result clash. Let the
+  # original inference/checking error explain that call; this specialized path is
+  # only for constructors whose own family matches the expected family.
+  defp partial_pin_result(_actual, _expected, _mctx, _env), do: :not_applicable
+
+  defp definite_constructor_result_clash?({:data, left, _, _}, {:data, right, _, _}),
+    do: left != right
+
+  defp definite_constructor_result_clash?({:ctor, left, _}, {:ctor, right, _}),
+    do: left != right
+
+  defp definite_constructor_result_clash?({:global, left}, {:global, right}),
+    do: left != right
+
+  defp definite_constructor_result_clash?({:global, left}, {:data, right, _, _}),
+    do: left != right
+
+  defp definite_constructor_result_clash?({:data, left, _, _}, {:global, right}),
+    do: left != right
+
+  defp definite_constructor_result_clash?(left, right)
+       when is_tuple(left) and is_tuple(right) and tuple_size(left) == 1 and tuple_size(right) == 1 do
+    primitive_type_head?(elem(left, 0)) and primitive_type_head?(elem(right, 0)) and left != right
+  end
+
+  defp definite_constructor_result_clash?(_left, _right), do: false
+
+  defp primitive_type_head?(head),
+    do:
+      head in [
+        :int_type,
+        :float_type,
+        :string_type,
+        :binary_type,
+        :atom_type,
+        :char_type,
+        :type
+      ]
 
   # Retry each deferred result-index equation after zonking both sides. Solved
   # equations are dropped; unsolved ones are kept for a later sweep. Returns the
@@ -9759,7 +12295,7 @@ defmodule Cure.Elab.Elaborator do
   # present slots unify against the supplied arguments. Returns the applied term
   # and its result type (the codomain instantiated with the solved arguments).
   defp elaborate_global_app(env, name, present_args, ctx, expected \\ nil) do
-    %{type: pi_type, quantities: quantities} = Env.get_def(env, name)
+    %{type: pi_type, quantities: quantities} = defn = Env.get_def(env, name)
     {domains, codomain} = peel_pi(pi_type, length(quantities))
 
     # A global def has no relevant-implicit surface (that is a constructor-index
@@ -9767,10 +12303,16 @@ defmodule Cure.Elab.Elaborator do
     # else :explicit (positional) — preserving the pre-plicity `solve_arg`
     # behavior now that the slot carries an explicit plicity.
     slot_plicities =
-      Enum.map(quantities, fn
-        :erased -> :implicit
-        _ -> :explicit
-      end)
+      case Map.get(defn, :plicities) do
+        ps when is_list(ps) ->
+          ps
+
+        _ ->
+          Enum.map(quantities, fn
+            :erased -> :implicit
+            _ -> :explicit
+          end)
+      end
 
     telescope = Enum.zip([Enum.map(domains, &{:_, &1}), quantities, slot_plicities])
     init = {:ok, MetaCtx.new(), [], present_args}
@@ -9989,6 +12531,9 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  def elaborate_expr({:unsafe_expression, meta, _children}, _scope, _env),
+    do: {:error, {:unsafe_call_required, %{span: Keyword.get(meta, :unsafe_span)}}}
+
   def elaborate_expr({:record_update, meta, children}, scope, env) do
     with {:ok, positional} <- desugar_record_update(meta, children, env) do
       elaborate_expr(positional, scope, env)
@@ -10052,16 +12597,34 @@ defmodule Cure.Elab.Elaborator do
     do: elaborate_expr(Cure.Compiler.MacroSyntax.lower_quote(inner), scope, env)
 
   def elaborate_expr({:async_operation, meta, _children}, _scope, _env),
-    do: {:error, {:unsupported_async, "`spawn` is not supported by the dependent runtime yet.", meta}}
+    do: {:error, unsupported_async_error(meta)}
 
   # A `$(e)` / `$(e ...)` splice reaching the elaborator as a bare node means it
   # sits outside any enclosing `quote` — a category error. Inside a quote,
   # `lower_quote/1` consumes the splice wrapper (only its inner expression
   # survives), so this clause fires only for an orphan splice.
   def elaborate_expr({tag, meta, _}, _scope, _env) when tag in [:splice, :splice_group],
-    do: {:error, {:splice_outside_quote, tag, meta}}
+    do: {:error, splice_outside_quote_error(tag, meta)}
 
   def elaborate_expr(other, _scope, _env), do: {:error, {:unsupported_expression, other}}
+
+  defp unsupported_async_error(meta) do
+    {:unsupported_async,
+     %{
+       primitive: :spawn,
+       stage: :dependent_runtime,
+       span: surface_expression_span({:async_operation, meta, []})
+     }}
+  end
+
+  defp splice_outside_quote_error(tag, meta) do
+    {:splice_outside_quote,
+     %{
+       form: tag,
+       stage: :elaboration,
+       span: surface_expression_span({tag, meta, []})
+     }}
+  end
 
   # The registered Sigma constructor name (canonically `:mk_pair`), resolved via the
   # builtin registry (§1.4) rather than hard-coded; defaults to `:mk_pair` when no
@@ -10078,6 +12641,19 @@ defmodule Cure.Elab.Elaborator do
   defp unit_family_name(env), do: Env.resolve_key(env, env.families, :Unit)
 
   defp unit_ctor_name(env), do: Env.resolve_key(env, env.ctors, :unit)
+
+  # `Tuple(A, B, ...)` is parsed as a dedicated `:tuple_type` in annotation
+  # position, but as an ordinary call when it occurs in the body of a
+  # Type-returning function. Types are first-class there too: route the call
+  # through the same tuple-type lowering used by annotations instead of trying
+  # to resolve a nonexistent runtime value named `Tuple`.
+  defp elaborate_named_call_scoped([{:name, "Tuple"} | _], args, scope, env) do
+    elaborate_type(
+      {:tuple_type, [arity: length(args), binders: List.duplicate("_", length(args))], args},
+      scope,
+      env
+    )
+  end
 
   defp elaborate_named_call_scoped(meta, args, scope, env) do
     name = Keyword.fetch!(meta, :name)

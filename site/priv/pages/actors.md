@@ -4,6 +4,14 @@
   order: 5
 }
 ---
+
+> **0.34 update:** `actor` and `sup` are auto-preluded standard-library
+> macros, not privileged compiler container nodes. They expand to ordinary
+> lifted modules, callbacks, and the checked `Std.Otp` algebra. The dependent
+> kernel checks message indices and linear reply capabilities before erasure;
+> no raw-source or direct code-server escape path is involved. The sections
+> below retain the established runtime vocabulary and pre-0.34 history.
+
 Cure 0.25.0 turns the language into a first-class environment for writing OTP-style supervision trees. The four pieces that land together are:
 
 1. The **Melquiades Operator** `<-|` (unicode alias `✉`) for sending a message to a pid.

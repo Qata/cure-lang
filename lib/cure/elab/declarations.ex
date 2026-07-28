@@ -43,10 +43,13 @@ defmodule Cure.Elab.Declarations do
   """
   @spec elaborate(tuple(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
   def elaborate(decl, env) do
-    with :ok <- reject_erases_on_non_opaque(decl),
-         {:ok, env} <- Cure.Elab.Union.predeclare_all(decl, env) do
-      do_elaborate(decl, env)
-    end
+    result =
+      with :ok <- reject_erases_on_non_opaque(decl),
+           {:ok, env} <- Cure.Elab.Union.predeclare_all(decl, env) do
+        do_elaborate(decl, env)
+      end
+
+    attach_declaration_source_context(result, decl)
   end
 
   defp do_elaborate({:function_def, _meta, _body} = decl, env) do
@@ -103,10 +106,12 @@ defmodule Cure.Elab.Declarations do
 
               with {:ok, [ctor]} <- elaborate_gadt_ctors([sig], name, [], [], working_env) do
                 declare_at_min_level(env, name, [attach_field_defaults(ctor, variants)], 0)
+                |> register_record_field_sites(env, name, variants)
               end
 
             type_params ->
               declare_parameterized_struct(name, type_params, variants, env)
+              |> register_record_field_sites(env, name, variants)
           end
         end
 
@@ -150,7 +155,7 @@ defmodule Cure.Elab.Declarations do
   # Indexed (GADT) family: `type NAME(params) indices (idx) <ctor sigs>`. Head
   # `(params)` are uniform parameters (restated, never matched); the `indices`
   # clause lists the refined indices. Each constructor signature is an
-  # `{:arrow_chain, [dom…, result]}`; the implicit index-variable telescope is
+  # `{:arrow_chain, meta, [dom…, result]}`; the implicit index-variable telescope is
   # inferred from the signature (§5.2). A parameter-free family omits `(params)`.
   # `type X = Y` with a single bare right-hand side is ambiguous, and the parser cannot
   # resolve it — it tags the RHS `variant: true` and defers:
@@ -185,7 +190,124 @@ defmodule Cure.Elab.Declarations do
     Cure.Elab.Interface.elaborate(decl, env)
   end
 
-  defp do_elaborate(other, _env), do: {:error, {:unsupported_declaration, elem(other, 0)}}
+  defp do_elaborate(other, _env) when is_tuple(other),
+    do: {:error, {:unsupported_declaration, elem(other, 0)}}
+
+  defp do_elaborate(other, _env), do: {:error, {:unsupported_declaration, declaration_shape(other)}}
+
+  # Declaration validation runs after parsing and can also receive generated
+  # MetaAST. Preserve the exact authored declaration role when one exists,
+  # while leaving generated-only failures honestly span-free.
+  defp attach_declaration_source_context(
+         {:error, reason},
+         {:container, meta, _children}
+       )
+       when is_list(meta) and
+              elem(reason, 0) in [
+                :primitive_missing_builtin,
+                :unknown_primitive_tag,
+                :primitive_floor_mismatch
+              ] do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+    kind = elem(reason, 0)
+
+    context = %{
+      span: primitive_failure_span(kind, info),
+      declaration_span: if(info, do: info.whole),
+      name_span: if(info, do: info.name),
+      builtin_span: decorator_span(info, "builtin", :whole),
+      builtin_argument_span: decorator_span(info, "builtin", 0),
+      primitive: Keyword.get(meta, :name),
+      builtin_tag: primitive_decorator_tag(meta),
+      expectation_origin: :primitive_declaration,
+      expression_category: :primitive_declaration
+    }
+
+    {:error, {:source_context, reason, context}}
+  end
+
+  defp attach_declaration_source_context(
+         {:error, {:unsupported_declaration, _shape} = reason},
+         {_tag, meta, _children}
+       )
+       when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{} = info ->
+        {:error,
+         {:source_context, reason,
+          %{
+            span: info.whole,
+            declaration_span: info.whole,
+            name_span: info.name,
+            expectation_origin: :declaration_validation,
+            expression_category: :declaration
+          }}}
+
+      _ ->
+        {:error, reason}
+    end
+  end
+
+  defp attach_declaration_source_context(
+         {:error, {:source_context, {:result_type_not_family, _family}, context} = reason},
+         {:indexed_type, meta, _constructors}
+       )
+       when is_list(meta) and is_map(context) do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+
+    {:error,
+     {:source_context, elem(reason, 1),
+      Map.merge(
+        %{
+          family_declaration_span: info && info.whole,
+          family_name_span: info && info.name,
+          family: Keyword.get(meta, :name),
+          expectation_origin: :constructor_result,
+          expression_category: :constructor_signature
+        },
+        context
+      )}}
+  end
+
+  defp attach_declaration_source_context(result, _decl), do: result
+
+  defp primitive_failure_span(kind, info)
+       when kind in [:unknown_primitive_tag, :primitive_floor_mismatch],
+       do: decorator_span(info, "builtin", 0) || if(info, do: info.name)
+
+  defp primitive_failure_span(_kind, info), do: if(info, do: info.name || info.whole)
+
+  defp decorator_span(%Cure.MetaAST.SourceInfo{decorators: decorators}, name, :whole) do
+    case Map.get(decorators, name) do
+      %{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp decorator_span(%Cure.MetaAST.SourceInfo{decorators: decorators}, name, index)
+       when is_integer(index) do
+    case Map.get(decorators, name) do
+      %{arguments: arguments} -> Enum.at(arguments, index)
+      _ -> nil
+    end
+  end
+
+  defp decorator_span(_info, _name, _role), do: nil
+
+  defp primitive_decorator_tag(meta) do
+    case Keyword.get(meta, :decorator) do
+      {:decorator, dm, [{:literal, _, tag}]} when is_atom(tag) ->
+        if Keyword.get(dm, :name) == :builtin, do: tag
+
+      _ ->
+        nil
+    end
+  end
+
+  defp declaration_shape(value) when is_map(value), do: :map
+  defp declaration_shape(value) when is_list(value), do: :list
+  defp declaration_shape(value) when is_atom(value), do: value
+  defp declaration_shape(_value), do: :unknown
 
   # `Cure.Elab.Union.union_family?/1` recognises a generated union family purely
   # by a name-prefix test ("Union<…>"). That is safe only if the prefix is truly
@@ -361,21 +483,41 @@ defmodule Cure.Elab.Declarations do
          {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
          ctx = build_context(env, telescope),
          {:ok, rhs_core} <- idx_to_core(rhs, scope, nil, env),
-         {:ok, level} <- typealias_universe(ctx, name, rhs_core) do
+         {:ok, level} <- typealias_universe(ctx, name, rhs_core, meta, rhs) do
       type_core = wrap_binders(:pi, telescope, quantities, {:type, level})
       body = wrap_binders(:lam, telescope, quantities, rhs_core)
-      env1 = Env.add_def(env, name, type_core, body, quantities)
+      env1 = env |> Env.add_def(name, type_core, body, quantities) |> Env.put_typealias(name)
       {:ok, maybe_certify(env1, name)}
     end
   end
 
-  defp typealias_universe(ctx, name, rhs_core) do
+  defp typealias_universe(ctx, name, rhs_core, meta, rhs) do
     case Kernel.infer(ctx, rhs_core) do
-      {:ok, {:vtype, level}} -> {:ok, level}
-      {:ok, other} -> {:error, {:typealias_not_a_type, name, Quote.reify(other, 0)}}
-      {:error, reason} -> {:error, reason}
+      {:ok, {:vtype, level}} ->
+        {:ok, level}
+
+      {:ok, other} ->
+        info = Cure.MetaAST.Metadata.source_info(meta)
+        rhs_info = rhs |> elem(1) |> Cure.MetaAST.Metadata.source_info()
+
+        {:error,
+         {:typealias_not_a_type,
+          %{
+            name: name,
+            actual_type: Quote.reify(other, 0),
+            rhs_shape: typealias_rhs_shape(rhs),
+            span: rhs_info && rhs_info.whole,
+            declaration_span: info && info.whole,
+            name_span: info && info.name
+          }}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
+
+  defp typealias_rhs_shape({tag, _meta, _children}) when is_atom(tag), do: tag
+  defp typealias_rhs_shape(_rhs), do: :expression
 
   defp typealias_params(meta) do
     meta
@@ -419,13 +561,15 @@ defmodule Cure.Elab.Declarations do
          {:ok, sig} <- function_signature(meta, env) do
       env1 =
         env
-        |> Env.add_def(sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
+        |> Env.add_def(sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities, sig.plicities)
         # Labels must ride the record from the SIGNATURE pass on: overlap legality
         # (`check_overload_legality`) runs between the signature and body passes and
         # needs them to tell `move(to:)` from `move(from:)`. The body pass re-adds
         # the def (dropping this) and re-attaches its own copy.
         |> Env.put_labels(sig.name, param_label_vector(sig.params))
         |> register_parameter_spans(sig.name, sig.params)
+        |> register_declaration_span(sig.name, meta)
+        |> maybe_register_unsafe(sig.name, meta)
         |> maybe_register_lemma(sig, meta)
 
       env2 =
@@ -458,9 +602,10 @@ defmodule Cure.Elab.Declarations do
              :ok <- check_extern_not_union(sig, env) do
           final =
             env
-            |> Env.add_def(sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)
+            |> Env.add_def(sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities, sig.plicities)
             |> Env.put_labels(sig.name, param_label_vector(sig.params))
             |> register_parameter_spans(sig.name, sig.params)
+            |> maybe_register_unsafe(sig.name, meta)
 
           {:ok, final}
         end
@@ -584,8 +729,17 @@ defmodule Cure.Elab.Declarations do
       {:data, ukey, [], []} ->
         if Cure.Elab.Union.union_family?(ukey) do
           case Cure.Elab.Union.discriminable(Cure.Elab.Union.members_of(env, ukey), env) do
-            :ok -> :ok
-            {:error, reason} -> {:error, {:extern_union_indistinct, sig.name, reason}}
+            :ok ->
+              :ok
+
+            {:error, reason} ->
+              {:error,
+               extern_union_source_context(
+                 {:extern_union_indistinct, sig.name, reason},
+                 sig,
+                 env,
+                 [ukey]
+               )}
           end
         else
           :ok
@@ -595,12 +749,51 @@ defmodule Cure.Elab.Declarations do
         # A union NESTED inside the return type (`List(Int | Bool)`) cannot be re-tagged:
         # the boundary would have to walk an arbitrary structure. Reject.
         if Elaborator.union_goal?(codomain) do
-          {:error, {:extern_returns_union, sig.name, codomain}}
+          {:error,
+           extern_union_source_context(
+             {:extern_returns_union, sig.name, codomain},
+             sig,
+             env,
+             nested_union_families(codomain)
+           )}
         else
           :ok
         end
     end
   end
+
+  defp extern_union_source_context(reason, sig, env, families) do
+    union_members =
+      families
+      |> Enum.flat_map(&Cure.Elab.Union.members_of(env, &1))
+      |> Enum.map(& &1.key)
+      |> Enum.uniq()
+
+    {:source_context, reason,
+     %{
+       span: sig.return_span || sig.declaration_span,
+       return_span: sig.return_span,
+       declaration_span: sig.declaration_span,
+       name_span: sig.name_span,
+       extern_span: sig.extern_span,
+       checking: sig.name,
+       expectation_origin: :ffi_boundary,
+       expression_category: :extern_return_type,
+       union_families: families,
+       union_members: union_members
+     }}
+  end
+
+  defp nested_union_families({:data, family, parameters, indices}) do
+    own = if Cure.Elab.Union.union_family?(family), do: [family], else: []
+    own ++ Enum.flat_map(parameters ++ indices, &nested_union_families/1)
+  end
+
+  defp nested_union_families(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.flat_map(&nested_union_families/1)
+
+  defp nested_union_families(list) when is_list(list), do: Enum.flat_map(list, &nested_union_families/1)
+  defp nested_union_families(_other), do: []
 
   defp extern_codomain(type, 0), do: type
   defp extern_codomain({:pi, _g, _dom, cod}, n), do: extern_codomain(cod, n - 1)
@@ -741,7 +934,8 @@ defmodule Cure.Elab.Declarations do
            :ok <- assert_no_erased_effect_binder(final_pi, sig.name) do
         final =
           env
-          |> Env.add_def(sig.name, final_pi, lambda, quantities)
+          |> Env.add_def(sig.name, final_pi, lambda, quantities, sig.plicities)
+          |> maybe_register_unsafe(sig.name, meta)
           |> Env.put_source_holes(sig.name, collect_source_holes(body_expr, def_env, sig.return_span))
           |> Env.put_labels(sig.name, param_label_vector(sig.params))
           |> register_parameter_spans(sig.name, sig.params)
@@ -755,6 +949,16 @@ defmodule Cure.Elab.Declarations do
         final = maybe_certify(final, sig.name)
         Cure.Elab.Equation.generate(final, sig.name, meta, body_expr)
       end
+    end
+  end
+
+  defp maybe_register_unsafe(env, name, meta) do
+    case Keyword.get(meta, :decorator) do
+      {:decorator, decorator_meta, _args} when is_list(decorator_meta) ->
+        Env.put_unsafe(env, name, Keyword.get(decorator_meta, :name) == :unsafe)
+
+      _ ->
+        env
     end
   end
 
@@ -791,7 +995,6 @@ defmodule Cure.Elab.Declarations do
     do: map |> Map.values() |> collect_source_holes(env, annotation_span, acc)
 
   defp collect_source_holes(_other, _env, _annotation_span, acc), do: acc
-
   # Elaborate the body and settle the return type + its Core form. With a DECLARED
   # return, check the body against it (the long-standing behavior). With NONE
   # (annotation-free `fn f() = expr`, which the parser accepts), INFER the body's
@@ -842,6 +1045,7 @@ defmodule Cure.Elab.Declarations do
     reason = Elaborator.contextualize_call_arity(reason, expression, env)
     {line, column, length} = expression_extent(expression)
     meta = expression_meta(expression)
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
 
     expectation_origin =
       if branch_type_reason?(reason) and dependent_match?(expression, env),
@@ -853,11 +1057,21 @@ defmodule Cure.Elab.Declarations do
       column: column,
       length: length,
       checking: checking,
-      span: Cure.MetaAST.Metadata.source_info(meta) |> then(&if(&1, do: &1.whole)),
+      span: if(source_info, do: source_info.whole),
+      opener_span: if(source_info, do: source_info.opener),
+      scrutinee_span: if(source_info, do: List.first(source_info.operands)),
+      proof_span: if(source_info, do: Map.get(source_info.fields, :proof_clause)),
+      proof_keyword_span: if(source_info, do: Map.get(source_info.fields, :proof_keyword)),
+      proof_name_span: if(source_info, do: Map.get(source_info.fields, :proof_name)),
+      proof_name: Keyword.get(meta, :proof),
+      parameter_sites:
+        env
+        |> Env.owned_name(checking)
+        |> Cure.Elab.SourceMetadata.parameter_sites(),
       expectation_span: expectation_span,
       expression_category: expression_category(expression),
       expectation_origin: expectation_origin,
-      branch_patterns: branch_patterns(expression)
+      branch_patterns: branch_patterns(expression, env)
     }
 
     outer_context = declaration_expectation_context(expression, reason, outer_context, env)
@@ -883,10 +1097,25 @@ defmodule Cure.Elab.Declarations do
           end
 
         merged_context =
-          if Map.get(merged_context, :expectation_origin) == :annotation and expectation_span do
+          if expectation_span &&
+               (Map.get(merged_context, :expectation_origin) == :annotation or
+                  match?({:unsolved_metavariables, _}, nested_reason)) do
             Map.put(merged_context, :expectation_span, expectation_span)
           else
             merged_context
+          end
+
+        merged_context =
+          case Map.get(merged_context, :span) do
+            %Cure.Diagnostic.Span{} = span ->
+              Map.merge(merged_context, %{
+                line: span.start_line,
+                column: span.start_column,
+                length: max(1, span.end_column - span.start_column)
+              })
+
+            _ ->
+              merged_context
           end
 
         {:error, {:source_context, nested_reason, merged_context}}
@@ -900,26 +1129,30 @@ defmodule Cure.Elab.Declarations do
 
   defp declaration_expectation_context({:function_call, meta, _args}, reason, context, env)
        when is_list(meta) do
-    {origin, owner} =
-      if ffi_call_failure?(reason, meta, env) do
-        {:ffi, Keyword.get(meta, :name, context.checking)}
-      else
-        if implicit_failure?(reason) do
-          {:implicit, Keyword.get(meta, :name, context.checking)}
+    if projection_failure?(reason) do
+      context
+    else
+      {origin, owner} =
+        if ffi_call_failure?(reason, meta, env) do
+          {:ffi, Keyword.get(meta, :name, context.checking)}
         else
-          if Keyword.has_key?(meta, :callee) do
-            {:application, declaration_application_owner(meta)}
+          if implicit_failure?(reason) do
+            {:implicit, Keyword.get(meta, :name, context.checking)}
           else
-            {:call_result, Keyword.get(meta, :name, context.checking)}
+            if Keyword.has_key?(meta, :callee) do
+              {:application, declaration_application_owner(meta)}
+            else
+              {:call_result, Keyword.get(meta, :name, context.checking)}
+            end
           end
         end
-      end
 
-    Map.merge(context, %{
-      checking: owner,
-      expectation_origin: origin,
-      expression_category: :function_call
-    })
+      Map.merge(context, %{
+        checking: owner,
+        expectation_origin: origin,
+        expression_category: :function_call
+      })
+    end
   end
 
   defp declaration_expectation_context({:binary_op, meta, _args}, reason, context, _env)
@@ -936,6 +1169,9 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp declaration_expectation_context(_expression, _reason, context, _env), do: context
+
+  defp projection_failure?({:source_context, _reason, %{expectation_origin: :projection}}), do: true
+  defp projection_failure?(_reason), do: false
 
   defp ffi_call_failure?({:source_context, reason, _context}, meta, env),
     do: ffi_call_failure?(reason, meta, env)
@@ -977,17 +1213,35 @@ defmodule Cure.Elab.Declarations do
   defp expression_category({kind, _meta, _left, _right}) when is_atom(kind), do: kind
   defp expression_category(_expression), do: :expression
 
-  defp branch_patterns({:pattern_match, _meta, [_scrutinee | arms]}) do
-    Enum.map(arms, fn
-      {:match_arm, arm_meta, _body} ->
-        %{name: pattern_label(Keyword.get(arm_meta, :pattern)), span: arm_span(arm_meta)}
-
-      _ ->
-        %{name: "unknown branch", span: nil}
-    end)
+  defp branch_patterns({:pattern_match, _meta, [_scrutinee | arms]}, env) do
+    Enum.map(arms, &branch_pattern(&1, env))
   end
 
-  defp branch_patterns(_expression), do: []
+  defp branch_patterns({:with_abs, _meta, [_scrutinee | arms]}, env),
+    do: Enum.map(arms, &branch_pattern(&1, env))
+
+  defp branch_patterns(_expression, _env), do: []
+
+  defp branch_pattern({family, arm_meta, _body}, env)
+       when family in [:match_arm, :with_rematch_arm] and is_list(arm_meta) do
+    pattern = Keyword.get(arm_meta, :pattern)
+
+    %{
+      name: pattern_label(pattern),
+      kind: pattern_kind(pattern, env),
+      family: family,
+      span: arm_span(arm_meta),
+      pattern_span: surface_pattern_span(arm_meta, pattern),
+      guard_span:
+        case Cure.MetaAST.Metadata.source_info(arm_meta) do
+          %Cure.MetaAST.SourceInfo{guard: %Cure.Diagnostic.Span{} = span} -> span
+          _ -> nil
+        end,
+      variable_spans: pattern_variable_spans(pattern)
+    }
+  end
+
+  defp branch_pattern(_arm, _env), do: %{name: "unknown branch", span: nil}
 
   defp branch_type_reason?(:branch_type), do: true
   defp branch_type_reason?({:branch_type, _details}), do: true
@@ -1031,12 +1285,47 @@ defmodule Cure.Elab.Declarations do
   defp pattern_label({:literal, _meta, value}), do: inspect(value)
   defp pattern_label(_pattern), do: "pattern"
 
+  defp pattern_kind({:variable, _meta, name}, env) when is_binary(name) do
+    key = Env.resolve_key(env, env.ctors, String.to_atom(name))
+    if Inductive.get_ctor(env, key), do: :constructor, else: :variable
+  end
+
+  defp pattern_kind({:function_call, _meta, _args}, _env), do: :constructor
+  defp pattern_kind(_pattern, _env), do: :other
+
   defp arm_span(meta) when is_list(meta) do
     case Keyword.get(meta, :source_info) do
       %Cure.MetaAST.SourceInfo{whole: span} -> span
       _ -> nil
     end
   end
+
+  defp surface_pattern_span(meta, pattern) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{pattern: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> expression_meta(pattern) |> Cure.MetaAST.Metadata.source_info() |> then(&if(&1, do: &1.whole))
+    end
+  end
+
+  defp pattern_variable_spans({:variable, meta, name}) when is_list(meta) and name != "_" do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> %{to_string(name) => [span]}
+      _ -> %{}
+    end
+  end
+
+  defp pattern_variable_spans({_tag, _meta, children}), do: pattern_variable_spans(children)
+
+  defp pattern_variable_spans(items) when is_list(items) do
+    Enum.reduce(items, %{}, fn item, acc ->
+      Map.merge(acc, pattern_variable_spans(item), fn _name, left, right -> left ++ right end)
+    end)
+  end
+
+  defp pattern_variable_spans(item) when is_tuple(item),
+    do: item |> Tuple.to_list() |> pattern_variable_spans()
+
+  defp pattern_variable_spans(_item), do: %{}
 
   defp expression_extent({_, meta, _} = expression) when is_list(meta) do
     case Cure.MetaAST.Metadata.source_info(meta) do
@@ -1122,6 +1411,8 @@ defmodule Cure.Elab.Declarations do
     {params, constraint_specs} =
       inject_constraint_dicts(params1, Keyword.get(meta, :constraints, []))
 
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+
     with {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
          ctx = build_context(env, telescope),
          {:ok, return_core} <- signature_return_core(return_expr, scope, env, ctx) do
@@ -1131,9 +1422,16 @@ defmodule Cure.Elab.Declarations do
          params: params,
          telescope: telescope,
          quantities: quantities,
+         plicities:
+           Enum.map(params, fn {:param, pmeta, _} ->
+             if Keyword.get(pmeta, :implicit, false), do: :implicit, else: :explicit
+           end),
          scope: scope,
          return_core: return_core,
          return_span: function_return_span(meta),
+         declaration_span: source_info && source_info.whole,
+         name_span: source_info && source_info.name,
+         extern_span: source_info && decorator_span(source_info, "extern", :whole),
          extern_arity_span: decorator_argument_span(meta, "extern", 2),
          inferred_return: is_nil(return_expr),
          constraints: constraint_specs,
@@ -1148,9 +1446,35 @@ defmodule Cure.Elab.Declarations do
 
   defp function_return_span(meta) do
     case Cure.MetaAST.Metadata.source_info(meta) do
-      %Cure.MetaAST.SourceInfo{annotation: %Cure.Diagnostic.Span{} = span} -> span
-      _ -> nil
+      %Cure.MetaAST.SourceInfo{annotation: %Cure.Diagnostic.Span{} = span} ->
+        span
+
+      _ ->
+        return_type_span(Keyword.get(meta, :return_type))
     end
+  end
+
+  defp return_type_span({_tag, meta, children}) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> children |> return_type_child_spans() |> cover_source_spans()
+    end
+  end
+
+  defp return_type_span(_other), do: nil
+
+  defp return_type_child_spans(children) when is_list(children),
+    do: Enum.flat_map(children, &List.wrap(return_type_span(&1)))
+
+  defp return_type_child_spans(_children), do: []
+
+  defp cover_source_spans([]), do: nil
+
+  defp cover_source_spans(spans) do
+    first = Enum.min_by(spans, & &1.start_byte)
+    last = Enum.max_by(spans, & &1.end_byte)
+
+    %{first | end_byte: last.end_byte, end_line: last.end_line, end_column: last.end_column}
   end
 
   defp decorator_argument_span(meta, decorator, index) do
@@ -1284,10 +1608,10 @@ defmodule Cure.Elab.Declarations do
   defp struct_ctor_sig(name, type_params, fields) do
     named_doms =
       Enum.map(fields, fn {:param, m, fname} ->
-        {:named_dom, fname, Keyword.fetch!(m, :type)}
+        {:named_dom, [name: fname], [Keyword.fetch!(m, :type)]}
       end)
 
-    {:gadt_ctor, [name: Atom.to_string(name)], {:arrow_chain, named_doms ++ [family_app(name, type_params)]}}
+    {:gadt_ctor, [name: Atom.to_string(name)], [{:arrow_chain, [], named_doms ++ [family_app(name, type_params)]}]}
   end
 
   # A record field may declare a default (`name: String = "Anonymous"`), carried in
@@ -1316,17 +1640,41 @@ defmodule Cure.Elab.Declarations do
     end)
   end
 
+  defp register_record_field_sites({:ok, declared}, owner_env, name, fields) do
+    sites =
+      Map.new(fields, fn {:param, meta, field_name} ->
+        info = Cure.MetaAST.Metadata.source_info(meta)
+
+        {field_name,
+         %{
+           span: info && info.whole,
+           name_span: info && info.name,
+           type_span: info && info.annotation
+         }}
+      end)
+
+    :ok =
+      Cure.Elab.SourceMetadata.put_record_field_sites(
+        Env.owned_name(owner_env, name),
+        sites
+      )
+
+    {:ok, declared}
+  end
+
+  defp register_record_field_sites(error, _owner_env, _name, _fields), do: error
+
   # A positional enum variant, seen as a GADT constructor signature that returns
   # the family applied to its own parameters. `Nil` → `Nil : List(a)`;
   # `Cons(a, List(a))` → `Cons : a -> List(a) -> List(a)`.
   defp variant_to_gadt_sig({:variable, _meta, vname}, fam, type_params) do
-    {:gadt_ctor, [name: vname], {:arrow_chain, [family_app(fam, type_params)]}}
+    {:gadt_ctor, [name: vname], [{:arrow_chain, [], [family_app(fam, type_params)]}]}
   end
 
   defp variant_to_gadt_sig({:function_def, cmeta, _body}, fam, type_params) do
     cname = Keyword.fetch!(cmeta, :name)
     field_asts = Keyword.fetch!(cmeta, :params)
-    {:gadt_ctor, [name: cname], {:arrow_chain, field_asts ++ [family_app(fam, type_params)]}}
+    {:gadt_ctor, [name: cname], [{:arrow_chain, [], field_asts ++ [family_app(fam, type_params)]}]}
   end
 
   defp family_app(fam, type_params) do
@@ -1520,6 +1868,26 @@ defmodule Cure.Elab.Declarations do
   # checked path to the same infer-and-convert behavior as before.
   defp elaborate_body({:literal, _meta, _value} = expr, return_core, scope, ctx, env, _params),
     do: Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+
+  # A negative integer spelling parses as unary `-` over a positive literal.
+  # Keep this whole-body form in checking mode so the declared result can select
+  # `ExpressibleByIntegerLiteral`; inference would prematurely default the
+  # operand and the negation to Int.
+  defp elaborate_body(
+         {:unary_op, meta, [{:literal, literal_meta, value}]} = expr,
+         return_core,
+         scope,
+         ctx,
+         env,
+         _params
+       )
+       when is_integer(value) and value >= 0 do
+    if Keyword.get(meta, :operator) == :- and Keyword.get(literal_meta, :subtype) == :integer do
+      Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+    else
+      elaborate_body_infer(expr, return_core, scope, ctx, env)
+    end
+  end
 
   # The general body: elaborated in INFER mode. `coerce_union/5` is a strict no-op
   # unless the declared return type is a generated anonymous-union family — in which
@@ -1877,7 +2245,33 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp register_parameter_spans(env, name, params) do
-    :ok = Cure.Elab.SourceMetadata.put_parameter_spans(Env.owned_name(env, name), param_label_span_vector(params) || [])
+    owned_name = Env.owned_name(env, name)
+    :ok = Cure.Elab.SourceMetadata.put_parameter_spans(owned_name, param_label_span_vector(params) || [])
+    :ok = Cure.Elab.SourceMetadata.put_parameter_sites(owned_name, parameter_site_vector(params))
+    env
+  end
+
+  defp parameter_site_vector(params) do
+    Enum.map(params, fn {:param, meta, name} ->
+      info = Cure.MetaAST.Metadata.source_info(meta)
+
+      %{
+        name: param_name_string(name),
+        span: info && info.whole,
+        name_span: info && info.name,
+        type_span: info && info.annotation
+      }
+    end)
+  end
+
+  defp register_declaration_span(env, name, meta) do
+    span =
+      case Cure.MetaAST.Metadata.source_info(meta) do
+        %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+        _source_info -> nil
+      end
+
+    :ok = Cure.Elab.SourceMetadata.put_declaration_span(Env.owned_name(env, name), span)
     env
   end
 
@@ -1904,7 +2298,16 @@ defmodule Cure.Elab.Declarations do
             # over `Type`; it is erased, exactly like `{a: Type}`.
             {:cont, {:ok, tele ++ [{String.to_atom(pname), {:type, 0}}], quants ++ [:erased], [pname | scope]}}
           else
-            {:halt, {:error, {:untyped_parameter, pname}}}
+            info = Cure.MetaAST.Metadata.source_info(pmeta)
+
+            {:halt,
+             {:error,
+              {:untyped_parameter,
+               %{
+                 name: pname,
+                 span: info && (info.name || info.whole),
+                 parameter_span: info && info.whole
+               }}}}
           end
 
         type_expr ->
@@ -1982,13 +2385,15 @@ defmodule Cure.Elab.Declarations do
   # §5.3: reject an `:erased` binder whose domain is `Effect`-headed — erasure
   # would delete a computation the type says must run. Walks the Pi spine like
   # `grade_spine_mismatch`; a non-Pi tail (the return type) ends the walk.
-  defp assert_no_erased_effect_binder({:pi, g, dom, cod}, name) do
+  defp assert_no_erased_effect_binder(pi, name), do: assert_no_erased_effect_binder(pi, name, 0)
+
+  defp assert_no_erased_effect_binder({:pi, g, dom, cod}, name, index) do
     if Grade.erased?(g) and effect_headed?(dom),
-      do: {:error, {:effect_binder_erased, name}},
-      else: assert_no_erased_effect_binder(cod, name)
+      do: {:error, {:effect_binder_erased, %{def: name, binder: index}}},
+      else: assert_no_erased_effect_binder(cod, name, index + 1)
   end
 
-  defp assert_no_erased_effect_binder(_non_pi, _name), do: :ok
+  defp assert_no_erased_effect_binder(_non_pi, _name, _index), do: :ok
 
   defp effect_headed?({:effect_type, _}), do: true
   defp effect_headed?(_), do: false
@@ -2044,7 +2449,7 @@ defmodule Cure.Elab.Declarations do
     end)
   end
 
-  defp elaborate_gadt_ctor({:gadt_ctor, cmeta, {:arrow_chain, atoms}}, fam, param_tele, index_tele, env) do
+  defp elaborate_gadt_ctor({:gadt_ctor, cmeta, [{:arrow_chain, _chain_meta, atoms}]}, fam, param_tele, index_tele, env) do
     cname = cmeta |> Keyword.fetch!(:name) |> String.to_atom()
     {dom_exprs, result_expr} = split_last(atoms)
 
@@ -2057,7 +2462,16 @@ defmodule Cure.Elab.Declarations do
     param_scope = param_tele |> Enum.map(fn {n, _t} -> Atom.to_string(n) end) |> Enum.reverse()
 
     with :ok <- ensure_linear_named_doms(dom_exprs),
-         {:ok, applied_exprs} <- family_index_args(result_expr, fam) do
+         {:ok, applied_exprs} <-
+           family_index_args(result_expr, fam)
+           |> attach_constructor_result_context(
+             cmeta,
+             result_expr,
+             fam,
+             cname,
+             length(param_tele),
+             length(index_tele)
+           ) do
       # Implicit index variables are inferred from every family application in
       # the signature (domains + the result), positionally typed by the family's
       # index telescope. Ordered by first appearance → the leading telescope.
@@ -2082,7 +2496,7 @@ defmodule Cure.Elab.Declarations do
       impl_names = Enum.map(implicits, &elem(&1, 0))
 
       case build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
-        {:ok, expl_tele, expl_names, expl_plicities} ->
+        {:ok, expl_tele, expl_names, expl_plicities, expl_quantities} ->
           full_scope = Enum.reverse(impl_names ++ expl_names) ++ param_scope
           {param_exprs, index_exprs} = Enum.split(applied_exprs, param_count)
 
@@ -2102,7 +2516,7 @@ defmodule Cure.Elab.Declarations do
             # `{k:T}` — is runtime-relevant (quantity ω). See M8.3 / M9.
             quantities =
               List.duplicate(:erased, length(impl_tele)) ++
-                List.duplicate(:unrestricted, length(expl_tele))
+                expl_quantities
 
             # Plicity decouples from quantity: inferred indices AND relevant
             # implicits `{k:T}` are :implicit (non-positional); explicit doms are
@@ -2128,19 +2542,63 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  defp attach_constructor_result_context(
+         {:error, {:result_type_not_family, _family} = reason},
+         constructor_meta,
+         result_expr,
+         family,
+         constructor,
+         parameter_count,
+         index_count
+       ) do
+    constructor_info = Cure.MetaAST.Metadata.source_info(constructor_meta)
+
+    {:error,
+     {:source_context, reason,
+      %{
+        span: surface_ast_span(result_expr),
+        result_span: surface_ast_span(result_expr),
+        constructor_span: constructor_info && constructor_info.whole,
+        constructor_name_span: constructor_info && constructor_info.name,
+        signature_span: constructor_info && constructor_info.annotation,
+        expected_family: family,
+        observed_family: constructor_result_head(result_expr),
+        constructor: constructor,
+        parameter_count: parameter_count,
+        index_count: index_count
+      }}}
+  end
+
+  defp attach_constructor_result_context(result, _meta, _expr, _family, _constructor, _params, _indices),
+    do: result
+
+  defp constructor_result_head({:function_call, meta, _arguments}), do: Keyword.get(meta, :name)
+  defp constructor_result_head({:variable, _meta, name}), do: name
+  defp constructor_result_head({tag, _meta, _children}) when is_atom(tag), do: tag
+  defp constructor_result_head(_other), do: :unknown
+
+  defp surface_ast_span({_tag, meta, _children}) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: span} -> span
+      _ -> nil
+    end
+  end
+
+  defp surface_ast_span(_other), do: nil
+
   defp split_last(list), do: {Enum.slice(list, 0..-2//1), List.last(list)}
 
   # For implicit-variable inference we scan a named `(k: Nat)` or relevant-
   # implicit `{k: Nat}` binder by its inner type (`Nat`); the binder name itself
   # is handled as a source-position arg, not an inferred index.
-  defp strip_named_dom({:named_dom, _name, inner}), do: inner
-  defp strip_named_dom({:implicit_dom, _name, inner}), do: inner
+  defp strip_named_dom({:named_dom, _meta, [inner]}), do: inner
+  defp strip_named_dom({:implicit_dom, _meta, [inner]}), do: inner
   defp strip_named_dom(other), do: other
 
   # The name a domain binds into the constructor's local scope, or `nil` for an
   # anonymous positional argument. Both `(k: T)` and `{k: T}` bind `k`.
-  defp bound_dom_name({:named_dom, name, _inner}), do: name
-  defp bound_dom_name({:implicit_dom, name, _inner}), do: name
+  defp bound_dom_name({:named_dom, meta, _children}), do: Keyword.get(meta, :name)
+  defp bound_dom_name({:implicit_dom, meta, _children}), do: Keyword.get(meta, :name)
   defp bound_dom_name(_other), do: nil
 
   # A constructor's named/implicit dependent domains must be linear: a repeated
@@ -2167,7 +2625,8 @@ defmodule Cure.Elab.Declarations do
       else: {:error, {:result_type_not_family, fam}}
   end
 
-  defp family_index_args(other, _fam), do: {:error, {:bad_result_type, other}}
+  defp family_index_args(other, fam),
+    do: {:error, {:bad_result_type, index_problem_details(other, family: fam)}}
 
   # Source-position telescope: convert each domain in the scope of all preceding
   # binders (inferred implicits, then earlier source-position doms). Returns the
@@ -2177,30 +2636,37 @@ defmodule Cure.Elab.Declarations do
   defp build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
     dom_exprs
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, [], []}, fn {dom, i},
-                                                                                        {:ok, tele, scope, names, plics} ->
+    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, [], [], []}, fn {dom, i},
+                                                                                            {:ok, tele, scope, names,
+                                                                                             plics, quantities} ->
       # A NAMED / IMPLICIT dependent binder uses its declared name (so later
       # domains and the result index can reference it); an unnamed arg keeps its
       # anonymous `_aN` name byte-for-byte. Either way the scope is threaded so
       # the next domain's de Bruijn indices resolve this binder.
-      {argname, type_expr, plicity} =
+      {argname, type_expr, plicity, quantity} =
         case dom do
-          {:named_dom, name, inner} -> {name, inner, :explicit}
-          {:implicit_dom, name, inner} -> {name, inner, :implicit}
-          _ -> {"_a#{i}", dom, :explicit}
+          {:named_dom, meta, [inner]} ->
+            {Keyword.fetch!(meta, :name), inner, :explicit, Keyword.get(meta, :grade, :unrestricted)}
+
+          {:implicit_dom, meta, [inner]} ->
+            {Keyword.fetch!(meta, :name), inner, :implicit, :unrestricted}
+
+          _ ->
+            {"_a#{i}", dom, :explicit, :unrestricted}
         end
 
       case idx_to_core(type_expr, scope, fam, env) do
         {:ok, core} ->
           {:cont,
-           {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname], plics ++ [plicity]}}
+           {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname], plics ++ [plicity],
+            quantities ++ [quantity]}}
 
         {:error, _} = err ->
           {:halt, err}
       end
     end)
     |> case do
-      {:ok, tele, _scope, names, plics} -> {:ok, tele, names, plics}
+      {:ok, tele, _scope, names, plics, quantities} -> {:ok, tele, names, plics, quantities}
       {:error, _} = err -> err
     end
   end
@@ -2549,7 +3015,7 @@ defmodule Cure.Elab.Declarations do
 
   defp idx_to_core({:variable, _meta, "Type"}, _scope, _fam, _env, _ctx), do: {:ok, {:type, 0}}
 
-  defp idx_to_core({:variable, _meta, name}, scope, _fam, env, _ctx) do
+  defp idx_to_core({:variable, _meta, name} = node, scope, _fam, env, _ctx) do
     # A numeric literal in a dependent type index — the `5` in `Bounded(5)`, the
     # `0x110000` Char bound in `Bounded(1114112)`, a scientific `1e6`. The lexer's
     # numeric token is stringified into a NAME node by the type parser. It can never
@@ -2562,7 +3028,13 @@ defmodule Cure.Elab.Declarations do
         {:ok, {:nat_lit, n}}
 
       {:error, reason} ->
-        {:error, reason}
+        case reason do
+          {:non_integer_index, ^name} ->
+            {:error, {:non_integer_index, index_problem_details(node, value: name)}}
+
+          _ ->
+            {:error, reason}
+        end
 
       :not_numeric ->
         cond do
@@ -2582,6 +3054,14 @@ defmodule Cure.Elab.Declarations do
     cond do
       Keyword.get(fmeta, :function_type) ->
         arrow_to_pi(args, scope, fam, env)
+
+      Keyword.fetch!(fmeta, :name) == "Tuple" ->
+        build_telescope_type(
+          Enum.zip(List.duplicate("_", length(args)), args),
+          scope,
+          fam,
+          env
+        )
 
       Keyword.fetch!(fmeta, :name) == "Effect" ->
         lower_effect_former(args, scope, fam, env, ctx)
@@ -2699,7 +3179,7 @@ defmodule Cure.Elab.Declarations do
         end
 
       attr in ["1", "2"] ->
-        {:error, {:sigma_projection_needs_ctx, attr}}
+        {:error, {:sigma_projection_needs_ctx, index_problem_details(node, projection: attr)}}
 
       true ->
         {:error, {:bad_projection, attr}}
@@ -2736,13 +3216,18 @@ defmodule Cure.Elab.Declarations do
   # types) and stays on the int op: it simply will not type-check or discharge — a
   # documented residual, never unsound. Operands recurse through `idx_to_core`, so
   # nested connectives compose.
-  defp idx_to_core({:binary_op, meta, [l_ast, r_ast]}, scope, fam, env, ctx) do
+  defp idx_to_core({:binary_op, meta, [l_ast, r_ast]} = node, scope, fam, env, ctx) do
     op = Keyword.fetch!(meta, :operator)
 
     with {:ok, l} <- idx_to_core(l_ast, scope, fam, env, ctx),
-         {:ok, r} <- idx_to_core(r_ast, scope, fam, env, ctx),
-         {:ok, global} <- index_binop_global(op, float_operands?(l, r)) do
-      {:ok, {:app, {:app, {:global, global}, l}, r}}
+         {:ok, r} <- idx_to_core(r_ast, scope, fam, env, ctx) do
+      case index_binop_global(op, float_operands?(l, r)) do
+        {:ok, global} ->
+          {:ok, {:app, {:app, {:global, global}, l}, r}}
+
+        {:error, {:unsupported_index_operator, ^op}} ->
+          {:error, {:unsupported_index_operator, index_problem_details(node, operator: op)}}
+      end
     end
   end
 
@@ -2751,15 +3236,48 @@ defmodule Cure.Elab.Declarations do
   # NAME nodes handled by the `{:variable, ...}` clause). An integer operand of an Int
   # comparison must be a real `{:int_lit, _}` so the kernel's `int_*` fold fires; a Nat
   # literal (`{:nat_lit, _}`, `{:vnat, _}`) would leave the spine stuck.
-  defp idx_to_core({:literal, meta, value}, _scope, _fam, _env, _ctx) do
+  defp idx_to_core({:literal, meta, value} = node, _scope, _fam, _env, _ctx) do
     case Keyword.get(meta, :subtype) do
-      :integer -> {:ok, {:int_lit, value}}
-      :float -> {:ok, {:float_lit, value}}
-      other -> {:error, {:unsupported_index_literal, other}}
+      :integer ->
+        {:ok, {:int_lit, value}}
+
+      :float ->
+        {:ok, {:float_lit, value}}
+
+      :char when is_integer(value) and value >= 0 and value <= 0x10FFFF ->
+        {:ok, {:bounded_lit, value}}
+
+      :char ->
+        {:error, {:char_literal_out_of_range, index_problem_details(node, value: value)}}
+
+      other ->
+        {:error, {:unsupported_index_literal, index_problem_details(node, subtype: other, value: value)}}
     end
   end
 
-  defp idx_to_core(other, _scope, _fam, _env, _ctx), do: {:error, {:unsupported_index_expr, other}}
+  defp idx_to_core(other, _scope, _fam, _env, _ctx),
+    do: {:error, {:unsupported_index_expr, index_problem_details(other)}}
+
+  defp index_problem_details(expression, extra \\ []) do
+    %{
+      expression: expression,
+      span: index_expression_span(expression),
+      shape: index_expression_shape(expression)
+    }
+    |> Map.merge(Map.new(extra))
+  end
+
+  defp index_expression_span({_tag, meta, _children}) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp index_expression_span(_expression), do: nil
+
+  defp index_expression_shape({tag, _meta, _children}) when is_atom(tag), do: tag
+  defp index_expression_shape(_expression), do: :unknown
 
   # A comparison is over Float when either lowered operand is a float literal. This is
   # the only operand-type signal available in an index position (the scope threaded
@@ -2796,14 +3314,16 @@ defmodule Cure.Elab.Declarations do
   defp index_binop_global(op, _), do: {:error, {:unsupported_index_operator, op}}
 
   # Wrap a `Bool`-typed refinement clause in `IsTrue(·)` (§3a level 1). Only
-  # comparison and boolean-connective operators reflect (they produce `Bool`);
+  # operators with a Bool-producing index lowering reflect;
   # every other clause — a `Type`-valued predicate application, an already-explicit
   # `IsTrue(…)`, or an arithmetic misuse that should be rejected as ill-sorted —
   # passes through untouched. The wrapper node is exactly what the parser yields
   # for an explicit `IsTrue(φ)`, so lowering (and `IsTrue` name resolution) is
   # shared verbatim.
   defp reflect_boolean_proposition({:binary_op, meta, _} = prop) do
-    if Keyword.get(meta, :category) in [:comparison, :boolean] do
+    op = Keyword.fetch!(meta, :operator)
+
+    if match?({:ok, _global}, index_binop_global(op, false)) do
       {:function_call, [name: "IsTrue"], [prop]}
     else
       prop

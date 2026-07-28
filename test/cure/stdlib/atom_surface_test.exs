@@ -51,6 +51,7 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
              Program.elaborate("""
              mod GoodExitReason
                use Std.Process
+               use Std.ExitReason
                fn stop(pid: Pid) -> Unit = exit(pid, Shutdown())
              """)
 
@@ -58,6 +59,7 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
              Program.elaborate("""
              mod BadExitReason
                use Std.Process
+               use Std.ExitReason
                fn stop(pid: Pid) -> Unit = exit(pid, :shutdown)
              """)
   end

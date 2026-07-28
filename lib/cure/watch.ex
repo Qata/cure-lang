@@ -113,22 +113,31 @@ defmodule Cure.Watch do
   def run_action(:compile, path) do
     info("[#{ts()}] compiling #{path}")
 
-    paths =
-      if File.dir?(path) do
-        Path.wildcard(Path.join(path, "**/*.cure"))
-      else
-        [path]
-      end
+    if File.dir?(path) do
+      paths = Path.wildcard(Path.join(path, "**/*.cure"))
 
-    Enum.each(paths, fn p ->
-      case Cure.Compiler.compile_file(p, emit_events: false) do
-        {:ok, mod, _warnings} ->
-          info("  #{p} -> #{mod}")
+      case Cure.Compiler.compile_files(paths, emit_events: false, continue_on_error: true) do
+        {:ok, %{compiled: compiled, errors: errors}} ->
+          Enum.each(compiled, fn {source, module, _warnings} ->
+            info("  #{source} -> #{module}")
+          end)
+
+          Enum.each(errors, fn {source, reason} ->
+            emit_error(reason, source, read_source(source))
+          end)
 
         {:error, reason} ->
-          emit_error(reason, p, read_source(p))
+          emit_error(reason, path, nil)
       end
-    end)
+    else
+      case Cure.Compiler.compile_file(path, emit_events: false) do
+        {:ok, mod, _warnings} ->
+          info("  #{path} -> #{mod}")
+
+        {:error, reason} ->
+          emit_error(reason, path, read_source(path))
+      end
+    end
   end
 
   def run_action(:check, path) do

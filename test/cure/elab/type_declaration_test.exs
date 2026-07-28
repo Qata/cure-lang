@@ -31,6 +31,7 @@ defmodule Cure.Elab.TypeDeclarationTest do
   """
   use ExUnit.Case, async: true
 
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.{Emit, Program}
 
   @nat "  type Nat = Z | S(Nat)\n"
@@ -41,8 +42,51 @@ defmodule Cure.Elab.TypeDeclarationTest do
     end
 
     test "an alias to a constructor is rejected — a constructor is not a type" do
-      assert {:error, {:typealias_not_a_type, :Bad, _}} =
-               Program.elaborate("mod M\n" <> @nat <> "  typealias Bad = Z\nend\n")
+      source = "mod M\n" <> @nat <> "  typealias Bad = Z\nend\n"
+      assert {:error, {:typealias_not_a_type, %{name: :Bad}} = error} = Program.elaborate(source)
+
+      {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "bad_alias.cure", source)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- `BAD` ALIASES A VALUE, NOT A TYPE [E093] --------------------- bad_alias.cure
+
+               The right side of a `typealias` must itself be a type, but this expression is a
+               value whose type is `Nat`. Type aliases give another name to a type; they cannot
+               name one particular value.
+
+               at bad_alias.cure:3:19
+               3 |   typealias Bad = Z
+                 |             ---   ^ this declaration promises a type alias; this is a value of type `Nat`
+
+               Hint: If `Bad` should alias the value's type, write `typealias Bad = Nat`
+               """)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+
+      assert lsp["range"] == %{
+               "start" => %{"line" => 2, "character" => 18},
+               "end" => %{"line" => 2, "character" => 19}
+             }
+
+      assert [related] = lsp["relatedInformation"]
+
+      assert related["location"]["range"] == %{
+               "start" => %{"line" => 2, "character" => 12},
+               "end" => %{"line" => 2, "character" => 15}
+             }
+
+      assert lsp["data"]["payload"] == %{
+               "actual_surface" => "Nat",
+               "kind" => "typealias_not_a_type",
+               "name" => "Bad",
+               "rhs_shape" => "variable"
+             }
+
+      assert {:ok, _environment} =
+               source
+               |> String.replace("typealias Bad = Z", "typealias Bad = Nat")
+               |> Program.elaborate(file: "fixed_alias.cure")
     end
   end
 
@@ -106,15 +150,66 @@ defmodule Cure.Elab.TypeDeclarationTest do
       assert {:non_strictly_positive, :"M#MkBad"} = Program.semantic_error(error)
 
       {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "positivity.cure", src)
-      rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80)
 
-      assert diagnostic.code == "E103"
-      assert diagnostic.primary.span.start_line == 3
-      assert diagnostic.primary.span.start_column == 14
-      assert diagnostic.primary.span.end_column == 19
-      assert rendered =~ "3 |   type Bad = MkBad((Bad) -> Nat)"
-      assert rendered =~ "^^^^^ this recursive type definition is not strictly positive"
-      assert rendered =~ "Hint: Move the recursive type out of function-input positions"
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- RECURSIVE TYPE APPEARS IN A FUNCTION INPUT [E103] ----------- positivity.cure
+
+               `Bad` appears in a function input stored by `MkBad`. A recursive type may appear
+               in a stored function's result, but not in one of its inputs.
+
+               at positivity.cure:3:21
+               3 |   type Bad = MkBad((Bad) -> Nat)
+                 |              -----  ^^^ this constructor stores the unsafe function type; recursive `Bad` is consumed here
+
+               Hint: Move `Bad` to the function result, or make the input non-recursive
+               """)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+
+      assert lsp["range"] == %{
+               "start" => %{"line" => 2, "character" => 20},
+               "end" => %{"line" => 2, "character" => 23}
+             }
+
+      assert [related] = lsp["relatedInformation"]
+      assert related["message"] == "this constructor stores the unsafe function type"
+
+      assert related["location"]["range"] == %{
+               "start" => %{"line" => 2, "character" => 13},
+               "end" => %{"line" => 2, "character" => 18}
+             }
+    end
+
+    test "an alias-expanded negative occurrence keeps honest constructor-level blame" do
+      src = "mod M\n  typealias Neg(a) = (a) -> Int\n  type Bad = MkBad(Neg(Bad))\nend\n"
+
+      assert {:error, error} = Program.elaborate(src, file: "alias_positivity.cure")
+      assert {:non_strictly_positive, :"M#MkBad"} = Program.semantic_error(error)
+
+      {diagnostic, registry} =
+        Cure.Compiler.Errors.to_diagnostic(error, "alias_positivity.cure", src)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- NON-STRICTLY-POSITIVE TYPE [E103] --------------------- alias_positivity.cure
+
+               The recursive occurrence in `MkBad` cannot be proven strictly positive, so this
+               type cannot be accepted by the normalising kernel.
+
+               at alias_positivity.cure:3:14
+               3 |   type Bad = MkBad(Neg(Bad))
+                 |              ^^^^^ this constructor is not strictly positive
+
+               Hint: Move recursive types out of function-input and other negative positions in this constructor
+               """)
+
+      assert diagnostic.secondary == []
+
+      assert Renderer.lsp(diagnostic, registry)["range"] == %{
+               "start" => %{"line" => 2, "character" => 13},
+               "end" => %{"line" => 2, "character" => 18}
+             }
     end
   end
 end

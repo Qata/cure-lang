@@ -23,7 +23,9 @@ defmodule Cure.Compiler.Incremental do
   merge in. If two versions of a module produce a byte-identical `export_env`,
   no consumer's compilation can differ, so its dependents need not recompile.
   """
-  @spec interface_hash(map()) :: binary()
+  @spec interface_hash(Cure.Compiler.ModuleInterface.t() | map()) :: binary()
+  def interface_hash(%Cure.Compiler.ModuleInterface{interface_hash: hash}), do: hash
+
   def interface_hash(export_env) do
     :crypto.hash(:sha256, :erlang.term_to_binary(export_env, [:deterministic]))
   end
@@ -41,7 +43,7 @@ defmodule Cure.Compiler.Incremental do
       :code.add_patha(String.to_charlist(abs_out))
     end
 
-    case DepGraph.scan(source_paths) do
+    case DepGraph.scan(source_paths, validate_dependencies: true) do
       {:error, reason} -> {:error, reason}
       {:ok, graph} -> run(graph, source_paths, output_dir, opts)
     end
@@ -95,21 +97,17 @@ defmodule Cure.Compiler.Incremental do
   of its `use`-dependencies (`order_deps`). This is the only sound compile order —
   a module's codegen links its use-deps' beams, so those must be built first.
 
-  Ordering follows the acyclic `order_deps` graph, NOT `closure_deps`. The closure
-  superset adds ambient `@prelude`/qualified edges that make the primitive modules
-  a single cycle (`Std.Atom`, `Std.Binary`, `Std.Char`, ...); a cyclic graph has
-  no dependency-respecting order, and `toposort` would emit the cycle
-  alphabetically — scheduling `Std.Binary` before `Std.Char` despite
-  `Binary use Char`, which breaks a cold build. `order_deps` is also the *complete*
-  compile dependency: the only cross-module beam a module links is a `use`-dep
-  (a qualified call without `use` does not compile), so nothing load-bearing is
-  lost by ignoring the closure-only edges here. Change propagation still uses the
-  conservative closure superset — see `dep_changed?/2`.
+  Ordering follows the explicit `use` graph. Among modules whose explicit
+  dependencies are already satisfied, ambient prelude providers are selected
+  first. This gives new providers a BEAM before ordinary implicit consumers
+  without adding synthetic edges or manufacturing prelude cycles. Qualified-call
+  closure edges remain order-free. Change propagation still uses the conservative
+  closure superset — see `dep_changed?/2`.
   """
   @spec compile_order(DepGraph.t()) :: [String.t()]
   def compile_order(graph) do
     order = DepGraph.order_deps_map(graph)
-    DepGraph.toposort(order, Map.keys(order))
+    DepGraph.toposort(order, Map.keys(order), DepGraph.prelude_provider_names(graph))
   end
 
   defp run(graph, source_paths, output_dir, opts) do
@@ -208,15 +206,8 @@ defmodule Cure.Compiler.Incremental do
       compile_opts:
         opts
         |> Keyword.get(:compile_opts, [])
-        |> Keyword.put(:prelude_providers, prelude_providers),
-      # `roots` drives BOTH deletion scoping (above) and the standalone
-      # interface-hash recomputation below. `Program.module_interface/2` resolves
-      # a module's `use`-dependencies through `:cure_source_roots`; without it,
-      # any module with a dependency fails to elaborate, its fresh interface hash
-      # is `nil`, and every dependent is needlessly treated as changed. Setting
-      # the roots here (as `mix cure.compile` does for the compile step) keeps
-      # incrementality effective for non-leaf modules.
-      roots: roots,
+        |> Keyword.put(:prelude_providers, prelude_providers)
+        |> Keyword.put(:module_index, graph.module_index),
       old: manifest.modules,
       # Seed `new` with the post-deletion kept map, NOT `%{}`. Every module the
       # walk actually visits overwrites its own key below (skip branch: `old`;
@@ -274,18 +265,22 @@ defmodule Cure.Compiler.Incremental do
   end
 
   defp compile_and_stage(mod, path, state) do
-    case Cure.Compiler.compile_file(path, [output_dir: state.output_dir] ++ state.compile_opts) do
-      {:ok, _module, _warnings} ->
-        # `path` may be a shipped-stdlib source, whose interface the loader
-        # memoizes for the lifetime of the OS process (`Program.
-        # cached_module_interface/2` — a sound assumption for ordinary
-        # compilation, but one this exact recompile just violated). Evict any
-        # stale entry before recomputing so a same-process rebuild of a
-        # stdlib-recognized path (e.g. two `mix cure.compile_stdlib` runs, or
-        # two `compile_dir` calls, sharing a VM) is never compared against a
-        # first-run interface that no longer matches the source on disk.
-        Program.invalidate_module_interface(path)
-        new_hash = interface_hash_for(mod, path, state.roots)
+    case Cure.Compiler.compile_file_with_artifact(
+           path,
+           [output_dir: state.output_dir] ++ state.compile_opts
+         ) do
+      {:ok, _module, _warnings, artifact} ->
+        new_hash =
+          case artifact do
+            %Cure.Elab.CheckedModule{
+              module_name: ^mod,
+              interface: %Cure.Compiler.ModuleInterface{} = interface
+            } ->
+              interface_hash(interface)
+
+            _ ->
+              nil
+          end
 
         stored = get_in(state.old, [mod, Access.key(:interface_hash, nil)])
         changed? = is_nil(new_hash) or is_nil(stored) or new_hash != stored
@@ -312,26 +307,6 @@ defmodule Cure.Compiler.Incremental do
           | iface: Map.put(state.iface, mod, %{changed: true}),
             errors: [{mod, reason} | state.errors]
         }
-    end
-  end
-
-  # Recompute `mod`'s interface hash with `:cure_source_roots` bound so its
-  # `use`-dependencies resolve, restoring the prior value afterward (mirrors
-  # `Cure.Compiler`'s own `with_source_roots`). Returns nil if the interface
-  # cannot be computed, which conservatively marks the module interface-changed.
-  defp interface_hash_for(mod, path, roots) do
-    previous = Process.get(:cure_source_roots)
-    Process.put(:cure_source_roots, roots)
-
-    try do
-      case Program.module_interface(mod, path) do
-        {:ok, iface} -> interface_hash(iface.export_env)
-        _ -> nil
-      end
-    after
-      if previous == nil,
-        do: Process.delete(:cure_source_roots),
-        else: Process.put(:cure_source_roots, previous)
     end
   end
 

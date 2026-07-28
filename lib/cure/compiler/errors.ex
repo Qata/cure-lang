@@ -107,7 +107,8 @@ defmodule Cure.Compiler.Errors do
   def catalog_entries, do: Cure.Diagnostic.Registry.catalog_entries()
 
   @doc """
-  Suggest similar names for typos using Levenshtein distance.
+  Suggest similar names for typos using the shared, case-insensitive restricted
+  Damerau-Levenshtein distance.
 
   Both `name` and every entry in `candidates` are coerced to strings
   before comparison. Atoms are converted via `Atom.to_string/1`; any
@@ -127,9 +128,13 @@ defmodule Cure.Compiler.Errors do
         candidates
         |> Enum.map(&to_string_safe/1)
         |> Enum.filter(&is_binary/1)
-        |> Enum.map(fn c -> {c, levenshtein(name_str, c)} end)
+        |> Enum.map(fn candidate ->
+          {candidate, Cure.Diagnostic.Suggest.distance(name_str, candidate)}
+        end)
         |> Enum.filter(fn {_, d} -> d > 0 and d <= 2 end)
-        |> Enum.sort_by(fn {_, d} -> d end)
+        |> Enum.sort_by(fn {candidate, distance} ->
+          {distance, String.downcase(candidate), candidate}
+        end)
         |> case do
           [{best, _} | _] -> best
           _ -> nil
@@ -157,7 +162,12 @@ defmodule Cure.Compiler.Errors do
   @doc "Convert an error at the compiler presentation boundary."
   @spec to_diagnostic(term(), String.t(), String.t()) ::
           {Cure.Diagnostic.t(), Cure.Diagnostic.SourceRegistry.t()}
-  def to_diagnostic(error, file, source) do
+  def to_diagnostic(error, file, source), do: to_diagnostic(error, file, source, [])
+
+  @doc "Convert an error with presentation options such as `debug: true`."
+  @spec to_diagnostic(term(), String.t(), String.t(), keyword()) ::
+          {Cure.Diagnostic.t(), Cure.Diagnostic.SourceRegistry.t()}
+  def to_diagnostic(error, file, source, presentation_opts) do
     # The source identity is the same identity carried by lexer/parser spans.
     # Keeping it stable lets unsaved LSP buffers and generated source registries
     # resolve exact UTF-8/16/32 positions without a scalar-column fallback.
@@ -179,6 +189,11 @@ defmodule Cure.Compiler.Errors do
         [] -> opts
         patterns -> Keyword.put(opts, :branch_patterns, remap_branch_patterns(patterns, registry, source_id))
       end
+
+    opts =
+      if Keyword.get(presentation_opts, :debug, false),
+        do: Keyword.put(opts, :debug, true),
+        else: opts
 
     diagnostic =
       if operational_error?(error) do
@@ -371,19 +386,8 @@ defmodule Cure.Compiler.Errors do
   defp operational_error?(_), do: false
 
   defp error_location({:lift_module_error, %{source_provenance: %{line: line, col: col}}}), do: {line, col}
-  defp error_location({:unresolved_import, _name, _arity, _imports, line}) when is_integer(line), do: {line, 1}
-  defp error_location({:import_cycle, [%{line: line} | _]}) when is_integer(line), do: {line, 1}
-  defp error_location({:duplicate_module, _name, _paths}), do: {1, 1}
-  defp error_location({:ambiguous_name, _name, _modules}), do: {1, 1}
   defp error_location({:lex_error, reason}), do: lex_error_location(reason)
   defp error_location({_, _, meta}) when is_list(meta), do: {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, 0)}
-
-  defp error_location(error) when is_tuple(error) and tuple_size(error) >= 4 do
-    case error |> Tuple.to_list() |> Enum.reverse() do
-      [col, line | _] when is_integer(line) and is_integer(col) -> {line, col}
-      _ -> {0, 0}
-    end
-  end
 
   defp error_location({:computed_macro_error, meta, _reason}) when is_list(meta) do
     {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, Keyword.get(meta, :column, 0))}
@@ -467,13 +471,6 @@ defmodule Cure.Compiler.Errors do
        ),
        do: {:ok, start_byte, end_byte}
 
-  defp hole_span({:unfilled_hole, _name}, source) do
-    case Regex.run(~r/\?{3}|\?{1,2}[A-Za-z_][A-Za-z0-9_]*/, source, return: :index) do
-      [{start_byte, length}] -> {:ok, start_byte, start_byte + length}
-      _ -> :error
-    end
-  end
-
   defp hole_span(_error, _source), do: :error
 
   defp insertion_at_eof?({:lex_error, {kind, _line, _column}})
@@ -556,43 +553,4 @@ defmodule Cure.Compiler.Errors do
   end
 
   defp lex_error_location(_reason), do: {0, 0}
-
-  # Levenshtein distance for typo suggestions
-  defp levenshtein(s, t) do
-    s_len = String.length(s)
-    t_len = String.length(t)
-    s_chars = String.graphemes(s)
-    t_chars = String.graphemes(t)
-
-    if s_len == 0 do
-      t_len
-    else
-      if t_len == 0 do
-        s_len
-      else
-        prev_row = Enum.to_list(0..t_len)
-
-        Enum.reduce(Enum.with_index(s_chars, 1), prev_row, fn {s_ch, i}, row ->
-          first = [i]
-
-          rest =
-            Enum.reduce(Enum.with_index(t_chars, 1), {first, row}, fn {t_ch, j}, {new_row, old_row} ->
-              cost = if s_ch == t_ch, do: 0, else: 1
-
-              val =
-                Enum.min([
-                  Enum.at(old_row, j) + 1,
-                  List.last(new_row) + 1,
-                  Enum.at(old_row, j - 1) + cost
-                ])
-
-              {new_row ++ [val], old_row}
-            end)
-
-          elem(rest, 0)
-        end)
-        |> List.last()
-      end
-    end
-  end
 end

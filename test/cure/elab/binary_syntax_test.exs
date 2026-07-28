@@ -1,15 +1,15 @@
 defmodule Cure.Elab.BinarySyntaxTest do
   @moduledoc """
   Byte-granular binary syntax in the dependent pipeline: construction
-  `<<b1, b2, …>>` and patterns `<<b, rest/binary>>`. The classic codegen lowered
+  `<<b1, b2, …>>` and patterns `<<b, rest::binary>>`. The classic codegen lowered
   these to Erlang bit-syntax; here they desugar (in the elaborator, before Core)
   to `Std.Binary` byte primitives — `of_bytes` for construction, and
   `byte_at`/`drop_bytes` guarded by `byte_size` for patterns — over the `Binary`
   primitive type. Nothing new reaches the kernel and there is no Core binary
   former.
 
-  Scope: default 8-bit-integer segments plus a trailing `rest/binary`. Sized or
-  typed bit segments (`x:16`, `x/float`, endianness/signedness) are a separate
+  Scope: default 8-bit-integer segments plus a trailing `rest::binary`. Sized or
+  typed bit segments (`x:16`, `x::float`, endianness/signedness) are a separate
   future extension and are rejected here rather than silently mislowered. The
   module must `use Std.Binary` so the emitted primitives resolve.
 
@@ -45,14 +45,14 @@ defmodule Cure.Elab.BinarySyntaxTest do
     assert apply(m, :build, []) == <<1, 2, 3>>
   end
 
-  test "a head-byte + rest/binary pattern binds both, guarded by length" do
+  test "a head-byte + rest::binary pattern binds both, guarded by length" do
     m =
       compile!(
         :head,
         """
           fn head(b: Binary) -> Int =
             match b
-              <<a, _rest/binary>> -> a
+              <<a, _rest::binary>> -> a
               _ -> 0
         """,
         :"Cure.Test.BinHead"
@@ -64,14 +64,14 @@ defmodule Cure.Elab.BinarySyntaxTest do
     assert apply(m, :head, [<<>>]) == 0
   end
 
-  test "the rest/binary tail binds the remaining suffix" do
+  test "the rest::binary tail binds the remaining suffix" do
     m =
       compile!(
         :tail,
         """
           fn tail(b: Binary) -> Binary =
             match b
-              <<_a, rest/binary>> -> rest
+              <<_a, rest::binary>> -> rest
               _ -> b
         """,
         :"Cure.Test.BinTail"
@@ -88,8 +88,8 @@ defmodule Cure.Elab.BinarySyntaxTest do
         """
           fn classify(b: Binary) -> Int =
             match b
-              <<0, _rest/binary>> -> 1
-              <<_x, _rest/binary>> -> 2
+              <<0, _rest::binary>> -> 1
+              <<_x, _rest::binary>> -> 2
               _ -> 0
         """,
         :"Cure.Test.BinLit"
@@ -119,24 +119,13 @@ defmodule Cure.Elab.BinarySyntaxTest do
     assert apply(m, :pair, [<<3>>]) == 0
   end
 
-  test "a typed segment (float/binary specifier) is rejected, not mislowered" do
-    src = """
-    mod M
-      use Std.Binary
-      fn f(b: Binary) -> Binary = <<b/binary>>
-    end
-    """
-
-    assert {:error, {:source_context, {:unsupported_binary_segment, _}, _}} = Program.elaborate(src)
-  end
-
   test "a binary match with no default arm is rejected" do
     src = """
     mod M
       use Std.Binary
       fn f(b: Binary) -> Int =
         match b
-          <<a, _rest/binary>> -> a
+          <<a, _rest::binary>> -> a
     end
     """
 

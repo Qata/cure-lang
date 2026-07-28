@@ -8,6 +8,28 @@ defmodule Cure.MetaAST.MetadataLint do
 
   @type site :: %{file: String.t(), line: pos_integer(), node: atom(), pattern: Macro.t()}
 
+  @legacy_source_keys [
+    :construct_span,
+    :span,
+    :name_span,
+    :callee_span,
+    :operator_span,
+    :operand_spans,
+    :argument_spans,
+    :arg_label_spans,
+    :annotation_span,
+    :body_span,
+    :condition_span,
+    :then_span,
+    :else_span,
+    :pattern_span,
+    :guard_span,
+    :branch_spans,
+    :field_spans,
+    :opener_span,
+    :closer_span
+  ]
+
   @spec scan([Path.t()]) :: [site()]
   def scan(paths) when is_list(paths), do: Enum.flat_map(paths, &scan_file/1)
 
@@ -47,7 +69,13 @@ defmodule Cure.MetaAST.MetadataLint do
   defp walk({:{}, meta, [node, metadata, _children]} = quoted, true, file)
        when is_atom(node) and is_list(meta) do
     if keyword_metadata_literal?(metadata) do
-      [%{file: file, line: Keyword.get(meta, :line, 0), node: node, pattern: quoted}]
+      site = %{file: file, line: Keyword.get(meta, :line, 0), node: node, pattern: quoted}
+
+      if legacy_metadata_literal?(metadata) do
+        [Map.put(site, :legacy_source_keys, legacy_metadata_keys(metadata))]
+      else
+        [site]
+      end
     else
       walk(metadata, true, file)
     end
@@ -72,4 +100,10 @@ defmodule Cure.MetaAST.MetadataLint do
   end
 
   defp keyword_metadata_literal?(_), do: false
+
+  defp legacy_metadata_literal?(metadata),
+    do: Enum.any?(metadata, fn {key, _value} -> key in @legacy_source_keys end)
+
+  defp legacy_metadata_keys(metadata),
+    do: metadata |> Keyword.keys() |> Enum.filter(&(&1 in @legacy_source_keys))
 end

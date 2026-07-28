@@ -9,7 +9,6 @@ defmodule Cure.Diagnostic.Adapter do
     ExpectationOrigin,
     InductionProblem,
     Label,
-    ProvenanceFrame,
     ProofChainMismatchProblem,
     ProofChainSyntaxProblem,
     RewriteProblem,
@@ -21,10 +20,22 @@ defmodule Cure.Diagnostic.Adapter do
     TypeProblem
   }
 
-  alias Cure.Diagnostic.Operational
-  alias Cure.Diagnostic.Suggest
+  alias Cure.Diagnostic.Adapter.Codegen
+  alias Cure.Diagnostic.Adapter.Arity
+  alias Cure.Diagnostic.Adapter.Declaration
+  alias Cure.Diagnostic.Adapter.Hole
+  alias Cure.Diagnostic.Adapter.Kernel, as: KernelAdapter
+  alias Cure.Diagnostic.Adapter.Macro, as: MacroAdapter
+  alias Cure.Diagnostic.Adapter.Name, as: NameAdapter
+  alias Cure.Diagnostic.Adapter.Operational
+  alias Cure.Diagnostic.Adapter.Pattern
+  alias Cure.Diagnostic.Adapter.Proof, as: ProofAdapter
+  alias Cure.Diagnostic.Adapter.Runtime
+  alias Cure.Diagnostic.Adapter.StaticAnalysis
+  alias Cure.Diagnostic.Adapter.Syntax, as: SyntaxAdapter
+  alias Cure.Diagnostic.Adapter.Type, as: TypeAdapter
 
-  @unknown_name_code "E091"
+  @compile {:nowarn_unused_function, [shadowed_guard_binding_failure: 3, shadowed_sub_union_pattern_failure: 3]}
 
   @spec from_error(term(), keyword()) :: Diagnostic.t()
   def from_error(error, opts \\ [])
@@ -38,100 +49,25 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error([reason | _], opts), do: from_error(reason, opts)
 
   def from_error([], opts) do
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Type mismatch",
-      body: Doc.paragraph("The type checker reported an unsatisfied constraint without further detail."),
-      primary: primary_label(opts, "this expression does not satisfy its type constraints"),
-      payload: %{errors: []}
-    )
+    TypeAdapter.empty_type_failure(opts)
   end
 
-  def from_error({:type_mismatch, message, meta}, opts) when is_binary(message) and is_list(meta) do
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Type mismatch",
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, "this expression has the wrong type"),
-      payload: %{message: message, meta: meta}
-    )
-  end
+  def from_error({:type_mismatch, _, _} = error, opts), do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:unknown_erasure_class, name, class}, opts) do
-    erasure_failure(:unknown_erasure_class, %{name: name, class: class}, opts)
-  end
+  def from_error({:unknown_erasure_class, _name, _class} = error, opts),
+    do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:erases_on_non_opaque, name}, opts) do
-    erasure_failure(:erases_on_non_opaque, %{name: name}, opts)
-  end
+  def from_error({:erases_on_non_opaque, _name} = error, opts),
+    do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:non_strictly_positive, family}, opts) do
-    Diagnostic.new(
-      code: "E103",
-      key: :non_strictly_positive_type,
-      severity: :error,
-      title: "Non-strictly-positive type",
-      body:
-        Doc.paragraph(
-          "The recursive occurrence in `#{name_to_string(family)}` is not strictly positive, so this type cannot be accepted by the normalising kernel."
-        ),
-      primary: primary_label(opts, "this recursive type definition is not strictly positive"),
-      suggestions: [
-        %Suggestion{
-          message: "Move the recursive type out of function-input positions in this constructor",
-          applicability: :manual
-        }
-      ],
-      payload: %{family: family}
-    )
-  end
+  def from_error({:non_strictly_positive, _family} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
 
-  def from_error({:erased_used_relevantly, details}, opts) when is_map(details) do
-    site = Map.get(details, :site, :runtime)
-    binder = Map.get(details, :binder)
+  def from_error({:erased_used_relevantly, details} = error, opts) when is_map(details),
+    do: StaticAnalysis.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E104",
-      key: :erased_value_used_relevantly,
-      severity: :error,
-      title: "Erased value used relevantly",
-      body:
-        Doc.paragraph(
-          "An erased value#{if is_nil(binder), do: "", else: " (binder #{binder})"} is used in the runtime-relevant `#{site}` position."
-        ),
-      primary: primary_label(opts, "remove this runtime use or make the binding relevant"),
-      suggestions: [
-        %Suggestion{
-          message: "Pass a runtime value here, or remove the erased/implicit grade from the binding",
-          applicability: :manual
-        }
-      ],
-      payload: details
-    )
-  end
-
-  def from_error({:usage_violation, details}, opts) when is_map(details) do
-    declared = Map.get(details, :declared, :unknown)
-    used = Map.get(details, :used, :unknown)
-    binder = Map.get(details, :binder)
-
-    Diagnostic.new(
-      code: "E104",
-      key: :erased_value_used_relevantly,
-      severity: :error,
-      title: "Resource usage violates its grade",
-      body:
-        Doc.paragraph(
-          "This #{if is_nil(binder), do: "binding", else: "binder #{binder}"} is declared `#{declared}` but used as `#{used}`. Restricted resources must not be duplicated or consumed at an incompatible grade."
-        ),
-      primary: primary_label(opts, "use this binding according to its declared grade"),
-      payload: details
-    )
-  end
+  def from_error({:usage_violation, details} = error, opts) when is_map(details),
+    do: StaticAnalysis.from_error(error, opts)
 
   def from_error({kind, name}, opts)
       when kind in [
@@ -144,481 +80,183 @@ defmodule Cure.Diagnostic.Adapter do
              :reserved_union_type_name,
              :constructor_function_collision,
              :duplicate_definition
-           ] do
-    if is_map(name) do
-      declaration_conflict(kind, name, opts)
-    else
-      declaration_conflict(kind, %{name: name}, opts)
-    end
-  end
+           ],
+      do: NameAdapter.from_error({kind, name}, opts)
 
-  def from_error({kind, %{name: _name} = details}, opts)
-      when kind in [:duplicate_parameter, :duplicate_field, :duplicate_index] do
-    declaration_conflict(kind, details, opts)
-  end
+  def from_error({:overlapping_overload, _name, _arity} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:overlapping_overload, name, arity}, opts) do
-    declaration_conflict(:overlapping_overload, %{name: name, arity: arity}, opts)
-  end
+  def from_error({:overlapping_overload, %{name: _name, first: _first, second: _second}} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:overlapping_instance, interface, head}, opts) do
-    declaration_conflict(:overlapping_instance, %{interface: interface, head: head}, opts)
-  end
+  def from_error({:overlapping_instance, _interface, _head} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:overlapping_named_instance, name, interface, head}, opts) do
-    declaration_conflict(
-      :overlapping_named_instance,
-      %{name: name, interface: interface, head: head},
-      opts
-    )
-  end
+  def from_error({:overlapping_instance, %{interface: _interface, head: _head}} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:sibling_module_collision, name, owners}, opts) do
-    declaration_conflict(:sibling_module_collision, %{name: name, owners: owners}, opts)
-  end
+  def from_error({:overlapping_named_instance, _name, _interface, _head} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:sibling_module_collision, %{name: _name} = details}, opts) do
-    declaration_conflict(:sibling_module_collision, details, opts)
-  end
+  def from_error({:overlapping_named_instance, %{name: _name}} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:precedence_cycle, %{groups: groups} = details}, opts) when is_list(groups) do
-    operator_conflict(:precedence_cycle, details, opts)
-  end
+  def from_error({:sibling_module_collision, _name, _owners} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:precedence_cycle, groups}, opts) when is_list(groups) do
-    operator_conflict(:precedence_cycle, %{groups: groups}, opts)
-  end
+  def from_error({:sibling_module_collision, %{name: _name}} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:conflicting_operator_fixity, details}, opts) when is_map(details) do
-    operator_conflict(:conflicting_operator_fixity, details, opts)
-  end
+  def from_error({:precedence_cycle, _groups} = error, opts), do: NameAdapter.from_error(error, opts)
+  def from_error({:conflicting_operator_fixity, _details} = error, opts), do: NameAdapter.from_error(error, opts)
+  def from_error({:conflicting_precedence_group, _details} = error, opts), do: NameAdapter.from_error(error, opts)
 
-  def from_error({:conflicting_precedence_group, details}, opts) when is_map(details) do
-    operator_conflict(:conflicting_precedence_group, details, opts)
-  end
+  def from_error({:unsupported_operand_type, _operator} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:builtin_operator_not_overloadable, operator}, opts) do
-    operator_conflict(:builtin_operator_not_overloadable, %{operator: operator}, opts)
-  end
+  def from_error({:no_operator_meaning, _operator} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:unsupported_operand_type, operator}, opts) do
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Operator operand type mismatch",
-      body: Doc.paragraph("The operands of `#{name_to_string(operator)}` do not have a supported type combination."),
-      primary: primary_label(opts, "change the operand types or use a supported operator"),
-      payload: %{kind: :unsupported_operand_type, operator: operator}
-    )
-  end
+  def from_error({:cannot_infer_match_type, %{reason: reason}} = error, opts)
+      when reason in [:no_constructor_arm, :scrutinee_not_data],
+      do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:no_operator_meaning, operator}, opts) do
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Operator has no valid meaning",
-      body:
-        Doc.paragraph(
-          "The operator `#{name_to_string(operator)}` has no valid meaning for the surrounding operand types."
-        ),
-      primary: primary_label(opts, "use an operator supported by these types"),
-      payload: %{kind: :no_operator_meaning, operator: operator}
-    )
-  end
+  def from_error({:cannot_infer_match_type, _legacy_expression} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:cannot_infer_match_type, expression}, opts) do
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Cannot infer match type",
-      body: Doc.paragraph("The compiler cannot determine one common type for the branches of this match expression."),
-      primary: primary_label(opts, "add an annotation or make the branches agree"),
-      payload: %{kind: :cannot_infer_match_type, expression: expression}
-    )
-  end
+  def from_error({:lambda_expected_pi, %{expected: _expected}} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:lambda_expected_pi, expected}, opts) do
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Lambda used where a function was not expected",
-      body:
-        Doc.paragraph(
-          "This lambda can only be checked against a function type, but the expected type is `#{surface_type(expected)}`."
-        ),
-      primary: primary_label(opts, "change the expected type or remove this lambda"),
-      payload: %{kind: :lambda_expected_pi, expected: expected}
-    )
-  end
+  def from_error({:lambda_expected_pi, _expected} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:unsupported_async, message, meta}, opts)
-      when is_binary(message) and is_list(meta) do
-    Diagnostic.new(
-      code: "E107",
-      key: :unsupported_async,
-      severity: :error,
-      title: "Unsupported asynchronous primitive",
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, "use a supported asynchronous boundary"),
-      payload: %{message: message, meta: meta}
-    )
-  end
+      when is_binary(message) and is_list(meta),
+      do: Runtime.from_error({:unsupported_async, message, meta}, opts)
 
-  def from_error({:splice_outside_quote, tag, meta}, opts) when is_list(meta) do
-    form = if tag == :splice_group, do: "$(e ...)", else: "$(e)"
+  def from_error({:unsupported_async, %{primitive: _primitive} = details}, opts),
+    do: Runtime.from_error({:unsupported_async, details}, opts)
 
-    Diagnostic.new(
-      code: "E108",
-      key: :splice_outside_quote,
-      severity: :error,
-      title: "Splice outside quote",
-      body: Doc.paragraph("The `#{form}` splice has no surrounding quote to receive generated syntax."),
-      primary: primary_label(opts, "place this splice inside a quote"),
-      payload: %{tag: tag, meta: meta}
-    )
-  end
+  def from_error({:splice_outside_quote, tag, meta}, opts) when is_list(meta),
+    do: MacroAdapter.from_error({:splice_outside_quote, tag, meta}, opts)
 
-  def from_error({:proof_chain_syntax, %ProofChainSyntaxProblem{} = problem}, opts) do
-    {title, message, label} =
-      case problem.kind do
-        :empty_chain ->
-          {"Proof chain is empty", "A proof chain needs a first expression and at least one justified equality step.",
-           "add the first expression and an equality step"}
+  def from_error({:splice_outside_quote, %{form: tag} = details}, opts)
+      when tag in [:splice, :splice_group],
+      do: MacroAdapter.from_error({:splice_outside_quote, details}, opts)
 
-        :missing_relation ->
-          {"Proof chain step is missing `==`",
-           "Every chain step must relate the previous endpoint to a new endpoint with `==`.",
-           "add `==` and the next endpoint"}
+  def from_error({:proof_chain_syntax, %ProofChainSyntaxProblem{} = problem}, opts),
+    do: ProofAdapter.from_error({:proof_chain_syntax, problem}, opts)
 
-        :missing_right_side ->
-          {"Proof chain step has no endpoint",
-           "The `==` relation must be followed by the expression reached by this step.",
-           "add the right-hand expression"}
+  def from_error({:proof_chain_mismatch, %ProofChainMismatchProblem{} = problem}, opts),
+    do: ProofAdapter.from_error({:proof_chain_mismatch, problem}, opts)
 
-        :missing_because ->
-          {"Proof chain step needs a reason",
-           "Every equality step must include `because` followed by checked evidence.", "add `because` and its evidence"}
+  def from_error({:rewrite_failed, %RewriteProblem{} = problem}, opts),
+    do: ProofAdapter.from_error({:rewrite_failed, problem}, opts)
 
-        :first_step_previous ->
-          {"Proof chain cannot start with `_`", "There is no previous endpoint at the beginning of a proof chain.",
-           "write the first expression explicitly"}
+  def from_error({:simplification_failed, %SimplificationProblem{} = problem}, opts),
+    do: ProofAdapter.from_error({:simplification_failed, problem}, opts)
 
-        :unreachable_proof_statement ->
-          {"Proof statement is unreachable",
-           "An earlier expression already closed this justification, so this later statement cannot contribute evidence.",
-           "this statement is unreachable"}
+  def from_error({:induction_failed, %InductionProblem{} = problem}, opts),
+    do: ProofAdapter.from_error({:induction_failed, problem}, opts)
 
-        _ ->
-          {"Malformed proof chain", "This proof chain does not have the required equational structure.",
-           "repair this proof-chain step"}
-      end
-
-    suggestions =
-      if problem.kind == :missing_because and match?(%Span{}, problem.insertion) do
-        [
-          %Suggestion{
-            message: "Insert `because`",
-            applicability: :machine_applicable,
-            edits: [%TextEdit{span: problem.insertion, replacement: "because "}]
-          }
-        ]
-      else
-        []
-      end
-
-    Diagnostic.new(
-      code: "E109",
-      key: :proof_chain_syntax,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      secondary: proof_chain_syntax_labels(problem, Keyword.get(opts, :span)),
-      suggestions: suggestions,
-      payload: problem
-    )
-  end
-
-  def from_error({:proof_chain_mismatch, %ProofChainMismatchProblem{} = problem}, opts) do
-    displayed = problem.step_index + 1
-
-    {title, message, label} =
-      case problem.kind do
-        :unfinished_justification ->
-          {"Proof justification is unfinished",
-           "The justification for step #{displayed} ended while its equality goal was still open. Add a final evidence expression; the structured payload lists the residual goal and available local facts.",
-           "this block ends without proving its goal"}
-
-        :adjacent_endpoints ->
-          {"Proof chain endpoints have different types",
-           "The endpoint written for step #{displayed} does not have the same carrier type as the previous endpoint.",
-           "this endpoint has the wrong type"}
-
-        _ ->
-          {"Proof does not justify chain step #{displayed}",
-           "The evidence after `because` does not prove the equality required by step #{displayed}. Each step is checked independently before the chain is composed.",
-           "this evidence proves a different proposition"}
-      end
-
-    Diagnostic.new(
-      code: "E110",
-      key: :proof_chain_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      secondary: proof_chain_mismatch_labels(problem, Keyword.get(opts, :span)),
-      payload: problem
-    )
-  end
-
-  def from_error({:rewrite_failed, %RewriteProblem{} = problem}, opts) do
-    {title, message, label} =
-      case problem.kind do
-        :no_occurrence ->
-          {"Rewrite has no matching occurrence",
-           "The selected side of this equality does not occur in the current proof goal.",
-           "nothing in this goal matches the rewrite"}
-
-        :ambiguous_occurrence ->
-          {"Rewrite matches more than once",
-           "This equality matches multiple places. Select one of the numbered occurrences with `at n`.",
-           "choose which occurrence to rewrite"}
-
-        :invalid_occurrence ->
-          {"Rewrite occurrence does not exist",
-           "The requested occurrence number is outside the candidates in the current goal.",
-           "this occurrence number is not available"}
-
-        :bad_target ->
-          {"Rewrite target is not a local hypothesis",
-           "The name after `in` must identify a local proof hypothesis in this justification.",
-           "this rewrite target is unavailable"}
-
-        :reverse_only ->
-          {"Rewrite only matches in the opposite direction",
-           "The other side of this equality occurs in the goal. Add or remove `backwards` to use that direction.",
-           "this direction has no match"}
-
-        _ ->
-          {"Rewrite theorem is not an equality",
-           "The expression after `using` must prove Cure's `Equivalent` proposition.",
-           "this expression is not equality evidence"}
-      end
-
-    Diagnostic.new(
-      code: "E111",
-      key: :rewrite_failed,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      secondary: rewrite_labels(problem, Keyword.get(opts, :span)),
-      suggestions: rewrite_suggestions(problem),
-      payload: problem
-    )
-  end
-
-  def from_error({:simplification_failed, %SimplificationProblem{} = problem}, opts) do
-    {title, message, label} =
-      case problem.kind do
-        :inadmissible_rule ->
-          {"Simplification rule is not admissible", "This rule cannot be given a deterministic decreasing orientation.",
-           "this rule cannot be admitted"}
-
-        :proof_mismatch ->
-          {"Simplified proof does not match", "The supplied proof and current goal simplify to different propositions.",
-           "the simplified propositions still differ"}
-
-        :resource_guard ->
-          {"Simplification stopped safely",
-           "The simplifier reached its explicit resource limit without claiming that the goal is false.",
-           "simplification stopped at its resource limit"}
-
-        _ ->
-          {"Simplification left a residual goal",
-           "The approved rules made no further progress, and the remaining proposition is not definitionally reflexive.",
-           "this goal was not fully simplified"}
-      end
-
-    Diagnostic.new(
-      code: "E112",
-      key: :simplification_failed,
-      severity: :error,
-      title: title,
-      body: simplification_body(message, problem, opts),
-      primary: primary_label(opts, label),
-      secondary: simplification_labels(problem, Keyword.get(opts, :span)),
-      payload: problem
-    )
-  end
-
-  def from_error({:induction_failed, %InductionProblem{} = problem}, opts) do
-    {title, message, label} =
-      case problem.kind do
-        :non_inductive_subject ->
-          {"Cannot induct over this value", "The selected subject does not have an inductive datatype.",
-           "this subject is not inductive"}
-
-        :missing_case ->
-          {"Induction case is missing", "The induction block does not cover every possible constructor.",
-           "add the missing constructor case"}
-
-        :duplicate_case ->
-          {"Induction case is duplicated", "A constructor may appear only once in an induction block.",
-           "this constructor case is duplicated"}
-
-        :impossible_case ->
-          {"Induction case is reachable",
-           "This case was marked impossible, but the subject indices permit its constructor.",
-           "this constructor case is possible"}
-
-        :unknown_case ->
-          {"Unknown induction constructor", "This pattern does not name a constructor of the subject datatype.",
-           "this constructor is unavailable"}
-
-        :wrong_case_fields ->
-          {"Induction case has the wrong fields",
-           "Bind every ordinary constructor field, followed by one induction hypothesis for each recursive field.",
-           "this constructor pattern has the wrong shape"}
-
-        :unavailable_hypothesis ->
-          {"Invalid induction hypothesis binder", "An induction hypothesis must be bound by an ordinary name.",
-           "name this induction hypothesis"}
-
-        :mistyped_hypothesis ->
-          {"Induction hypothesis has the wrong proposition",
-           "This induction hypothesis is specialized for its recursive field, but that proposition does not satisfy this use.",
-           "this induction hypothesis has a different proposition"}
-
-        :unknown_subject_type ->
-          {"Cannot determine the induction subject type",
-           "Give the local value a type annotation or induct over an expression whose result type is declared.",
-           "the subject type is not available"}
-
-        :local_subject_requires_return_annotation ->
-          {"Local induction needs a declared result type",
-           "Closure-lifted induction needs the enclosing proposition in order to construct its motive.",
-           "declare this function's result proposition"}
-
-        _ ->
-          {"Induction could not be elaborated", "The induction block could not be lowered to checked total recursion.",
-           "this induction block is invalid"}
-      end
-
-    Diagnostic.new(
-      code: "E113",
-      key: :induction_failed,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(induction_message(message, problem)),
-      primary: induction_primary(problem, opts, label),
-      secondary: induction_labels(problem),
-      suggestions: induction_suggestions(problem),
-      payload: problem
-    )
-  end
-
-  def from_error({:defining_equation_unavailable, %DefiningEquationProblem{} = problem}, opts) do
-    {title, message, label} =
-      case problem.kind do
-        :inaccessible_equation ->
-          {"Defining equation is private", "This generated equation follows its function's private visibility.",
-           "this equation is not visible here"}
-
-        :friendly_name_collision ->
-          {"Defining equation name is ambiguous",
-           "More than one certified branch has this friendly constructor name. Select its structural pattern key.",
-           "this friendly equation name is ambiguous"}
-
-        _ ->
-          {"Defining equation is unavailable",
-           "This function has no certified defining equation with the requested constructor path.",
-           "no such defining equation is available"}
-      end
-
-    Diagnostic.new(
-      code: "E114",
-      key: :defining_equation_unavailable,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      secondary: defining_equation_labels(problem, Keyword.get(opts, :span)),
-      payload: problem
-    )
-  end
+  def from_error({:defining_equation_unavailable, %DefiningEquationProblem{} = problem}, opts),
+    do: ProofAdapter.from_error({:defining_equation_unavailable, problem}, opts)
 
   def from_error({:named_argument_mismatch, variant, details}, opts) when is_map(details) do
-    {title, message, label} =
-      case variant do
-        :unknown_label ->
-          {"Unknown named argument", "`#{details.label}` is not a parameter label of this call target.",
-           "this name does not match a parameter"}
-
-        :duplicate_label ->
-          {"Named argument is supplied twice", "`#{details.label}` fills a parameter that already has an argument.",
-           "this parameter was already filled"}
-
-        :positional_after_named ->
-          {"Positional argument follows a named argument",
-           "Positional arguments must come first; named arguments may follow in any order.",
-           "move this positional argument before the named arguments"}
-
-        :missing_label ->
-          {"Required named argument is missing",
-           "The parameter `#{details.label}` must be supplied by its declared argument name.",
-           "write `#{details.label}:` for this argument"}
-
-        :ambiguous_label ->
-          {"Named arguments do not select one overload",
-           "These names fit more than one candidate, or fail differently across the remaining candidates.",
-           "make the target or argument names unambiguous"}
-      end
-
-    Diagnostic.new(
-      code: "E115",
-      key: :named_argument_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: named_argument_primary(details, opts, label),
-      secondary: named_argument_labels(details),
-      suggestions: named_argument_suggestions(variant, details),
-      payload: Map.put(details, :kind, variant)
-    )
+    NameAdapter.from_error({:named_argument_mismatch, variant, details}, opts)
   end
 
-  def from_error({:missing_diagnosis, points}, opts), do: macro_validation_failure(:missing_diagnosis, points, opts)
-  def from_error({:rule_unpinned, keywords}, opts), do: macro_validation_failure(:rule_unpinned, keywords, opts)
+  def from_error({:missing_diagnosis, points}, opts),
+    do: MacroAdapter.validation_failure(:missing_diagnosis, points, opts)
+
+  def from_error({:rule_unpinned, keywords}, opts), do: MacroAdapter.validation_failure(:rule_unpinned, keywords, opts)
 
   def from_error({:source_context, {:missing_diagnosis, points}, context}, opts) when is_map(context),
-    do: macro_validation_failure(:missing_diagnosis, points, opts, context)
+    do: MacroAdapter.validation_failure(:missing_diagnosis, points, opts, context)
 
   def from_error({:source_context, {:rule_unpinned, keywords}, context}, opts) when is_map(context),
-    do: macro_validation_failure(:rule_unpinned, keywords, opts, context)
+    do: MacroAdapter.validation_failure(:rule_unpinned, keywords, opts, context)
 
   def from_error({:source_context, {:example_mismatch, mismatches}, context}, opts) when is_map(context),
-    do: macro_validation_failure(:example_mismatch, mismatches, opts, context)
+    do: MacroAdapter.validation_failure(:example_mismatch, mismatches, opts, context)
 
   def from_error({:source_context, {:example_type_mismatch, failures}, context}, opts) when is_map(context),
-    do: macro_validation_failure(:example_type_mismatch, failures, opts, context)
+    do: MacroAdapter.validation_failure(:example_type_mismatch, failures, opts, context)
 
   def from_error({:source_context, {:computed_example_error, failures}, context}, opts) when is_map(context),
-    do: macro_validation_failure(:computed_example_error, failures, opts, context)
+    do: MacroAdapter.validation_failure(:computed_example_error, failures, opts, context)
+
+  def from_error({:source_context, {:reserved_syntax_field, field, keywords}, context}, opts) when is_map(context),
+    do: MacroAdapter.validation_failure(:reserved_syntax_field, %{first: field, second: keywords}, opts, context)
+
+  def from_error({:source_context, {:expansion_ill_typed, details}, context}, opts)
+      when is_map(details) and is_map(context),
+      do: MacroAdapter.expansion_proof_failure(details, context, opts)
+
+  def from_error({:source_context, {:unsupported_hole_type, category}, context}, opts) when is_map(context),
+    do: MacroAdapter.validation_failure(:unsupported_hole_type, %{detail: category}, opts, context)
+
+  def from_error({:source_context, {:generated_hole_not_well_typed, details}, context}, opts)
+      when is_map(details) and is_map(context),
+      do: MacroAdapter.generated_hole_invariant_failure(details, context, opts)
 
   def from_error({:example_mismatch, mismatches}, opts),
-    do: macro_validation_failure(:example_mismatch, mismatches, opts)
+    do: MacroAdapter.validation_failure(:example_mismatch, mismatches, opts)
 
   def from_error({:example_type_mismatch, failures}, opts),
-    do: macro_validation_failure(:example_type_mismatch, failures, opts)
+    do: MacroAdapter.validation_failure(:example_type_mismatch, failures, opts)
 
   def from_error({:computed_example_error, failures}, opts),
-    do: macro_validation_failure(:computed_example_error, failures, opts)
+    do: MacroAdapter.validation_failure(:computed_example_error, failures, opts)
+
+  def from_error({kind, detail}, opts)
+      when kind in [
+             :invalid_packet_name,
+             :invalid_packet_endian,
+             :unknown_packet_scalar,
+             :missing_packet_endian,
+             :invalid_packet_field
+           ],
+      do: MacroAdapter.from_error({kind, detail}, opts)
+
+  def from_error({kind, field, dependency}, opts)
+      when kind in [:forward_packet_length, :invalid_packet_crc_fields],
+      do: MacroAdapter.from_error({kind, field, dependency}, opts)
+
+  def from_error(kind, opts)
+      when kind in [:invalid_packet_field, :invalid_packet_field_name, :duplicate_packet_field],
+      do: MacroAdapter.from_error(kind, opts)
+
+  def from_error({:invalid_driver_base, base}, opts),
+    do: MacroAdapter.from_error({:invalid_driver_base, base}, opts)
+
+  def from_error(kind, opts)
+      when kind in [:invalid_driver_register, :duplicate_driver_register, :overlapping_driver_register],
+      do: MacroAdapter.from_error(kind, opts)
+
+  def from_error({kind, detail}, opts)
+      when kind in [
+             :invalid_board_name,
+             :invalid_board_chip,
+             :unknown_board_pin,
+             :invalid_board_capability,
+             :invalid_board_bus,
+             :unknown_bus_pin,
+             :missing_bus_capability
+           ],
+      do: MacroAdapter.from_error({kind, detail}, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :invalid_board_definition,
+             :missing_board_chip,
+             :invalid_board_pins,
+             :invalid_board_capabilities,
+             :invalid_board_buses,
+             :invalid_board_flash,
+             :flash_offset_out_of_bounds
+           ],
+      do: MacroAdapter.from_error(kind, opts)
 
   def from_error({:codegen_error, {:computed_macro_error, _, _} = reason}, opts),
     do: from_error(reason, opts)
@@ -676,18 +314,83 @@ defmodule Cure.Diagnostic.Adapter do
     do: from_error(reason, opts)
 
   def from_error({:codegen_failure, details}, opts) when is_map(details) do
-    opts =
-      opts
-      |> Keyword.put(:codegen_stage, Map.get(details, :stage))
-      |> Keyword.put(:codegen_module, Map.get(details, :module))
-      |> Keyword.put(:source_file, Map.get(details, :file, Keyword.get(opts, :source_file)))
-
-    codegen_failure(Map.get(details, :reason), opts)
+    Codegen.from_error({:codegen_failure, details}, opts)
   end
 
-  def from_error({:codegen_error, reason}, opts), do: codegen_failure(reason, opts)
+  def from_error({:codegen_error, reason}, opts), do: Codegen.from_error({:codegen_error, reason}, opts)
 
   def from_error({:parse_error, [reason | _]}, opts), do: from_error(reason, opts)
+
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :shadowed_sub_union, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
+
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :shadowed_literal_member, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
+
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :shadowed_as, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
+
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :shadowed_nested, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
+
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :shadowed_tuple, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
+
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :shadowed_tuple_arg, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
+
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: reason, name: _name} = details}, context},
+        opts
+      )
+      when reason in [:shadowed_catchall, :shadowed_literal_catchall, :shadowed_default] and is_map(context),
+      do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
+
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :named_default_nonvariable, name: _name} = details},
+         context},
+        opts
+      )
+      when is_map(context),
+      do: Pattern.named_default_nonvariable_failure(details, context, opts)
+
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :default_in_with, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: Pattern.with_default_pattern_failure(details, context, opts)
+
+  def from_error(
+        {:source_context, {:unsupported_pattern, %{reason: :unlowered_nested_constructor_argument} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: Pattern.unlowered_nested_constructor_failure(details, context, opts)
 
   def from_error({:source_context, {:unsupported_pattern, shape}, context}, opts) when is_map(context) do
     from_error(
@@ -701,432 +404,496 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:source_context, {:unsolved_metavariables, name}, context}, opts) when is_map(context) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
-    primary = primary_label(opts, "these hidden arguments cannot be inferred")
+  def from_error({:source_context, {:unsupported_guard, :non_exhaustive}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
-    secondary =
-      case {Map.get(context, :expectation_span), primary} do
-        {%Span{} = span, %Label{span: primary_span}} when span != primary_span ->
-          [%Label{span: span, style: :secondary, message: "this result annotation still leaves them unknown"}]
+  def from_error(
+        {:source_context, {:unsupported_guard, %{reason: :shadowed, name: _name} = details}, context},
+        opts
+      )
+      when is_map(context),
+      do: NameAdapter.shadowed_guard_binding_failure(details, context, opts)
 
-        _ ->
-          []
-      end
+  def from_error(
+        {:source_context, {:unsupported_guard, %{reason: :refutable_pattern}}, context} = error,
+        opts
+      )
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E011",
-      key: :missing_implicit_argument,
-      severity: :error,
-      title: "Missing implicit argument",
-      body:
-        Doc.stack([
-          Doc.paragraph("Cure could not infer every implicit argument for `#{name}` at this call site."),
-          Doc.paragraph(
-            "The call leaves hidden type or index values unconstrained. Provide arguments that determine them, or use the result where its dependent type is known."
-          )
-        ]),
-      primary: primary,
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Provide arguments or a result type that determines the hidden values",
-          applicability: :manual
-        }
-      ],
-      payload: Map.put(context, :name, name)
-    )
-  end
+  def from_error(
+        {:source_context, {:unsupported_guard, %{reason: :complex_scrutinee}}, context} = error,
+        opts
+      )
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {:no_instance, interface, head}, context}, opts)
-      when is_map(context) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
-    origin = Map.get(context, :expectation_origin, :implicit)
+  def from_error({:source_context, {:unsolved_metavariables, name}, context}, opts) when is_map(context),
+    do: TypeAdapter.from_error({:source_context, {:unsolved_metavariables, name}, context}, opts)
 
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "No instance found",
-      body:
-        Doc.stack([
-          Doc.paragraph(
-            "Cure could not find an implementation of `#{name_to_string(interface)}` for the required type `#{surface_type(head)}`."
-          ),
-          Doc.paragraph("Add an instance, import the module that provides it, or change the expression's type.")
-        ]),
-      primary: primary_label(opts, "this implicit constraint has no available instance"),
-      payload: %{
-        kind: :no_instance,
-        interface: interface,
-        head: head,
-        expectation_origin: origin,
-        checking: Map.get(context, :checking)
-      }
-    )
-  end
+  def from_error({:source_context, {:no_instance, _interface, _head}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {:no_named_instance, name}, context}, opts) when is_map(context) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+  def from_error({:source_context, {:ambiguous_method, method, interfaces}, context}, opts)
+      when is_map(context),
+      do: NameAdapter.ambiguous_member(method, interfaces, context, opts)
 
-    Diagnostic.new(
-      code: "E011",
-      key: :missing_implicit_argument,
-      severity: :error,
-      title: "Named instance not found",
-      body: Doc.paragraph("The named instance `#{name_to_string(name)}` is not available in this scope."),
-      primary: primary_label(opts, "import or define this named instance"),
-      payload: %{kind: :no_named_instance, name: name, checking: Map.get(context, :checking)}
-    )
-  end
+  def from_error({:source_context, {:inconsistent_head_kind, interface}, context}, opts)
+      when is_map(context),
+      do: NameAdapter.from_error({:source_context, {:inconsistent_head_kind, interface}, context}, opts)
 
-  def from_error({:source_context, {:missing_branch, branch}, context}, opts) when is_map(context) do
-    coverage_problem(:missing_branch, branch, context, opts)
-  end
+  def from_error({:source_context, {:no_named_instance, name}, context}, opts) when is_map(context),
+    do: NameAdapter.from_error({:source_context, {:no_named_instance, name}, context}, opts)
 
-  def from_error({:source_context, :branch_type, context}, opts) when is_map(context) do
-    branch_type_failure(context, opts)
-  end
+  def from_error({:source_context, {:missing_branch, _branch}, context} = error, opts)
+      when is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:source_context, {:branch_type, details}, context}, opts) when is_map(context) do
-    branch_type_failure(Map.put(context, :branch_details, details), opts)
-  end
+  def from_error(
+        {:source_context, {:tuple_missing_branch, %{branch: _branch}}, context} = error,
+        opts
+      )
+      when is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:source_context, {:reachable_impossible, branch}, context}, opts) when is_map(context) do
-    coverage_problem(:reachable_impossible, branch, context, opts)
-  end
+  def from_error({:source_context, :branch_type, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {:duplicate_branch, branch}, context}, opts) when is_map(context) do
-    coverage_problem(:duplicate_branch, branch, context, opts)
-  end
+  def from_error({:source_context, {:branch_type, _details}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {:forced_pattern_mismatch, actual, expected}, context}, opts)
-      when is_map(context) do
-    pattern_problem(:forced_pattern_mismatch, %{actual: actual, expected: expected}, context, opts)
-  end
+  def from_error({:source_context, {:reachable_impossible, _branch}, context} = error, opts)
+      when is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:source_context, {:named_implicit_unforced, name}, context}, opts) when is_map(context) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+  def from_error({:source_context, {:duplicate_branch, _branch}, context} = error, opts)
+      when is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E011",
-      key: :missing_implicit_argument,
-      severity: :error,
-      title: "Named implicit was not forced",
-      body: Doc.paragraph("The named implicit `#{name_to_string(name)}` must be explicitly forced in this pattern."),
-      primary: primary_label(opts, "force this named implicit or remove the pattern reference"),
-      payload: %{kind: :named_implicit_unforced, name: name, checking: Map.get(context, :checking)}
-    )
-  end
+  def from_error(
+        {:source_context, {:forced_pattern_mismatch, _actual, _expected}, %{forced_pattern_span: _}} = error,
+        opts
+      ),
+      do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {kind, first, second}, context}, opts)
-      when kind in [:with_rematch_ctor_mismatch] and is_map(context) do
-    pattern_problem(kind, %{actual: first, expected: second}, context, opts)
-  end
+  def from_error({:source_context, {:forced_pattern_mismatch, _actual, _expected}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {kind, details}, context}, opts)
+  def from_error(
+        {:source_context, {:named_implicit_unforced, name}, %{named_implicit_status: :unforced} = context},
+        opts
+      ),
+      do: TypeAdapter.from_error({:source_context, {:named_implicit_unforced, name}, context}, opts)
+
+  def from_error({:source_context, {:named_implicit_unforced, name}, context}, opts) when is_map(context),
+    do: TypeAdapter.from_error({:source_context, {:named_implicit_unforced, name}, context}, opts)
+
+  def from_error({:source_context, {kind, _first, _second}, context} = error, opts)
+      when kind == :with_rematch_ctor_mismatch and is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {kind, _details}, context} = error, opts)
       when kind in [
              :with_rematch_ctor_mismatch,
              :with_rematch_non_constructor_pattern,
-             :with_rematch_inconsistent_binding
+             :with_rematch_inconsistent_binding,
+             :with_rematch_unsupported_parent_pattern
            ] and
-             is_map(context) do
-    pattern_problem(kind, %{details: details}, context, opts)
+             is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error(
+        {:source_context, {:with_rematch_arity_mismatch, _expected, _actual}, context} = error,
+        opts
+      )
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:unknown_record, name, candidates}, context}, opts)
+      when is_map(context) and is_list(candidates),
+      do: NameAdapter.from_error({:source_context, {:unknown_record, name, candidates}, context}, opts)
+
+  def from_error({:source_context, {:unknown_record, name}, context}, opts) when is_map(context),
+    do: NameAdapter.from_error({:source_context, {:unknown_record, name}, context}, opts)
+
+  def from_error({:source_context, {:unknown_field, _record, _field}, context} = error, opts)
+      when is_map(context),
+      do: NameAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:unknown_field, record, field, available_fields}, context}, opts)
+      when is_map(context) and is_list(available_fields) do
+    NameAdapter.from_error({:source_context, {:unknown_field, record, field, available_fields}, context}, opts)
   end
 
-  def from_error({:source_context, {:unknown_record, name}, context}, opts) when is_map(context) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+  def from_error({:source_context, {:projection_not_a_record, _record}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E021",
-      key: :unknown_record,
-      severity: :error,
-      title: "Unknown record",
-      body: Doc.paragraph("The record `#{name}` is not declared in this module or its imports."),
-      primary: primary_label(opts, "declare this record before constructing it"),
-      payload: %{record: name, checking: Map.get(context, :checking)}
-    )
-  end
+  def from_error(
+        {:source_context, {:dependent_record_projection, _record, _field}, context} = error,
+        opts
+      )
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:source_context, {:unknown_field, record, field}, context}, opts) when is_map(context) do
-    opts =
-      opts
-      |> Keyword.put_new(:span, Map.get(context, :span))
-      |> Keyword.put(:owner, record)
-      |> Keyword.put(:checking, Map.get(context, :checking))
+  def from_error({:unknown_field, _record, _field} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-    unknown_name(:member, "#{name_to_string(record)}.#{name_to_string(field)}", opts)
-  end
+  def from_error({:unknown_field, _record, _field, available_fields} = error, opts)
+      when is_list(available_fields),
+      do: NameAdapter.from_error(error, opts)
 
-  def from_error({:unknown_field, record, field}, opts) do
-    unknown_name(:member, "#{name_to_string(record)}.#{name_to_string(field)}", Keyword.put(opts, :owner, record))
-  end
-
-  def from_error({:unknown_field, record, field, available_fields}, opts) when is_list(available_fields) do
-    candidates =
-      Enum.map(available_fields, fn candidate ->
-        %{
-          id: {:record_field, record, candidate},
-          name: name_to_string(candidate),
-          namespace: :member,
-          owner: record,
-          imported: true,
-          origin: :record_shape
-        }
-      end)
-
-    opts =
-      opts
-      |> Keyword.put(:owner, record)
-      |> Keyword.put(:record, record)
-      |> Keyword.put(:candidates, candidates)
-      |> Keyword.put(:display_name, "#{name_to_string(record)}.#{name_to_string(field)}")
-
-    unknown_name(:member, name_to_string(field), opts)
-  end
-
-  def from_error({:source_context, {:projection_non_record, field}, context}, opts) when is_map(context) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Record projection requires a record",
-      body: Doc.paragraph("The value being projected with `#{name_to_string(field)}` is not a record."),
-      primary: primary_label(opts, "project a field from a record value"),
-      payload: %{kind: :projection_non_record, field: field, checking: Map.get(context, :checking)}
-    )
-  end
+  def from_error({:source_context, {:projection_non_record, _field}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
   def from_error({:unknown_record, name}, opts),
     do: from_error({:source_context, {:unknown_record, name}, %{}}, opts)
 
-  def from_error({:source_context, {:record_field_mismatch, name}, context}, opts)
-      when is_map(context) and not is_map(name) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+  def from_error({:unknown_record, name, candidates}, opts) when is_list(candidates),
+    do: from_error({:source_context, {:unknown_record, name, candidates}, %{}}, opts)
 
-    Diagnostic.new(
-      code: "E022",
-      key: :record_field_mismatch,
-      severity: :error,
-      title: "Record field mismatch",
-      body: Doc.paragraph("The fields supplied to `#{name}` do not match its declared record shape."),
-      primary: primary_label(opts, "use exactly the declared record fields"),
-      payload: %{record: name, checking: Map.get(context, :checking)}
-    )
-  end
+  def from_error({:source_context, {:record_field_mismatch, name}, context}, opts)
+      when is_map(context) and not is_map(name),
+      do: NameAdapter.from_error({:source_context, {:record_field_mismatch, name}, context}, opts)
 
   def from_error({:source_context, {:record_field_mismatch, details}, context}, opts)
-      when is_map(details) and is_map(context) do
-    unknown = Map.get(details, :unknown, [])
-    missing = Map.get(details, :missing, [])
-    declared = Map.get(details, :declared, [])
-    record = Map.get(details, :record)
-    field_spans = Map.get(context, :field_spans, %{})
-    offending = List.first(unknown)
-    field_span = Map.get(field_spans, offending) || Map.get(field_spans, name_to_string(offending))
+      when is_map(details) and is_map(context),
+      do: NameAdapter.from_error({:source_context, {:record_field_mismatch, details}, context}, opts)
 
-    opts =
-      if field_span do
-        Keyword.put(opts, :span, field_span)
-      else
-        Keyword.put_new(opts, :span, Map.get(context, :span))
-      end
+  def from_error({:source_context, {:record_update_base_mismatch, details}, context} = error, opts)
+      when is_map(details) and is_map(context),
+      do: TypeAdapter.from_error(error, opts)
 
-    candidates = record_field_candidates(offending, declared, record)
+  def from_error({:source_context, {:foreign_ctor, constructor}, context}, opts)
+      when is_map(context),
+      do: NameAdapter.from_error({:source_context, {:foreign_ctor, constructor}, context}, opts)
 
-    body =
-      cond do
-        offending && candidates != [] ->
-          candidate = hd(candidates).name
-
-          Doc.paragraph(
-            "`#{name_to_string(offending)}` is not a field of `#{name_to_string(record)}`. Did you mean `#{candidate}`?"
-          )
-
-        offending ->
-          Doc.paragraph(
-            "`#{name_to_string(offending)}` is not a field of `#{name_to_string(record)}`. Available fields are #{field_list(declared)}."
-          )
-
-        missing != [] ->
-          Doc.paragraph("This `#{name_to_string(record)}` value is missing #{field_list(missing)}.")
-
-        true ->
-          Doc.paragraph("The supplied fields do not match `#{name_to_string(record)}`.")
-      end
-
-    suggestions = record_field_suggestions(offending, candidates, field_span)
-
-    Diagnostic.new(
-      code: "E022",
-      key: :record_field_mismatch,
-      severity: :error,
-      title: if(offending, do: "Unknown record field", else: "Missing record field"),
-      body: body,
-      primary:
-        primary_label(
-          opts,
-          if(offending, do: "this field is not declared by the record", else: "add the missing field here")
-        ),
-      suggestions: suggestions,
-      payload: %{
-        record: record,
-        declared: declared,
-        provided: Map.get(details, :provided, []),
-        unknown: unknown,
-        missing: missing,
-        candidates: candidates,
-        checking: Map.get(context, :checking)
-      }
-    )
-  end
-
-  def from_error({:source_context, {kind, name}, context}, opts)
+  def from_error({:source_context, {kind, _name}, context} = error, opts)
       when kind in [:unknown_ctor, :foreign_ctor, :unknown_pattern_constructor, :unknown_family] and
-             is_map(context) do
-    opts =
-      opts
-      |> Keyword.put_new(:span, Map.get(context, :span))
-      |> Keyword.put(:candidates, Map.get(context, :name_candidates, []))
-      |> Keyword.put(:available_candidates, Map.get(context, :name_candidates, []))
-      |> Keyword.put(:arity, Map.get(context, :name_arity))
+             is_map(context),
+      do: NameAdapter.from_error(error, opts)
 
-    namespace = if kind == :unknown_family, do: :type, else: :constructor
-    unknown_name(namespace, name, Keyword.put(opts, :checking, Map.get(context, :checking)))
-  end
+  def from_error({:no_such_interface, _interface} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:no_such_interface, interface}, opts),
-    do: unknown_name(:interface, interface, opts)
+  def from_error({:unknown_interface_method, _interface, _method} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:unknown_interface_method, interface, method}, opts),
-    do: unknown_name(:member, method, Keyword.put(opts, :checking, interface))
+  def from_error({:unknown_interface_method, details} = error, opts) when is_map(details),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:implementation_scope, %{kind: :member_outside} = details}, opts) do
-    implementation = "#{name_to_string(details.interface)} for #{name_to_string(details.for)}"
-    primary_span = Map.get(details, :member_span) || Keyword.get(opts, :span)
-
-    secondary =
-      case Map.get(details, :implementation_span) do
-        %Span{} = span ->
-          [%Label{span: span, style: :secondary, message: "this implementation has no nested members"}]
-
-        _ ->
-          []
-      end
-
-    suggestions =
-      case Map.get(details, :insertion_span) do
-        %Span{} = span ->
-          [
-            %Suggestion{
-              message: "Indent `#{name_to_string(details.member)}` beneath the implementation",
-              applicability: :machine_applicable,
-              edits: [%TextEdit{span: span, replacement: Map.get(details, :indentation, "  ")}]
-            }
-          ]
-
-        _ ->
-          []
-      end
-
-    Diagnostic.new(
-      code: "E116",
-      key: :implementation_scope,
-      severity: :error,
-      title: "Implementation member is outside its implementation scope",
-      body:
-        Doc.paragraph(
-          "`#{name_to_string(details.member)}` appears to implement `#{implementation}`, but it is aligned outside that implementation. Implementation members must be indented beneath their `implementation` declaration."
-        ),
-      primary:
-        primary_label(
-          Keyword.put(opts, :span, primary_span),
-          "indent this member so it belongs to the implementation"
-        ),
-      secondary: secondary,
-      suggestions: suggestions,
-      payload: details
-    )
-  end
-
-  def from_error({:implementation_scope, %{kind: :empty} = details}, opts) do
-    span = Map.get(details, :implementation_span) || Keyword.get(opts, :span)
-
-    Diagnostic.new(
-      code: "E116",
-      key: :implementation_scope,
-      severity: :error,
-      title: "Implementation has no members",
-      body:
-        Doc.paragraph(
-          "The implementation of `#{name_to_string(details.interface)}` for `#{name_to_string(details.for)}` is empty. Every implementation must contain at least one nested member."
-        ),
-      primary:
-        primary_label(
-          Keyword.put(opts, :span, span),
-          "add the implementation's members beneath this declaration"
-        ),
-      suggestions: [
-        %Suggestion{
-          message: "Add and indent the required interface members beneath this implementation",
-          applicability: :manual
-        }
-      ],
-      payload: details
-    )
-  end
+  def from_error({:implementation_scope, %{kind: kind} = details}, opts)
+      when kind in [:member_outside, :empty],
+      do: NameAdapter.from_error({:implementation_scope, details}, opts)
 
   def from_error({:missing_method, interface, method}, opts),
-    do: interface_failure(:missing_method, %{interface: interface, method: method}, opts)
+    do: NameAdapter.from_error({:missing_method, interface, method}, opts)
+
+  def from_error({:missing_method, %{interface: _interface, method: _method} = details}, opts),
+    do: NameAdapter.from_error({:missing_method, details}, opts)
 
   def from_error({:method_signature_mismatch, interface, method}, opts),
-    do: interface_failure(:method_signature_mismatch, %{interface: interface, method: method}, opts)
+    do: NameAdapter.from_error({:method_signature_mismatch, interface, method}, opts)
+
+  def from_error({:method_signature_mismatch, %{interface: _interface, method: _method} = details}, opts),
+    do: NameAdapter.from_error({:method_signature_mismatch, details}, opts)
+
+  def from_error({:instance_head_ill_formed, %{reason: _reason} = details}, opts),
+    do: NameAdapter.from_error({:instance_head_ill_formed, details}, opts)
 
   def from_error({:instance_head_ill_formed, reason}, opts),
-    do: interface_failure(:instance_head_ill_formed, %{reason: reason}, opts)
+    do: NameAdapter.from_error({:instance_head_ill_formed, reason}, opts)
 
   def from_error({:missing_superinterface, interface, super_interface, head}, opts),
-    do:
-      interface_failure(
-        :missing_superinterface,
-        %{interface: interface, superinterface: super_interface, head: head},
-        opts
-      )
+    do: NameAdapter.from_error({:missing_superinterface, interface, super_interface, head}, opts)
+
+  def from_error({:missing_superinterface, %{interface: _interface} = details}, opts),
+    do: NameAdapter.from_error({:missing_superinterface, details}, opts)
 
   def from_error({:union_member_not_ground, member}, opts),
-    do: union_declaration_failure(:union_member_not_ground, %{member: member}, opts)
+    do: TypeAdapter.from_error({:union_member_not_ground, member}, opts)
 
   def from_error({:unsupported_member_shape, members}, opts),
-    do: union_declaration_failure(:unsupported_member_shape, %{members: members}, opts)
+    do: TypeAdapter.from_error({:unsupported_member_shape, members}, opts)
 
   def from_error({:same_runtime_shape, members}, opts),
-    do: union_declaration_failure(:same_runtime_shape, %{members: members}, opts)
+    do: TypeAdapter.from_error({:same_runtime_shape, members}, opts)
 
   def from_error({:same_erased_literal, members}, opts),
-    do: union_declaration_failure(:same_erased_literal, %{members: members}, opts)
+    do: TypeAdapter.from_error({:same_erased_literal, members}, opts)
 
   def from_error({:cannot_derive, interface}, opts),
-    do: deriving_failure(:cannot_derive, %{interface: interface}, opts)
+    do: NameAdapter.from_error({:cannot_derive, interface}, opts)
 
   def from_error({:deriving_needs_strings, interface}, opts),
-    do: deriving_failure(:deriving_needs_strings, %{interface: interface}, opts)
+    do: NameAdapter.from_error({:deriving_needs_strings, interface}, opts)
 
   def from_error({:deriving_needs_constraints, interface, type_name}, opts),
-    do: deriving_failure(:deriving_needs_constraints, %{interface: interface, type: type_name}, opts)
+    do: NameAdapter.from_error({:deriving_needs_constraints, interface, type_name}, opts)
 
   def from_error({:cannot_derive_shape, interface, type_name}, opts),
-    do: deriving_failure(:cannot_derive_shape, %{interface: interface, type: type_name}, opts)
+    do: NameAdapter.from_error({:cannot_derive_shape, interface, type_name}, opts)
 
   def from_error({:cannot_derive_method, interface, method, reason}, opts),
-    do: deriving_failure(:cannot_derive_method, %{interface: interface, method: method, reason: reason}, opts)
+    do: NameAdapter.from_error({:cannot_derive_method, interface, method, reason}, opts)
 
   def from_error({:missing_stdlib_source, source, path}, _opts),
     do: Cure.Diagnostic.Operational.file_read(path || source, :enoent)
 
   def from_error({:missing_stdlib_source_dir, source}, _opts),
     do: Cure.Diagnostic.Operational.file_read(source, :enoent)
+
+  def from_error({:source_context, {:non_strictly_positive, _constructor}, context} = error, opts)
+      when is_map(context),
+      do: KernelAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:erased_used_relevantly, details}, context} = error, opts)
+      when is_map(details) and is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
+
+  def from_error({:source_context, {:usage_violation, details}, context} = error, opts)
+      when is_map(details) and is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
+
+  def from_error({:source_context, {:totality_required, _name}, context} = error, opts)
+      when is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
+
+  def from_error({:source_context, {:compile_time_totality, _name, _reason}, context} = error, opts)
+      when is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
+
+  def from_error({:source_context, {:final_core_violation, name, rejections}, context}, opts)
+      when is_list(rejections) and is_map(context) do
+    opts =
+      opts
+      |> Keyword.put_new(:span, Map.get(context, :span))
+      |> Keyword.put(:codegen_stage, Map.get(context, :codegen_stage, :final_core_validation))
+      |> Keyword.put(:codegen_module, Map.get(context, :codegen_module))
+
+    Codegen.from_error({:final_core_violation, name, rejections}, opts)
+  end
+
+  def from_error(
+        {:source_context, {:unsupported_expression, {:hole, meta, _children}}, context},
+        opts
+      )
+      when is_list(meta) and is_map(context) do
+    Hole.inferred_failure(Keyword.get(meta, :name), context, opts)
+  end
+
+  def from_error({:source_context, {:unsafe_call_required, details}, context}, opts)
+      when is_map(details) and is_map(context),
+      do: contextual_type_failure(:unsafe_call_required, Map.merge(context, details), opts)
+
+  def from_error({:unsafe_call_required, details}, opts) when is_map(details),
+    do: contextual_type_failure(:unsafe_call_required, details, opts)
+
+  def from_error({:run_requires_effect, details}, opts) when is_map(details),
+    do: contextual_type_failure(:run_requires_effect, details, opts)
+
+  def from_error({:run_arity, actual}, opts),
+    do: contextual_type_failure(:run_arity, %{actual: actual}, opts)
+
+  def from_error({:source_context, {kind, _operator}, context} = error, opts)
+      when kind in [:unsupported_operand_type, :no_operator_meaning] and is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {kind, _detail}, context} = error, opts)
+      when kind in [
+             :nonlinear_pattern,
+             :duplicate_default_pattern,
+             :impossible_default_pattern,
+             :unreachable_after_default_pattern
+           ] and
+             is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
+
+  def from_error({:source_context, {kind}, context} = error, opts)
+      when kind in [:binary_match_needs_default, :map_match_needs_default] and is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
+
+  def from_error({:source_context, {kind, _detail}, context} = error, opts)
+      when kind in [
+             :unsupported_comprehension_pattern,
+             :unsupported_binary_generator_pattern,
+             :unsupported_binary_segment,
+             :unsupported_binary_match_arm,
+             :unsupported_map_match_arm,
+             :unsupported_map_value_pattern,
+             :unsupported_map_key_pattern,
+             :unsupported_block_statement,
+             :unsupported_block
+           ] and is_map(context),
+      do: SyntaxAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:primitive_missing_builtin, name}, context}, opts)
+      when is_map(context),
+      do: primitive_declaration_failure(:missing_builtin, %{name: name}, context, opts)
+
+  def from_error({:source_context, {:unknown_primitive_tag, tag}, context}, opts)
+      when is_map(context),
+      do: primitive_declaration_failure(:unknown_builtin, %{tag: tag}, context, opts)
+
+  def from_error(
+        {:source_context, {:primitive_floor_mismatch, name, declared, expected}, context},
+        opts
+      )
+      when is_map(context),
+      do:
+        primitive_declaration_failure(
+          :floor_mismatch,
+          %{name: name, declared: primitive_core_tag(declared), expected: primitive_core_tag(expected)},
+          context,
+          opts
+        )
+
+  def from_error({:source_context, {:unsupported_declaration, shape}, context}, opts)
+      when is_map(context),
+      do: primitive_declaration_failure(:unsupported_declaration, %{shape: shape}, context, opts)
+
+  def from_error({:source_context, {:extern_returns_union, _name, _codomain}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:extern_union_indistinct, _name, _reason}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:bounded_lit_out_of_range, _value, _bound}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error(
+        {:source_context, {:cannot_infer_dependent_match, _inferred_type}, context} = error,
+        opts
+      )
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:result_type_not_family, _family}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error(
+        {:source_context, {:typed_pattern_type_mismatch, _type_ast}, %{field_type: field_type}} = error,
+        opts
+      )
+      when not is_nil(field_type),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error(
+        {:source_context, {:typed_pattern_arity, _position}, %{visible_arity: _} = context},
+        opts
+      ),
+      do: Arity.typed_pattern_arity_failure(context, opts)
+
+  def from_error(
+        {:source_context, {:forced_pattern_not_in_pattern, _meta},
+         %{forced_pattern_position: :positional_constructor_argument}} = error,
+        opts
+      ),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:applied_non_function, details}, context} = error, opts)
+      when is_map(details) and is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error(
+        {:source_context, {:telescope_index_out_of_bounds, index, arity}, context} = error,
+        opts
+      )
+      when is_integer(index) and is_integer(arity) and is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:unknown_erasure_class, _name, _class}, context} = error, opts)
+      when is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
+
+  def from_error({:source_context, {:erases_on_non_opaque, _name}, context} = error, opts)
+      when is_map(context),
+      do: StaticAnalysis.from_error(error, opts)
+
+  def from_error({:source_context, {:effect_binder_erased, details}, context} = error, opts)
+      when is_map(details) and is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:forced_pattern_not_in_pattern, _meta}, context} = error, opts)
+      when is_map(context),
+      do: SyntaxAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:named_implicit_not_in_pattern, _meta}, context} = error, opts)
+      when is_map(context),
+      do: SyntaxAdapter.from_error(error, opts)
+
+  def from_error({:source_context, kind, context} = error, opts)
+      when kind in [:rewrite_requires_expected_type, :rewrite_proof_not_equality] and is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, :with_mixed_rematch_arms, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, :with_scrutinee_not_data, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, :match_scrutinee_not_data, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error(
+        {:source_context, {:with_indexed_scrutinee_unsupported, _family}, context} = error,
+        opts
+      )
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error(
+        {:source_context, {:with_sibling_dependency_unsupported, reason}, context} = error,
+        opts
+      )
+      when reason in [:sibling_references_sibling, :kept_references_sibling] and
+             is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:rewrite_no_match, _left, _right}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:rewrite_no_match, _left, _right, _goal}, context} = error, opts)
+      when is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:source_context, {:cannot_derive, interface}, context}, opts)
+      when is_map(context),
+      do: NameAdapter.from_error({:source_context, {:cannot_derive, interface}, context}, opts)
+
+  def from_error({:source_context, {:deriving_needs_strings, interface}, context}, opts)
+      when is_map(context),
+      do: NameAdapter.from_error({:source_context, {:deriving_needs_strings, interface}, context}, opts)
+
+  def from_error({:source_context, {:deriving_needs_constraints, interface, type_name}, context}, opts)
+      when is_map(context),
+      do: NameAdapter.from_error({:source_context, {:deriving_needs_constraints, interface, type_name}, context}, opts)
+
+  def from_error({:source_context, {:cannot_derive_shape, interface, type_name}, context}, opts)
+      when is_map(context),
+      do: NameAdapter.from_error({:source_context, {:cannot_derive_shape, interface, type_name}, context}, opts)
+
+  def from_error({:source_context, {:cannot_derive_method, interface, method, reason}, context}, opts)
+      when is_map(context),
+      do:
+        NameAdapter.from_error(
+          {:source_context, {:cannot_derive_method, interface, method, reason}, context},
+          opts
+        )
 
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
     opts =
@@ -1183,92 +950,206 @@ defmodule Cure.Diagnostic.Adapter do
     end
   end
 
-  def from_error({:index_mismatch, _details}, opts),
-    do: kernel_type_failure(:index_mismatch, opts)
+  def from_error({:index_mismatch, _details} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
 
-  def from_error({:cannot_unify, _actual, _expected}, opts),
-    do: kernel_type_failure(:cannot_unify, opts)
+  def from_error({:cannot_unify, _actual, _expected} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
 
-  def from_error({:escaping_variable, _id}, opts),
-    do: kernel_type_failure(:escaping_variable, opts)
+  def from_error({:escaping_variable, _id} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
 
   def from_error({:hole_in_inference_position, name}, opts),
-    do: kernel_type_failure(:hole_in_inference_position, Keyword.put(opts, :name, name))
+    do: Hole.inferred_failure(name, %{}, opts)
 
-  def from_error({:ctor_requires_checking_mode, family}, opts),
-    do: kernel_type_failure(:ctor_requires_checking_mode, Keyword.put(opts, :family, family))
+  def from_error({kind, _detail} = error, opts)
+      when kind in [
+             :nonlinear_pattern,
+             :duplicate_default_pattern,
+             :impossible_default_pattern,
+             :unreachable_after_default_pattern
+           ],
+      do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:bounded_bound_not_concrete, bound}, opts),
-    do: kernel_type_failure(:bounded_bound_not_concrete, Keyword.put(opts, :bound, bound))
+  def from_error({kind} = error, opts) when kind in [:binary_match_needs_default, :map_match_needs_default],
+    do: StaticAnalysis.from_error(error, opts)
+
+  def from_error({:ctor_requires_checking_mode, _family} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
+
+  def from_error({:bounded_bound_not_concrete, _bound} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
 
   def from_error({:cyclic_typealiases, aliases}, opts),
-    do: declaration_conflict(:cyclic_typealiases, %{aliases: aliases}, opts)
+    do: NameAdapter.from_error({:cyclic_typealiases, aliases}, opts)
 
   def from_error({:module_identity_missing, path}, _opts),
     do: Cure.Diagnostic.Operational.file_read(path, :module_identity_missing)
 
   def from_error({:module_identity_mismatch, requested, declared, path}, opts),
-    do: declaration_conflict(:module_identity_mismatch, %{requested: requested, declared: declared, path: path}, opts)
+    do: NameAdapter.from_error({:module_identity_mismatch, requested, declared, path}, opts)
 
   def from_error({:module_path_identity_mismatch, path, declared, requested}, opts),
-    do:
-      declaration_conflict(
-        :module_path_identity_mismatch,
-        %{path: path, declared: declared, requested: requested},
-        opts
-      )
+    do: NameAdapter.from_error({:module_path_identity_mismatch, path, declared, requested}, opts)
 
   def from_error({:char_literal_needs_bounded, value}, opts),
-    do: contextual_type_failure(:char_literal_needs_bounded, %{value: value}, opts)
+    do: TypeAdapter.from_error({:char_literal_needs_bounded, value}, opts)
 
   def from_error({:char_literal_out_of_range, value}, opts),
-    do: contextual_type_failure(:char_literal_out_of_range, %{value: value}, opts)
+    do: TypeAdapter.from_error({:char_literal_out_of_range, value}, opts)
 
-  def from_error({:extern_returns_union, name, codomain}, opts),
-    do: contextual_type_failure(:extern_returns_union, %{name: name, codomain: codomain}, opts)
+  def from_error({:extern_returns_union, _name, _codomain} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:extern_union_indistinct, name, reason}, opts),
-    do: contextual_type_failure(:extern_union_indistinct, %{name: name, reason: reason}, opts)
+  def from_error({:extern_union_indistinct, _name, _reason} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:cannot_infer_dependent_match, branch}, opts),
-    do: contextual_type_failure(:cannot_infer_dependent_match, %{branch: branch}, opts)
-
-  def from_error({:bidirectional_erased_field, constructor}, opts),
-    do: contextual_type_failure(:bidirectional_erased_field, %{constructor: constructor}, opts)
+    do: TypeAdapter.from_error({:cannot_infer_dependent_match, branch}, opts)
 
   def from_error({:generated_hole_not_well_typed, term}, opts),
-    do: macro_validation_failure(:generated_hole_not_well_typed, %{term: term}, opts)
+    do: MacroAdapter.generated_hole_invariant_failure(%{term: term}, %{}, opts)
 
   def from_error({:example_use_site_not_fully_consumed, _unused, _ast}, opts),
-    do: macro_validation_failure(:example_use_site_not_fully_consumed, %{}, opts)
+    do: MacroAdapter.validation_failure(:example_use_site_not_fully_consumed, %{}, opts)
 
   def from_error({:closed_category_extension, categories}, opts),
-    do: macro_validation_failure(:closed_category_extension, %{categories: categories}, opts)
+    do: MacroAdapter.from_error({:closed_category_extension, categories}, opts)
+
+  def from_error({:ambiguous_macro_extension, keywords}, opts),
+    do: MacroAdapter.from_error({:ambiguous_macro_extension, keywords}, opts)
+
+  def from_error({kind, detail}, opts) when kind in [:module_rule_not_fully_consumed, :not_a_module_rule],
+    do: MacroAdapter.from_error({kind, detail}, opts)
+
+  def from_error({:invalid_macro_rules, _detail}, opts),
+    do: MacroAdapter.family_failure(:invalid_macro_rules, opts)
+
+  def from_error({kind, detail}, opts)
+      when not is_map(detail) and
+             kind in [
+               :unknown_syntax_family,
+               :duplicate_syntax_family,
+               :duplicate_syntax_family_field,
+               :syntax_family_cycle
+             ],
+      do: MacroAdapter.family_failure({kind, detail}, opts)
 
   def from_error({:duplicate_unit, suffix}, opts),
-    do: macro_validation_failure(:duplicate_unit, %{suffix: suffix}, opts)
+    do: MacroAdapter.from_error({:duplicate_unit, suffix}, opts)
 
-  # These are public macro-library validation boundaries. Keep them in the
-  # macro family so users are directed to the authored board/unit declaration,
-  # rather than seeing an internal tuple or a generic compiler failure.
   def from_error({kind, detail}, opts)
-      when kind in [:invalid_unit, :unknown_unit, :invalid_board_name],
-      do: macro_validation_failure(kind, %{detail: detail}, opts)
+      when kind in [:invalid_unit, :unknown_unit],
+      do: MacroAdapter.from_error({kind, detail}, opts)
+
+  def from_error({:invalid_unit_literal, value, suffix}, opts),
+    do: MacroAdapter.from_error({:invalid_unit_literal, value, suffix}, opts)
+
+  def from_error({:invalid_check_name, name}, opts),
+    do: MacroAdapter.from_error({:invalid_check_name, name}, opts)
+
+  def from_error({:invalid_protocol_name, name}, opts),
+    do: MacroAdapter.from_error({:invalid_protocol_name, name}, opts)
+
+  def from_error({:protocol_role_count, count}, opts),
+    do: MacroAdapter.from_error({:protocol_role_count, count}, opts)
+
+  def from_error({kind, role}, opts)
+      when kind in [:self_protocol_step, :unknown_choice_decider, :invalid_protocol_branches, :unprojectable_choice],
+      do: MacroAdapter.from_error({kind, role}, opts)
+
+  def from_error({:unknown_protocol_role, sender, receiver}, opts),
+    do: MacroAdapter.from_error({:unknown_protocol_role, sender, receiver}, opts)
+
+  def from_error({:invalid_parse_name, name}, opts),
+    do: MacroAdapter.from_error({:invalid_parse_name, name}, opts)
+
+  def from_error({:left_recursive_parse_production, names}, opts),
+    do: MacroAdapter.from_error({:left_recursive_parse_production, names}, opts)
+
+  def from_error({:missing_raw_delimiter, delimiter}, opts),
+    do: MacroAdapter.from_error({:missing_raw_delimiter, delimiter}, opts)
+
+  def from_error({:invalid_raw_delimiter, delimiter}, opts),
+    do: MacroAdapter.from_error({:invalid_raw_delimiter, delimiter}, opts)
+
+  def from_error({kind, path}, opts)
+      when kind in [
+             :raw_syntax_in_expansion,
+             :quoted_syntax_in_expansion,
+             :malformed_expansion_syntax,
+             :malformed_expansion_attribute,
+             :malformed_expansion_map,
+             :malformed_expansion_literal,
+             :malformed_reflected_syntax,
+             :malformed_reflected_attribute,
+             :malformed_reflected_map,
+             :malformed_reflected_literal
+           ],
+      do: MacroAdapter.from_error({kind, path}, opts)
+
+  def from_error({:invalid_syntax_node, attrs, kids}, opts),
+    do: MacroAdapter.from_error({:invalid_syntax_node, attrs, kids}, opts)
+
+  def from_error({:invalid_syntax_node, detail}, opts),
+    do: MacroAdapter.from_error({:invalid_syntax_node, detail}, opts)
+
+  def from_error({:invalid_syntax_leaf, tag}, opts),
+    do: MacroAdapter.from_error({:invalid_syntax_leaf, tag}, opts)
+
+  def from_error({:invalid_syntax_failure, name}, opts),
+    do: MacroAdapter.from_error({:invalid_syntax_failure, name}, opts)
+
+  def from_error({:unsupported_syntax_core, term}, opts),
+    do: MacroAdapter.from_error({:unsupported_syntax_core, term}, opts)
+
+  def from_error({:invalid_syntax_attrs, core}, opts),
+    do: MacroAdapter.from_error({:invalid_syntax_attrs, core}, opts)
+
+  def from_error({kind, _detail}, opts) when kind in [:invalid_macro_diagnostics, :invalid_macro_diagnostic],
+    do: MacroAdapter.from_error({kind, :detail}, opts)
+
+  def from_error({kind, detail}, opts)
+      when kind in [
+             :invalid_macro_segment,
+             :unsupported_surface_filler,
+             :missing_hole_filler,
+             :invalid_repeated_hole_filler
+           ],
+      do: MacroAdapter.from_error({kind, detail}, opts)
+
+  def from_error({kind, detail}, opts)
+      when kind in [
+             :invalid_syntax_attr,
+             :invalid_syntax_list,
+             :invalid_syntax_string,
+             :invalid_syntax_literal,
+             :invalid_syntax_pair
+           ],
+      do: MacroAdapter.from_error({kind, detail}, opts)
+
+  def from_error({kind, detail}, opts)
+      when kind in [
+             :invalid_lift_module,
+             :invalid_lift_module_name,
+             :invalid_lift_callback,
+             :invalid_module_name,
+             :invalid_behaviour,
+             :lifted_module_dependency_cycle,
+             :duplicate_lifted_module
+           ],
+      do: MacroAdapter.lift_module_validation(kind, %{detail: detail}, opts)
+
+  def from_error({:unknown_reducer_constructor, constructors}, opts),
+    do: MacroAdapter.from_error({:unknown_reducer_constructor, constructors}, opts)
+
+  def from_error({:incomplete_reducer, constructors}, opts),
+    do: MacroAdapter.from_error({:incomplete_reducer, constructors}, opts)
 
   # Some trusted checking paths can return the bare verdict after their
   # declaration wrapper has been stripped. Keep that verdict contextual rather
   # than falling through to the unhelpful generic "Elaboration failed" title.
-  def from_error(:branch_type, opts), do: branch_type_failure(%{}, opts)
-
-  def from_error(kind, opts)
-      when kind in [
-             :invalid_board_pins,
-             :invalid_board_capabilities,
-             :invalid_board_buses,
-             :invalid_board_flash,
-             :flash_offset_out_of_bounds
-           ],
-      do: macro_validation_failure(kind, %{}, opts)
+  def from_error(:branch_type, opts), do: TypeAdapter.from_error(:branch_type, opts)
 
   def from_error({kind, detail}, opts)
       when not is_map(detail) and
@@ -1282,74 +1163,18 @@ defmodule Cure.Diagnostic.Adapter do
                :invalid_packet_field,
                :invalid_packet_field_name,
                :duplicate_packet_field,
-               :invalid_macro_rules,
-               :accepts_without_syntax_family,
-               :accepts_without_expander,
-               :expander_without_accepts,
-               :multiple_accepts_declarations,
-               :multiple_expands_declarations,
                :invalid_driver_base,
                :invalid_driver_register,
                :duplicate_driver_register,
                :overlapping_driver_register,
-               :module_rule_not_fully_consumed,
-               :not_a_module_rule,
-               :ambiguous_macro_extension,
-               :invalid_macro_diagnostics,
-               :invalid_macro_diagnostic,
-               :invalid_syntax_list,
-               :invalid_syntax_string,
-               :invalid_syntax_literal,
-               :invalid_syntax_pair,
-               :left_recursive_parse_production,
-               :protocol_role_count,
-               :invalid_macro_segment,
-               :unsupported_surface_filler,
-               :missing_hole_filler,
                :unsupported_hole_type,
-               :invalid_lift_module,
-               :invalid_lift_module_name,
-               :invalid_lift_callback,
-               :invalid_module_name,
-               :invalid_behaviour,
-               :invalid_lift_declaration,
-               :invalid_lift_import,
-               :invalid_lift_module_ast,
-               :lifted_module_dependency_cycle,
-               :duplicate_lifted_module,
-               :invalid_generated_syntax,
-               :unknown_syntax_family,
-               :duplicate_syntax_family,
-               :duplicate_syntax_family_field,
-               :syntax_family_cycle,
-               :primitive_missing_builtin,
-               :unknown_primitive_tag,
-               :primitive_floor_mismatch,
-               :unsupported_declaration,
-               :invalid_syntax_node,
-               :invalid_syntax_leaf,
-               :invalid_syntax_failure,
-               :unsupported_syntax_core,
-               :raw_syntax_in_expansion,
-               :quoted_syntax_in_expansion,
-               :malformed_expansion_syntax,
-               :malformed_expansion_attribute,
-               :malformed_expansion_map,
-               :malformed_expansion_literal,
-               :malformed_reflected_syntax,
-               :malformed_reflected_attribute,
-               :malformed_reflected_literal,
-               :malformed_reflected_map,
-               :invalid_syntax_attrs,
-               :unknown_reducer_constructor,
-               :incomplete_reducer,
-               :unsupported_hole_arity
+               :invalid_generated_syntax
              ],
-      do: macro_validation_failure(kind, %{detail: detail}, opts)
+      do: MacroAdapter.validation_failure(kind, %{detail: detail}, opts)
 
   def from_error({kind, first, second}, opts)
-      when kind in [:forward_packet_length, :invalid_packet_crc_fields, :reserved_syntax_field, :invalid_unit_literal],
-      do: macro_validation_failure(kind, %{first: first, second: second}, opts)
+      when kind in [:forward_packet_length, :invalid_packet_crc_fields, :reserved_syntax_field],
+      do: MacroAdapter.validation_failure(kind, %{first: first, second: second}, opts)
 
   # C2/Core artifact decoding is an untrusted boundary. Its failures are
   # operational artifact diagnostics, not kernel terms to expose in default
@@ -1366,15 +1191,25 @@ defmodule Cure.Diagnostic.Adapter do
     do: Operational.artifact_error("Core artifact contains an ill-formed term", %{kind: :ill_formed_term, term: term})
 
   def from_error({:reducer_arity, constructor, actual, expected}, opts),
+    do: MacroAdapter.from_error({:reducer_arity, constructor, actual, expected}, opts)
+
+  def from_error({:primitive_missing_builtin, name}, opts),
+    do: primitive_declaration_failure(:missing_builtin, %{name: name}, %{}, opts)
+
+  def from_error({:unknown_primitive_tag, tag}, opts),
+    do: primitive_declaration_failure(:unknown_builtin, %{tag: tag}, %{}, opts)
+
+  def from_error({:primitive_floor_mismatch, name, declared, expected}, opts),
     do:
-      macro_validation_failure(
-        :reducer_arity,
-        %{constructor: constructor, actual: actual, expected: expected},
+      primitive_declaration_failure(
+        :floor_mismatch,
+        %{name: name, declared: primitive_core_tag(declared), expected: primitive_core_tag(expected)},
+        %{},
         opts
       )
 
-  def from_error({:primitive_floor_mismatch, name, node, other}, opts),
-    do: macro_validation_failure(:primitive_floor_mismatch, %{name: name, node: node, other: other}, opts)
+  def from_error({:unsupported_declaration, shape}, opts),
+    do: primitive_declaration_failure(:unsupported_declaration, %{shape: shape}, %{}, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -1390,47 +1225,109 @@ defmodule Cure.Diagnostic.Adapter do
            ],
       do: contextual_type_failure(kind, %{}, opts)
 
+  def from_error({:applied_non_function, details} = error, opts) when is_map(details),
+    do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:effect_binder_erased, details} = error, opts) when is_map(details),
+    do: TypeAdapter.from_error(error, opts)
+
   def from_error(kind, opts)
       when kind in [
-             :no_compatible_macro_input,
-             :normalization_fuel_exhausted,
-             :invalid_parse_production,
-             :duplicate_parse_production,
-             :invalid_macro_diagnostics,
-             :invalid_macro_diagnostic,
+             :invalid_driver_register,
+             :duplicate_driver_register,
+             :overlapping_driver_register
+           ],
+      do: MacroAdapter.validation_failure(kind, %{}, opts)
+
+  def from_error(kind, opts) when kind in [:no_compatible_macro_input, :normalization_fuel_exhausted],
+    do: from_error({:computed_macro_error, [], kind}, opts)
+
+  def from_error(kind, opts) when kind in [:invalid_macro_diagnostics, :invalid_macro_diagnostic],
+    do: MacroAdapter.from_error(kind, opts)
+
+  def from_error(kind, opts)
+      when kind in [:not_a_nat, :invalid_macro_fuzz_rule, :invalid_macro_fuzz_bindings],
+      do: MacroAdapter.from_error(kind, opts)
+
+  def from_error(kind, opts)
+      when kind in [
              :invalid_syntax_attr,
              :invalid_syntax_list,
              :invalid_syntax_string,
              :invalid_syntax_literal,
-             :invalid_syntax_pair,
-             :invalid_check_property,
-             :duplicate_check_property,
-             :invalid_protocol_role,
-             :duplicate_protocol_role,
-             :duplicate_reducer_constructor,
-             :not_a_nat,
+             :invalid_syntax_pair
+           ],
+      do: MacroAdapter.from_error(kind, opts)
+
+  def from_error(kind, opts) when kind in [:invalid_check_property, :duplicate_check_property],
+    do: MacroAdapter.from_error(kind, opts)
+
+  def from_error(:invalid_raw_tokens, opts), do: MacroAdapter.from_error(:invalid_raw_tokens, opts)
+
+  def from_error(kind, opts)
+      when kind in [
              :invalid_lift_module_ast,
              :invalid_lift_callback,
              :invalid_lift_declaration,
              :invalid_lift_import,
-             :invalid_driver_register,
-             :duplicate_driver_register,
-             :overlapping_driver_register,
+             :invalid_lift_inheritance
+           ],
+      do: MacroAdapter.lift_module_validation(kind, %{}, opts)
+
+  def from_error(kind, opts)
+      when kind in [
              :module_rule_not_fully_consumed,
              :not_a_module_rule,
+             :invalid_module_rule_set,
+             :invalid_module_rule_bindings,
+             :invalid_macro_extension_rules,
+             :invalid_macro_extension_rule
+           ],
+      do: MacroAdapter.from_error(kind, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :invalid_macro_rules,
              :expander_without_accepts,
              :accepts_without_syntax_family,
              :accepts_without_expander,
              :multiple_accepts_declarations,
              :multiple_expands_declarations
            ],
-      do: macro_validation_failure(kind, %{}, opts)
+      do: MacroAdapter.family_failure(kind, opts)
+
+  def from_error(kind, opts)
+      when kind in [:invalid_parse_productions, :invalid_parse_production, :duplicate_parse_production],
+      do: MacroAdapter.from_error(kind, opts)
+
+  def from_error(kind, opts)
+      when kind in [:invalid_reducer_arms, :invalid_reducer_arm, :duplicate_reducer_constructor],
+      do: MacroAdapter.from_error(kind, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :invalid_protocol_roles,
+             :invalid_protocol_role,
+             :duplicate_protocol_role,
+             :invalid_protocol_steps,
+             :invalid_protocol_step,
+             :invalid_protocol_message,
+             :invalid_protocol_options,
+             :invalid_protocol_choices,
+             :invalid_protocol_choice
+           ],
+      do: MacroAdapter.from_error(kind, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :rewrite_requires_expected_type,
+             :rewrite_proof_not_equality
+           ],
+      do: TypeAdapter.from_error(kind, opts)
 
   def from_error(kind, opts)
       when kind in [
              :applied_non_function,
-             :rewrite_requires_expected_type,
-             :rewrite_proof_not_equality,
              :match_scrutinee_not_data,
              :with_mixed_rematch_arms,
              :with_scrutinee_not_data,
@@ -1441,7 +1338,7 @@ defmodule Cure.Diagnostic.Adapter do
       do: contextual_type_failure(kind, %{}, opts)
 
   def from_error(:shadowed, opts),
-    do: declaration_conflict(:shadowed, %{}, opts)
+    do: NameAdapter.from_error(:shadowed, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -1458,21 +1355,23 @@ defmodule Cure.Diagnostic.Adapter do
              :hole_in_inference_position,
              :ctor_requires_checking_mode,
              :bounded_bound_not_concrete
-           ] do
-    kernel_type_failure(kind, opts)
-  end
+           ],
+      do: KernelAdapter.from_error(kind, opts)
 
-  def from_error({:occurs_check, id, _term}, opts),
-    do: kernel_type_failure(:occurs_check, Keyword.put(opts, :variable, id))
+  def from_error({:occurs_check, _id, _term} = error, opts),
+    do: KernelAdapter.from_error(error, opts)
 
-  def from_error({:no_instance, interface, head}, opts),
-    do: contextual_type_failure(:no_instance, %{interface: interface, head: head}, opts)
+  def from_error({:no_instance, _interface, _head} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:ambiguous_instance_for_expected_type, interface, expected}, opts),
-    do: contextual_type_failure(:ambiguous_instance, %{interface: interface, expected: expected}, opts)
+    do: TypeAdapter.from_error({:ambiguous_instance_for_expected_type, interface, expected}, opts)
 
-  def from_error({:no_matching_overload, name, arguments}, opts),
-    do: contextual_type_failure(:no_matching_overload, %{name: name, arguments: arguments}, opts)
+  def from_error({:no_matching_overload, _name, _arguments} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:no_matching_overload, %{name: _name}} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:label_mismatch, key, declared, written}, opts),
     do:
@@ -1482,54 +1381,77 @@ defmodule Cure.Diagnostic.Adapter do
         opts
       )
 
-  def from_error({:ambiguous_overload, name, owners}, opts),
-    do: contextual_type_failure(:ambiguous_overload, %{name: name, owners: owners}, opts)
+  def from_error({:ambiguous_overload, _name, _owners} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:ambiguous_method, method, interfaces}, opts),
-    do: ambiguous_member(method, interfaces, opts)
+    do: NameAdapter.ambiguous_member(method, interfaces, opts)
 
   def from_error({:projection_not_a_record, record}, opts),
-    do: contextual_type_failure(:projection_not_a_record, %{record: record}, opts)
+    do: TypeAdapter.from_error({:projection_not_a_record, record}, opts)
 
   def from_error({:bad_projection, details}, opts),
-    do: contextual_type_failure(:bad_projection, %{details: details}, opts)
+    do: TypeAdapter.from_error({:bad_projection, details}, opts)
 
   def from_error({:typed_pattern_arity, position}, opts),
-    do: arity_failure(:typed_pattern, %{position: position}, opts)
+    do: Arity.from_error({:typed_pattern_arity, position}, opts)
 
   def from_error({:typed_pattern_type_error, reason}, opts),
-    do: contextual_type_failure(:typed_pattern_type_error, %{reason: reason}, opts)
+    do: TypeAdapter.from_error({:typed_pattern_type_error, reason}, opts)
 
   def from_error({:unsolved_index, constructor}, opts),
-    do: contextual_type_failure(:unsolved_index, %{constructor: constructor}, opts)
+    do: TypeAdapter.from_error({:unsolved_index, constructor}, opts)
 
   def from_error({:unsolved_field_type, constructor}, opts),
-    do: contextual_type_failure(:unsolved_field_type, %{constructor: constructor}, opts)
+    do: TypeAdapter.from_error({:unsolved_field_type, constructor}, opts)
 
-  def from_error({:forced_pattern_not_in_pattern, meta}, opts),
-    do: contextual_type_failure(:forced_pattern_not_in_pattern, %{detail: meta}, opts)
+  def from_error({:forced_pattern_not_in_pattern, _meta} = error, opts),
+    do: SyntaxAdapter.from_error(error, opts)
 
-  def from_error({:named_implicit_not_in_pattern, meta}, opts),
-    do: contextual_type_failure(:named_implicit_not_in_pattern, %{detail: meta}, opts)
+  def from_error({:named_implicit_not_in_pattern, _meta} = error, opts),
+    do: SyntaxAdapter.from_error(error, opts)
 
   def from_error({:unsolved_parameters, constructor}, opts),
-    do: contextual_type_failure(:unsolved_parameters, %{constructor: constructor}, opts)
+    do: TypeAdapter.from_error({:unsolved_parameters, constructor}, opts)
+
+  def from_error({:untyped_parameter, %{name: _name}} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:graded_let_needs_annotation, %{name: _name}} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:let_needs_annotation, %{name: _name}} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:typealias_not_a_type, %{name: _name, actual_type: _actual}} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:typealias_not_a_type, _name, _actual_type} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
+
+  def from_error({kind, _detail} = error, opts)
+      when kind in [
+             :untyped_parameter,
+             :let_needs_annotation,
+             :graded_let_needs_annotation,
+             :typealias_not_a_type
+           ],
+      do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:result_type_not_family, _detail} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({kind, detail}, opts)
       when kind in [
              :unsupported_expression,
              :unsupported_pattern,
              :unsupported_guard,
-             :untyped_parameter,
-             :let_needs_annotation,
-             :graded_let_needs_annotation,
              :binary_match_needs_default,
              :map_match_needs_default,
              :nonlinear_pattern,
              :duplicate_default_pattern,
              :impossible_default_pattern,
-             :typealias_not_a_type,
-             :result_type_not_family,
+             :unreachable_after_default_pattern,
              :constructor_result_mismatch,
              :dependent_record_projection,
              :with_indexed_scrutinee_unsupported,
@@ -1541,611 +1463,111 @@ defmodule Cure.Diagnostic.Adapter do
       do: contextual_type_failure(kind, %{detail: detail}, opts)
 
   def from_error({:effect_arity, name, expected, actual}, opts),
-    do: contextual_type_failure(:effect_arity, %{name: name, expected: expected, actual: actual}, opts)
+    do: TypeAdapter.from_error({:effect_arity, name, expected, actual}, opts)
 
-  def from_error({:unknown_global, name}, opts),
-    do: unknown_name(:value, name, opts)
+  def from_error({kind, details} = error, opts)
+      when kind in [
+             :bad_result_type,
+             :non_integer_index,
+             :unsupported_index_literal,
+             :unsupported_index_expr,
+             :unsupported_index_operator,
+             :sigma_projection_needs_ctx
+           ] and is_map(details),
+      do: SyntaxAdapter.from_error(error, opts)
 
-  def from_error({:unbound_var, name}, opts),
-    do: unknown_name(:value, name, opts)
+  def from_error({kind, _detail} = error, opts)
+      when kind in [
+             :unsupported_comprehension_pattern,
+             :unsupported_binary_generator_pattern,
+             :unsupported_binary_segment,
+             :unsupported_binary_match_arm,
+             :unsupported_map_match_arm,
+             :unsupported_map_value_pattern,
+             :unsupported_map_key_pattern,
+             :unsupported_block_statement,
+             :unsupported_block
+           ],
+      do: SyntaxAdapter.from_error(error, opts)
 
-  def from_error({:unknown_family, name}, opts),
-    do: unknown_name(:type, name, opts)
+  def from_error({kind, _name} = error, opts)
+      when kind in [:unknown_global, :unbound_var, :unknown_family, :unknown_ctor, :foreign_ctor, :unknown_constructor],
+      do: NameAdapter.from_error(error, opts)
 
-  def from_error({:unknown_ctor, name}, opts),
-    do: unknown_name(:constructor, name, opts)
+  def from_error({:unknown_global, _name, details} = error, opts) when is_map(details),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:foreign_ctor, name}, opts),
-    do: unknown_name(:constructor, name, opts)
+  def from_error({:unknown_name, details} = error, opts) when is_map(details),
+    do: NameAdapter.from_error(error, opts)
 
-  def from_error({:unknown_global, name, details}, opts) when is_map(details),
-    do: unknown_name(:value, name, Keyword.put(opts, :kernel_context, details))
+  def from_error({:unfilled_hole, details}, opts) when is_map(details),
+    do: Hole.from_error({:unfilled_hole, details}, opts)
 
-  def from_error({:unknown_name, details}, opts) when is_map(details) do
-    namespace = Map.get(details, :namespace, :value)
-    name = Map.get(details, :name, "<unknown>")
+  def from_error({:unfilled_hole, _name} = error, opts), do: Hole.from_error(error, opts)
 
-    unknown_name(
-      namespace,
-      name,
-      opts
-      |> Keyword.put(:candidates, Map.get(details, :candidates, []))
-      |> Keyword.put(:owner, Map.get(details, :owner))
-      |> Keyword.put(:checking, Map.get(details, :checking))
-      |> Keyword.put(:arity, Map.get(details, :arity))
-      |> Keyword.put(:expected_namespace, Map.get(details, :expected_namespace))
-      |> Keyword.put(:imported_from, Map.get(details, :imported_from))
-      |> Keyword.put(:span, Map.get(details, :span))
-      |> Keyword.put(:provenance, Map.get(details, :provenance, []))
-    )
-  end
+  def from_error({:arity_mismatch, _, _} = error, opts), do: Arity.from_error(error, opts)
 
-  def from_error({:unknown_constructor, name}, opts),
-    do: unknown_name(:constructor, name, opts)
+  def from_error({:extern_arity_mismatch, _, _, _} = error, opts), do: Arity.from_error(error, opts)
 
-  def from_error({:unknown_type, name}, opts),
-    do: unknown_name(:type, name, opts)
+  def from_error({:call_arity_mismatch, _details} = error, opts), do: Arity.from_error(error, opts)
 
-  def from_error({:unknown_module, name}, opts),
-    do: unknown_name(:module, name, opts)
+  def from_error({:extern_arity_mismatch, %{name: _name} = _details} = error, opts), do: Arity.from_error(error, opts)
 
-  def from_error({:unknown_member, module, name}, opts),
-    do: unknown_name(:member, "#{module}.#{name}", Keyword.put(opts, :owner, module))
+  def from_error({:constructor_arity_mismatch, %{name: _name} = _details} = error, opts),
+    do: Arity.from_error(error, opts)
 
-  def from_error({:unbound_variable, message, meta}, opts) when is_binary(message) and is_list(meta) do
-    Diagnostic.new(
-      code: "E002",
-      key: :unbound_variable,
-      severity: :error,
-      title: "Unbound variable",
-      message: message,
-      primary: primary_label(opts, "this variable is not bound here"),
-      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
-    )
-  end
+  def from_error({:constructor_arity_mismatch, _name} = error, opts), do: Arity.from_error(error, opts)
 
-  def from_error({:unfilled_hole, details}, opts) when is_map(details) do
-    opts = Keyword.put_new(opts, :span, Map.get(details, :span))
-    primary = primary_label(opts, "replace this hole with an expression")
+  def from_error({:pattern_arity_mismatch, %{constructor: _} = _details} = error, opts),
+    do: Arity.from_error(error, opts)
 
-    secondary =
-      case {Map.get(details, :annotation_span), primary} do
-        {%Span{} = span, %Label{span: primary_span}} when span != primary_span ->
-          [%Label{span: span, style: :secondary, message: "this function's result type is declared here"}]
+  def from_error({:tuple_arity_mismatch, _, _} = error, opts), do: Arity.from_error(error, opts)
 
-        _ ->
-          []
-      end
+  def from_error({:with_rematch_arity_mismatch, _, _} = error, opts), do: Arity.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E014",
-      key: :unfilled_hole,
-      severity: :error,
-      title: "Unfilled hole",
-      body: Doc.paragraph("The definition `#{name_to_string(details.definition)}` still contains an unfinished hole."),
-      primary: primary,
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Replace the hole with an expression that satisfies its surrounding type",
-          applicability: :manual
-        }
-      ],
-      payload: details
-    )
-  end
+  def from_error({:typed_pattern_type_mismatch, _type_ast} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
-  def from_error({:unfilled_hole, name}, opts) do
-    Diagnostic.new(
-      code: "E014",
-      key: :unfilled_hole,
-      severity: :error,
-      title: "Unfilled hole",
-      body: Doc.paragraph("The compiler reached the unfinished hole `?#{name}`."),
-      primary: primary_label(opts, "replace this hole with an expression"),
-      payload: %{name: name}
-    )
-  end
+  def from_error({:extern_untyped_head, _, _} = error, opts), do: Declaration.from_error(error, opts)
+  def from_error({:extern_has_body, _, _} = error, opts), do: Declaration.from_error(error, opts)
 
-  def from_error({:arity_mismatch, message, meta}, opts) when is_binary(message) and is_list(meta) do
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Arity mismatch",
-      message: message,
-      primary: primary_label(opts, "the number of arguments does not match"),
-      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
-    )
-  end
+  def from_error({:proof_shape_mismatch, _, _} = error, opts), do: ProofAdapter.from_error(error, opts)
+  def from_error({:ambiguous_proof_search, _, _} = error, opts), do: ProofAdapter.from_error(error, opts)
 
-  def from_error({:extern_arity_mismatch, name, declared, present}, opts)
-      when is_integer(declared) and is_integer(present) do
-    from_error(
-      {:extern_arity_mismatch, %{name: name, declared: declared, present: present}},
-      opts
-    )
-  end
+  def from_error({:totality_required, _name} = error, opts),
+    do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:call_arity_mismatch, %{name: name, expected: expected, actual: actual} = details}, opts)
-      when is_integer(expected) and is_integer(actual) do
-    difference = abs(expected - actual)
+  def from_error({:compile_time_totality, _name, _reason} = error, opts),
+    do: StaticAnalysis.from_error(error, opts)
 
-    {label, hint} =
-      if actual < expected do
-        {"add #{argument_count(difference)} to this call",
-         "Supply the remaining #{argument_count(difference)}, or use this partial application where a function is expected."}
-      else
-        {"remove #{argument_count(difference)} from this call",
-         "Remove the extra #{argument_count(difference)}, or call the returned function separately if that was intended."}
-      end
+  def from_error({:pickup_no_else, _details} = error, opts), do: StaticAnalysis.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Function arity mismatch",
-      body:
-        Doc.paragraph(
-          "`#{name_to_string(name)}` accepts #{argument_count(expected)}, but this call supplies #{argument_count(actual)}."
-        ),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: Map.put(details, :kind, :function)
-    )
-  end
+  def from_error({:pickup_else_not_last, _details} = error, opts), do: StaticAnalysis.from_error(error, opts)
 
-  def from_error(
-        {:extern_arity_mismatch, %{name: name, declared: declared, present: present} = details},
-        opts
-      )
-      when is_integer(declared) and is_integer(present) do
-    opts = Keyword.put_new(opts, :span, Map.get(details, :span))
+  def from_error({:pickup_multiple_else, _details} = error, opts), do: StaticAnalysis.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Arity mismatch",
-      body:
-        Doc.paragraph(
-          "Extern `#{name_to_string(name)}` declares target arity #{declared}, but its present Cure arity is #{present}."
-        ),
-      primary:
-        primary_label(
-          opts,
-          "change this target arity to #{present} so it matches the values present at runtime"
-        ),
-      suggestions: [
-        %Suggestion{
-          message: "Use target arity #{present}; erased parameters do not cross the FFI boundary.",
-          applicability: :manual
-        }
-      ],
-      payload:
-        details
-        |> Map.put(:name, name_to_string(name))
-        |> Map.put(:kind, :extern)
-    )
-  end
+  def from_error({kind, _, _} = error, opts)
+      when kind in [:pickup_no_else, :pickup_else_not_last, :pickup_multiple_else],
+      do: StaticAnalysis.from_error(error, opts)
 
-  def from_error({:constructor_arity_mismatch, %{name: name} = details}, opts) do
-    expected = Map.get(details, :expected)
-    actual = Map.get(details, :actual)
-    display_name = Map.get(details, :display_name) || name_to_string(name)
+  def from_error({:ambiguous_name, _name, _modules} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Constructor arity mismatch",
-      body:
-        Doc.paragraph(
-          "Constructor `#{display_name}` requires #{argument_count(expected)}, but this call supplies #{argument_count(actual)}."
-        ),
-      primary: primary_label(opts, constructor_arity_label(expected, actual)),
-      payload:
-        details
-        |> Map.put(:kind, :constructor)
-        |> Map.put(:constructor, display_name)
-    )
-  end
-
-  def from_error({:constructor_arity_mismatch, name}, opts),
-    do: from_error({:constructor_arity_mismatch, %{name: name}}, opts)
-
-  def from_error(
-        {:pattern_arity_mismatch, %{constructor: constructor, expected: expected, actual: actual} = details},
-        opts
-      ) do
-    opts = Keyword.put(opts, :span, Map.get(details, :span))
-    difference = abs(expected - actual)
-    display_name = Map.get(details, :display_name) || name_to_string(constructor)
-
-    {label, hint} =
-      if actual < expected do
-        {"add #{argument_count(difference)} to this pattern",
-         "Bind the remaining constructor field#{if difference == 1, do: "", else: "s"}, or use `_` for fields you do not need."}
-      else
-        {"remove #{argument_count(difference)} from this pattern",
-         "Remove the extra pattern field#{if difference == 1, do: "", else: "s"}; this constructor does not contain them."}
-      end
-
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Pattern arity mismatch",
-      body:
-        Doc.paragraph(
-          "Constructor `#{display_name}` has #{argument_count(expected)}, but this pattern matches #{argument_count(actual)}."
-        ),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: Map.put(details, :kind, :pattern)
-    )
-  end
-
-  def from_error({:tuple_arity_mismatch, expected, actual}, opts)
-      when is_integer(expected) and is_integer(actual) do
-    difference = abs(expected - actual)
-
-    {label, hint} =
-      if actual < expected do
-        {"add #{argument_count(difference)} to this tuple pattern",
-         "Add #{argument_count(difference)} to match all #{expected} tuple elements; use `_` for values you do not need."}
-      else
-        {"remove #{argument_count(difference)} from this tuple pattern",
-         "Remove #{argument_count(difference)}; this value has only #{argument_count(expected)}."}
-      end
-
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Tuple pattern has the wrong size",
-      body:
-        Doc.paragraph("This value has #{argument_count(expected)}, but the pattern contains #{argument_count(actual)}."),
-      primary: primary_label(opts, label),
-      suggestions: [%Suggestion{message: hint, applicability: :manual}],
-      payload: %{kind: :tuple_pattern, expected: expected, actual: actual}
-    )
-  end
-
-  def from_error({:tuple_arity_mismatch, direction, details}, opts) do
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Tuple arity mismatch",
-      body: Doc.paragraph("This tuple pattern has the wrong number of elements (#{direction})."),
-      primary: primary_label(opts, "make the tuple pattern match the value's arity"),
-      payload: %{kind: :tuple, direction: direction, details: details}
-    )
-  end
-
-  def from_error({:with_rematch_arity_mismatch, expected, actual}, opts) do
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "With-pattern arity mismatch",
-      body: Doc.paragraph("The original `with` match has #{expected} pattern(s), but its rematch has #{actual}."),
-      primary: primary_label(opts, "keep the rematched patterns aligned with the original values"),
-      payload: %{kind: :with_rematch, expected: expected, actual: actual}
-    )
-  end
-
-  def from_error({:typed_pattern_type_mismatch, type_ast}, opts) do
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "Pattern annotation does not match",
-      body: Doc.paragraph("This pattern's annotation is incompatible with the value it matches."),
-      primary: primary_label(opts, "change the pattern or its type annotation"),
-      payload: %{kind: :typed_pattern, annotation: type_ast}
-    )
-  end
-
-  def from_error({:extern_untyped_head, message, meta}, opts) when is_binary(message) and is_list(meta) do
-    Diagnostic.new(
-      code: "E056",
-      key: :extern_untyped_head,
-      severity: :error,
-      title: "@extern declaration missing a typed head",
-      message: message,
-      primary: primary_label(opts, "add parameter and return type annotations"),
-      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
-    )
-  end
-
-  def from_error({:extern_has_body, message, meta}, opts) when is_binary(message) and is_list(meta) do
-    Diagnostic.new(
-      code: "E057",
-      key: :extern_has_body,
-      severity: :error,
-      title: "@extern declaration has a body",
-      message: message,
-      primary: primary_label(opts, "remove the body from this extern declaration"),
-      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
-    )
-  end
-
-  def from_error({:proof_shape_mismatch, message, name}, opts) when is_binary(message) do
-    Diagnostic.new(
-      code: "E026",
-      key: :proof_shape_mismatch,
-      severity: :error,
-      title: "Proof shape mismatch",
-      message: message,
-      primary: primary_label(opts, "return a propositional equality from this proof binding"),
-      payload: %{name: name}
-    )
-  end
-
-  def from_error({:ambiguous_proof_search, goal, candidates}, opts) when is_list(candidates) do
-    Diagnostic.new(
-      code: "E026",
-      key: :proof_shape_mismatch,
-      severity: :error,
-      title: "Proof search is ambiguous",
-      body:
-        Doc.paragraph(
-          "More than one proof can solve the current obligation, so the compiler cannot choose a deterministic witness."
-        ),
-      primary: primary_label(opts, "make the proof obligation unambiguous"),
-      payload: %{kind: :ambiguous_proof_search, goal: goal, candidates: candidates}
-    )
-  end
-
-  def from_error({:totality_required, name}, opts) do
-    spelling = name_to_string(name)
-
-    Diagnostic.new(
-      code: "E013",
-      key: :totality_failure,
-      severity: :error,
-      title: "Function must be total",
-      body:
-        Doc.paragraph(
-          "`#{spelling}` is evaluated while checking types, but the compiler cannot prove that every call to it terminates."
-        ),
-      primary: primary_label(opts, "this definition is used in a type and must always terminate"),
-      suggestions: [
-        %Suggestion{
-          message: "Make each recursive call use a structurally smaller argument, or keep this function out of types",
-          applicability: :manual
-        }
-      ],
-      notes: ["Runtime-only functions may remain partial; only compile-time computation requires a total definition."],
-      payload: %{name: name, checking: Keyword.get(opts, :checking)}
-    )
-  end
-
-  def from_error({:compile_time_totality, name, reason}, opts) do
-    diagnostic = from_error({:totality_required, name}, opts)
-    %{diagnostic | payload: Map.put(diagnostic.payload, :reason, inspect(reason))}
-  end
-
-  def from_error({:pickup_no_else, details}, opts) when is_map(details) do
-    clauses = pickup_spans(details.clauses)
-    span = List.last(clauses) || details.pickup || Keyword.get(opts, :span)
-
-    Diagnostic.new(
-      code: "E076",
-      key: :pickup_missing_else,
-      severity: :error,
-      title: "Pickup needs a fallback",
-      body:
-        Doc.paragraph(
-          "A `pickup` must finish with a fallback branch so it has a result when no earlier condition is true."
-        ),
-      primary: pickup_label(span, :primary, "this is the final branch, but it is not a fallback"),
-      suggestions: [
-        %Suggestion{
-          message: "Add `else -> ...` after this branch, or change the final condition to `true`",
-          applicability: :manual
-        }
-      ],
-      payload: Map.put(details, :repair_alternatives, [:append_else_branch, :use_trailing_true])
-    )
-  end
-
-  def from_error({:pickup_else_not_last, details}, opts) when is_map(details) do
-    clauses = pickup_spans(details.clauses)
-    index = details.terminator_index
-    else_span = details.else_clauses |> Enum.find_value(fn {idx, span} -> if idx == index, do: span end)
-    primary_span = else_span || Enum.at(clauses, index) || Keyword.get(opts, :span)
-
-    secondary =
-      clauses
-      |> Enum.drop(index + 1)
-      |> Enum.map(&pickup_label(&1, :secondary, "this branch can never be reached after `else`"))
-      |> Enum.reject(&is_nil/1)
-
-    Diagnostic.new(
-      code: "E077",
-      key: :pickup_else_not_last,
-      severity: :error,
-      title: "Fallback branch is not last",
-      body: Doc.paragraph("An `else` branch matches every remaining case, so no branch may follow it."),
-      primary: pickup_label(primary_span, :primary, "this fallback matches everything that reaches it"),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{message: "Move the `else` branch after every conditional branch", applicability: :manual}
-      ],
-      payload: details
-    )
-  end
-
-  def from_error({:pickup_multiple_else, details}, opts) when is_map(details) do
-    else_spans = details.else_clauses |> Enum.map(&elem(&1, 1)) |> pickup_spans()
-    primary_span = Enum.at(else_spans, 1) || List.first(else_spans) || Keyword.get(opts, :span)
-
-    secondary =
-      else_spans
-      |> List.delete_at(1)
-      |> Enum.map(&pickup_label(&1, :secondary, "another fallback branch is here"))
-      |> Enum.reject(&is_nil/1)
-
-    Diagnostic.new(
-      code: "E078",
-      key: :pickup_multiple_else,
-      severity: :error,
-      title: "Pickup has more than one fallback",
-      body:
-        Doc.paragraph(
-          "Only one `else` branch is allowed because the first fallback already matches every remaining case."
-        ),
-      primary: pickup_label(primary_span, :primary, "this second fallback is redundant"),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Keep one `else` branch and remove or give conditions to the others",
-          applicability: :manual
-        }
-      ],
-      payload: details
-    )
-  end
-
-  def from_error({kind, message, meta}, opts)
-      when kind in [:pickup_no_else, :pickup_else_not_last, :pickup_multiple_else] and
-             is_binary(message) and is_list(meta) do
-    {code, key, title, hint} =
-      case kind do
-        :pickup_no_else ->
-          {"E076", :pickup_missing_else, "pickup without else", "add a final `else -> ...` clause"}
-
-        :pickup_else_not_last ->
-          {"E077", :pickup_else_not_last, "pickup else is not last", "move `else -> ...` to the final clause"}
-
-        :pickup_multiple_else ->
-          {"E078", :pickup_multiple_else, "pickup has multiple else clauses", "keep exactly one `else -> ...` clause"}
-      end
-
-    Diagnostic.new(
-      code: code,
-      key: key,
-      severity: :error,
-      title: title,
-      message: message,
-      primary: primary_label(opts, hint),
-      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
-    )
-  end
-
-  def from_error({:ambiguous_name, name, modules}, opts) when is_list(modules) do
-    spelling = name_to_string(name)
-    owners = Enum.map(modules, &name_to_string/1)
-
-    Diagnostic.new(
-      code: "E089",
-      key: :ambiguous_name,
-      severity: :error,
-      title: "Ambiguous name",
-      message: "`#{spelling}` is provided by more than one imported module.",
-      primary: primary_label(opts, "qualification is required here"),
-      suggestions: [
-        %Suggestion{
-          message: "Qualify the name as #{Enum.map_join(owners, " or ", &"`#{&1}.#{spelling}`")}",
-          applicability: :manual
-        }
-      ],
-      payload: %{namespace: :value, name: spelling, owners: owners}
-    )
-  end
-
-  def from_error({:duplicate_module, name, paths}, opts) when is_list(paths) do
-    Diagnostic.new(
-      code: "E087",
-      key: :duplicate_module,
-      severity: :error,
-      title: "Duplicate module",
-      message: "Module `#{name_to_string(name)}` is declared by more than one file: #{Enum.join(paths, ", ")}.",
-      primary: primary_label(opts, "one declaration is here"),
-      payload: %{module: name_to_string(name), paths: paths}
-    )
-  end
+  def from_error({:duplicate_module, _name, _paths} = error, opts),
+    do: NameAdapter.from_error(error, opts)
 
   def from_error({:duplicate_module_identity, name, other_path, path}, opts) do
-    from_error({:duplicate_module, name, [other_path, path]}, opts)
+    NameAdapter.from_error({:duplicate_module_identity, name, other_path, path}, opts)
   end
 
   def from_error({:duplicate_module_identity, name, paths}, opts) when is_list(paths) do
-    from_error({:duplicate_module, name, paths}, opts)
+    NameAdapter.from_error({:duplicate_module_identity, name, paths}, opts)
   end
 
-  def from_error({:import_cycle, hops}, opts) when is_list(hops) do
-    chain = Enum.map_join(hops, " -> ", fn hop -> "#{hop.module} (#{hop.path}:#{hop.line})" end)
-
-    Diagnostic.new(
-      code: "W086",
-      key: :import_cycle,
-      severity: :warning,
-      title: "Import cycle",
-      message: "This warning means the modules form a `use` cycle: #{chain}.",
-      primary: primary_label(opts, "the cycle begins here"),
-      notes: ["Cycle members compile together in deterministic order; qualify cross-module calls when order matters."],
-      payload: %{hops: hops}
-    )
-  end
-
-  def from_error({:unresolved_import, name, arity, imports, line}, opts) when is_list(imports) do
-    spelling = name_to_string(name)
-    modules = Enum.map(imports, &name_to_string/1)
-
-    Diagnostic.new(
-      code: "W088",
-      key: :unresolved_import,
-      severity: :warning,
-      title: "Unresolved import",
-      message: "This warning means `#{spelling}/#{arity}` matches no export of #{Enum.join(modules, ", ")}.",
-      primary: primary_label(opts, "this call falls back to a local call"),
-      suggestions: [
-        %Suggestion{message: "Qualify the call with the module that defines it", applicability: :manual}
-      ],
-      payload: %{name: spelling, arity: arity, imports: modules, line: line}
-    )
-  end
+  def from_error({:import_cycle, _hops} = error, opts), do: NameAdapter.from_error(error, opts)
 
   def from_error(%TypeProblem{} = problem, opts) do
-    actual_surface = surface_type(problem.actual)
-    expected_surface = surface_type(problem.expected)
-    primary_span = problem.span || Keyword.get(opts, :span)
-
-    primary =
-      if primary_span do
-        %Label{span: primary_span, style: :primary, message: type_problem_label(problem.origin)}
-      end
-
-    secondary = expectation_labels(problem.origin, primary_span, problem.related)
-
-    Diagnostic.new(
-      code: "E093",
-      key: problem.kind,
-      severity: :error,
-      title: type_problem_title(problem.origin),
-      body:
-        Doc.stack([
-          Doc.paragraph(type_problem_context(problem.origin)),
-          type_comparison_doc(problem.expected, problem.actual)
-        ]),
-      primary: primary,
-      secondary: secondary,
-      notes: Keyword.get(opts, :notes, []),
-      provenance: Keyword.get(opts, :provenance, []),
-      payload: %{
-        expected_surface: expected_surface,
-        actual_surface: actual_surface,
-        origin: Map.from_struct(problem.origin),
-        expression_category: problem.expression,
-        expected_core: inspect(problem.expected),
-        actual_core: inspect(problem.actual),
-        debug: problem.debug
-      }
-    )
+    TypeAdapter.from_error(problem, opts)
   end
 
   def from_error(%SyntaxProblem{} = problem, opts) do
@@ -2184,27 +1606,8 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:conversion_failure, actual, expected}, opts) do
-    actual_surface = print_core(actual)
-    expected_surface = print_core(expected)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :conversion_failure,
-      severity: :error,
-      title: "Type mismatch",
-      body: type_comparison_doc(expected, actual),
-      primary: primary_label(opts, "this expression has the wrong type"),
-      notes: Keyword.get(opts, :notes, []),
-      provenance: Keyword.get(opts, :provenance, []),
-      payload: %{
-        expected_surface: expected_surface,
-        actual_surface: actual_surface,
-        expected_core: inspect(expected),
-        actual_core: inspect(actual)
-      }
-    )
-  end
+  def from_error({:conversion_failure, _actual, _expected} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error({:expected, expected, :got, actual, line, column, %Span{} = span}, opts) do
     from_error(
@@ -2232,201 +1635,39 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:expected_literal_capture, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
-    article = article_for_kind(details.shape)
+  def from_error({:expected_literal_capture, _details} = error, opts), do: MacroAdapter.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E094",
-      key: :macro_literal_capture,
-      severity: :error,
-      title: "Macro field needs a literal",
-      body:
-        Doc.paragraph(
-          "This syntax-family field accepts #{article} `#{details.shape}` literal, not an expression of another shape."
-        ),
-      primary: pickup_label(span, :primary, "this is not #{article} `#{details.shape}` literal"),
-      suggestions: [
-        %Suggestion{
-          message: "Replace this value with #{article} `#{details.shape}` literal",
-          applicability: :manual
-        }
-      ],
-      payload: details
-    )
-  end
+  def from_error({:unknown_syntax_family_field, details} = error, opts)
+      when is_map(details),
+      do: MacroAdapter.from_error(error, opts)
 
-  def from_error({:unknown_syntax_family_field, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
+  def from_error({:missing_syntax_family_field, details} = error, opts)
+      when is_map(details),
+      do: MacroAdapter.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E092",
-      key: :unknown_syntax_family_field,
-      severity: :error,
-      title: "Unknown syntax-family field",
-      body: Doc.paragraph("`#{details.field}` is not a field of the `#{details.family}` syntax family."),
-      primary: pickup_label(span, :primary, "this field is not declared by the family"),
-      suggestions: syntax_family_field_suggestions(details, span),
-      payload: details
-    )
-  end
+  def from_error({:unknown_macro_obligation_capture, details} = error, opts)
+      when is_map(details),
+      do: MacroAdapter.from_error(error, opts)
 
-  def from_error({:missing_syntax_family_field, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
+  def from_error({:graded_let_requires_variable, details} = error, opts)
+      when is_map(details),
+      do: SyntaxAdapter.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E092",
-      key: :missing_syntax_family_field,
-      severity: :error,
-      title: "Syntax-family field is missing",
-      body: Doc.paragraph("The `#{details.family}` syntax family requires a `#{details.field}` section here."),
-      primary: pickup_label(span, :primary, "add `#{details.field}` here"),
-      suggestions: [
-        %Suggestion{
-          message: "Add a `#{details.field} ...` section to this family body",
-          applicability: :manual
-        }
-      ],
-      payload: details
-    )
-  end
+  def from_error({:unknown_grade, details} = error, opts)
+      when is_map(details),
+      do: SyntaxAdapter.from_error(error, opts)
 
-  def from_error({:unknown_macro_obligation_capture, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
+  def from_error({:grade_requires_type, details} = error, opts)
+      when is_map(details),
+      do: SyntaxAdapter.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E092",
-      key: :unknown_macro_obligation_capture,
-      severity: :error,
-      title: "Unknown macro capture",
-      body:
-        Doc.paragraph(
-          "The `#{details.interface}` obligation refers to `#{details.capture}`, but this rule declares no capture with that name."
-        ),
-      primary: pickup_label(span, :primary, "this capture is not declared by the rule"),
-      suggestions: macro_capture_suggestions(details, span),
-      payload: details
-    )
-  end
+  def from_error({:unit_type_reserved, details} = error, opts)
+      when is_map(details),
+      do: MacroAdapter.from_error(error, opts)
 
-  def from_error({:graded_let_requires_variable, details}, opts) when is_map(details) do
-    pattern_span = Map.get(details, :pattern_span) || Keyword.get(opts, :span)
-    grade_span = Map.get(details, :grade_span)
-
-    secondary =
-      case pickup_label(grade_span, :secondary, "this grade applies to the binding") do
-        nil -> []
-        label -> [label]
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :graded_let_requires_variable,
-      severity: :error,
-      title: "Graded binding needs a variable",
-      body:
-        Doc.paragraph(
-          "A `#{details.grade}` grade controls one Core binder, but this pattern introduces multiple or destructured bindings."
-        ),
-      primary: pickup_label(pattern_span, :primary, "this pattern is not a single variable binding"),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Bind the value to one graded variable, then destructure it in a separate `let`",
-          applicability: :manual
-        }
-      ],
-      payload: details
-    )
-  end
-
-  def from_error({:unknown_grade, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
-    supported = Map.get(details, :supported, [:erased, :linear, :affine])
-    supported_text = Enum.map_join(supported, ", ", &"`:#{&1}`")
-
-    Diagnostic.new(
-      code: "E093",
-      key: :unknown_grade,
-      severity: :error,
-      title: "Unknown relevance grade",
-      body: Doc.paragraph("`:#{details.grade}` is not a relevance grade. Cure supports #{supported_text}."),
-      primary: pickup_label(span, :primary, "this grade is not defined"),
-      suggestions: grade_suggestions(details, span),
-      payload: details
-    )
-  end
-
-  def from_error({:grade_requires_type, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :grade_requires_type,
-      severity: :error,
-      title: "Graded parameter needs a type",
-      body:
-        Doc.paragraph(
-          "The `:#{details.grade}` grade on `#{details.name}` controls how a value may be used, but no value type follows it."
-        ),
-      primary: pickup_label(span, :primary, "add the parameter type after this grade"),
-      suggestions: [
-        %Suggestion{message: "Write `#{details.name} :#{details.grade} TypeName`", applicability: :manual}
-      ],
-      payload: details
-    )
-  end
-
-  def from_error({:unit_type_reserved, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
-
-    secondary =
-      case pickup_label(Map.get(details, :unit_span), :secondary, "this spelling denotes the built-in `Unit` type") do
-        nil -> []
-        label -> [label]
-      end
-
-    Diagnostic.new(
-      code: "E092",
-      key: :unit_type_reserved,
-      severity: :error,
-      title: "Unit syntax cannot define another type",
-      body: Doc.paragraph("`()` has exactly one type, `Unit`, so it cannot define the new type `#{details.name}`."),
-      primary: pickup_label(span, :primary, "this declaration must not reuse `Unit` syntax"),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{
-          message: "Give `#{details.name}` its own constructor, or rename the type to `Unit`",
-          applicability: :manual
-        }
-      ],
-      payload: details
-    )
-  end
-
-  def from_error({:duplicate_syntax_family_field, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
-
-    secondary =
-      case pickup_label(Map.get(details, :first_span), :secondary, "the field was first supplied here") do
-        nil -> []
-        label -> [label]
-      end
-
-    Diagnostic.new(
-      code: "E092",
-      key: :duplicate_syntax_family_field,
-      severity: :error,
-      title: "Syntax-family field is duplicated",
-      body: Doc.paragraph("The `#{details.field}` field may be supplied only once in this family body."),
-      primary: pickup_label(span, :primary, "this second `#{details.field}` field is redundant"),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{message: "Keep one `#{details.field}` section", applicability: :manual}
-      ],
-      payload: details
-    )
-  end
+  def from_error({:duplicate_syntax_family_field, details} = error, opts)
+      when is_map(details),
+      do: MacroAdapter.from_error(error, opts)
 
   def from_error({:non_associative, details}, opts) when is_map(details),
     do:
@@ -2812,104 +2053,13 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:malformed_hole, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
+  def from_error({:malformed_hole, _details} = error, opts), do: SyntaxAdapter.from_error(error, opts)
 
-    secondary =
-      case pickup_label(Map.get(details, :opener_span), :secondary, "the macro hole starts here") do
-        nil -> []
-        label -> [label]
-      end
+  def from_error({:edition_pragma_placement, _details} = error, opts), do: SyntaxAdapter.from_error(error, opts)
 
-    suggestions =
-      case insertion_before(span) do
-        %Span{} = insertion ->
-          [
-            %Suggestion{
-              message: "Insert `>` to close the macro hole",
-              applicability: :machine_applicable,
-              edits: [%TextEdit{span: insertion, replacement: ">"}]
-            }
-          ]
+  def from_error({:edition_pragma_malformed, _details} = error, opts), do: SyntaxAdapter.from_error(error, opts)
 
-        _ ->
-          [%Suggestion{message: "Write the hole as `<name: Kind>`", applicability: :manual}]
-      end
-
-    Diagnostic.new(
-      code: "E094",
-      key: :malformed_macro_hole,
-      severity: :error,
-      title: "Macro hole is not closed",
-      body:
-        Doc.paragraph(
-          "A typed macro hole has the form `<name: Kind>`. The closing `>` is missing before #{syntax_name(details.observed)}."
-        ),
-      primary: pickup_label(span, :primary, "expected `>` before this token"),
-      secondary: secondary,
-      suggestions: suggestions,
-      payload: details
-    )
-  end
-
-  def from_error({:edition_pragma_placement, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
-
-    Diagnostic.new(
-      code: "E094",
-      key: :edition_pragma_placement,
-      severity: :error,
-      title: "Edition pragma is too late",
-      body:
-        Doc.paragraph(
-          "`@edition(...)` selects how the entire file is read, so it must be the first non-comment item in the file."
-        ),
-      primary: pickup_label(span, :primary, "the edition cannot change after parsing has started"),
-      suggestions: [
-        %Suggestion{message: "Move this pragma above every declaration and decorator", applicability: :manual}
-      ],
-      payload: details
-    )
-  end
-
-  def from_error({:edition_pragma_malformed, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
-
-    Diagnostic.new(
-      code: "E094",
-      key: :edition_pragma_malformed,
-      severity: :error,
-      title: "Malformed edition pragma",
-      body:
-        Doc.paragraph(
-          "An edition pragma must use the single-line form `@edition(\"YYYY\")` with exactly one four-digit string."
-        ),
-      primary: pickup_label(span, :primary, "this is not a valid edition argument"),
-      suggestions: edition_replacement_suggestion(details),
-      payload: details
-    )
-  end
-
-  def from_error({:edition_pragma_unknown, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
-    observed = Map.get(details, :observed)
-    known = Map.get(details, :known_editions, Cure.Edition.all())
-    supported = Enum.map_join(known, ", ", &"`#{&1}`")
-
-    Diagnostic.new(
-      code: "E094",
-      key: :edition_pragma_unknown,
-      severity: :error,
-      title: "Unknown edition",
-      body:
-        Doc.paragraph(
-          "`#{name_to_string(observed)}` is not a supported Cure edition. This compiler supports #{supported}."
-        ),
-      primary: pickup_label(span, :primary, "this edition is not available"),
-      suggestions: edition_replacement_suggestion(details),
-      payload: details
-    )
-  end
+  def from_error({:edition_pragma_unknown, _details} = error, opts), do: SyntaxAdapter.from_error(error, opts)
 
   def from_error({kind, line, column}, opts)
       when kind in [:edition_pragma_placement, :edition_pragma_malformed, :edition_pragma_unknown] and
@@ -2925,155 +2075,52 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:edition_error, {:unknown_edition, edition}}, opts) do
-    Diagnostic.new(
-      code: "E094",
-      key: :edition_pragma_unknown,
-      severity: :error,
-      title: "Unknown edition",
-      body: Doc.paragraph("The edition `#{edition}` is not supported. Use edition `#{Cure.Edition.current()}`."),
-      primary: primary_label(opts, "choose a supported edition"),
-      payload: %{edition: edition, current: Cure.Edition.current()}
-    )
-  end
+  def from_error({:edition_error, {:unknown_edition, _edition}} = error, opts),
+    do: SyntaxAdapter.from_error(error, opts)
 
-  def from_error({:computed_macro_error, meta, reason}, opts) when is_list(meta) do
-    keyword = Keyword.get(meta, :keyword, "computed")
-    payload = %{keyword: keyword, reason: inspect(reason)} |> maybe_put_meta_location(meta)
+  def from_error({:computed_macro_error, meta, reason}, opts) when is_list(meta),
+    do: MacroAdapter.computed_macro_error(meta, reason, opts)
 
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_expansion_failed,
-      severity: :error,
-      title: "Computed macro expansion failed",
-      body:
-        Doc.paragraph(
-          "The `#{keyword}` computed macro could not produce valid Cure syntax: #{computed_macro_reason(reason)}"
-        ),
-      primary: primary_label(opts, "this macro invocation generated the failing syntax"),
-      notes: ["Edit the authored macro invocation or its rule; generated syntax is not the user-facing source."],
-      provenance: Keyword.get(opts, :provenance, []),
-      payload: payload
-    )
-  end
+  def from_error({:invalid_macro_family, details}, opts) when is_map(details),
+    do: MacroAdapter.from_error({:invalid_macro_family, details}, opts)
 
-  def from_error({:invalid_macro_family, details}, opts) when is_map(details) do
-    span = Map.get(details, :span) || Keyword.get(opts, :span)
+  def from_error({:macro_expansion_cycle, chain} = error, opts)
+      when is_list(chain),
+      do: MacroAdapter.from_error(error, opts)
 
-    secondary =
-      details
-      |> Map.get(:related_spans, [])
-      |> Enum.map(&pickup_label(&1, :secondary, macro_family_related_label(details.reason)))
-      |> Enum.reject(&is_nil/1)
+  def from_error({:macro_expansion_budget, kind, frames} = error, opts)
+      when is_atom(kind) and is_list(frames),
+      do: MacroAdapter.from_error(error, opts)
 
-    Diagnostic.new(
-      code: "E092",
-      key: :invalid_macro_family,
-      severity: :error,
-      title: macro_family_title(details.reason),
-      body: Doc.paragraph(macro_family_body(details.reason)),
-      primary: pickup_label(span, :primary, macro_family_primary_label(details.reason)),
-      secondary: secondary,
-      suggestions: [
-        %Suggestion{message: macro_family_hint(details.reason), applicability: :manual}
-      ],
-      payload: details
-    )
-  end
-
-  def from_error({:macro_expansion_cycle, chain}, opts) when is_list(chain) do
-    macro_expansion_failure(
-      :cycle,
-      "Macro expansion is recursive and did not reach a stable result.",
-      chain,
-      opts
-    )
-  end
-
-  def from_error({:macro_expansion_budget, kind, frames}, opts) when is_atom(kind) and is_list(frames) do
-    macro_expansion_failure(
-      {:budget, kind},
-      "Macro expansion exceeded its #{kind} limit.",
-      frames,
-      opts
-    )
-  end
-
-  def from_error({:expansion_ill_typed, details}, opts) when is_map(details) do
-    keyword = Map.get(details, :keyword, "computed")
-
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_expansion_failed,
-      severity: :error,
-      title: "Macro expansion proof failed",
-      body: Doc.paragraph("The `#{keyword}` macro generated code that does not satisfy the dependent elaborator."),
-      primary: primary_label(opts, "this macro invocation generated the invalid expansion"),
-      notes: ["Edit the authored macro invocation; generated code is an implementation detail."],
-      provenance: Keyword.get(opts, :provenance, []),
-      payload: %{
-        keyword: keyword,
-        input: Map.get(details, :input),
-        expansion: Map.get(details, :expansion),
-        reason: inspect(Map.get(details, :kernel_error) || Map.get(details, :reason))
-      }
-    )
-  end
+  def from_error({:expansion_ill_typed, details} = error, opts)
+      when is_map(details),
+      do: MacroAdapter.from_error(error, opts)
 
   def from_error({:beam_lint_error, errors, warnings}, opts) do
-    codegen_failure({:beam_lint, errors, warnings}, opts)
+    Codegen.from_error({:beam_lint_error, errors, warnings}, opts)
   end
 
   def from_error({:beam_lint_error, errors}, opts) do
-    codegen_failure({:beam_lint, errors}, opts)
+    Codegen.from_error({:beam_lint_error, errors}, opts)
   end
 
   def from_error({:final_core_violation, rejections}, opts) when is_list(rejections) do
-    final_core_failure(nil, rejections, opts)
+    Codegen.from_error({:final_core_violation, rejections}, opts)
   end
 
   def from_error({:final_core_violation, name, rejections}, opts) when is_list(rejections) do
-    final_core_failure(name, rejections, opts)
+    Codegen.from_error({:final_core_violation, name, rejections}, opts)
   end
 
-  def from_error({:expected_module, _ast}, opts), do: codegen_failure(:expected_module, opts)
-  def from_error({:unsupported_container, type}, opts), do: codegen_failure({:unsupported_container, type}, opts)
-  def from_error({:cannot_emit, reason}, opts), do: codegen_failure({:cannot_emit, reason}, opts)
+  def from_error({:expected_module, _ast} = error, opts), do: Codegen.from_error(error, opts)
+  def from_error({:unsupported_container, _type} = error, opts), do: Codegen.from_error(error, opts)
+  def from_error({:cannot_emit, _reason} = error, opts), do: Codegen.from_error(error, opts)
 
   def from_error({:inconsistent_head_kind, name}, opts),
-    do: declaration_conflict(:inconsistent_head_kind, %{name: name}, opts)
+    do: NameAdapter.from_error({:inconsistent_head_kind, name}, opts)
 
-  def from_error({:lift_module_error, details}, opts) when is_map(details) do
-    macro = get_in(details, [:source_provenance, :macro]) || :macro
-    cause = Map.get(details, :cause)
-
-    case family_type_failure(cause, details, opts) do
-      {:ok, diagnostic} ->
-        diagnostic
-
-      :error ->
-        cause_diagnostic = from_error(cause)
-
-        Diagnostic.new(
-          code: "E092",
-          key: :macro_expansion_failed,
-          severity: :error,
-          title: "#{macro_title(macro)} expansion failed",
-          message: macro_failure_message(macro, details.module, cause_diagnostic),
-          primary: primary_label(opts, "this `#{macro}` declaration generated the failing module"),
-          notes: [
-            "The generated module is an implementation detail; edit the authored `#{macro}` declaration instead."
-          ],
-          provenance: provenance_frames(details, opts),
-          payload: %{
-            macro: name_to_string(macro),
-            module: name_to_string(details.module),
-            behaviour: Map.get(details, :behaviour),
-            cause: %{code: cause_diagnostic.code, key: cause_diagnostic.key, payload: cause_diagnostic.payload}
-          }
-        )
-    end
-  end
+  def from_error({:lift_module_error, details}, opts) when is_map(details),
+    do: MacroAdapter.lift_module_error(details, opts)
 
   def from_error({kind, detail}, opts)
       when kind in [
@@ -3083,113 +2130,25 @@ defmodule Cure.Diagnostic.Adapter do
              :unsupported_index_expr,
              :unsupported_index_operator,
              :sigma_projection_needs_ctx,
-             :unsupported_comprehension_pattern,
-             :unsupported_binary_generator_pattern,
-             :unsupported_binary_segment,
-             :unsupported_binary_match_arm,
-             :unsupported_map_match_arm,
-             :unsupported_map_value_pattern,
-             :unsupported_map_key_pattern,
-             :unsupported_block_statement,
-             :unsupported_block,
              :unknown_macro_failure,
              :unsolved_metavariable_in_type,
-             :lambda_expected_pi,
-             :missing_raw_delimiter
+             :lambda_expected_pi
            ],
       do: contextual_type_failure(kind, %{detail: detail}, opts)
 
-  def from_error({kind, first, second}, opts)
-      when kind in [:rewrite_no_match, :non_uniform_parameter, :bounded_lit_out_of_range],
-      do: contextual_type_failure(kind, %{first: first, second: second}, opts)
+  def from_error({:rewrite_no_match, _first, _second} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:non_uniform_parameter, first, second}, opts),
+    do: contextual_type_failure(:non_uniform_parameter, %{first: first, second: second}, opts)
+
+  def from_error({:rewrite_no_match, _first, _second, _goal} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:bounded_lit_out_of_range, _value, _bound} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
-
-  defp argument_count(1), do: "1 argument"
-  defp argument_count(count) when is_integer(count), do: "#{count} arguments"
-  defp argument_count(_count), do: "a different number of arguments"
-
-  defp constructor_arity_label(expected, actual)
-       when is_integer(expected) and is_integer(actual) and actual < expected,
-       do: "add #{argument_count(expected - actual)} to this constructor call"
-
-  defp constructor_arity_label(expected, actual)
-       when is_integer(expected) and is_integer(actual) and actual > expected,
-       do: "remove #{argument_count(actual - expected)} from this constructor call"
-
-  defp constructor_arity_label(_expected, _actual),
-    do: "provide the arguments required by this constructor"
-
-  # Generated OTP callbacks still represent authored family sections. Preserve
-  # a real type relation at that boundary instead of presenting it as E092.
-  defp family_type_failure({:source_context, reason, context}, details, opts)
-       when is_map(context) do
-    with origin when not is_nil(origin) <- family_origin(details) do
-      context =
-        context
-        |> Map.put(:expectation_origin, origin)
-        |> Map.put(:checking, Map.get(details, :module))
-
-      if reason_kind?(reason) do
-        {:ok, from_error({:source_context, reason, context}, opts)}
-      else
-        if family_boundary_reason?(reason) do
-          {:ok, family_boundary_failure(origin, details, reason, opts)}
-        else
-          :error
-        end
-      end
-    else
-      _ -> :error
-    end
-  end
-
-  defp family_type_failure(_cause, _details, _opts), do: :error
-
-  defp reason_kind?({:cannot_unify, _, _}), do: true
-  defp reason_kind?({:index_mismatch, {:cannot_unify, _, _}}), do: true
-  defp reason_kind?({:conversion_failure, _, _}), do: true
-  defp reason_kind?(_reason), do: false
-
-  defp family_boundary_reason?({:foreign_ctor, _}), do: true
-  defp family_boundary_reason?({:unknown_ctor, _}), do: true
-  defp family_boundary_reason?(_reason), do: false
-
-  defp family_boundary_failure(origin, details, reason, opts) do
-    family = family_origin_name(origin)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "#{family} callback has the wrong type",
-      body:
-        Doc.paragraph(
-          "This authored #{String.downcase(family)} callback does not produce the protocol value required by its generated module."
-        ),
-      primary: primary_label(opts, "this #{String.downcase(family)} callback has the wrong type"),
-      provenance: provenance_frames(details, opts),
-      payload: %{
-        origin: %{kind: origin, owner: Map.get(details, :module)},
-        cause: inspect(reason),
-        module: Map.get(details, :module),
-        behaviour: Map.get(details, :behaviour)
-      }
-    )
-  end
-
-  defp family_origin_name(:actor), do: "Actor"
-  defp family_origin_name(:fsm), do: "FSM"
-  defp family_origin_name(:supervisor), do: "Supervisor"
-
-  defp family_origin(details) do
-    case Map.get(details, :behaviour) do
-      :gen_server -> :actor
-      :gen_statem -> :fsm
-      :supervisor -> :supervisor
-      _ -> nil
-    end
-  end
 
   defp contextual_type_problem(kind, actual, expected, origin, context, opts) do
     from_error(
@@ -3211,827 +2170,41 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  defp macro_expansion_failure(kind, message, frames, opts) do
-    provenance =
-      frames
-      |> Enum.filter(&is_map/1)
-      |> Enum.map(fn frame ->
-        %ProvenanceFrame{
-          kind: :macro_expansion,
-          name: Map.get(frame, :keyword, "macro"),
-          invocation: Keyword.get(opts, :span)
-        }
-      end)
+  @doc false
+  def operator_conflict(kind, details, opts), do: NameAdapter.operator_conflict(kind, details, opts)
 
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_expansion_failed,
-      severity: :error,
-      title: if(kind == :cycle, do: "Macro expansion cycle", else: "Macro expansion limit exceeded"),
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, "reduce or stop this macro expansion"),
-      provenance: provenance ++ Keyword.get(opts, :provenance, []),
-      payload: %{kind: kind, frames: frames}
-    )
+  @doc false
+  def operator_conflict_labels(spans, opts, primary_message, secondary_message),
+    do: NameAdapter.operator_conflict_labels(spans, opts, primary_message, secondary_message)
+
+  defp primitive_declaration_failure(kind, details, context, opts) do
+    Declaration.primitive_declaration_failure(kind, details, context, opts)
   end
 
-  defp codegen_failure(reason, opts) do
-    {title, body, kind} = codegen_failure_content(reason)
-    stage = Keyword.get(opts, :codegen_stage) || codegen_stage(reason)
-    module = Keyword.get(opts, :codegen_module)
-    file = Keyword.get(opts, :source_file)
-    reason_text = codegen_reason_text(reason)
-    fingerprint = diagnostic_fingerprint({stage, module, file, reason})
+  defp primitive_core_tag({:float_type}), do: :float
+  defp primitive_core_tag({:binary_type}), do: :binary
+  defp primitive_core_tag({:atom_type}), do: :atom
+  defp primitive_core_tag(other) when is_atom(other), do: other
+  defp primitive_core_tag(_other), do: :unknown
 
-    context =
-      [
-        "Stage: `#{name_to_string(stage)}`.",
-        if(module, do: "Module: `#{name_to_string(module)}`."),
-        if(file, do: "Source: `#{file}`."),
-        "Underlying reason: #{reason_text}.",
-        "Diagnostic fingerprint: `#{fingerprint}`."
-      ]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.join(" ")
+  defp overload_type_surface(type) when is_atom(type) or is_binary(type),
+    do: name_to_string(Cure.Elab.Name.base(type) || type)
 
-    Diagnostic.new(
-      code: "E101",
-      key: :internal_compiler_error,
-      severity: :error,
-      title: title,
-      body: Doc.stack([Doc.paragraph(body), Doc.paragraph(context)]),
-      primary: primary_label(opts, "code generation failed here"),
-      notes: ["This is an internal compiler failure; report it with the diagnostic fingerprint."],
-      payload: %{
-        kind: kind,
-        stage: stage,
-        module: module,
-        file: file,
-        reason: reason_text,
-        fingerprint: fingerprint
-      }
-    )
+  defp overload_type_surface(type), do: surface_type(type)
+
+  @doc false
+  def overload_declaration_signature(name, member) do
+    parameters = Enum.map_join(Map.get(member, :parameters, []), ", ", &overload_type_surface/1)
+    "#{name}(#{parameters})"
   end
 
-  defp codegen_stage({:beam_lint, _errors}), do: :beam_writer
-  defp codegen_stage({:beam_lint, _errors, _warnings}), do: :beam_writer
-  defp codegen_stage({:missing_stdlib_module, _module, _message}), do: :module_resolution
-  defp codegen_stage(_reason), do: :codegen
-
-  defp codegen_reason_text({:beam_lint, errors}), do: beam_diagnostics_text(errors)
-
-  defp codegen_reason_text({:beam_lint, errors, warnings}) do
-    errors_text = beam_diagnostics_text(errors)
-    warnings_text = beam_diagnostics_text(warnings)
-
-    if warnings_text == "no details", do: errors_text, else: errors_text <> "; warnings: " <> warnings_text
-  end
-
-  defp codegen_reason_text({:compilation_failed, errors}), do: beam_diagnostics_text(errors)
-  defp codegen_reason_text(reason), do: human_reason(reason)
-
-  defp beam_diagnostics_text(diagnostics) do
-    diagnostics
-    |> List.wrap()
-    |> Enum.flat_map(fn
-      {_file, entries} when is_list(entries) -> entries
-      entry -> [entry]
-    end)
-    |> Enum.take(3)
-    |> Enum.map_join("; ", &beam_diagnostic_text/1)
-    |> case do
-      "" -> "no details"
-      text -> text
-    end
-  end
-
-  defp beam_diagnostic_text({location, formatter, detail}) when is_atom(formatter) do
-    message =
-      try do
-        formatter.format_error(detail) |> IO.iodata_to_binary() |> String.trim()
-      rescue
-        _ -> human_reason(detail)
-      end
-
-    "#{human_reason(location)}: #{message}"
-  end
-
-  defp beam_diagnostic_text(other), do: human_reason(other)
-
-  defp human_reason(value) when is_binary(value), do: value
-  defp human_reason(value) when is_atom(value), do: Atom.to_string(value)
-  defp human_reason(value) when is_number(value), do: to_string(value)
-
-  defp human_reason(value) when is_list(value) do
-    value |> Enum.take(3) |> Enum.map_join(", ", &human_reason/1)
-  end
-
-  defp human_reason(value) when is_tuple(value) do
-    value |> Tuple.to_list() |> Enum.take(4) |> Enum.map_join(": ", &human_reason/1)
-  end
-
-  defp human_reason(%_{} = value), do: value |> Map.from_struct() |> human_reason()
-
-  defp human_reason(value) when is_map(value) do
-    value
-    |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
-    |> Enum.take(4)
-    |> Enum.map_join(", ", fn {key, nested} -> "#{key}=#{human_reason(nested)}" end)
-  end
-
-  defp human_reason(value), do: inspect(value, limit: 4, printable_limit: 120)
-
-  defp diagnostic_fingerprint(term) do
-    term
-    |> :erlang.term_to_binary()
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.encode16(case: :lower)
-    |> binary_part(0, 12)
-  end
-
-  defp codegen_failure_content(:expected_module) do
-    {"Module emission failed", "The compiler expected a module definition before emitting a BEAM artifact.",
-     :expected_module}
-  end
-
-  defp codegen_failure_content({:unsupported_container, type}) do
-    {"Unsupported container", "The compiler cannot emit the `#{name_to_string(type)}` container in this context.",
-     :unsupported_container}
-  end
-
-  defp codegen_failure_content({:beam_lint, errors, warnings}) when is_list(errors) and is_list(warnings) do
-    {"BEAM validation failed",
-     "The generated BEAM artifact was rejected by the BEAM validator (#{length(errors)} error(s), #{length(warnings)} warning(s)).",
-     :beam_lint}
-  end
-
-  defp codegen_failure_content({:beam_lint, errors}) when is_list(errors) do
-    {"BEAM validation failed",
-     "The generated BEAM artifact was rejected by the BEAM validator (#{length(errors)} error(s)).", :beam_lint}
-  end
-
-  defp codegen_failure_content({:missing_stdlib_module, module, message}) do
-    module_name = name_to_string(module)
-
-    {"Stdlib module resolution failed",
-     "The compiler could not resolve `#{module_name}` while generating the BEAM artifact. #{message}",
-     :missing_stdlib_module}
-  end
-
-  defp codegen_failure_content(_reason) do
-    {"Code generation failed", "The compiler could not produce a valid BEAM artifact for this source.", :codegen}
-  end
-
-  defp final_core_failure(name, rejections, opts) do
-    clauses = Enum.map(rejections, &Map.get(&1, :clause))
-    messages = Enum.map(rejections, &Map.get(&1, :message))
-
-    Diagnostic.new(
-      code: "E101",
-      key: :internal_compiler_error,
-      severity: :error,
-      title: "Final-Core validation failed",
-      body:
-        Doc.paragraph(
-          "The compiler rejected an internal Core term at the trusted boundary (#{Enum.join(Enum.map(messages, &to_string/1), "; ")})."
-        ),
-      primary: primary_label(opts, "this definition produced invalid internal Core"),
-      notes: ["This is an internal compiler failure; report it with the diagnostic fingerprint."],
-      payload: %{kind: :final_core_violation, name: name, clauses: clauses, messages: messages}
-    )
-  end
-
-  defp erasure_failure(kind, details, opts) do
-    body =
-      case kind do
-        :unknown_erasure_class ->
-          "`@erases(#{name_to_string(details.class)})` on `#{name_to_string(details.name)}` is not a supported erasure class. Supported classes: #{known_erasure_classes_hint()}."
-
-        :erases_on_non_opaque ->
-          "`#{name_to_string(details.name)}` has constructors, so its runtime erasure is already determined. `@erases` is only valid on a constructor-less opaque type."
-      end
-
-    Diagnostic.new(
-      code: "E102",
-      key: :erasure_violation,
-      severity: :error,
-      title: "Erasure violation",
-      body: Doc.paragraph(body),
-      primary: primary_label(opts, "this erasure declaration is invalid"),
-      suggestions: erasure_suggestions(kind),
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
-  defp erasure_suggestions(:unknown_erasure_class) do
-    [%Suggestion{message: "Choose one of #{known_erasure_classes_hint()}", applicability: :manual}]
-  end
-
-  defp erasure_suggestions(:erases_on_non_opaque) do
-    [%Suggestion{message: "Remove `@erases`, or make this a constructor-less `opaque type`", applicability: :manual}]
-  end
-
-  defp declaration_conflict(kind, details, opts) do
-    name = name_to_string(Map.get(details, :name, :declaration))
-
-    detail =
-      case kind do
-        :overlapping_overload ->
-          " with arity #{Map.get(details, :arity)}"
-
-        :sibling_module_collision ->
-          " across modules #{Enum.map_join(Map.get(details, :owners, []), ", ", &name_to_string/1)}"
-
-        :overlapping_instance ->
-          " for interface `#{name_to_string(Map.get(details, :interface))}` and head `#{surface_type(Map.get(details, :head))}`"
-
-        :overlapping_named_instance ->
-          " for named interface instance `#{name_to_string(Map.get(details, :name))}`"
-
-        _ ->
-          ""
-      end
-
-    spans = Map.get(details, :spans, [])
-    {primary, secondary} = conflict_labels(spans, opts, kind)
-
-    Diagnostic.new(
-      code: "E105",
-      key: :declaration_conflict,
-      severity: :error,
-      title: declaration_conflict_title(kind),
-      body: Doc.paragraph(declaration_conflict_message(kind, name, detail)),
-      primary: primary,
-      secondary: secondary,
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
-  defp conflict_labels([first, second | rest], _opts, kind) do
-    primary = %Label{span: second, style: :primary, message: duplicate_primary_label(kind)}
-
-    secondary =
-      [%Label{span: first, style: :secondary, message: "the name was first declared here"}] ++
-        Enum.map(rest, &%Label{span: &1, style: :secondary, message: "another duplicate is here"})
-
-    {primary, secondary}
-  end
-
-  defp conflict_labels(_spans, opts, kind),
-    do: {primary_label(opts, duplicate_primary_label(kind)), []}
-
-  defp declaration_conflict_title(:duplicate_parameter), do: "Duplicate parameter"
-  defp declaration_conflict_title(:duplicate_field), do: "Duplicate field"
-  defp declaration_conflict_title(:duplicate_index), do: "Duplicate index"
-  defp declaration_conflict_title(:duplicate_type), do: "Duplicate type declaration"
-  defp declaration_conflict_title(:duplicate_constructor), do: "Duplicate constructor"
-  defp declaration_conflict_title(:sibling_module_collision), do: "Name repeated across sibling modules"
-  defp declaration_conflict_title(_kind), do: "Declaration conflict"
-
-  defp declaration_conflict_message(:duplicate_parameter, name, _detail),
-    do:
-      "The parameter `#{name}` is declared more than once. Rename or remove one occurrence so every parameter has a unique name."
-
-  defp declaration_conflict_message(:duplicate_field, name, _detail),
-    do:
-      "The field `#{name}` is declared more than once. Rename or remove one occurrence so every record field has a unique name."
-
-  defp declaration_conflict_message(:duplicate_type, name, _detail),
-    do:
-      "The type `#{name}` is declared more than once in this module. Rename or remove one declaration so the type has a unique identity."
-
-  defp declaration_conflict_message(:duplicate_constructor, name, _detail),
-    do:
-      "The constructor `#{name}` is declared more than once in this module. Rename or remove one declaration so pattern matching stays unambiguous."
-
-  defp declaration_conflict_message(:sibling_module_collision, name, detail),
-    do:
-      "The name `#{name}` is declared#{detail}. Sibling modules in one source file currently share an elaboration namespace, so one declaration would overwrite the other. Rename one declaration or move the modules into separate source files."
-
-  defp declaration_conflict_message(_kind, name, detail),
-    do: "The declaration `#{name}` conflicts with another visible declaration#{detail}."
-
-  defp duplicate_primary_label(:duplicate_parameter), do: "this parameter repeats an earlier name"
-  defp duplicate_primary_label(:duplicate_field), do: "this field repeats an earlier name"
-  defp duplicate_primary_label(:duplicate_index), do: "this index repeats an earlier name"
-  defp duplicate_primary_label(:duplicate_type), do: "this type repeats an earlier declaration"
-  defp duplicate_primary_label(:duplicate_constructor), do: "this constructor repeats an earlier declaration"
-
-  defp duplicate_primary_label(:sibling_module_collision),
-    do: "this name is already declared in another sibling module"
-
-  defp duplicate_primary_label(_kind), do: "rename this declaration or make its identity unique"
-
-  defp interface_failure(kind, details, opts) do
-    {title, message, label} =
-      case kind do
-        :missing_method ->
-          {"Interface method is missing",
-           "The implementation of `#{name_to_string(details.interface)}` does not define required method `#{name_to_string(details.method)}`.",
-           "implement this required method"}
-
-        :method_signature_mismatch ->
-          {"Interface method signature mismatch",
-           "Method `#{name_to_string(details.method)}` does not match the signature required by `#{name_to_string(details.interface)}`.",
-           "make this method match the interface signature"}
-
-        :instance_head_ill_formed ->
-          {"Instance head is not well formed",
-           "The interface instance head cannot be used as a valid implementation head.",
-           "use a well-formed instance head"}
-
-        :missing_superinterface ->
-          {"Required superinterface is missing",
-           "Interface `#{name_to_string(details.interface)}` requires `#{name_to_string(details.superinterface)}` for this implementation.",
-           "implement the required superinterface first"}
-      end
-
-    Diagnostic.new(
-      code: "E105",
-      key: :declaration_conflict,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
-  defp union_declaration_failure(kind, details, opts) do
-    {title, message, label} =
-      case kind do
-        :union_member_not_ground ->
-          {"Union member is not ground", "Every union member must be a concrete, fully-resolved type.",
-           "make this union member concrete"}
-
-        :unsupported_member_shape ->
-          {"Unsupported union member shape", "This union member has a runtime shape that Cure cannot represent safely.",
-           "use a supported union member shape"}
-
-        :same_runtime_shape ->
-          {"Union members have the same runtime shape",
-           "Two union members erase to the same runtime representation and cannot be distinguished.",
-           "change one member's runtime shape"}
-
-        :same_erased_literal ->
-          {"Union members have the same erased literal",
-           "Two union members erase to the same literal value and would overlap at runtime.",
-           "use distinct literal values"}
-      end
-
-    Diagnostic.new(
-      code: "E105",
-      key: :declaration_conflict,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
-  defp deriving_failure(kind, details, opts) do
-    {title, message, label} =
-      case kind do
-        :cannot_derive ->
-          {"Cannot derive interface",
-           "Cure cannot derive interface `#{name_to_string(details.interface)}` for this declaration.",
-           "provide the required deriving implementation"}
-
-        :deriving_needs_strings ->
-          {"Deriving requires string support",
-           "Interface `#{name_to_string(details.interface)}` can only be derived for a type with string-compatible members.",
-           "use string-compatible members or implement the interface manually"}
-
-        :deriving_needs_constraints ->
-          {"Deriving constraints are not satisfied",
-           "Deriving `#{name_to_string(details.interface)}` for `#{name_to_string(details.type)}` requires constraints that are not available.",
-           "add the required constraints or implement the interface manually"}
-
-        :cannot_derive_shape ->
-          {"Cannot derive for this type shape",
-           "Interface `#{name_to_string(details.interface)}` cannot be derived for `#{name_to_string(details.type)}` because its shape is unsupported.",
-           "change the type shape or implement the interface manually"}
-
-        :cannot_derive_method ->
-          {"Cannot derive interface method",
-           "Method `#{name_to_string(details.method)}` of `#{name_to_string(details.interface)}` cannot be generated for this type.",
-           "implement this method explicitly"}
-      end
-
-    Diagnostic.new(
-      code: "E105",
-      key: :declaration_conflict,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
-  defp operator_conflict(kind, details, opts) do
-    {title, body, primary_message, secondary_message} =
-      case kind do
-        :precedence_cycle ->
-          {"Cyclic operator precedence",
-           "The precedence groups #{Enum.map_join(details.groups, ", ", &"`#{name_to_string(&1)}`")} form a cycle, so the compiler cannot decide which operators bind tighter. Remove or reverse one `higher_than`/`lower_than` relation to break the cycle.",
-           "this precedence group participates in the cycle", "this precedence group also participates in the cycle"}
-
-        :conflicting_operator_fixity ->
-          {"Conflicting operator fixity",
-           "The #{details.fixity} operator `#{details.operator}` is assigned to both `#{name_to_string(details.existing_group)}` and `#{name_to_string(details.new_group)}`. Keep one precedence group for this operator, or choose a different operator spelling.",
-           "this declaration assigns `#{details.operator}` to `#{name_to_string(details.new_group)}`",
-           "the conflicting assignment is here"}
-
-        :conflicting_precedence_group ->
-          {"Conflicting precedence group",
-           "The precedence group `#{name_to_string(details.name)}` is declared with incompatible associativity or ordering rules. Give the declarations identical bodies, or rename one group.",
-           "this declaration conflicts with the earlier group", "the incompatible group declaration is here"}
-
-        :builtin_operator_not_overloadable ->
-          {"Operator declaration conflict", "The built-in operator `#{details.operator}` cannot be overloaded.",
-           "adjust this operator declaration", nil}
-      end
-
-    {primary, secondary} =
-      operator_conflict_labels(Map.get(details, :spans, []), opts, primary_message, secondary_message)
-
-    Diagnostic.new(
-      code: "E106",
-      key: :operator_declaration_conflict,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(body),
-      primary: primary,
-      secondary: secondary,
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
-  defp operator_conflict_labels([first, second | rest], _opts, primary_message, secondary_message) do
-    primary = %Label{span: second, style: :primary, message: primary_message}
-
-    secondary =
-      [%Label{span: first, style: :secondary, message: secondary_message}] ++
-        Enum.map(rest, &%Label{span: &1, style: :secondary, message: secondary_message})
-
-    {primary, secondary}
-  end
-
-  defp operator_conflict_labels([span], _opts, primary_message, _secondary_message),
-    do: {%Label{span: span, style: :primary, message: primary_message}, []}
-
-  defp operator_conflict_labels([], opts, primary_message, _secondary_message),
-    do: {primary_label(opts, primary_message), []}
-
-  defp coverage_problem(kind, branch, context, opts) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
-
-    {title, body, label} =
-      case kind do
-        :missing_branch ->
-          {"Incomplete pattern match", "This match does not cover the branch `#{name_to_string(branch)}`.",
-           "add a branch for this constructor or a catch-all pattern"}
-
-        :reachable_impossible ->
-          {"Impossible pattern branch", "This branch can never be reached for the matched type.",
-           "remove this branch or correct its pattern"}
-
-        :duplicate_branch ->
-          {"Duplicate pattern branch", "This branch repeats a constructor already handled by an earlier branch.",
-           "remove the duplicate branch"}
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(body),
-      primary: primary_label(opts, label),
-      payload: %{kind: kind, branch: branch, checking: Map.get(context, :checking)}
-    )
-  end
-
-  defp pattern_problem(kind, details, context, opts) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
-
-    {title, body, label} =
-      case kind do
-        :forced_pattern_mismatch ->
-          {"Forced pattern does not match", "This forced pattern does not match the value's expected type.",
-           "change the forced pattern or its expected type"}
-
-        :with_rematch_ctor_mismatch ->
-          {"With rematch constructor mismatch",
-           "The rematched value uses a different constructor than the original `with` pattern.",
-           "keep the rematch constructor aligned"}
-
-        :with_rematch_non_constructor_pattern ->
-          {"With rematch must use a constructor",
-           "This `with` rematch is not a constructor pattern that can be checked against the original value.",
-           "rematch with the corresponding constructor"}
-
-        :with_rematch_inconsistent_binding ->
-          {"With rematch binding is inconsistent",
-           "The rematch binds a name differently from the original `with` pattern.",
-           "keep bindings consistent across the rematch"}
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(body),
-      primary: primary_label(opts, label),
-      payload: Map.merge(%{kind: kind, checking: Map.get(context, :checking)}, details)
-    )
-  end
-
-  defp kernel_type_failure(kind, opts) do
-    {title, message, label} =
-      case kind do
-        :index_mismatch ->
-          {"Dependent index mismatch", "A dependent index does not agree with the value required by this expression.",
-           "make the indexed values agree"}
-
-        :cannot_unify ->
-          {"Types cannot be unified", "The type checker could not make these types definitionally equal.",
-           "change the expression or annotation so the types agree"}
-
-        :escaping_variable ->
-          {"Type variable escapes its scope", "A type variable would escape the scope in which it was introduced.",
-           "keep this type variable within its binding"}
-
-        :occurs_check ->
-          {"Infinite type detected", "A type variable would have to contain itself, producing an infinite type.",
-           "break the recursive type equation"}
-
-        :arg_arity ->
-          {"Wrong number of type arguments",
-           "This type application has a different number of arguments than its declaration.",
-           "supply exactly the declared arguments"}
-
-        :ctor_arity ->
-          {"Wrong number of constructor arguments",
-           "This constructor application has a different number of arguments than its declaration.",
-           "supply exactly the constructor arguments"}
-
-        :domain_mismatch ->
-          {"Function domain mismatch", "This function is being applied to a value of the wrong type.",
-           "change the argument to match the function domain"}
-
-        :grade_mismatch ->
-          {"Relevance grade mismatch", "This value is used with a relevance grade that its type does not allow.",
-           "use the value at its declared relevance"}
-
-        :bad_motive ->
-          {"Invalid case motive", "The dependent case motive is not a well-formed type family.",
-           "make the case motive a function over the scrutinee"}
-
-        :not_a_type ->
-          {"Expected a type", "This expression does not evaluate to a type where one is required.",
-           "use a type expression here"}
-
-        :not_a_type_value ->
-          {"Expected a type value", "This expression is not a valid type value in this position.",
-           "use a well-formed type value"}
-
-        :universe_level ->
-          {"Universe level mismatch", "This type lives above the universe level allowed here.",
-           "lower the universe level or widen the surrounding type"}
-
-        :universe_ceiling ->
-          {"Universe level is too high", "This type would exceed Cure's supported universe ceiling.",
-           "reduce the universe level"}
-
-        :hole_in_inference_position ->
-          {"Hole needs an expected type", "This hole appears where the kernel cannot infer its type.",
-           "add an annotation that determines the hole's type"}
-
-        :ctor_requires_checking_mode ->
-          {"Constructor needs an expected type", "This constructor cannot be inferred without checking information.",
-           "add a type annotation at the constructor use"}
-
-        :bounded_bound_not_concrete ->
-          {"Bound must be concrete", "This bounded type declaration requires a concrete bound.",
-           "replace the bound with a concrete value"}
-
-        :bounded_family_unregistered ->
-          {"Bounded literal type is unavailable", "This literal requires the standard Bounded type family.",
-           "import or register the Bounded type family"}
-
-        :absurd_in_reachable_position ->
-          {"Impossible branch is reachable", "This absurd branch is reachable in the current type.",
-           "make the branch unreachable or prove the contradiction"}
-
-        :opaque_not_eliminable ->
-          {"Opaque value cannot be eliminated", "This opaque value cannot be reduced or matched here.",
-           "use the public interface of the opaque value"}
-
-        :case_scrutinee_not_data ->
-          {"Case scrutinee is not data", "A case expression must scrutinize a data value.",
-           "match on a data constructor"}
-
-        :not_total ->
-          {"Definition is not total", "This definition is used in a total context but is not total.",
-           "cover every case or remove the total-context use"}
-
-        :not_a_function ->
-          {"Application target is not a function", "This expression is applied but has no function type.",
-           "apply a function-valued expression"}
-
-        :coverage ->
-          {"Pattern match is not exhaustive", "This pattern match does not cover every possible value.",
-           "add the missing pattern or a default arm"}
-
-        :branch_arity ->
-          {"Pattern branch has the wrong arity", "The branch binds a different number of fields than its constructor.",
-           "make the pattern match the constructor fields"}
-
-        :branch_type ->
-          {"Pattern branches disagree", "The branches of this expression do not produce one compatible type.",
-           "make every branch return the same type"}
-
-        :index_arity ->
-          {"Indexed type has the wrong number of indices", "This indexed application does not match its declaration.",
-           "supply exactly the declared indices"}
-
-        _ ->
-          {"Kernel type check failed", "The kernel could not validate this type or term.",
-           "add an annotation or revise the term"}
-      end
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      payload: %{kind: kind}
-    )
-  end
-
-  defp branch_type_failure(context, opts) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
-    branches = Keyword.get(opts, :branch_patterns, Map.get(context, :branch_patterns, []))
-    branch_names = Enum.map(branches, &branch_name/1)
-    checking = Map.get(context, :checking)
-    subject = if checking, do: " in `#{checking}`", else: ""
-    details = Map.get(context, :branch_details, %{})
-    branch_details = Map.get(details, :branches, [])
-
-    selected_detail =
-      case Enum.find(branch_details, &match?({:error, _}, Map.get(&1, :status))) do
-        nil -> List.first(branch_details, details)
-        detail -> detail
-      end
-
-    failing =
-      Map.get(selected_detail, :constructor) ||
-        case singleton_type_branches(branch_details) do
-          [{constructor, _type}] -> constructor
-          _ -> nil
-        end
-
-    actual = Map.get(selected_detail, :actual)
-    expected = Map.get(selected_detail, :expected)
-    singleton_branches = singleton_type_branches(branch_details)
-
-    detail =
-      case {singleton_branches, failing, actual, expected} do
-        {[{constructor, type}], _, _, _} ->
-          "Possible outlier: only the `#{name_to_string(constructor)}` branch has type `#{type}`; check it against the other branches and the declared result."
-
-        {_, constructor, actual, expected}
-        when not is_nil(constructor) and not is_nil(actual) and not is_nil(expected) ->
-          "Possible outlier: the `#{name_to_string(constructor)}` branch has type `#{surface_type(actual)}`, but the declared result requires `#{surface_type(expected)}`."
-
-        _ ->
-          case branch_names do
-            [first, second | rest] ->
-              names = Enum.map_join([first, second | rest], ", ", &"`#{&1}`")
-
-              "The branches #{names} of this match are checked against the declared result, but at least one branch does not produce that result."
-
-            _ ->
-              "Every branch of this match is checked against the declared result type."
-          end
-      end
-
-    branch_labels =
-      Enum.map(branches, fn branch ->
-        span = branch_span(branch)
-        name = branch_name(branch)
-
-        message =
-          if same_branch?(name, failing),
-            do: "possible outlier: this branch has the incompatible type",
-            else: "compare this branch with the declared result"
-
-        %{span: span, name: name, message: message}
-      end)
-      |> Enum.reject(&is_nil(&1.span))
-      |> Enum.sort_by(fn label -> if String.starts_with?(label.message || "", "possible outlier"), do: 0, else: 1 end)
-
-    {primary, secondary} =
-      case branch_labels do
-        [] ->
-          {primary_label(opts, "make these branches return the same type"), []}
-
-        labels ->
-          {outliers, comparisons} = Enum.split_with(labels, &same_branch?(&1.name, failing))
-          [chosen | rest] = if outliers == [], do: labels, else: outliers ++ comparisons
-
-          primary = %Label{span: chosen.span, style: :primary, message: chosen.message}
-
-          secondary =
-            Enum.map(rest, fn label ->
-              %Label{span: label.span, style: :secondary, message: label.message}
-            end)
-
-          {primary, secondary}
-      end
-
-    dependent? = Map.get(context, :expectation_origin) == :dependent_branch
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title:
-        if(dependent?,
-          do: "Dependent branch has the wrong result#{subject}",
-          else: "Pattern branches disagree#{subject}"
-        ),
-      body:
-        Doc.stack([
-          Doc.paragraph(detail),
-          Doc.paragraph(
-            if dependent?,
-              do:
-                "This constructor refines indices in the branch context. Check the authored branch against the resulting specialized proposition.",
-              else: "Check each branch expression against the result type written after the function name."
-          )
-        ]),
-      primary: primary,
-      secondary: secondary,
-      payload: %{
-        kind: :branch_type,
-        branches: branch_names,
-        failing_branch: failing,
-        actual_surface: if(actual, do: surface_type(actual)),
-        expected_surface: if(expected, do: surface_type(expected)),
-        branch_types: branch_type_payload(branch_details),
-        checking: checking,
-        expression_category: Map.get(context, :expression_category),
-        expectation_origin: Map.get(context, :expectation_origin)
-      }
-    )
-  end
-
-  defp branch_name(%{name: name}), do: to_string(name)
-  defp branch_name(name), do: to_string(name)
-
-  defp same_branch?(_name, nil), do: false
-
-  defp same_branch?(name, failing) do
-    name = to_string(name)
-    failing = to_string(failing)
-    failing == name or String.ends_with?(failing, "#" <> name) or String.ends_with?(failing, "." <> name)
-  end
-
-  defp singleton_type_branches(details) do
-    groups =
-      details
-      |> Enum.filter(&(not is_nil(Map.get(&1, :actual))))
-      |> Enum.group_by(&surface_type(&1.actual))
-
-    if map_size(groups) > 1 and Enum.any?(groups, fn {_type, entries} -> length(entries) > 1 end) do
-      groups
-      |> Enum.filter(fn {_type, entries} -> length(entries) == 1 end)
-      |> Enum.map(fn {type, [entry]} -> {entry.constructor, type} end)
-    else
-      []
-    end
-  end
-
-  defp branch_type_payload(details) do
-    Enum.map(details, fn detail ->
-      %{
-        branch: detail.constructor,
-        status: detail.status,
-        actual: if(detail.actual, do: surface_type(detail.actual)),
-        expected: if(detail.expected, do: surface_type(detail.expected))
-      }
-    end)
-  end
-
-  defp branch_span(%{span: %Cure.Diagnostic.Span{} = span}), do: span
-  defp branch_span(_branch), do: nil
+  @doc false
+  def shadowed_guard_binding_failure(details, context, opts),
+    do: NameAdapter.shadowed_guard_binding_failure(details, context, opts)
+
+  @doc false
+  def shadowed_sub_union_pattern_failure(details, context, opts),
+    do: NameAdapter.shadowed_sub_union_pattern_failure(details, context, opts)
 
   defp contextual_type_failure(kind, details, opts) do
     {title, message, label} =
@@ -4205,10 +2378,6 @@ defmodule Cure.Diagnostic.Adapter do
           {"Dependent match needs an expected type", "Cure cannot infer the indexed result of this match expression.",
            "add an annotation that determines the dependent result"}
 
-        :bidirectional_erased_field ->
-          {"Erased field cannot be inferred here", "This erased constructor field requires checking information.",
-           "add an annotation or make the field relevant"}
-
         :applied_non_function ->
           {"Application target is not callable", "This expression is applied but does not have a callable type.",
            "apply a function or constructor"}
@@ -4307,6 +2476,19 @@ defmodule Cure.Diagnostic.Adapter do
           {"Application target is not callable", "This value is used as a function, but its type is not callable.",
            "apply a function or constructor value"}
 
+        :unsafe_call_required ->
+          {"Unsafe call requires `unsafe`",
+           "Calling `#{name_to_string(details.callee || "this function")}` crosses an unsafe boundary and must be written with the `unsafe` keyword.",
+           "prefix the call with `unsafe`"}
+
+        :run_requires_effect ->
+          {"`run` expects an effect", "The argument to `run` must have type `Effect(T)`.",
+           "pass an effectful computation to `run`"}
+
+        :run_arity ->
+          {"`run` expects one argument", "The effect escape `run` takes exactly one computation.",
+           "pass exactly one argument"}
+
         :branch_arity ->
           {"Pattern branch has the wrong arity",
            "A pattern branch does not bind the number of values required by the matched constructor.",
@@ -4325,15 +2507,7 @@ defmodule Cure.Diagnostic.Adapter do
           contextual_type_fallback(kind, opts)
       end
 
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: title,
-      body: Doc.paragraph(message),
-      primary: primary_label(opts, label),
-      payload: Map.put(details, :kind, kind)
-    )
+    TypeAdapter.contextual_failure(kind, details, opts, {title, message, label})
   end
 
   defp contextual_type_fallback(_kind, opts) do
@@ -4372,893 +2546,12 @@ defmodule Cure.Diagnostic.Adapter do
     {title, message, label}
   end
 
-  defp ambiguous_member(method, interfaces, opts) do
-    spelling = name_to_string(method)
-    owners = Enum.map(interfaces, &name_to_string/1)
-
-    Diagnostic.new(
-      code: "E089",
-      key: :ambiguous_name,
-      severity: :error,
-      title: "Ambiguous interface method",
-      body: Doc.paragraph("Method `#{spelling}` is declared by more than one visible interface."),
-      primary: primary_label(opts, "qualify or disambiguate this method"),
-      suggestions: [
-        %Suggestion{
-          message: "Choose one of #{Enum.map_join(owners, ", ", &"`#{&1}`")}",
-          applicability: :manual
-        }
-      ],
-      payload: %{kind: :ambiguous_method, method: spelling, interfaces: owners}
-    )
-  end
-
-  defp arity_failure(kind, details, opts) do
-    Diagnostic.new(
-      code: "E003",
-      key: :arity_mismatch,
-      severity: :error,
-      title: "Pattern arity mismatch",
-      body: Doc.paragraph("This typed pattern has the wrong number of elements at position #{details.position}."),
-      primary: primary_label(opts, "make the pattern arity match the value"),
-      payload: Map.put(details, :kind, kind)
-    )
-  end
-
-  defp known_erasure_classes_hint do
-    [:pid, :reference, :integer, :float, :binary, :atom, :boolean, :list]
-    |> Enum.map_join(", ", &Atom.to_string/1)
-  end
-
-  defp macro_validation_failure(kind, details, opts), do: macro_validation_failure(kind, details, opts, %{})
-
-  defp macro_validation_failure(kind, details, opts, context) do
-    span = Map.get(context, :span) || Keyword.get(opts, :span)
-
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_validation_failed,
-      severity: :error,
-      title: macro_validation_title(kind),
-      body: Doc.paragraph(macro_validation_message(kind, details)),
-      primary: pickup_label(span, :primary, macro_validation_primary_label(kind)),
-      secondary: macro_validation_secondary_labels(kind, context, span),
-      suggestions: macro_validation_suggestions(kind),
-      payload: %{kind: kind, details: details, macro: Map.get(context, :macro)}
-    )
-  end
-
-  defp macro_validation_title(:missing_diagnosis), do: "Macro explanations are incomplete"
-  defp macro_validation_title(:rule_unpinned), do: "Macro rule needs a worked example"
-  defp macro_validation_title(:example_mismatch), do: "Macro example has the wrong expansion"
-  defp macro_validation_title(:example_type_mismatch), do: "Macro example has the wrong type"
-  defp macro_validation_title(:computed_example_error), do: "Computed macro example failed"
-  defp macro_validation_title(_kind), do: "Macro validation failed"
-
-  defp macro_validation_primary_label(:missing_diagnosis), do: "add clauses for the unexplained failure points"
-  defp macro_validation_primary_label(:rule_unpinned), do: "add a worked example beneath this rule"
-  defp macro_validation_primary_label(:example_mismatch), do: "this pin does not match the actual expansion"
-  defp macro_validation_primary_label(:example_type_mismatch), do: "this pinned type does not accept the expansion"
-  defp macro_validation_primary_label(:computed_example_error), do: "this computed example could not be checked"
-  defp macro_validation_primary_label(_kind), do: "this macro declaration is incomplete or inconsistent"
-
-  defp macro_validation_secondary_labels(:missing_diagnosis, context, primary_span) do
-    context
-    |> Map.get(:rule_spans, [])
-    |> Enum.map(&pickup_label(&1, :secondary, "this rule declares an unexplained failure point"))
-    |> Enum.reject(&(&1.span == primary_span))
-  end
-
-  defp macro_validation_secondary_labels(:rule_unpinned, context, primary_span) do
-    context
-    |> Map.get(:rule_spans, [])
-    |> Enum.drop(1)
-    |> Enum.map(&pickup_label(&1, :secondary, "this rule also needs a worked example"))
-    |> Enum.reject(&(&1.span == primary_span))
-  end
-
-  defp macro_validation_secondary_labels(kind, context, primary_span)
-       when kind in [:example_mismatch, :example_type_mismatch, :computed_example_error] do
-    context
-    |> Map.get(:rule_spans, [])
-    |> Enum.map(&pickup_label(&1, :secondary, "this rule owns the failing example"))
-    |> Enum.reject(&(&1.span == primary_span))
-  end
-
-  defp macro_validation_secondary_labels(_kind, _context, _primary_span), do: []
-
-  defp macro_validation_suggestions(:missing_diagnosis),
-    do: [%Suggestion{message: "Add one `explain` clause for each listed failure point", applicability: :manual}]
-
-  defp macro_validation_suggestions(:rule_unpinned),
-    do: [
-      %Suggestion{message: "Add `example use_site expands expected` beneath each listed rule", applicability: :manual}
-    ]
-
-  defp macro_validation_suggestions(:example_mismatch),
-    do: [%Suggestion{message: "Update the pinned expansion or fix the macro rule", applicability: :manual}]
-
-  defp macro_validation_suggestions(:example_type_mismatch),
-    do: [%Suggestion{message: "Use the expansion's actual type or fix the macro rule", applicability: :manual}]
-
-  defp macro_validation_suggestions(:computed_example_error),
-    do: [%Suggestion{message: "Fix the computed expander or its worked example", applicability: :manual}]
-
-  defp macro_validation_suggestions(_kind), do: []
-
-  defp macro_validation_message(:missing_diagnosis, points),
-    do: "The macro does not explain every declared failure point: #{macro_failure_points(points)}."
-
-  defp macro_validation_message(:rule_unpinned, keywords),
-    do: "These macro rules have no worked example: #{Enum.join(Enum.map(keywords, &name_to_string/1), ", ")}."
-
-  defp macro_validation_message(:example_mismatch, mismatches),
-    do: "Macro example(s) do not match their actual expansions: #{macro_example_names(mismatches)}."
-
-  defp macro_validation_message(:example_type_mismatch, failures),
-    do: "Macro example(s) have the wrong type: #{macro_example_names(failures)}."
-
-  defp macro_validation_message(:computed_example_error, failures),
-    do: "A computed macro example failed while being checked: #{macro_example_names(failures)}."
-
-  defp macro_validation_message(:invalid_macro_family, _reason),
-    do: "The macro's syntax-family declarations are inconsistent."
-
-  defp macro_validation_message(:generated_hole_not_well_typed, _details),
-    do: "A generated hole is not well typed."
-
-  defp macro_validation_message(:example_use_site_not_fully_consumed, _details),
-    do: "A macro example did not consume the complete use site."
-
-  defp macro_validation_message(:closed_category_extension, _details),
-    do: "A closed macro category was extended unexpectedly."
-
-  defp macro_validation_message(:duplicate_unit, _details),
-    do: "A macro literal unit was declared more than once."
-
-  defp macro_validation_message(kind, _details),
-    do: "Macro validation failed for #{name_to_string(kind)}."
-
-  defp macro_family_title({:unknown_syntax_family, _name}), do: "Included syntax family is unknown"
-  defp macro_family_title({:syntax_family_cycle, _names}), do: "Syntax families form a cycle"
-  defp macro_family_title({:duplicate_syntax_family_field, _pairs}), do: "Syntax-family field is duplicated"
-  defp macro_family_title(_reason), do: "Syntax-family declaration is invalid"
-
-  defp macro_family_body({:unknown_syntax_family, name}),
-    do: "`#{name}` is included here, but this macro does not declare a syntax family with that name."
-
-  defp macro_family_body({:syntax_family_cycle, names}),
-    do: "These syntax families include one another in a cycle: #{Enum.map_join(names, " → ", &to_string/1)}."
-
-  defp macro_family_body({:duplicate_syntax_family_field, pairs}) do
-    fields = Enum.map_join(pairs, ", ", fn {family, field} -> "`#{family}.#{field}`" end)
-    "The same field is declared more than once: #{fields}."
-  end
-
-  defp macro_family_body(reason),
-    do: "The syntax-family declarations are inconsistent: #{name_to_string(reason)}."
-
-  defp macro_family_primary_label({:unknown_syntax_family, _name}), do: "this included family is not declared"
-  defp macro_family_primary_label({:syntax_family_cycle, _names}), do: "the inclusion cycle starts here"
-  defp macro_family_primary_label({:duplicate_syntax_family_field, _pairs}), do: "this field is declared again"
-  defp macro_family_primary_label(_reason), do: "this macro family is inconsistent"
-
-  defp macro_family_related_label({:syntax_family_cycle, _names}), do: "this family also participates in the cycle"
-  defp macro_family_related_label({:duplicate_syntax_family_field, _pairs}), do: "the field was already declared here"
-  defp macro_family_related_label(_reason), do: "related family declaration"
-
-  defp macro_family_hint({:unknown_syntax_family, name}),
-    do: "Declare `syntax family #{name}` or change `includes` to a declared family"
-
-  defp macro_family_hint({:syntax_family_cycle, _names}),
-    do: "Remove one `includes` edge so the family graph is acyclic"
-
-  defp macro_family_hint({:duplicate_syntax_family_field, _pairs}),
-    do: "Keep one declaration of the field"
-
-  defp macro_family_hint(_reason), do: "Make the syntax-family declarations consistent"
-
-  defp macro_failure_points(points) do
-    Enum.map_join(points, ", ", fn
-      {:failure, name} -> "author failure `#{name}`"
-      {:hole_kind, kind} -> "#{kind} hole"
-      {:keyword, keyword} -> "keyword `#{keyword}`"
-      _point -> "an additional declared failure point"
-    end)
-  end
-
-  defp macro_example_names(values) when is_list(values) do
-    names =
-      values
-      |> Enum.map(fn
-        %{keyword: keyword} -> name_to_string(keyword)
-        %{"keyword" => keyword} -> name_to_string(keyword)
-        _ -> nil
-      end)
-      |> Enum.reject(&is_nil/1)
-
-    case names do
-      [] -> "the affected examples"
-      names -> Enum.join(names, ", ")
-    end
-  end
-
   @spec unknown_name(atom(), term(), keyword()) :: Diagnostic.t()
-  def unknown_name(namespace, name, opts \\ []) do
-    spelling = name_to_string(name)
-    candidate_details = rank_candidates(Keyword.get(opts, :candidates, []), spelling, namespace, opts)
-    candidates = Enum.map(candidate_details, & &1.name)
-    available_candidates = Keyword.get(opts, :available_candidates, [])
-    available_names = available_candidates |> Enum.map(&suggestion_name/1) |> Enum.uniq()
-
-    body =
-      case available_names do
-        [] ->
-          Doc.paragraph(
-            "`#{Keyword.get(opts, :display_name, spelling)}` is not available in this #{namespace} namespace."
-          )
-
-        names ->
-          Doc.stack([
-            Doc.paragraph(
-              "`#{Keyword.get(opts, :display_name, spelling)}` is not available in this #{namespace} namespace."
-            ),
-            Doc.paragraph("The matched type provides #{Enum.map_join(names, ", ", &"`#{&1}`")}.")
-          ])
-      end
-
-    suggestions =
-      case {candidate_suggestions(candidate_details, spelling, opts), available_names} do
-        {[], [_ | _] = names} ->
-          [
-            %Suggestion{
-              message: "Use one of the matched type's constructors: #{Enum.map_join(names, ", ", &"`#{&1}`")}",
-              applicability: :manual
-            }
-          ]
-
-        {ranked, _names} ->
-          ranked
-      end
-
-    Diagnostic.new(
-      code: @unknown_name_code,
-      key: :unknown_name,
-      severity: :error,
-      title: "Unknown #{namespace_title(namespace)}",
-      body: body,
-      primary: primary_label(opts, "`#{spelling}` was not found"),
-      notes: Keyword.get(opts, :notes, []),
-      suggestions: suggestions,
-      provenance: Keyword.get(opts, :provenance, []),
-      payload: %{
-        namespace: namespace,
-        name: spelling,
-        candidates: candidates,
-        candidate_details: candidate_details,
-        available_candidates: available_candidates,
-        owner: Keyword.get(opts, :owner),
-        record: Keyword.get(opts, :record),
-        checking: Keyword.get(opts, :checking),
-        arity: Keyword.get(opts, :arity),
-        expected_namespace: Keyword.get(opts, :expected_namespace),
-        imported_from: Keyword.get(opts, :imported_from),
-        kernel_context: Keyword.get(opts, :kernel_context)
-      }
-    )
-  end
-
-  defp primary_label(opts, default_message) do
-    case Keyword.get(opts, :span) do
-      %Span{} = span ->
-        %Label{
-          span: span,
-          style: :primary,
-          message: Keyword.get(opts, :label, default_message)
-        }
-
-      nil ->
-        nil
-    end
-  end
-
-  defp named_argument_primary(details, opts, message) do
-    index = named_argument_index(details)
-    span = Enum.at(Map.get(details, :label_spans, []), index) || Enum.at(Map.get(details, :argument_spans, []), index)
-
-    case span || Keyword.get(opts, :span) do
-      %Span{} = primary -> %Label{span: primary, style: :primary, message: message}
-      _ -> nil
-    end
-  end
-
-  defp named_argument_labels(details) do
-    primary_index = named_argument_index(details)
-    label = Map.get(details, :label)
-
-    duplicate_labels =
-      details
-      |> Map.get(:written, [])
-      |> List.wrap()
-      |> Enum.with_index()
-      |> Enum.flat_map(fn
-        {^label, index} when index != primary_index ->
-          case Enum.at(Map.get(details, :label_spans, []), index) do
-            %Span{} = span -> [%Label{span: span, style: :secondary, message: "`#{label}` is also supplied here"}]
-            _ -> []
-          end
-
-        _ ->
-          []
-      end)
-
-    argument_label =
-      case Enum.at(Map.get(details, :argument_spans, []), primary_index) do
-        %Span{} = span -> [%Label{span: span, style: :secondary, message: "argument value"}]
-        _ -> []
-      end
-
-    parameter_labels =
-      Map.get(details, :parameter_spans, [])
-      |> Enum.flat_map(fn
-        %Span{} = span -> [%Label{span: span, style: :secondary, message: "parameter declared here"}]
-        _ -> []
-      end)
-
-    duplicate_labels ++ argument_label ++ parameter_labels
-  end
-
-  defp named_argument_index(%{argument_index: index}) when is_integer(index), do: index
-  defp named_argument_index(%{parameter_index: index, written: nil}) when is_integer(index), do: index
-
-  defp named_argument_index(details) do
-    written = Map.get(details, :written) || []
-    label = Map.get(details, :label)
-    Enum.find_index(written, &(&1 == label)) || 0
-  end
-
-  defp named_argument_suggestions(:missing_label, %{label: label} = details) when is_binary(label) do
-    index = named_argument_index(details)
-    written = Map.get(details, :written)
-
-    case {written == nil or Enum.at(written, index) == nil, Enum.at(Map.get(details, :argument_spans, []), index)} do
-      {true, %Span{} = span} ->
-        insertion = %{span | end_byte: span.start_byte, end_line: span.start_line, end_column: span.start_column}
-
-        [
-          %Suggestion{
-            message: "Add the required `#{label}:` argument name",
-            applicability: :machine_applicable,
-            edits: [%TextEdit{span: insertion, replacement: "#{label}: "}]
-          }
-        ]
-
-      _ ->
-        []
-    end
-  end
-
-  defp named_argument_suggestions(:unknown_label, %{label: bad, telescope: telescope} = details)
-       when is_binary(bad) do
-    declared =
-      telescope
-      |> Enum.map(fn {_kind, name} -> name end)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
-
-    case {declared, Enum.at(Map.get(details, :label_spans, []), named_argument_index(details))} do
-      {[replacement], %Span{} = span} ->
-        [
-          %Suggestion{
-            message: "Replace `#{bad}` with the declared argument name `#{replacement}`",
-            applicability: :machine_applicable,
-            edits: [%TextEdit{span: span, replacement: replacement}]
-          }
-        ]
-
-      _ ->
-        []
-    end
-  end
-
-  defp named_argument_suggestions(_variant, _details), do: []
-
-  defp proof_chain_syntax_labels(problem, primary) do
-    construct_message =
-      if problem.kind == :unreachable_proof_statement,
-        do: "the goal was already closed here",
-        else: "this proof chain starts here"
-
-    [
-      {problem.construct, construct_message},
-      {problem.step,
-       if(problem.kind == :unreachable_proof_statement,
-         do: "this statement is unreachable",
-         else: "this step is incomplete"
-       )}
-    ]
-    |> Enum.flat_map(fn
-      {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
-      _ -> []
-    end)
-  end
-
-  defp proof_chain_mismatch_labels(problem, primary) do
-    [
-      {problem.current_step, "step #{problem.step_index + 1} requires this equality"},
-      {problem.previous_step, "the previous endpoint is established here"}
-    ]
-    |> Enum.flat_map(fn
-      {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
-      _ -> []
-    end)
-  end
-
-  defp rewrite_labels(problem, primary) do
-    [
-      {problem.command, "rewrite command"},
-      {problem.theorem, "equality supplied here"},
-      {problem.goal, "current proof goal"}
-    ]
-    |> Enum.flat_map(fn
-      {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
-      _ -> []
-    end)
-  end
-
-  defp simplification_labels(problem, primary) do
-    [{problem.command, "simplify command"}, {problem.rule, "rule supplied here"}]
-    |> Enum.flat_map(fn
-      {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
-      _ -> []
-    end)
-  end
-
-  defp induction_primary(problem, opts, message) do
-    span =
-      problem.pattern_range || problem.case_range || problem.subject_range || problem.construct ||
-        Keyword.get(opts, :span)
-
-    if match?(%Span{}, span), do: %Label{span: span, style: :primary, message: message}, else: nil
-  end
-
-  defp induction_labels(problem) do
-    [
-      {problem.subject_range, "induction subject"},
-      {problem.constructor_range, "constructor declared here"},
-      {problem.hypothesis_range, "induction hypothesis used here"}
-    ]
-    |> Enum.flat_map(fn
-      {%Span{} = span, message} -> [%Label{span: span, style: :secondary, message: message}]
-      _ -> []
-    end)
-  end
-
-  defp induction_message(message, %InductionProblem{kind: :missing_case, missing: missing}) do
-    message <> " Missing: " <> Enum.map_join(List.wrap(missing), ", ", &Cure.Elab.Name.base/1) <> "."
-  end
-
-  defp induction_message(message, %InductionProblem{kind: :wrong_case_fields} = problem) do
-    message <>
-      " Expected #{problem.expected_fields} bindings but found #{problem.observed_fields}; recursive fields at positions " <>
-      Enum.map_join(List.wrap(problem.recursive_fields), ", ", &Integer.to_string(&1 + 1)) <> " produce hypotheses."
-  end
-
-  defp induction_message(message, %InductionProblem{kind: :mistyped_hypothesis} = problem) do
-    message <>
-      " Available: #{surface_type(problem.available)}. Required here: #{surface_type(problem.required)}."
-  end
-
-  defp induction_message(message, _problem), do: message
-
-  defp induction_suggestions(%InductionProblem{
-         kind: :missing_case,
-         missing_case_skeletons: skeletons,
-         insertion: %Span{} = insertion,
-         case_indent: case_indent
-       })
-       when is_list(skeletons) and skeletons != [] do
-    indent = String.duplicate(" ", max(case_indent || 0, 0))
-    replacement = "\n" <> Enum.map_join(skeletons, "\n", &(indent <> &1))
-
-    [
-      %Suggestion{
-        message: "Add missing induction cases",
-        applicability: :machine_applicable,
-        edits: [%TextEdit{span: insertion, replacement: replacement}]
-      }
-    ]
-  end
-
-  defp induction_suggestions(%InductionProblem{kind: :missing_case, missing: missing}) do
-    [
-      %Suggestion{
-        message: "Add cases for " <> Enum.map_join(List.wrap(missing), ", ", &Cure.Elab.Name.base/1),
-        applicability: :manual,
-        edits: []
-      }
-    ]
-  end
-
-  defp induction_suggestions(_problem), do: []
-
-  defp simplification_body(message, problem, opts) do
-    goals =
-      if problem.before_surface && problem.after_surface do
-        "\n\nBefore: #{problem.before_surface}\nAfter: #{problem.after_surface}"
-      else
-        ""
-      end
-
-    supplied =
-      if problem.kind == :proof_mismatch and problem.simplified_supplied_surface do
-        "\nSupplied proof simplifies to: #{problem.simplified_supplied_surface}"
-      else
-        ""
-      end
-
-    if Keyword.get(opts, :trace) == :expanded and (problem.trace_ids || []) != [] do
-      ids = Enum.map_join(problem.trace_ids, ", ", &to_string/1)
-      Doc.paragraph(message <> goals <> supplied <> "\n\nSimplification trace: " <> ids)
-    else
-      Doc.paragraph(message <> goals <> supplied)
-    end
-  end
-
-  defp rewrite_suggestions(%RewriteProblem{kind: :ambiguous_occurrence, command: %Span{} = command} = problem) do
-    insertion = %Span{
-      command
-      | start_byte: command.end_byte,
-        start_line: command.end_line,
-        start_column: command.end_column
-    }
-
-    Enum.map(problem.occurrences || [], fn occurrence ->
-      %Suggestion{
-        message: "Rewrite occurrence #{occurrence.number}",
-        applicability: :machine_applicable,
-        edits: [%TextEdit{span: insertion, replacement: " at #{occurrence.number}"}]
-      }
-    end)
-  end
-
-  defp rewrite_suggestions(%RewriteProblem{kind: :reverse_only, command: %Span{} = command, direction: direction}) do
-    {span, replacement} =
-      case direction do
-        :forward ->
-          {%Span{
-             command
-             | start_byte: command.start_byte + 7,
-               end_byte: command.start_byte + 7,
-               start_column: command.start_column + 7,
-               end_line: command.start_line,
-               end_column: command.start_column + 7
-           }, " backwards"}
-
-        :backwards ->
-          {%Span{
-             command
-             | start_byte: command.start_byte + 7,
-               end_byte: command.start_byte + 17,
-               start_column: command.start_column + 7,
-               end_line: command.start_line,
-               end_column: command.start_column + 17
-           }, ""}
-      end
-
-    [
-      %Suggestion{
-        message: "Use the opposite rewrite direction",
-        applicability: :machine_applicable,
-        edits: [%TextEdit{span: span, replacement: replacement}]
-      }
-    ]
-  end
-
-  defp rewrite_suggestions(_problem), do: []
-
-  defp defining_equation_labels(problem, primary) do
-    ([{problem.function_definition, "function is defined here"}] ++
-       Enum.map(problem.candidate_equations || [], &{&1, "candidate defining equation"}))
-    |> Enum.flat_map(fn
-      {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
-      _ -> []
-    end)
-  end
-
-  defp pickup_spans(spans), do: Enum.filter(spans, &match?(%Span{}, &1))
+  def unknown_name(namespace, name, opts \\ []),
+    do: NameAdapter.unknown_name(namespace, name, opts)
 
   defp pickup_label(%Span{} = span, style, message), do: %Label{span: span, style: style, message: message}
   defp pickup_label(_, _style, _message), do: nil
-
-  defp edition_replacement_suggestion(%{
-         argument_span: %Span{} = span,
-         known_editions: [edition],
-         single_line: true
-       }) do
-    [
-      %Suggestion{
-        message: "Use the supported edition `#{edition}`",
-        applicability: :machine_applicable,
-        edits: [%TextEdit{span: span, replacement: inspect(edition)}]
-      }
-    ]
-  end
-
-  defp edition_replacement_suggestion(%{known_editions: editions}) when is_list(editions) do
-    [
-      %Suggestion{
-        message: "Use one of the supported editions: #{Enum.map_join(editions, ", ", &"`#{&1}`")}",
-        applicability: :manual
-      }
-    ]
-  end
-
-  defp edition_replacement_suggestion(_details), do: []
-
-  defp grade_suggestions(%{grade: grade, supported: supported}, %Span{} = span) do
-    spelling = to_string(grade)
-
-    ranked =
-      supported
-      |> Enum.map(&{&1, Suggest.distance(spelling, to_string(&1))})
-      |> Enum.sort_by(fn {candidate, distance} -> {distance, to_string(candidate)} end)
-
-    case ranked do
-      [{candidate, distance}, {_other, next_distance} | _] when distance <= 2 and distance < next_distance ->
-        [
-          %Suggestion{
-            message: "Replace it with `:#{candidate}`",
-            applicability: :machine_applicable,
-            edits: [%TextEdit{span: span, replacement: ":#{candidate}"}]
-          }
-        ]
-
-      [{candidate, distance}] when distance <= 2 ->
-        [
-          %Suggestion{
-            message: "Replace it with `:#{candidate}`",
-            applicability: :machine_applicable,
-            edits: [%TextEdit{span: span, replacement: ":#{candidate}"}]
-          }
-        ]
-
-      _ ->
-        [
-          %Suggestion{
-            message: "Use `:erased`, `:linear`, `:affine`, or omit the grade for unrestricted use",
-            applicability: :manual
-          }
-        ]
-    end
-  end
-
-  defp grade_suggestions(_details, _span), do: []
-
-  defp syntax_family_field_suggestions(%{field: field, valid_fields: fields}, %Span{} = span)
-       when is_list(fields) do
-    spelling = to_string(field)
-
-    ranked =
-      fields
-      |> Enum.map(&{to_string(&1), Suggest.distance(spelling, to_string(&1))})
-      |> Enum.sort_by(fn {candidate, distance} -> {distance, String.downcase(candidate), candidate} end)
-
-    case ranked do
-      [{candidate, distance}, {_other, next_distance} | _]
-      when distance <= 2 and distance < next_distance ->
-        [
-          %Suggestion{
-            message: "Replace it with `#{candidate}`",
-            applicability: :machine_applicable,
-            edits: [%TextEdit{span: span, replacement: candidate}]
-          }
-        ]
-
-      [{candidate, distance}] when distance <= 2 ->
-        [
-          %Suggestion{
-            message: "Replace it with `#{candidate}`",
-            applicability: :machine_applicable,
-            edits: [%TextEdit{span: span, replacement: candidate}]
-          }
-        ]
-
-      _ ->
-        [
-          %Suggestion{
-            message: "Use one of: #{Enum.map_join(fields, ", ", &"`#{&1}`")}",
-            applicability: :manual
-          }
-        ]
-    end
-  end
-
-  defp syntax_family_field_suggestions(_details, _span), do: []
-
-  defp macro_capture_suggestions(%{capture: capture, available_captures: captures}, %Span{} = span)
-       when is_list(captures) do
-    spelling = to_string(capture)
-
-    ranked =
-      captures
-      |> Enum.map(&{to_string(&1), Suggest.distance(spelling, to_string(&1))})
-      |> Enum.sort_by(fn {candidate, distance} -> {distance, String.downcase(candidate), candidate} end)
-
-    case ranked do
-      [{candidate, distance}, {_other, next_distance} | _]
-      when distance <= 2 and distance < next_distance ->
-        [
-          %Suggestion{
-            message: "Replace it with the declared capture `#{candidate}`",
-            applicability: :machine_applicable,
-            edits: [%TextEdit{span: span, replacement: candidate}]
-          }
-        ]
-
-      [{candidate, distance}] when distance <= 2 ->
-        [
-          %Suggestion{
-            message: "Replace it with the declared capture `#{candidate}`",
-            applicability: :machine_applicable,
-            edits: [%TextEdit{span: span, replacement: candidate}]
-          }
-        ]
-
-      _ ->
-        [
-          %Suggestion{
-            message: "Refer to one of this rule's captures: #{Enum.map_join(captures, ", ", &"`#{&1}`")}",
-            applicability: :manual
-          }
-        ]
-    end
-  end
-
-  defp macro_capture_suggestions(_details, _span), do: []
-
-  defp insertion_before(%Span{} = span) do
-    %{
-      span
-      | end_byte: span.start_byte,
-        end_line: span.start_line,
-        end_column: span.start_column
-    }
-  end
-
-  defp insertion_before(_span), do: nil
-
-  defp candidate_suggestions([], _spelling, _opts), do: []
-
-  defp candidate_suggestions(candidates, spelling, opts) do
-    names = Enum.map(candidates, &suggestion_name/1)
-
-    qualification_hint =
-      if Enum.any?(candidates, &requires_qualification?/1), do: " Qualify it or import its module.", else: ""
-
-    {applicability, edits} = unique_name_repair(candidates, spelling, opts)
-
-    [
-      %Suggestion{
-        message: "Did you mean #{Enum.map_join(names, ", ", &"`#{&1}`")}?#{qualification_hint}",
-        applicability: applicability,
-        edits: edits
-      }
-    ]
-  end
-
-  defp unique_name_repair(
-         [%{name: replacement, imported: imported, requires_import: requires_import}],
-         spelling,
-         opts
-       ) do
-    case Keyword.get(opts, :span) do
-      %Span{} = span when imported != false and requires_import != true and replacement != spelling ->
-        {:machine_applicable, [%TextEdit{span: span, replacement: replacement}]}
-
-      _ ->
-        {:maybe_incorrect, []}
-    end
-  end
-
-  defp unique_name_repair(_candidates, _spelling, _opts), do: {:maybe_incorrect, []}
-
-  defp requires_qualification?(%{imported: false}), do: true
-  defp requires_qualification?(%{requires_import: true}), do: true
-  defp requires_qualification?(_candidate), do: false
-
-  defp rank_candidates(candidates, spelling, namespace, opts) do
-    Suggest.rank(candidates, spelling, namespace, opts)
-  end
-
-  defp suggestion_name(%{name: name, owner: owner, imported: false}) when not is_nil(owner),
-    do: "#{name_to_string(owner)}.#{name}"
-
-  defp suggestion_name(%{name: name}), do: name
-
-  defp record_field_candidates(nil, _declared, _record), do: []
-
-  defp record_field_candidates(field, declared, record) do
-    candidates =
-      Enum.map(declared, fn name ->
-        %{
-          id: {record, name},
-          name: name_to_string(name),
-          namespace: :field,
-          owner: record,
-          visibility: :public,
-          imported: true,
-          origin: :record_shape
-        }
-      end)
-
-    Suggest.rank(candidates, name_to_string(field), :field)
-  end
-
-  defp record_field_suggestions(field, [%{name: candidate} = first | rest], %Span{} = span) do
-    unique? =
-      Enum.all?(rest, fn other ->
-        Suggest.distance(name_to_string(field), first.name) <
-          Suggest.distance(name_to_string(field), other.name)
-      end)
-
-    if unique? do
-      [
-        %Suggestion{
-          message: "Replace it with `#{candidate}`",
-          applicability: :machine_applicable,
-          edits: [%TextEdit{span: span, replacement: candidate}]
-        }
-      ]
-    else
-      []
-    end
-  end
-
-  defp record_field_suggestions(_field, _candidates, _span), do: []
-
-  defp field_list([field]), do: "`#{name_to_string(field)}`"
-
-  defp field_list(fields) do
-    fields
-    |> Enum.map_join(", ", &"`#{name_to_string(&1)}`")
-  end
-
-  defp namespace_title(:value), do: "value"
-  defp namespace_title(:constructor), do: "constructor"
-  defp namespace_title(:type), do: "type"
-  defp namespace_title(:module), do: "module"
-  defp namespace_title(:member), do: "module member"
-  defp namespace_title(:interface), do: "interface"
-  defp namespace_title(other), do: to_string(other)
-
-  defp type_problem_title(%ExpectationOrigin{kind: :annotation}), do: "Annotation does not match"
-  defp type_problem_title(%ExpectationOrigin{kind: :local_fact}), do: "Local fact does not match"
-  defp type_problem_title(%ExpectationOrigin{kind: :call_result}), do: "Call result has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :branch}), do: "Branches have different types"
-  defp type_problem_title(%ExpectationOrigin{kind: :dependent_branch}), do: "Dependent branch has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :condition}), do: "Condition is not boolean"
-  defp type_problem_title(%ExpectationOrigin{kind: :call_argument}), do: "Argument has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :application}), do: "Application has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :overload}), do: "No matching overload"
-  defp type_problem_title(%ExpectationOrigin{kind: :element}), do: "Collection element has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :collection}), do: "Collection elements have different types"
-  defp type_problem_title(%ExpectationOrigin{kind: :record}), do: "Record has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :record_field}), do: "Record field has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :record_update}), do: "Record update has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :pattern}), do: "Pattern has the wrong type"
-
-  defp type_problem_title(%ExpectationOrigin{kind: :constructor_argument}),
-    do: "Constructor argument has the wrong type"
-
-  defp type_problem_title(%ExpectationOrigin{kind: :implicit}), do: "Implicit argument has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :effects}), do: "Effect is not allowed here"
-  defp type_problem_title(%ExpectationOrigin{kind: :ffi}), do: "FFI boundary has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :actor}), do: "Actor message has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :fsm}), do: "FSM transition has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :supervisor}), do: "Supervisor value has the wrong type"
-  defp type_problem_title(%ExpectationOrigin{kind: :operator_operand}), do: "Operator cannot use this value"
-  defp type_problem_title(_origin), do: "Type mismatch"
 
   defp syntax_problem_code(:unterminated_lambda), do: "E035"
   defp syntax_problem_code(:unrecognized_pattern), do: "E090"
@@ -6991,39 +4284,6 @@ defmodule Cure.Diagnostic.Adapter do
     do: "this operator has no precedence relative to the surrounding one"
 
   defp syntax_problem_label(_problem), do: "this syntax does not fit here"
-
-  defp computed_macro_reason({:invalid_generated_syntax, {:raw_syntax_in_expansion, path}}),
-    do:
-      "invalid macro expansion: raw syntax is only valid for reflection, not generated Cure code (#{format_syntax_path(path)})"
-
-  defp computed_macro_reason({:invalid_generated_syntax, {:quoted_syntax_in_expansion, path}}),
-    do:
-      "invalid macro expansion: quoted syntax must be unquoted before it is emitted as Cure code (#{format_syntax_path(path)})"
-
-  defp computed_macro_reason({:invalid_generated_syntax, {_reason, path}}),
-    do: "invalid macro expansion at #{format_syntax_path(path)}"
-
-  defp computed_macro_reason({:author_diagnostics, diagnostics}) when is_list(diagnostics),
-    do: "macro rejected expansion: it reported #{length(diagnostics)} diagnostic(s)"
-
-  defp computed_macro_reason({:author_failure, name, args}) when is_list(args),
-    do: "macro rejected expansion: the macro reported `#{name}`"
-
-  defp computed_macro_reason(_reason), do: "the generated expansion was rejected by the compiler"
-
-  defp format_syntax_path(path) do
-    path
-    |> Enum.reverse()
-    |> Enum.map_join(".", fn
-      {:child, index} -> "child[#{index}]"
-      {:attribute, key, index} -> "attribute #{key}[#{index}]"
-      {:syntax_literal} -> "syntax literal"
-      {:map_key} -> "map key"
-      {:map_value} -> "map value"
-      {:list_item} -> "list item"
-      other -> inspect(other)
-    end)
-  end
 
   defp syntax_secondary_labels(%SyntaxProblem{kind: :macro_use_mismatch} = problem, primary_span) do
     [
@@ -9301,236 +6561,8 @@ defmodule Cure.Diagnostic.Adapter do
     }
   end
 
-  defp type_problem_context(%ExpectationOrigin{kind: :annotation}),
-    do: "This expression does not match the type written in its annotation."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :local_fact, owner: owner}),
-    do: "The evidence for local fact `#{name_to_string(owner)}` does not match its stated type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :call_result, owner: owner}),
-    do: "The result of `#{name_to_string(owner || "this call")}` does not match the surrounding expectation."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :branch}),
-    do: "Every branch of this expression must produce the same type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :dependent_branch}),
-    do: "The constructor specializes this branch's indices, and its body must produce that refined result type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :condition}),
-    do: "A condition must produce `Bool` before either branch can run."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :call_argument, index: index, owner: owner}),
-    do: "Argument #{display_index(index)} of `#{name_to_string(owner || "this function")}` has an incompatible type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :application, owner: owner}),
-    do: "This application of `#{name_to_string(owner || "this function")}` has an incompatible type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :overload, owner: owner}),
-    do: "The overloaded call `#{name_to_string(owner || "this function")}` has no compatible type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :operator_operand, owner: owner}),
-    do: "The `#{name_to_string(owner || "operator")}` operator cannot use this operand type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :element, index: index}),
-    do: "Element #{display_index(index)} of this collection has an incompatible type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :collection}),
-    do: "All elements of this collection must agree on one type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :record, owner: owner}),
-    do: "This value does not match the declared shape of record `#{name_to_string(owner || "this record")}`."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :record_field, owner: owner}),
-    do: "Field `#{name_to_string(owner || "this field")}` does not match the record's declared field type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :record_update, owner: owner}),
-    do: "This record update does not preserve the declared record shape of `#{name_to_string(owner || "this record")}`."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :pattern}),
-    do: "This pattern must match the type of the value it is checking."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :constructor_argument, index: index, owner: owner}),
-    do:
-      "Argument #{display_index(index)} of constructor `#{name_to_string(owner || "this constructor")}` has an incompatible type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :implicit, owner: owner}),
-    do: "The implicit argument required by `#{name_to_string(owner || "this call")}` has the wrong type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :effects}),
-    do: "This expression performs an effect that is not allowed in its context."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :ffi, owner: owner}),
-    do: "The FFI boundary `#{name_to_string(owner || "this declaration")}` does not match its Cure type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :actor, owner: owner}),
-    do: "Actor `#{name_to_string(owner || "this actor")}` received a value with the wrong message type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :fsm, owner: owner}),
-    do: "FSM transition `#{name_to_string(owner || "this transition")}` does not produce the required state type."
-
-  defp type_problem_context(%ExpectationOrigin{kind: :supervisor, owner: owner}),
-    do:
-      "Supervisor `#{name_to_string(owner || "this supervisor")}` does not match the required child specification type."
-
-  defp type_problem_context(_origin), do: "This expression has a different type than its context requires."
-
-  # The labels take the same width, keeping the first type character in both
-  # rows aligned for quick visual comparison. Core terms retain enough shape to
-  # colour only the divergent descendants; strings and unrelated roots stay
-  # uncoloured because a textual resemblance is not semantic evidence.
-  defp type_comparison_doc(expected, actual) do
-    {expected_doc, actual_doc} = type_difference_docs(printable_core(expected), printable_core(actual), false)
-
-    Doc.concat([
-      Doc.concat(["Expected: ", expected_doc]),
-      Doc.text("\n"),
-      Doc.concat(["Found:    ", actual_doc])
-    ])
-  end
-
-  defp type_difference_docs(expected, actual, _within_common?) when expected == actual do
-    {plain_type_doc(expected), plain_type_doc(actual)}
-  end
-
-  defp type_difference_docs(
-         {:data, name, expected_params, expected_indices},
-         {:data, name, actual_params, actual_indices},
-         _within_common?
-       )
-       when length(expected_params) == length(actual_params) and length(expected_indices) == length(actual_indices) do
-    type_application_docs(
-      Cure.Elab.Name.base(name),
-      expected_params ++ expected_indices,
-      actual_params ++ actual_indices
-    )
-  end
-
-  defp type_difference_docs({:ctor, name, expected_args}, {:ctor, name, actual_args}, _within_common?)
-       when length(expected_args) == length(actual_args) do
-    type_application_docs(Cure.Elab.Name.base(name), expected_args, actual_args)
-  end
-
-  defp type_difference_docs({:app, expected_fun, expected_arg}, {:app, actual_fun, actual_arg}, _within_common?) do
-    {expected_fun_doc, actual_fun_doc} = type_difference_docs(expected_fun, actual_fun, true)
-    {expected_arg_doc, actual_arg_doc} = type_difference_docs(expected_arg, actual_arg, true)
-
-    {
-      Doc.concat([expected_fun_doc, Doc.text(" "), expected_arg_doc]),
-      Doc.concat([actual_fun_doc, Doc.text(" "), actual_arg_doc])
-    }
-  end
-
-  defp type_difference_docs(expected, actual, true) do
-    {
-      Doc.emphasis(:expected, plain_type_doc(expected)),
-      Doc.emphasis(:observed, plain_type_doc(actual))
-    }
-  end
-
-  defp type_difference_docs(expected, actual, false) do
-    {plain_type_doc(expected), plain_type_doc(actual)}
-  end
-
-  defp type_application_docs(head, expected_args, actual_args) do
-    {expected_args, actual_args} =
-      expected_args
-      |> Enum.zip(actual_args)
-      |> Enum.map(&type_difference_docs(elem(&1, 0), elem(&1, 1), true))
-      |> Enum.unzip()
-
-    {
-      type_application_doc(head, expected_args),
-      type_application_doc(head, actual_args)
-    }
-  end
-
-  defp type_application_doc(head, []), do: Doc.text(head)
-
-  defp type_application_doc(head, args) do
-    args_doc = args |> Enum.intersperse(Doc.text(", ")) |> Doc.concat()
-    Doc.concat([Doc.text(head), Doc.text("("), args_doc, Doc.text(")")])
-  end
-
-  # Some diagnostic entry points already provide a user-facing type string.
-  # Do not pass those through Core's printer, which would render them as quoted
-  # Elixir strings rather than as the type the user wrote.
-  defp plain_type_doc(type) when is_binary(type), do: Doc.text(type)
-  defp plain_type_doc(type), do: Doc.text(print_core(type))
-
-  defp type_problem_label(%ExpectationOrigin{kind: :condition}), do: "this condition has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :local_fact}), do: "this evidence has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :call_result}), do: "this call result has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :branch}), do: "this branch disagrees with another branch"
-
-  defp type_problem_label(%ExpectationOrigin{kind: :dependent_branch}),
-    do: "this branch does not satisfy its refined result"
-
-  defp type_problem_label(%ExpectationOrigin{kind: :call_argument}), do: "this argument has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :application}), do: "this application has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :overload}), do: "this overloaded call has no matching type"
-  defp type_problem_label(%ExpectationOrigin{kind: :element}), do: "this collection element has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :collection}), do: "this collection element has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :record}), do: "this record has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :record_field}), do: "this record field has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :record_update}), do: "this record update has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :pattern}), do: "this pattern has the wrong type"
-
-  defp type_problem_label(%ExpectationOrigin{kind: :constructor_argument}),
-    do: "this constructor argument has the wrong type"
-
-  defp type_problem_label(%ExpectationOrigin{kind: :implicit}), do: "this implicit argument has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :effects}), do: "this expression has an invalid effect"
-  defp type_problem_label(%ExpectationOrigin{kind: :ffi}), do: "this FFI boundary has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :actor}), do: "this actor message has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :fsm}), do: "this FSM transition has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :supervisor}), do: "this supervisor value has the wrong type"
-  defp type_problem_label(%ExpectationOrigin{kind: :operator_operand}), do: "this operator operand has the wrong type"
-  defp type_problem_label(_origin), do: "this expression has the wrong type"
-
-  defp expectation_labels(%ExpectationOrigin{span: %Span{} = span}, primary_span, _related)
-       when span != primary_span,
-       do: [%Label{span: span, style: :secondary, message: "the expectation comes from here"}]
-
-  defp expectation_labels(_origin, primary_span, %Span{} = related) when related != primary_span,
-    do: [%Label{span: related, style: :secondary, message: "the compared expression is here"}]
-
-  defp expectation_labels(_origin, _primary_span, _related), do: []
-
-  defp display_index(nil), do: ""
-  defp display_index(index), do: index + 1
-
   defp surface_type(type) when is_binary(type), do: type
   defp surface_type(type), do: print_core(type)
-
-  defp macro_title(macro), do: macro |> name_to_string() |> String.capitalize()
-
-  defp macro_failure_message(macro, module, %Diagnostic{} = cause) do
-    "The `#{macro}` declaration could not generate `#{module}`. #{Diagnostic.message(cause)}"
-  end
-
-  defp provenance_frames(details, opts) do
-    source = Map.get(details, :source_provenance) || %{}
-    chain = Map.get(details, :expansion_provenance, [])
-    invocation = Keyword.get(opts, :span)
-
-    frames =
-      Enum.map(chain, fn frame ->
-        %ProvenanceFrame{
-          kind: :macro_expansion,
-          name: Map.get(frame, :keyword) || "macro",
-          invocation: invocation
-        }
-      end)
-
-    source_frame =
-      case Map.get(source, :macro) do
-        nil -> []
-        macro -> [%ProvenanceFrame{kind: :macro_expansion, name: macro, invocation: invocation}]
-      end
-
-    (frames ++ source_frame)
-    |> Enum.uniq_by(& &1.name)
-  end
 
   defp name_to_string(name) when is_atom(name), do: Atom.to_string(name)
   defp name_to_string(name) when is_binary(name), do: name
@@ -9545,26 +6577,19 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp printable_core(term) when is_tuple(term) do
-    case term |> elem(0) |> Atom.to_string() do
-      "v" <> _ -> Cure.Core.Quote.reify(term, 0)
-      _ -> term
+    case elem(term, 0) do
+      :var ->
+        term
+
+      tag ->
+        case Atom.to_string(tag) do
+          "v" <> _ -> Cure.Core.Quote.reify(term, 0)
+          _ -> term
+        end
     end
   end
 
   defp printable_core(term), do: term
-
-  defp maybe_put_meta_location(payload, meta) do
-    case {Keyword.get(meta, :line), Keyword.get(meta, :col, Keyword.get(meta, :column))} do
-      {line, column} when is_integer(line) and is_integer(column) ->
-        Map.merge(payload, %{line: line, column: column})
-
-      {line, _column} when is_integer(line) ->
-        Map.put(payload, :line, line)
-
-      _ ->
-        payload
-    end
-  end
 
   # Parser errors retain token *kinds* for stable machine handling. Translate
   # punctuation and operators back to the spelling a user sees in the source;

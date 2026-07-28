@@ -1,0 +1,118 @@
+@group(:text)
+mod Std.Regex.Syntax.Parser
+  use Std.Regex.Syntax.Model
+  use Std.Regex.Syntax.Class
+
+  fn parse_literal(input: String) -> LiteralParse =
+    parse_literal_complete(parse_literal_alternate_fuel(input, literal_fuel(input)))
+
+  fn parse_literal_complete(result: LiteralParse) -> LiteralParse = match result
+    LiteralParsed(pattern, rest) -> match rest
+      [] -> LiteralParsed(pattern, [])
+      _ -> LiteralInvalid(:UnexpectedRegexToken)
+    LiteralInvalid(reason) -> LiteralInvalid(reason)
+
+  fn parse_literal_alternate_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match parse_literal_sequence_fuel(input, next_fuel)
+      LiteralParsed(left, rest) -> parse_literal_alternate_tail_fuel(left, rest, next_fuel)
+      LiteralInvalid(reason) -> LiteralInvalid(reason)
+
+  fn parse_literal_alternate_tail_fuel(left: LiteralPattern, input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralParsed(left, input)
+    S(next_fuel) -> match input
+      ['|' | rest] -> match parse_literal_sequence_fuel(rest, next_fuel)
+        LiteralParsed(right, tail) -> parse_literal_alternate_tail_fuel(LiteralAlternate(left, right), tail, next_fuel)
+        LiteralInvalid(reason) -> LiteralInvalid(reason)
+      _ -> LiteralParsed(left, input)
+
+  fn parse_literal_sequence_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match input
+      [] -> LiteralParsed(LiteralEmpty, [])
+      [head | _] -> pickup
+        is_literal_stop(head) -> LiteralParsed(LiteralEmpty, input)
+        else -> match parse_literal_repetition_fuel(input, next_fuel)
+          LiteralParsed(first, rest) -> parse_literal_sequence_tail_fuel(first, rest, next_fuel)
+          LiteralInvalid(reason) -> LiteralInvalid(reason)
+
+  fn parse_literal_sequence_tail_fuel(left: LiteralPattern, input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralParsed(left, input)
+    S(next_fuel) -> match input
+      [] -> LiteralParsed(left, [])
+      [head | _] -> pickup
+        is_literal_stop(head) -> LiteralParsed(left, input)
+        else -> match parse_literal_repetition_fuel(input, next_fuel)
+          LiteralParsed(right, rest) -> parse_literal_sequence_tail_fuel(LiteralSequence(left, right), rest, next_fuel)
+          LiteralInvalid(reason) -> LiteralInvalid(reason)
+
+  fn parse_literal_repetition_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match parse_literal_atom_fuel(input, next_fuel)
+      LiteralParsed(atom, ['*', '?' | rest]) -> LiteralParsed(LiteralRepeat(atom, true), rest)
+      LiteralParsed(atom, ['+', '?' | rest]) -> LiteralParsed(LiteralPlus(atom, true), rest)
+      LiteralParsed(atom, ['?', '?' | rest]) -> LiteralParsed(LiteralOptional(atom, true), rest)
+      LiteralParsed(atom, ['*' | rest]) -> LiteralParsed(LiteralRepeat(atom, false), rest)
+      LiteralParsed(atom, ['+' | rest]) -> LiteralParsed(LiteralPlus(atom, false), rest)
+      LiteralParsed(atom, ['?' | rest]) -> LiteralParsed(LiteralOptional(atom, false), rest)
+      result -> result
+
+  fn parse_literal_atom_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match input
+      [] -> LiteralInvalid(:MissingRegexAtom)
+      ['.' | rest] -> LiteralParsed(LiteralAny, rest)
+      ['^' | rest] -> LiteralParsed(LiteralStart, rest)
+      ['$' | rest] -> LiteralParsed(LiteralEnd, rest)
+      ['(' | rest] -> parse_literal_group_fuel(rest, next_fuel)
+      ['[' | rest] -> parse_literal_class(rest)
+      ['\\' | rest] -> parse_literal_escape(rest)
+      ['*' | _] -> LiteralInvalid(:QuantifierWithoutAtom)
+      ['+' | _] -> LiteralInvalid(:QuantifierWithoutAtom)
+      ['?' | _] -> LiteralInvalid(:QuantifierWithoutAtom)
+      [char | rest] -> LiteralParsed(LiteralExact(char), rest)
+
+  fn parse_literal_group_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match input
+      ['?', ':' | rest] -> parse_literal_non_capture_fuel(rest, next_fuel)
+      _ -> parse_literal_capture_fuel(input, next_fuel)
+
+  fn parse_literal_capture_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match parse_literal_alternate_fuel(input, next_fuel)
+      LiteralParsed(pattern, [')' | rest]) -> LiteralParsed(LiteralCapture(pattern), rest)
+      LiteralParsed(_, _) -> LiteralInvalid(:UnclosedRegexGroup)
+      LiteralInvalid(reason) -> LiteralInvalid(reason)
+
+  fn parse_literal_non_capture_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match parse_literal_alternate_fuel(input, next_fuel)
+      LiteralParsed(pattern, [')' | rest]) -> LiteralParsed(pattern, rest)
+      LiteralParsed(_, _) -> LiteralInvalid(:UnclosedRegexGroup)
+      LiteralInvalid(reason) -> LiteralInvalid(reason)
+
+  fn parse_literal_escape(input: String) -> LiteralParse = match input
+    [] -> LiteralInvalid(:TrailingRegexEscape)
+    ['d' | rest] -> LiteralParsed(LiteralDigit(false), rest)
+    ['D' | rest] -> LiteralParsed(LiteralDigit(true), rest)
+    ['w' | rest] -> LiteralParsed(LiteralWord(false), rest)
+    ['W' | rest] -> LiteralParsed(LiteralWord(true), rest)
+    ['s' | rest] -> LiteralParsed(LiteralSpace(false), rest)
+    ['S' | rest] -> LiteralParsed(LiteralSpace(true), rest)
+    ['h' | rest] -> LiteralParsed(LiteralHorizontal(false), rest)
+    ['H' | rest] -> LiteralParsed(LiteralHorizontal(true), rest)
+    ['v' | rest] -> LiteralParsed(LiteralVertical(false), rest)
+    ['V' | rest] -> LiteralParsed(LiteralVertical(true), rest)
+    ['A' | rest] -> LiteralParsed(LiteralAbsoluteStart, rest)
+    ['z' | rest] -> LiteralParsed(LiteralStrictEnd, rest)
+    ['Z' | rest] -> LiteralParsed(LiteralFinalEnd, rest)
+    ['b' | rest] -> LiteralParsed(LiteralWordBoundary(false), rest)
+    ['B' | rest] -> LiteralParsed(LiteralWordBoundary(true), rest)
+    ['a' | rest] -> LiteralParsed(LiteralExact(7), rest)
+    ['e' | rest] -> LiteralParsed(LiteralExact(27), rest)
+    ['f' | rest] -> LiteralParsed(LiteralExact(12), rest)
+    ['n' | rest] -> LiteralParsed(LiteralExact('\n'), rest)
+    ['r' | rest] -> LiteralParsed(LiteralExact('\r'), rest)
+    ['t' | rest] -> LiteralParsed(LiteralExact('\t'), rest)
+    [char | rest] -> LiteralParsed(LiteralExact(char), rest)

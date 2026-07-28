@@ -11,21 +11,42 @@ defmodule Cure.Compiler.MacroModule do
   @spec execute_module_rule(map(), [map()], map()) :: {:ok, term()} | {:error, term()}
   def execute_module_rule(%{kind: :syntax, module_rule: true} = rule, rules, bindings)
       when is_list(rules) and is_map(bindings) do
-    with {:ok, tokens} <- MacroFuzz.assemble_use_site(rule, bindings),
-         expansion = Parser.expand_example(rules, tokens),
-         false <- match?({:example_use_site_not_fully_consumed, _, _}, expansion) do
-      {:ok, expansion}
+    if Enum.all?(rules, &is_map/1) do
+      with {:ok, tokens} <- MacroFuzz.assemble_use_site(rule, bindings),
+           expansion = Parser.expand_example(rules, tokens),
+           false <- match?({:example_use_site_not_fully_consumed, _, _}, expansion) do
+        {:ok, expansion}
+      else
+        true -> {:error, :module_rule_not_fully_consumed}
+        {:error, _} = error -> error
+      end
     else
-      true -> {:error, :module_rule_not_fully_consumed}
-      {:error, _} = error -> error
+      {:error, :invalid_module_rule_set}
     end
   end
+
+  def execute_module_rule(%{kind: :syntax, module_rule: true}, rules, _bindings) when not is_list(rules),
+    do: {:error, :invalid_module_rule_set}
+
+  def execute_module_rule(%{kind: :syntax, module_rule: true}, _rules, bindings) when not is_map(bindings),
+    do: {:error, :invalid_module_rule_bindings}
 
   def execute_module_rule(_rule, _rules, _bindings), do: {:error, :not_a_module_rule}
 
   @spec compose_open_categories([map()], [map()]) :: {:ok, [map()]} | {:error, term()}
   def compose_open_categories(base_rules, extension_rules)
       when is_list(base_rules) and is_list(extension_rules) do
+    if Enum.all?(base_rules ++ extension_rules, &is_map/1) do
+      compose_valid_categories(base_rules, extension_rules)
+    else
+      {:error, :invalid_macro_extension_rule}
+    end
+  end
+
+  def compose_open_categories(_base_rules, _extension_rules),
+    do: {:error, :invalid_macro_extension_rules}
+
+  defp compose_valid_categories(base_rules, extension_rules) do
     open_categories =
       base_rules
       |> Enum.filter(&(&1[:kind] == :open_category))

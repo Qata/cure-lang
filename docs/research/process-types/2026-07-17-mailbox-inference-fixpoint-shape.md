@@ -111,6 +111,6 @@ all portable from the two local Lean trees.
 
 ## Artifacts
 
-- `lib/std/otp_inference_fixpoint.cure` — the holed outer-shape scaffold.
+- `metatheory/otp/src/otp_inference_fixpoint.cure` — the holed outer-shape scaffold.
 - `~/Develop/mathlib4` — cloned reference; port `Order/FixedPoints.lean` (statements) +
   `Order/Iterate.lean` (constructive fill) into the finite interface lattice.

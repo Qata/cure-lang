@@ -1,6 +1,6 @@
 defmodule Cure.Stdlib.CrdtOpaqueTest do
   @moduledoc """
-  `Std.Crdt`'s counter/set/register types are opaque handles to runtime state
+  `Std.CRDT`'s counter/set/register types are opaque handles to runtime state
   managed entirely through `@extern` calls to `:cure_std_crdt` — no Cure code
   constructs or projects them. They were declared as records with an *undeclared*
   field type variable (`rec GCounter\n counts: t`), which the dependent
@@ -20,7 +20,7 @@ defmodule Cure.Stdlib.CrdtOpaqueTest do
   test "an opaque GCounter handle threads through the extern API in a client module" do
     src = """
     mod M
-      use Std.Crdt
+      use Std.CRDT
       fn bump(node: Atom) -> Int =
         let c = g_increment(g_empty(), node, 5)
         g_value(c)
@@ -32,7 +32,7 @@ defmodule Cure.Stdlib.CrdtOpaqueTest do
   test "replica identities are application types rather than forced atoms" do
     src = """
     mod TypedReplica
-      use Std.Crdt
+      use Std.CRDT
 
       type Replica = Sydney | Melbourne
 

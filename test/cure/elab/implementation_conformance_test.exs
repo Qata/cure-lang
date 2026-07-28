@@ -41,7 +41,7 @@ defmodule Cure.Elab.ImplementationConformanceTest do
       end
       """
 
-      assert {:error, {:method_signature_mismatch, :Eqs, :eqs}} = Program.elaborate(src)
+      assert {:error, {:method_signature_mismatch, %{interface: :Eqs, method: :eqs}}} = Program.elaborate(src)
     end
 
     test "a clause whose parameter type diverges from the interface is rejected" do
@@ -54,7 +54,7 @@ defmodule Cure.Elab.ImplementationConformanceTest do
       end
       """
 
-      assert {:error, {:method_signature_mismatch, :Eqs, :eqs}} = Program.elaborate(src)
+      assert {:error, {:method_signature_mismatch, %{interface: :Eqs, method: :eqs}}} = Program.elaborate(src)
     end
 
     test "a conforming first-order implementation is accepted" do
@@ -98,7 +98,7 @@ defmodule Cure.Elab.ImplementationConformanceTest do
       end
       """
 
-      assert {:error, {:method_signature_mismatch, :Functor, :fmap}} = Program.elaborate(src)
+      assert {:error, {:method_signature_mismatch, %{interface: :Functor, method: :fmap}}} = Program.elaborate(src)
     end
   end
 
@@ -114,7 +114,7 @@ defmodule Cure.Elab.ImplementationConformanceTest do
       end
       """
 
-      assert {:error, {:unknown_interface_method, :Eqs, :eqz}} = Program.elaborate(src)
+      assert {:error, {:unknown_interface_method, %{interface: :Eqs, method: :eqz}}} = Program.elaborate(src)
     end
 
     test "an implementation relying entirely on interface defaults is still accepted" do
@@ -127,6 +127,43 @@ defmodule Cure.Elab.ImplementationConformanceTest do
       """
 
       assert {:ok, _env} = Program.elaborate(src)
+    end
+  end
+
+  describe "required methods" do
+    test "an omitted method without an interface default retains implementation context" do
+      src = """
+      mod M
+        interface Eqs(a)
+          fn eqs(x: a, y: a) -> Bool
+          fn nes(x: a, y: a) -> Bool
+        implementation Eqs for Int
+          fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)
+      end
+      """
+
+      assert {:error,
+              {:missing_method, %{interface: :Eqs, method: :nes, head: head, for: "Int", span: %Cure.Diagnostic.Span{}}}} =
+               Program.elaborate(src)
+
+      assert Cure.Elab.Name.base(head) == "Int"
+    end
+  end
+
+  describe "implementation heads" do
+    test "a value cannot be used as an implementation head" do
+      src = """
+      mod M
+        interface Eqs(a)
+          fn eqs(x: a, y: a) -> Bool = true
+        implementation Eqs for 1
+      end
+      """
+
+      assert {:error,
+              {:instance_head_ill_formed,
+               %{reason: :not_type_head, interface: :Eqs, for: "1", span: %Cure.Diagnostic.Span{}}}} =
+               Program.elaborate(src)
     end
   end
 end

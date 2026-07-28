@@ -75,7 +75,7 @@ Z3 stays out of the TCB permanently. Any external solver may only ever act as an
 | LIA goal normalization | Lean 4 **`omega`** | `~/Develop/lean4/src/Init/Omega` |
 | Farkas certificate *content* | mathlib **`linarith`** | `~/Develop/mathlib4/Mathlib/Tactic/Linarith` |
 | Reflective checker idiom in a DT setting | agda-stdlib **`RingSolver`** (`NonReflective`, `Core`) | `~/Develop/agda-stdlib/src/Tactic/RingSolver` |
-| In-repo precedent for verified-checker + reflection | shipped mailbox `Incl`/`incl_sound`, Brzozowski `matches_word_sound` | `test/oracle/otp/mailbox_pattern.cure` |
+| In-repo precedent for verified-checker + reflection | shipped mailbox `Incl`/`incl_sound`, Brzozowski `matches_word_sound` | `metatheory/otp/oracle/otp/mailbox_pattern.cure` |
 | Sibling verified-checker design, same architecture | mailbox-subtyping certificate checker plan (`check_incl`/`check_incl_sound`, Brzozowski completeness `matches_word_complete`) — **not yet merged into this branch's history** (commit `8b237eef`, branch `elaborator-gaps`); read for the pattern, don't assume its lemmas are in scope here | `docs/research/process-types/2026-07-18-mailbox-subtyping-certificate-checker-plan.md` on `elaborator-gaps` |
 
 The algorithm is modeled on Micromega; `bv_decide`/`omega`/`linarith`/`RingSolver`
@@ -285,7 +285,7 @@ semantic complement of the original goal.
 
 ## 6. Testing (oracle discipline)
 
-Paired `.cure`/`.idr` probe: `test/oracle/otp/linear_arithmetic.{cure,idr}` — `otp/`
+Paired `.cure`/`.idr` probe: `metatheory/otp/oracle/otp/linear_arithmetic.{cure,idr}` — `otp/`
 is the existing general-purpose oracle-probe directory (already home to non-OTP
 probes like `bst.cure`/`bag.cure`/`gbt.cure`), so this needs no new harness support.
 `mix cure.oracle`, `rel=same`, replay green before commit. Watch the 30s per-probe budget — a self-contained probe

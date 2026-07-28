@@ -38,7 +38,7 @@ defmodule Cure.Elab.Interface do
     super_interfaces =
       meta |> Keyword.get(:requires, []) |> Enum.map(&String.to_atom/1)
 
-    with {:ok, head_kind} <- infer_head_kind(name_atom, head_var, methods) do
+    with {:ok, head_kind} <- infer_head_kind(name_atom, head_var, methods, meta) do
       desc =
         Metadata.strip_diagnostics(%{
           name: name_atom,
@@ -50,8 +50,9 @@ defmodule Cure.Elab.Interface do
           super: super_interfaces
         })
 
-      with :ok <- check_method_names_free(desc, env),
+      with :ok <- check_method_names_free(desc, env, methods),
            {:ok, env1} <- declare_dictionary_former(desc, env) do
+        register_method_spans(desc.name, methods)
         {:ok, Env.put_interface(env1, name_atom, desc)}
       end
     end
@@ -68,7 +69,7 @@ defmodule Cure.Elab.Interface do
   # same-named method: an unqualified reference that cannot be disambiguated is a compile error,
   # never an arbitrary pick. Cure has no qualified method-call syntax, so the ambiguity can only
   # be reported where it is created.
-  defp check_method_names_free(desc, %Env{interfaces: ifaces}) do
+  defp check_method_names_free(desc, %Env{interfaces: ifaces}, methods) do
     desc.method_order
     |> Enum.find_value(fn m ->
       Enum.find_value(ifaces, fn {other, other_desc} ->
@@ -76,8 +77,57 @@ defmodule Cure.Elab.Interface do
       end)
     end)
     |> case do
-      nil -> :ok
-      {method, other} -> {:error, {:ambiguous_method, method, Enum.sort([desc.name, other])}}
+      nil ->
+        :ok
+
+      {method, other} ->
+        interfaces = Enum.sort([desc.name, other])
+        current_span = method_span(methods, method)
+        other_span = Cure.Elab.SourceMetadata.interface_method_span(other, method)
+
+        {:error,
+         {:source_context, {:ambiguous_method, method, interfaces},
+          %{
+            span: current_span,
+            method: method,
+            interfaces: interfaces,
+            method_declarations: [
+              %{interface: other, span: other_span},
+              %{interface: desc.name, span: current_span}
+            ],
+            checking: desc.name,
+            expectation_origin: :interface_declaration,
+            expression_category: :interface_method
+          }}}
+    end
+  end
+
+  defp register_method_spans(interface, methods) do
+    Enum.each(methods, fn
+      {:function_def, meta, _body} ->
+        method = meta |> Keyword.fetch!(:name) |> String.to_atom()
+        :ok = Cure.Elab.SourceMetadata.put_interface_method_span(interface, method, method_span(meta))
+
+      _other ->
+        :ok
+    end)
+  end
+
+  defp method_span(methods, method) when is_list(methods) do
+    Enum.find_value(methods, fn
+      {:function_def, meta, _body} ->
+        if String.to_atom(Keyword.fetch!(meta, :name)) == method, do: method_span(meta)
+
+      _other ->
+        nil
+    end)
+  end
+
+  defp method_span(meta) when is_list(meta) do
+    case Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: span} when not is_nil(span) -> span
+      %Cure.MetaAST.SourceInfo{whole: span} -> span
+      _ -> nil
     end
   end
 
@@ -155,9 +205,9 @@ defmodule Cure.Elab.Interface do
   # Scan every method signature (param types + return type) for uses of the head
   # variable. A bare occurrence (`a`) contributes `:type`; an applied occurrence
   # (`a(...)`, i.e. `f(x)`) contributes `:arrow`. Both present ⇒ inconsistent.
-  defp infer_head_kind(_name, nil, _methods), do: {:ok, :type}
+  defp infer_head_kind(_name, nil, _methods, _meta), do: {:ok, :type}
 
-  defp infer_head_kind(name, head_var, methods) do
+  defp infer_head_kind(name, head_var, methods, interface_meta) do
     uses =
       methods
       |> Enum.flat_map(&method_type_asts/1)
@@ -165,7 +215,23 @@ defmodule Cure.Elab.Interface do
 
     cond do
       MapSet.member?(uses, :bare) and MapSet.member?(uses, :applied) ->
-        {:error, {:inconsistent_head_kind, name}}
+        sites = head_use_sites(methods, head_var)
+        primary = Enum.find(sites, &(&1.kind == :applied)) || List.first(sites)
+        interface_info = Metadata.source_info(interface_meta)
+
+        {:error,
+         {:source_context, {:inconsistent_head_kind, name},
+          %{
+            span: primary && primary.span,
+            interface: name,
+            head_parameter: head_var,
+            head_uses: sites,
+            declaration_span: interface_info && interface_info.whole,
+            declaration_name_span: interface_info && interface_info.name,
+            checking: name,
+            expectation_origin: :interface_head_kind,
+            expression_category: :interface_type
+          }}}
 
       MapSet.member?(uses, :applied) ->
         {:ok, {:arrow, :type, :type}}
@@ -203,4 +269,52 @@ defmodule Cure.Elab.Interface do
   end
 
   defp collect_head_uses(_other, _head_var, acc), do: acc
+
+  defp head_use_sites(methods, head_var) do
+    Enum.flat_map(methods, fn
+      {:function_def, meta, _body} ->
+        method = Keyword.get(meta, :name)
+
+        meta
+        |> Keyword.get(:params, [])
+        |> Enum.map(fn {:param, parameter_meta, _name} -> Keyword.get(parameter_meta, :type) end)
+        |> then(fn types -> List.wrap(Keyword.get(meta, :return_type)) ++ types end)
+        |> Enum.flat_map(&collect_head_use_sites(&1, head_var, method))
+
+      _other ->
+        []
+    end)
+  end
+
+  defp collect_head_use_sites({:variable, meta, name}, head_var, method) do
+    if name == head_var,
+      do: [%{kind: :bare, method: method, span: ast_role_span(meta, :name)}],
+      else: []
+  end
+
+  defp collect_head_use_sites({:function_call, meta, arguments}, head_var, method) do
+    own =
+      if Keyword.get(meta, :function_type) != true and Keyword.get(meta, :name) == head_var do
+        [%{kind: :applied, method: method, span: ast_role_span(meta, :callee)}]
+      else
+        []
+      end
+
+    own ++ Enum.flat_map(arguments, &collect_head_use_sites(&1, head_var, method))
+  end
+
+  defp collect_head_use_sites({_tag, _meta, children}, head_var, method) when is_list(children),
+    do: Enum.flat_map(children, &collect_head_use_sites(&1, head_var, method))
+
+  defp collect_head_use_sites(list, head_var, method) when is_list(list),
+    do: Enum.flat_map(list, &collect_head_use_sites(&1, head_var, method))
+
+  defp collect_head_use_sites(_other, _head_var, _method), do: []
+
+  defp ast_role_span(meta, role) do
+    case Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{} = info -> Map.get(info, role) || info.name || info.whole
+      _ -> nil
+    end
+  end
 end

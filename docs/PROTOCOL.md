@@ -71,11 +71,10 @@ with `code: "E056"` in their meta keyword list. The formatter in
 
 Canonical examples:
 
-- **Dead role** (declared but never used). Appears as `role X never
-  appears in the protocol body`.
+- **Dead role** (declared but never used). Appears as
+  `role X never appears in the protocol body`.
 - **Stranger role** (used in a step but not declared). Appears as
-  `role X referenced in protocol body but not declared in the
-  \`with\` list`.
+  `role X referenced in protocol body but not declared in the with list`.
 - **Unreachable state** (should only arise from malformed input).
 
 ## Integration with actors

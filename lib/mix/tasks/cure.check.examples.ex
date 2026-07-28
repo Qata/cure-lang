@@ -7,22 +7,19 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
       mix cure.check.examples
 
-  Expectations are declared inline in this module. When a new example is
-  added, add an entry to `@expected` keyed by the example's basename
-  (without the `.cure` suffix). The value is one of:
+  Every fixture is declared in the manifest below. When a new example is
+  added, add an entry keyed by the example's basename (without the `.cure`
+  suffix). The `expect` value is one of:
 
   - `:compile_only` -- the file must compile; its `main/0` (if any) is
     not executed.
   - a string -- `main/0` is executed and its `inspect/1` output must
     match exactly.
 
-  Examples not listed in `@expected` are treated as `:compile_only`.
-
   ## Exit code
 
-  A small, explicit set of examples is currently skipped because they target
-  dependent-language features not yet available in the single dependent
-  pipeline. The task exits with status `1` for any unexpected failure.
+  Unclassified fixtures and stale manifest entries are errors, as is any
+  unexpected compilation, execution, or output failure.
   """
 
   use Mix.Task
@@ -33,44 +30,36 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
   @examples_dir "examples"
 
-  # These source fixtures target dependent-language features outside the
-  # current supported slice. Keep the list explicit so a new skip cannot hide
-  # an unexpected regression.
-  @known_dependent_gaps ~w(
-    derived_show
-    destructuring
-    json_derive
-    json_tree
-    lambda_block
-    lazy_iter
-    let_destructuring
-    list_basics
-    match_showcase
-    pattern_guards
-    protocols
-    result_handling
-    sigma_vector
-    specialise
-    test_showcase
-  )
-
   @expected %{
     "adt" => "42",
+    "adt_fn_payload" => :compile_only,
     "assert_type_demo" => "42",
+    "binary_comprehension" => :compile_only,
+    "binary_destructuring" => :compile_only,
+    "defaults" => :compile_only,
     "dependent_types" => "6",
+    "derived_show" => "1",
+    "destructuring" => "0",
     "doctest_demo" => "25",
     "fenced_docs" => "240",
     "ffi" => "42",
     "fsm_pipeline" => :compile_only,
     "hello" => "42",
     "holes_demo" => "0",
+    "json_derive" => ~s(~c"{}"),
+    "json_tree" => "48",
+    "lambda_block" => "54",
+    "lazy_iter" => "55",
     "length_indexed" => "{:succ_len, {:succ_len, :zero_len}}",
+    "let_destructuring" => "22",
     "list_basics" => "15",
     "match_showcase" => "200",
     "math" => :compile_only,
     "multi_head_cons" => "6",
+    "multi_line_adt" => :compile_only,
     "mutual_recursion" => "1",
     "pattern_guards" => "0",
+    "proof_laws" => :compile_only,
     "property_test" => ":ok",
     "protocols" => "0",
     "records" => "2",
@@ -78,6 +67,7 @@ defmodule Mix.Tasks.Cure.Check.Examples do
     "result_handling" => "0",
     "sigma_pairs" => :compile_only,
     "sigma_vector" => "5",
+    "test_showcase" => ":ok",
     "totality" => "120",
     "totality_enforcement" => "142",
     "traffic_light" => :compile_only
@@ -95,15 +85,15 @@ defmodule Mix.Tasks.Cure.Check.Examples do
     preload_stdlib()
 
     files = Path.wildcard(Path.join(@examples_dir, "*.cure")) |> Enum.sort()
+    validate_manifest!(files)
 
     results = Enum.map(files, &run_one/1)
 
     passed = Enum.count(results, &match?({:pass, _}, &1))
-    skipped = Enum.count(results, &match?({:skip, _}, &1))
     failed = Enum.filter(results, &match?({:fail, _}, &1))
 
     if failed == [] do
-      IO.puts("\nexamples: #{passed} passed, #{skipped} skipped, 0 failed")
+      IO.puts("\nexamples: #{passed} passed, 0 skipped, 0 failed")
       :ok
     else
       IO.puts("\nexamples: #{passed} passed, #{length(failed)} failed")
@@ -117,32 +107,39 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   defp run_one(path) do
     name = Path.basename(path, ".cure")
 
-    if name in @known_dependent_gaps do
-      IO.puts("  skip #{pad(name)} (dependent parity gap)")
-      {:skip, name}
-    else
-      expected = Map.get(@expected, name, :compile_only)
+    # Temporary directories used by the task's diagnostic tests deliberately
+    # contain synthetic fixtures. The real repository is made exhaustive by
+    # `validate_manifest!/1`; outside it, an unknown fixture is compile-only.
+    expected = Map.get(@expected, name, :compile_only)
 
-      case {expected, main_fn?(path)} do
-        {:compile_only, _} -> compile_only(name, path)
-        {_, false} -> compile_only(name, path)
-        {val, true} when is_binary(val) -> run_and_compare(name, path, val)
-      end
+    case {expected, main_fn?(path)} do
+      {:compile_only, _} -> compile_only(name, path)
+      {_, false} -> compile_only(name, path)
+      {val, true} when is_binary(val) -> run_and_compare(name, path, val)
     end
   end
 
   defp compile_only(name, path) do
-    case Cure.Compiler.compile_file(path,
-           output_dir: "_build/cure/ex_ebin",
-           emit_events: false
-         ) do
-      {:ok, _module, _warns} ->
-        IO.puts("  ok  #{pad(name)} (compile)")
-        {:pass, name}
+    case normalized_source(path) do
+      {:ok, source} ->
+        case Cure.Compiler.compile_and_load(source,
+               file: path,
+               output_dir: "_build/cure/ex_ebin",
+               emit_events: false
+             ) do
+          {:ok, _module} ->
+            IO.puts("  ok  #{pad(name)} (compile)")
+            {:pass, name}
+
+          {:error, reason} ->
+            IO.puts("  FAIL #{pad(name)} compilation failed")
+            emit_host_diagnostic(reason, path, source)
+            {:fail, name}
+        end
 
       {:error, reason} ->
-        IO.puts("  FAIL #{pad(name)} compilation failed")
-        emit_host_diagnostic(reason, path)
+        IO.puts("  FAIL #{pad(name)} could not read source")
+        emit_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason))
         {:fail, name}
     end
   end
@@ -150,6 +147,8 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   defp run_and_compare(name, path, expected) do
     case File.read(path) do
       {:ok, src} ->
+        {src, _legacy_otp_changed?} = Cure.Migrate.LegacyOtp.normalize(src)
+
         case Cure.Compiler.compile_and_load(src, file: path, emit_events: false) do
           {:ok, module} ->
             try do
@@ -191,6 +190,13 @@ defmodule Mix.Tasks.Cure.Check.Examples do
     end
   end
 
+  defp normalized_source(path) do
+    with {:ok, source} <- File.read(path) do
+      {source, _legacy_otp_changed?} = Cure.Migrate.LegacyOtp.normalize(source)
+      {:ok, source}
+    end
+  end
+
   defp main_fn?(path) do
     case File.read(path) do
       {:ok, src} -> String.match?(src, ~r/\bfn\s+main\b/)
@@ -200,7 +206,32 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
   defp pad(name), do: String.pad_trailing(name, 26)
 
-  defp emit_host_diagnostic(reason, path, source \\ nil) do
+  defp validate_manifest!(files) do
+    if File.exists?("mix.exs") do
+      discovered = MapSet.new(files, &Path.basename(&1, ".cure"))
+      declared = MapSet.new(Map.keys(@expected))
+      new = MapSet.difference(discovered, declared)
+      stale = MapSet.difference(declared, discovered)
+
+      if MapSet.size(new) > 0 or MapSet.size(stale) > 0 do
+        details =
+          [
+            if(MapSet.size(new) > 0, do: "unlisted: #{Enum.join(Enum.sort(new), ", ")}"),
+            if(MapSet.size(stale) > 0, do: "stale: #{Enum.join(Enum.sort(stale), ", ")}")
+          ]
+          |> Enum.reject(&is_nil/1)
+          |> Enum.join("; ")
+
+        usage_error("Example manifest mismatch (#{details})")
+      else
+        :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp emit_host_diagnostic(reason, path, source) do
     {diagnostic, registry} = Host.to_diagnostic(reason, path, source)
 
     emit_diagnostic(diagnostic, registry)

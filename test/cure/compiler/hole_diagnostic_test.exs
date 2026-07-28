@@ -19,7 +19,7 @@ defmodule Cure.Compiler.HoleDiagnosticTest do
                emit_events: false
              )
 
-    assert details.definition == :broken
+    assert details.definition == :"HoleDiagnostic#broken"
     assert details.hole_id == "HoleDiagnostic.broken#todo"
     assert details.span.start_byte == byte_offset!(@source, "?todo")
     assert details.span.end_byte - details.span.start_byte == byte_size("?todo")
@@ -88,6 +88,45 @@ defmodule Cure.Compiler.HoleDiagnosticTest do
            ]
   end
 
+  test "an unannotated generated hole asks for a result type at the exact token" do
+    source = """
+    mod InferredHole
+      # ??? in prose is not the unfinished program term.
+      fn broken() = ???
+    end
+    """
+
+    assert {:error, error} = Program.elaborate(source, file: "inferred_hole.cure")
+    {diagnostic, registry} = Errors.to_diagnostic(error, "inferred_hole.cure", source)
+
+    assert diagnostic.code == "E014"
+    assert diagnostic.key == :unfilled_hole
+    assert diagnostic.payload.kind == :inference_position
+    assert diagnostic.primary.span.start_byte == byte_offset!(source, "???", 2)
+    assert diagnostic.primary.span.end_byte - diagnostic.primary.span.start_byte == 3
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- HOLE NEEDS A TYPE ANNOTATION [E014] ---------------------- inferred_hole.cure
+
+             Cure cannot infer what this hole should contain because the surrounding
+             definition has no declared result type.
+
+             at inferred_hole.cure:3:17
+             3 |   fn broken() = ???
+               |                 ^^^ this hole has no expected type
+
+             Hint: Declare the result type after `->`, then replace the hole with an expression of that type
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 2, "character" => 16},
+             "end" => %{"line" => 2, "character" => 19}
+           }
+  end
+
   test "a selected definition reports its own hole when another authored hole comes first" do
     source = """
     mod MultipleHoles
@@ -112,8 +151,29 @@ defmodule Cure.Compiler.HoleDiagnosticTest do
     refute Renderer.plain(diagnostic, registry) =~ "?first"
   end
 
-  defp byte_offset!(source, needle) do
-    {offset, _length} = :binary.match(source, needle)
+  test "a locationless hole never infers blame from hole-looking source text" do
+    source = """
+    mod Locationless
+      # ??? belongs to this comment, not the independently supplied error
+      fn complete() -> Int = 1
+    end
+    """
+
+    {diagnostic, registry} =
+      Errors.to_diagnostic({:unfilled_hole, :missing}, "locationless.cure", source)
+
+    assert diagnostic.primary == nil
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- UNFILLED HOLE [E014] --------------------------------------------------------
+
+             The compiler reached the unfinished hole `?missing`.
+             """)
+  end
+
+  defp byte_offset!(source, needle, occurrence \\ 1) do
+    {offset, _length} = source |> :binary.matches(needle) |> Enum.at(occurrence - 1)
     offset
   end
 end

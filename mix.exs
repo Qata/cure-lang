@@ -174,6 +174,8 @@ defmodule Cure.MixProject do
         "docs/LANGUAGE_SPEC.md",
         "docs/TYPE_SYSTEM.md",
         "docs/DEPENDENT_TYPES.md",
+        "docs/KERNEL.md",
+        "docs/DEPENDENT_KERNEL_PEERNESS_ROADMAP.md",
         "docs/PATTERNS.md",
         "docs/BINARIES.md",
         "docs/PROOFS.md",
@@ -192,7 +194,6 @@ defmodule Cure.MixProject do
         "docs/BLESS.md",
         "docs/REPLAY.md",
         "docs/JOHN.md",
-        "docs/MONOMORPHISATION.md",
         "docs/PGO.md",
         "docs/PROOF_CARRYING.md",
         "docs/EXPORT_TYPES.md",
@@ -200,7 +201,8 @@ defmodule Cure.MixProject do
         "docs/STORY.md",
         "docs/MATCH.md",
         "docs/PICKUP.md",
-        "docs/FFI.md"
+        "docs/FFI.md",
+        "ROADMAP-0.34.md"
       ],
       source_url: @source_url,
       source_ref: "v#{@version}",

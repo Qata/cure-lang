@@ -18,7 +18,7 @@ mod Std.Telescope
   ## Each `Sigma` (from `Std.Sigma`) packages one component; the trailing `Unit`
   ## marks "no more components". This is the honest, arity-uniform generalisation
   ## of the dependent pair: `Std.Tuple`'s `Tuple(T1, …, Tn)` is exactly a
-  ## telescope, presented at a fixed (monomorphised) arity so users never see the
+  ## telescope, presented at a fixed arity so users never see the
   ## `Sigma`/`Unit` spine.
   ##
   ## ## Representation

@@ -1,8 +1,8 @@
 defmodule Cure.Compiler.MacroFuzzTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.MacroFuzz
-  alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Compiler.{Errors, Lexer, MacroFuzz, Parser}
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.Program
   alias Cure.Core.{Context, Eval, Kernel}
 
@@ -161,6 +161,96 @@ defmodule Cure.Compiler.MacroFuzzTest do
 
     assert {:error, {:unsupported_surface_filler, _}} =
              MacroFuzz.assemble_use_site(rule, %{"x" => {:global, :missing_surface}})
+  end
+
+  test "malformed proof-input structures return specific verdicts instead of raising" do
+    rule = %{keyword: "m", segments: [{:hole, %{name: "x"}}]}
+    repeated = %{keyword: "m", segments: [{:repeat, {:hole, %{name: "xs"}}}]}
+
+    assert {:error, :invalid_macro_fuzz_rule} = MacroFuzz.assemble_use_site(42, %{})
+    assert {:error, :invalid_macro_fuzz_rule} = MacroFuzz.assemble_use_site(%{keyword: "m", segments: :bad}, %{})
+    assert {:error, :invalid_macro_fuzz_bindings} = MacroFuzz.assemble_use_site(rule, :bindings)
+    assert {:error, {:missing_hole_filler, "x"}} = MacroFuzz.assemble_use_site(rule, %{})
+
+    assert {:error, {:invalid_repeated_hole_filler, "xs"}} =
+             MacroFuzz.assemble_use_site(repeated, %{"xs" => {:int_lit, 1}})
+
+    assert {:error, {:invalid_macro_segment, :bad}} =
+             MacroFuzz.assemble_use_site(%{keyword: "m", segments: [:bad]}, %{})
+
+    assert {:error, :not_a_nat} =
+             MacroFuzz.assemble_use_site(rule, %{"x" => {:ctor, :S, [{:ctor, :Bad, []}]}})
+  end
+
+  test "every proof-input assembly failure has dedicated diagnostic content" do
+    cases = [
+      {:invalid_macro_fuzz_rule, "Macro proof rule is malformed",
+       "Proof-input assembly needs a parsed macro rule with a textual keyword and segment list.",
+       "Provide a parsed syntax or computed rule"},
+      {:invalid_macro_fuzz_bindings, "Macro proof bindings are malformed",
+       "Generated hole bindings must map each textual hole name to its sampled value.",
+       "Provide a map from hole names to generated values"},
+      {{:invalid_macro_segment, :segment}, "Macro rule contains an unsupported segment",
+       "Proof-input assembly encountered a rule segment that is not a literal, hole, repetition, optional group, raw hole, or declaration body.",
+       "Use one of the supported macro rule segment forms"},
+      {{:missing_hole_filler, "value"}, "Generated macro input is missing a hole",
+       "The proof input has no generated value for the `value` hole required by this rule.",
+       "Add a generated value for `value`"},
+      {{:invalid_repeated_hole_filler, "items"}, "Repeated macro hole needs a list",
+       "The `items` hole is repeated by the rule, but its generated filler is not a list of values.",
+       "Provide a list of generated values for `items`"},
+      {{:unsupported_surface_filler, :core}, "Generated hole has no surface spelling",
+       "The proof generator produced a Core value that cannot be written as authored Cure macro input.",
+       "Generate a literal, nullary constructor, raw text, natural, boolean, or supported type value"},
+      {:not_a_nat, "Generated natural number is malformed",
+       "A sampled natural must be built only from `Z` and unary `S` constructors.", "Generate `Z` or `S(previous_nat)`"}
+    ]
+
+    Enum.each(cases, fn {reason, title, body, hint} ->
+      {diagnostic, registry} = Errors.to_diagnostic(reason, "fuzz.cure", "")
+      output = Renderer.plain(diagnostic, registry, width: 80)
+
+      assert diagnostic.code == "E092"
+      assert diagnostic.key == :macro_fuzz_input
+      assert diagnostic.title == title
+      assert String.replace(output, ~r/\s+/, " ") =~ String.replace(body, ~r/\s+/, " ")
+      assert output =~ "Hint: " <> hint
+
+      lsp = Renderer.lsp(diagnostic, registry)
+      refute Map.has_key?(lsp, "range")
+      assert lsp["message"] == title <> "\n\n" <> body
+    end)
+  end
+
+  test "a bare invalid generated hole remains an internal invariant diagnostic" do
+    {diagnostic, registry} = Errors.to_diagnostic({:generated_hole_not_well_typed, :bad}, "fuzz.cure", "")
+
+    assert diagnostic.key == :macro_validation_failed
+    assert diagnostic.title == "Macro proof generator produced an invalid value"
+    assert is_binary(diagnostic.payload.fingerprint)
+    refute Map.has_key?(diagnostic.payload, :generated_term)
+    assert Renderer.plain(diagnostic, registry, width: 80) =~ "not an error in the macro declaration"
+  end
+
+  test "proof-input failures retain the authored macro rule caret" do
+    source = "macro M\n  syntax m <value: Nat> becomes value\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "fuzz_rule.cure", emit_events: false)
+    assert {:ok, {:macro_def, _, [rule]}} = Parser.parse(tokens, emit_events: false)
+
+    reason =
+      {:source_context, {:missing_hole_filler, "value"},
+       %{span: rule.source_span, expectation_origin: :macro_proof_input, expression_category: :macro_rule}}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "fuzz_rule.cure", source)
+    output = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert output =~ "2 |   syntax m <value: Nat> becomes value"
+    assert output =~ "supply this generated hole"
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 1, "character" => 2},
+             "end" => %{"line" => 1, "character" => 37}
+           }
   end
 
   test "a well-typed expansion passes the generated proof batch" do

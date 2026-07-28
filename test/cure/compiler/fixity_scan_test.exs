@@ -36,8 +36,25 @@ defmodule Cure.Compiler.Parser.FixityScanTest do
     assert s.module == "M"
   end
 
+  test "qualified applied types retain the canonical explicitly used module" do
+    source = """
+    mod M
+      use Std.Otp.Raw
+      typealias Selector(p) = Std.Otp.Raw.Selector(p)
+    """
+
+    assert scan(source).qualified_targets == [%{target: "Std.Otp.Raw", line: 3}]
+  end
+
   test "a lexer error yields the empty scan rather than raising" do
     s = FixityScan.harvest_source(~s|mod M\n  fn f() = "unterminated|, "m.cure", FixityTable.new())
-    assert s == %{fixity: [], uses: [], prelude?: false, module: nil}
+
+    assert s == %{
+             fixity: [],
+             uses: [],
+             qualified_targets: [],
+             prelude?: false,
+             module: nil
+           }
   end
 end

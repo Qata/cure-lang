@@ -7,8 +7,8 @@ corrects that spec's earlier miscategorization of `proto`/`impl` as macros.
 
 **Decision (operator, 2026-07-09):** `proto`/`impl` become **real typeclasses
 implemented as an elaborator feature** — dictionaries as ordinary Core records,
-type-directed instance resolution in the untrusted E-layer, dispatch resolved
-at compile time and specialized away by the existing monomorphizer. **Not** a
+type-directed instance resolution in the untrusted E-layer, and dispatch resolved
+to direct calls at compile time. **Not** a
 macro (a macro is type-blind and can only emit runtime dispatch), and **not**
 in the kernel (no dependent language puts instance resolution in its kernel).
 
@@ -45,13 +45,12 @@ Three layers, each mapping to prior art:
    instance table. This is untrusted elaborator work, exactly like implicit
    argument resolution (which Cure already does — `resolve_deferred_slots`,
    `finish_global_app`).
-3. **Erasure = monomorphization** (Rust). Because Cure already monomorphizes
-   generics (`optimizer/monomorphise.ex`), a resolved instance is specialized
-   at each use: the dictionary is inlined and the method call becomes a
-   **direct call to the concrete implementation** — no runtime dictionary, no
-   guard check, nothing shipped to the device. This is strictly better than
-   Haskell's runtime dictionaries and removes the per-call cost the current
-   runtime-dispatch protocols pay on ESP32.
+3. **Static resolution.** A resolved instance becomes a **direct call to the
+   concrete implementation**. The dependent pipeline does not contain a
+   monomorphisation pass; dictionary elimination must therefore happen during
+   elaboration or erasure, rather than relying on a later optimizer. This
+   removes runtime lookup without claiming whole-program generic
+   specialization.
 
 ## 3. What this buys over the macro/runtime-dispatch version
 
@@ -59,7 +58,7 @@ Three layers, each mapping to prior art:
    method's result type may depend on the instance — the dictionary is present
    at elaboration time, so it participates in type checking. Runtime dispatch
    is fundamentally too late. This is the reason the language exists.
-2. **Zero device overhead** (§2.3) — resolved + monomorphized to direct calls,
+2. **Zero device overhead** (§2.3) — resolved to direct calls,
    vs. a runtime shape-check on every protocol call today.
 3. **Coherence and laws.** Resolution enforces one instance per type per class,
    and laws (Functor/Monad/Ord) become *statable and provable* against the
@@ -107,8 +106,8 @@ For each construct:
 - **A call `f(v)`** with `v : τ` → resolve `C(τ)`: look up `dict_C_τ`,
   synthesize and pass it as the implicit dictionary. Nested constraints
   (`C(T)` needs `D(T)`) resolve recursively.
-- **Monomorphize** → specialize `f` at `τ`, inline `dict_C_τ`, β-reduce the
-  projections to direct calls; the dictionary parameter erases.
+- **Resolve** → select `dict_C_τ`, β-reduce its projections to direct calls,
+  and erase the dictionary parameter when it is no longer needed.
 
 The kernel re-checks the resulting dictionary-passing terms as ordinary
 records + applications. Nothing in this pipeline is trusted beyond what already
@@ -144,8 +143,8 @@ search loop; it fixes the instance-specific policy:
 The classic runtime-dispatch codegen (`codegen.ex:471-601`,
 `protocol.ex`/`protocol_registry.ex`) is deleted with the rest of classic. The
 surface is preserved, so existing `proto`/`impl` programs recompile unchanged;
-their *dispatch* changes from runtime-guarded to compile-time-resolved +
-monomorphized. Programs relying on genuinely *runtime* (value-directed, not
+their *dispatch* changes from runtime-guarded to compile-time-resolved.
+Programs relying on genuinely *runtime* (value-directed, not
 type-directed) dispatch — if any exist — need identifying; that pattern is a
 different feature and would stay a runtime construct. Inventory required.
 
@@ -159,10 +158,10 @@ different feature and would stay a runtime construct. Inventory required.
    defer; v1 is single-parameter.
 5. **Default methods** — method with a body in the `proto`; dictionary-field
    defaulting.
-6. **Dictionaries that must survive to runtime** — if monomorphization can't
-   specialize (e.g. dispatch on a value whose type is only known dynamically),
-   fall back to a runtime dictionary rather than a direct call; when is that
-   reachable at all given Cure's monomorphizing backend?
+6. **Dictionaries that must survive to runtime** — if elaboration cannot
+   resolve a concrete implementation (for example, a genuinely dynamic type),
+   determine whether Cure rejects the call or retains an explicit runtime
+   dictionary.
 7. **Interaction with `@derive`** — `@derive(Show, Eq, Ord)` should generate
    instances (dictionaries) through this same machinery; unifies with the
    cutover's open `derive.ex` question.

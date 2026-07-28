@@ -371,55 +371,71 @@ defmodule Cure.Core.Term do
 
   def to_external({:hole, name}), do: %{"node" => "hole", "name" => name}
 
-  @doc "Decode a JSON-able map produced by `to_external/1` back into a Core term."
+  @doc """
+  Decode a JSON-able map produced by `to_external/1` back into a Core term.
+
+  The map is an external trust boundary. The fully reconstructed value is
+  checked against `term?/1`; malformed encodings raise instead of leaking a
+  tuple that the Core grammar itself rejects.
+  """
   @spec from_external(map()) :: t()
-  def from_external(%{"node" => "type", "level" => l}), do: {:type, l}
-  def from_external(%{"node" => "var", "index" => k}), do: {:var, k}
+  def from_external(external) when is_map(external) do
+    term = decode_external(external)
 
-  def from_external(%{"node" => "pi", "grade" => g, "dom" => d, "cod" => c}),
-    do: {:pi, grade_int(g), from_external(d), from_external(c)}
+    if term?(term) do
+      term
+    else
+      raise ArgumentError, "ill-formed external Core term: #{inspect(term)}"
+    end
+  end
 
-  def from_external(%{"node" => "lam", "grade" => g, "dom" => d, "body" => b}),
-    do: {:lam, grade_int(g), from_external(d), from_external(b)}
+  defp decode_external(%{"node" => "type", "level" => l}), do: {:type, l}
+  defp decode_external(%{"node" => "var", "index" => k}), do: {:var, k}
 
-  def from_external(%{"node" => "let", "grade" => g, "type" => t, "value" => v, "body" => b}),
-    do: {:let, grade_int(g), from_external(t), from_external(v), from_external(b)}
+  defp decode_external(%{"node" => "pi", "grade" => g, "dom" => d, "cod" => c}),
+    do: {:pi, grade_int(g), decode_external(d), decode_external(c)}
 
-  def from_external(%{"node" => "app", "fun" => f, "arg" => a}),
-    do: {:app, from_external(f), from_external(a)}
+  defp decode_external(%{"node" => "lam", "grade" => g, "dom" => d, "body" => b}),
+    do: {:lam, grade_int(g), decode_external(d), decode_external(b)}
 
-  def from_external(%{"node" => "data", "name" => n, "params" => ps, "indices" => is}),
-    do: {:data, sym_atom(n), Enum.map(ps, &from_external/1), Enum.map(is, &from_external/1)}
+  defp decode_external(%{"node" => "let", "grade" => g, "type" => t, "value" => v, "body" => b}),
+    do: {:let, grade_int(g), decode_external(t), decode_external(v), decode_external(b)}
 
-  def from_external(%{"node" => "ctor", "name" => n, "args" => args}),
-    do: {:ctor, sym_atom(n), Enum.map(args, &from_external/1)}
+  defp decode_external(%{"node" => "app", "fun" => f, "arg" => a}),
+    do: {:app, decode_external(f), decode_external(a)}
 
-  def from_external(%{"node" => "case", "scrut" => s, "motive" => m, "branches" => brs}),
+  defp decode_external(%{"node" => "data", "name" => n, "params" => ps, "indices" => is}),
+    do: {:data, sym_atom(n), Enum.map(ps, &decode_external/1), Enum.map(is, &decode_external/1)}
+
+  defp decode_external(%{"node" => "ctor", "name" => n, "args" => args}),
+    do: {:ctor, sym_atom(n), Enum.map(args, &decode_external/1)}
+
+  defp decode_external(%{"node" => "case", "scrut" => s, "motive" => m, "branches" => brs}),
     do:
-      {:case, from_external(s), from_external(m),
+      {:case, decode_external(s), decode_external(m),
        Enum.map(brs, fn %{"ctor" => cn, "arity" => ar, "body" => b} ->
-         {sym_atom(cn), ar, from_external(b)}
+         {sym_atom(cn), ar, decode_external(b)}
        end)}
 
-  def from_external(%{"node" => "global", "name" => n}), do: {:global, sym_atom(n)}
+  defp decode_external(%{"node" => "global", "name" => n}), do: {:global, sym_atom(n)}
 
-  def from_external(%{"node" => "int_type"}), do: {:int_type}
-  def from_external(%{"node" => "int_lit", "value" => n}), do: {:int_lit, n}
-  def from_external(%{"node" => "nat_lit", "value" => n}), do: {:nat_lit, n}
-  def from_external(%{"node" => "bounded_lit", "value" => n}), do: {:bounded_lit, n}
-  def from_external(%{"node" => "float_type"}), do: {:float_type}
-  def from_external(%{"node" => "float_lit", "value" => f}), do: {:float_lit, f}
-  def from_external(%{"node" => "binary_type"}), do: {:binary_type}
-  def from_external(%{"node" => "atom_type"}), do: {:atom_type}
-  def from_external(%{"node" => "atom_lit", "value" => a}), do: {:atom_lit, String.to_atom(a)}
+  defp decode_external(%{"node" => "int_type"}), do: {:int_type}
+  defp decode_external(%{"node" => "int_lit", "value" => n}), do: {:int_lit, n}
+  defp decode_external(%{"node" => "nat_lit", "value" => n}), do: {:nat_lit, n}
+  defp decode_external(%{"node" => "bounded_lit", "value" => n}), do: {:bounded_lit, n}
+  defp decode_external(%{"node" => "float_type"}), do: {:float_type}
+  defp decode_external(%{"node" => "float_lit", "value" => f}), do: {:float_lit, f}
+  defp decode_external(%{"node" => "binary_type"}), do: {:binary_type}
+  defp decode_external(%{"node" => "atom_type"}), do: {:atom_type}
+  defp decode_external(%{"node" => "atom_lit", "value" => a}), do: {:atom_lit, String.to_atom(a)}
 
-  def from_external(%{"node" => "effect_type", "arg" => t}), do: {:effect_type, from_external(t)}
-  def from_external(%{"node" => "effect_pure", "arg" => a}), do: {:effect_pure, from_external(a)}
+  defp decode_external(%{"node" => "effect_type", "arg" => t}), do: {:effect_type, decode_external(t)}
+  defp decode_external(%{"node" => "effect_pure", "arg" => a}), do: {:effect_pure, decode_external(a)}
 
-  def from_external(%{"node" => "effect_bind", "effect" => e, "cont" => k}),
-    do: {:effect_bind, from_external(e), from_external(k)}
+  defp decode_external(%{"node" => "effect_bind", "effect" => e, "cont" => k}),
+    do: {:effect_bind, decode_external(e), decode_external(k)}
 
-  def from_external(%{"node" => "hole", "name" => name}) when is_binary(name), do: {:hole, name}
+  defp decode_external(%{"node" => "hole", "name" => name}) when is_binary(name), do: {:hole, name}
 
   # -- helpers ----------------------------------------------------------------
 

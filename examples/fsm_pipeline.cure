@@ -1,0 +1,4 @@
+# Transparent FSM example. Transition algebra is ordinary Cure code.
+
+fsm Cure.Pipeline with 0
+  fn initial_state() -> Atom = :idle

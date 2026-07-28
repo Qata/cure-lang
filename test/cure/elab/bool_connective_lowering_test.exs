@@ -22,23 +22,24 @@ defmodule Cure.Elab.BoolConnectiveLoweringTest do
   # Builtin ops lower to owner-qualified globals (`Std.Builtin#int_eq`), matching
   # both `Builtins.seed`'s registration key and the elaborator's emission.
   defp bop(op), do: Cure.Elab.Name.qualify("Std.Builtin", op)
+  defp bool_def(name), do: Cure.Elab.Name.qualify("Std.Bool", name)
 
   @tt {:ctor, :"Std.Bool#True", []}
   @ff {:ctor, :"Std.Bool#False", []}
 
   test "`and` lowers to an `and` application, not a :and prim" do
     assert body("  fn t() -> Bool = true and false\n", :t) ==
-             {:app, {:app, {:global, :and}, @tt}, @ff}
+             {:app, {:app, {:global, bool_def(:and)}, @tt}, @ff}
   end
 
   test "`or` lowers to an `or` application" do
     assert body("  fn t() -> Bool = true or false\n", :t) ==
-             {:app, {:app, {:global, :or}, @tt}, @ff}
+             {:app, {:app, {:global, bool_def(:or)}, @tt}, @ff}
   end
 
   test "`not` lowers to a `not` application" do
     assert body("  fn t() -> Bool = not true\n", :t) ==
-             {:app, {:global, :not}, @tt}
+             {:app, {:global, bool_def(:not)}, @tt}
   end
 
   test "Int `==` lowers to the int_eq builtin-op global" do
@@ -58,12 +59,12 @@ defmodule Cure.Elab.BoolConnectiveLoweringTest do
 
   test "Bool `==` lowers to an `eq` application" do
     assert body("  fn t() -> Bool = true == false\n", :t) ==
-             {:app, {:app, {:global, :eq}, @tt}, @ff}
+             {:app, {:app, {:global, bool_def(:eq)}, @tt}, @ff}
   end
 
   test "Bool `!=` lowers to a `ne` application" do
     assert body("  fn t() -> Bool = true != false\n", :t) ==
-             {:app, {:app, {:global, :ne}, @tt}, @ff}
+             {:app, {:app, {:global, bool_def(:ne)}, @tt}, @ff}
   end
 
   test "a mixed Int/Bool `==` is rejected" do

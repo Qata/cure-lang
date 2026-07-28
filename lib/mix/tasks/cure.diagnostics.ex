@@ -8,7 +8,9 @@ defmodule Mix.Tasks.Cure.Diagnostics do
 
       mix cure.diagnostics
 
-  Every case is rendered to stderr in the same plain format used for users.
+  Every case is rendered to stderr in the same format used for users. Pass
+  `--audit` (normally via `mix cure.diagnostics.audit`) to print a numbered,
+  machine-readable header before every fixture as well.
   """
 
   @impl true
@@ -17,7 +19,7 @@ defmodule Mix.Tasks.Cure.Diagnostics do
 
     {opts, [], invalid} =
       OptionParser.parse(args,
-        strict: [color: :string, width: :integer, coverage: :boolean],
+        strict: [color: :string, width: :integer, coverage: :boolean, audit: :boolean],
         aliases: [w: :width]
       )
 
@@ -35,7 +37,8 @@ defmodule Mix.Tasks.Cure.Diagnostics do
     Application.put_env(:cure, :diagnostics_exerciser,
       color: color,
       width: width,
-      coverage: Keyword.get(opts, :coverage, false)
+      coverage: Keyword.get(opts, :coverage, false),
+      audit: Keyword.get(opts, :audit, false)
     )
 
     test_args =

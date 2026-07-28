@@ -147,7 +147,8 @@ Programmatic options to `Cure.REPL.start/1`:
 - `:mode`          - `:emacs` or `:vi`
 - `:stdlib`        - which stdlib modules to auto-import on startup. Accepts
   `:none` (default), `:all`, a single group atom, or a list of group atoms.
-  See `Cure.Stdlib.Preload.kind/0` for the full list.
+  Current groups are `:core`, `:collections`, `:text`, `:numeric`, `:system`,
+  `:concurrency`, `:option`, `:test`, and `:network`.
 - `:error_device`  - `:stderr` (default) or `:stdio`; use `:stdio` when the
   REPL is hosted behind a custom group leader (e.g. the Yeesh IOServer)
   so compiler diagnostics reach the embedder

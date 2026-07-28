@@ -6,6 +6,7 @@ defmodule Cure.Compiler.MacroBoard do
   @spec build(String.t() | atom(), map()) :: {:ok, map()} | {:error, term()}
   def build(name, definition) when is_map(definition) do
     with :ok <- validate_name(name),
+         {:ok, chip} <- validate_chip(Map.fetch(definition, :chip)),
          {:ok, pins} <- validate_pins(Map.get(definition, :pins)),
          :ok <- validate_capabilities(Map.get(definition, :capabilities, %{}), pins),
          :ok <- validate_buses(Map.get(definition, :buses, %{}), pins, definition),
@@ -14,7 +15,7 @@ defmodule Cure.Compiler.MacroBoard do
        %{
          kind: :quoted_board,
          name: name,
-         chip: Map.fetch!(definition, :chip),
+         chip: chip,
          pins: pins,
          capabilities: Map.get(definition, :capabilities, %{}),
          buses: Map.get(definition, :buses, %{}),
@@ -24,8 +25,14 @@ defmodule Cure.Compiler.MacroBoard do
     end
   end
 
+  def build(_name, _definition), do: {:error, :invalid_board_definition}
+
   defp validate_name(name) when is_atom(name) or is_binary(name), do: :ok
   defp validate_name(name), do: {:error, {:invalid_board_name, name}}
+
+  defp validate_chip({:ok, chip}) when is_atom(chip) or is_binary(chip), do: {:ok, chip}
+  defp validate_chip({:ok, chip}), do: {:error, {:invalid_board_chip, chip}}
+  defp validate_chip(:error), do: {:error, :missing_board_chip}
 
   defp validate_pins({first, last}) when is_integer(first) and is_integer(last) and first >= 0 and last >= first,
     do: {:ok, MapSet.new(first..last)}

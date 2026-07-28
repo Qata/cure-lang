@@ -7,9 +7,10 @@ defmodule Cure.Elab.Program do
   totality-certified signature.
   """
 
-  alias Cure.Compiler.{Lexer, MacroFamily, MacroSyntax, MacroValidate, Parser}
+  alias Cure.Compiler.{Lexer, MacroFamily, MacroSyntax, MacroValidate, ModuleIndex, ModuleInterface, Parser}
+  alias Cure.Compiler.Parser.FixityScan
   alias Cure.Core.{Env, Inductive, Validator}
-  alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, TotalityClosure}
+  alias Cure.Elab.{CheckedModule, Coherence, Declarations, Erase, MacroExpand, TotalityClosure}
   alias Cure.Stdlib.Paths
 
   @loader_state_key {__MODULE__, :module_loader_state}
@@ -104,10 +105,58 @@ defmodule Cure.Elab.Program do
   end
 
   @spec check_ast(tuple() | list(), keyword()) :: {:ok, Env.t()} | {:error, term()}
-  def check_ast(ast, _opts) do
+  def check_ast(ast, opts) do
+    with {:ok, %CheckedModule{env: env}} <- check_ast_artifact(ast, opts), do: {:ok, env}
+  end
+
+  @doc """
+  Elaborate and certify `ast` once, returning every semantic projection needed
+  by later compiler stages.
+
+  When both `:source` and `:file` are supplied, the artifact includes the
+  canonical `ModuleInterface` built from the same certified environment while
+  the same loader generation is still live. This is the entry point for real
+  compilation. AST-only callers still receive a reusable checked artifact, but
+  its `interface` and source identity fields are `nil`.
+  """
+  @spec check_ast_artifact(tuple() | list(), keyword()) ::
+          {:ok, CheckedModule.t()} | {:error, term()}
+  def check_ast_artifact(ast, opts \\ []) when is_list(opts) do
     with_loader_session(fn ->
-      with :ok <- check_declarations(ast) do
-        check_ast_elixir_core_in_session(ast)
+      source = Keyword.get(opts, :source)
+      file = Keyword.get(opts, :file)
+      module_name = Keyword.get(opts, :module_name, find_module_name(ast) || "Main")
+
+      with :ok <-
+             validate_artifact_identity(
+               ast,
+               module_name,
+               file,
+               source,
+               Keyword.get(opts, :require_module_identity, false)
+             ),
+           :ok <- check_declarations(ast),
+           {:ok, env} <-
+             check_ast_elixir_core_in_session(
+               ast,
+               source_context_opts(source, file),
+               Keyword.get(opts, :prelude_mode, :ordinary)
+             ),
+           local_defs = checked_local_defs(ast, env),
+           {:ok, interface} <- checked_module_interface(ast, env, module_name, file, source) do
+        emit_elaboration_event({:checked, Keyword.get(opts, :purpose, :entry), module_name, file})
+
+        {:ok,
+         %CheckedModule{
+           ast: ast,
+           env: env,
+           interface: interface,
+           module: module_atom(ast),
+           module_name: module_name,
+           source_hash: source_hash(source),
+           source_path: expanded_source_path(file, source),
+           local_defs: local_defs
+         }}
       end
     end)
   end
@@ -118,6 +167,7 @@ defmodule Cure.Elab.Program do
   defp with_loader_session(fun) when is_function(fun, 0) do
     case Process.get(@loader_state_key, :no_loader_session) do
       :no_loader_session ->
+        :ok = Cure.Elab.SourceMetadata.reset()
         Process.put(@loader_state_key, %{modules: %{}, paths: %{}, prelude_bootstrap: nil})
 
         try do
@@ -607,6 +657,9 @@ defmodule Cure.Elab.Program do
     if Keyword.get(rmeta, :variant, false), do: variant_constructor_binding(rhs), else: []
   end
 
+  defp constructor_bindings({:indexed_type, _meta, ctor_sigs}) when is_list(ctor_sigs),
+    do: Enum.flat_map(ctor_sigs, &gadt_constructor_binding/1)
+
   defp constructor_bindings(_decl), do: []
 
   defp variant_constructor_binding({:variable, meta, name}) when is_list(meta) and is_binary(name),
@@ -616,6 +669,16 @@ defmodule Cure.Elab.Program do
     do: [{meta |> Keyword.fetch!(:name) |> String.to_atom(), metadata_name_span(meta)}]
 
   defp variant_constructor_binding(_variant), do: []
+
+  defp gadt_constructor_binding({:gadt_ctor, meta, _body}) when is_list(meta) do
+    case Keyword.get(meta, :name) do
+      name when is_binary(name) -> [{String.to_atom(name), metadata_name_span(meta)}]
+      name when is_atom(name) and not is_nil(name) -> [{name, metadata_name_span(meta)}]
+      _ -> []
+    end
+  end
+
+  defp gadt_constructor_binding(_ctor), do: []
 
   defp metadata_name_span(meta) do
     case Cure.MetaAST.Metadata.source_info(meta) do
@@ -672,17 +735,24 @@ defmodule Cure.Elab.Program do
   @doc false
   @spec check_ast_elixir_core(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast_elixir_core(ast),
-    do: with_loader_session(fn -> check_ast_elixir_core_in_session(ast) end)
+    do: with_loader_session(fn -> check_ast_elixir_core_in_session(ast, [], :ordinary) end)
 
-  defp check_ast_elixir_core_in_session(ast) do
+  defp check_ast_elixir_core_in_session(ast, source_opts, prelude_mode) do
     with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
-         {:ok, prelude} <- prelude_slice_env(ast),
-         seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
+         {:ok, qualified} <- qualified_resolved_imports(ast),
+         {:ok, prelude} <- checked_prelude_env(ast, prelude_mode),
+         owner = find_module_name(ast) || "Main",
+         imported = without_incoming_owner(imported, owner),
+         qualified = without_incoming_owner(qualified, owner),
+         prelude = without_incoming_owner(prelude, owner),
+         seeded = Env.with_owner(seed_with_telescope_support(ast), owner),
          {:ok, base} <- merge_env(seeded, prelude),
-         {:ok, env0} <- merge_env(base, imported),
+         {:ok, opened} <- merge_env(base, imported),
+         {:ok, merged} <- merge_env(opened, qualified),
+         env0 = install_module_visibility(merged, ast),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          :ok <- MacroValidate.check_program(ast, env),
-         {:ok, certified} <- certify_type_level_with_source(ast, env),
+         {:ok, certified} <- certify_type_level_with_source(ast, env, source_opts),
          {:ok, certified} <- Cure.Elab.Equation.generate_all(certified, ast) do
       # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
       # defs so their intra-module uses keep inlining; any other module name
@@ -691,23 +761,48 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp certify_type_level_with_source(ast, env, opts \\ []) do
-    case TotalityClosure.certify_type_level(env) do
+  # A module cannot import its own prior interface through a transitive prelude
+  # edge. In a bulk build, for example, another ambient provider can carry
+  # `Std.Sigma` back into `Std.Sigma` even though direct self-injection is
+  # excluded. Its old equation index then makes `Equation.generate_all/2`
+  # believe the local equations already exist while local registration has
+  # replaced their generated theorem definitions. Start the module from a clean
+  # same-owner definition/equation namespace; dependencies owned by every other
+  # module remain available for conversion and checking.
+  defp without_incoming_owner(%Env{} = env, owner) when is_binary(owner) do
+    defs = reject_owned(env.defs, owner)
+    equations = reject_owned(env.equations, owner)
+
+    certified =
+      case env.certified do
+        %MapSet{} = names -> MapSet.filter(names, &(Cure.Elab.Name.owner(&1) != owner))
+        nil -> nil
+      end
+
+    %{env | defs: defs, equations: equations, certified: certified}
+  end
+
+  defp reject_owned(table, owner),
+    do: Map.reject(table, fn {key, _value} -> Cure.Elab.Name.owner(key) == owner end)
+
+  defp certify_type_level_with_source(ast, env, opts) do
+    case TotalityClosure.certify_type_level_detailed(env) do
       {:ok, certified} ->
         {:ok, certified}
 
-      {:error, {:totality_required, name} = reason} ->
-        {:error, {:source_context, reason, totality_source_context(ast, name, opts)}}
+      {:error, {:totality_required, name, detail}} ->
+        reason = {:totality_required, name}
+        {:error, {:source_context, reason, totality_source_context(ast, name, detail, opts)}}
 
-      {:error, {:compile_time_totality, name, _detail} = reason} ->
-        {:error, {:source_context, reason, totality_source_context(ast, name, opts)}}
+      {:error, {:compile_time_totality, name, detail} = reason} ->
+        {:error, {:source_context, reason, totality_source_context(ast, name, detail, opts)}}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp totality_source_context(ast, qualified_name, opts) do
+  defp totality_source_context(ast, qualified_name, detail, opts) do
     bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
 
     declaration =
@@ -716,21 +811,26 @@ defmodule Cure.Elab.Program do
         _ -> false
       end)
 
-    {name_span, definition_span} =
+    {name_span, definition_span, recursive_call_spans} =
       case declaration do
-        {:function_def, meta, _body} ->
+        {:function_def, meta, body} ->
           case Cure.MetaAST.Metadata.source_info(meta) do
-            %Cure.MetaAST.SourceInfo{name: name, whole: whole} -> {name, whole}
-            _ -> {nil, nil}
+            %Cure.MetaAST.SourceInfo{name: name, whole: whole} ->
+              {name, whole, recursive_call_spans(body, bare_name)}
+
+            _ ->
+              {nil, nil, recursive_call_spans(body, bare_name)}
           end
 
         _ ->
-          {nil, nil}
+          {nil, nil, []}
       end
 
     context = %{
       span: name_span || definition_span,
       definition_span: definition_span,
+      recursive_call_spans: recursive_call_spans,
+      totality_reason: detail,
       checking: qualified_name,
       expectation_origin: :type_level_totality,
       expression_category: :function_definition
@@ -744,6 +844,45 @@ defmodule Cure.Elab.Program do
         context
     end
   end
+
+  defp recursive_call_spans({:function_call, meta, arguments}, bare_name) when is_list(meta) do
+    own =
+      if same_surface_name?(Keyword.get(meta, :name), bare_name) do
+        case Cure.MetaAST.Metadata.source_info(meta) do
+          %Cure.MetaAST.SourceInfo{callee: %Cure.Diagnostic.Span{} = span} -> [span]
+          %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> [span]
+          _ -> []
+        end
+      else
+        []
+      end
+
+    own ++ Enum.flat_map(arguments, &recursive_call_spans(&1, bare_name))
+  end
+
+  defp recursive_call_spans({_tag, _meta, children}, bare_name),
+    do: recursive_call_spans(children, bare_name)
+
+  defp recursive_call_spans(items, bare_name) when is_list(items),
+    do: Enum.flat_map(items, &recursive_call_spans(&1, bare_name))
+
+  defp recursive_call_spans(item, bare_name) when is_tuple(item) do
+    item
+    |> Tuple.to_list()
+    |> Enum.flat_map(&recursive_call_spans(&1, bare_name))
+  end
+
+  defp recursive_call_spans(_item, _bare_name), do: []
+
+  defp same_surface_name?(name, bare_name) when is_atom(name) or is_binary(name) do
+    name
+    |> to_string()
+    |> String.split(["#", "."])
+    |> List.last()
+    |> Kernel.==(bare_name)
+  end
+
+  defp same_surface_name?(_name, _bare_name), do: false
 
   @doc "Expand Tier-3 computed uses that occur in declaration position."
   @spec expand_declaration_uses(tuple() | list()) :: {:ok, term()} | {:error, term()}
@@ -1178,9 +1317,23 @@ defmodule Cure.Elab.Program do
 
         case :persistent_term.get(key, :miss) do
           :miss ->
-            manifest = scan_prelude_manifest(dir)
-            :persistent_term.put(key, manifest)
-            manifest
+            # `persistent_term` makes hits cheap, but its get/scan/put sequence
+            # is not atomic. A broad async test run used to send many elaborator
+            # processes through the full stdlib parse simultaneously, saturating
+            # the file server long enough for unrelated 8-second tests to time
+            # out. Serialize only the cold miss and recheck after acquiring the
+            # lock; steady-state reads remain one `persistent_term.get/2`.
+            :global.trans({key, self()}, fn ->
+              case :persistent_term.get(key, :miss) do
+                :miss ->
+                  manifest = scan_prelude_manifest(dir)
+                  :persistent_term.put(key, manifest)
+                  manifest
+
+                cached ->
+                  cached
+              end
+            end)
 
           cached ->
             cached
@@ -1203,8 +1356,12 @@ defmodule Cure.Elab.Program do
   @spec invalidate_prelude_manifest() :: :ok
   def invalidate_prelude_manifest do
     case Paths.source_dir() do
-      nil -> :ok
-      dir -> :persistent_term.erase({__MODULE__, :prelude_manifest, dir})
+      nil ->
+        :ok
+
+      dir ->
+        key = {__MODULE__, :prelude_manifest, dir}
+        :global.trans({key, self()}, fn -> :persistent_term.erase(key) end)
     end
 
     :ok
@@ -1330,39 +1487,57 @@ defmodule Cure.Elab.Program do
   """
   @spec check_ast_with_locals(tuple() | list()) :: {:ok, Env.t(), [atom()]} | {:error, term()}
   def check_ast_with_locals(ast) do
+    with {:ok, %CheckedModule{env: env, local_defs: local_defs}} <- check_ast_artifact(ast) do
+      {:ok, env, local_defs}
+    end
+  end
+
+  defp checked_local_defs(ast, env) do
     local_defs = local_emit_names(ast)
 
-    with {:ok, env} <- check_ast(ast) do
-      # `implementation` declarations synthesise mangled method globals that are
-      # not in the source AST; they are still this module's locals and must be
-      # emitted alongside the source-declared defs. But the coherence table also
-      # carries every AMBIENT instance a `@prelude` module makes visible — and
-      # `Std.Equatable`/`Std.Comparable` are whole-module `@prelude`, so their ~two
-      # dozen instances are ambient in EVERY module. Emitting all of them into
-      # every consumer bloats each beam with instance methods it never defines
-      # (costly on the AtomVM/ESP32 target) and needlessly duplicates code that
-      # already lives in the owning module's beam.
-      #
-      # Each mangled impl key is OWNER-QUALIFIED (`Std.Equatable#__impl_…`), so
-      # emit only the instances THIS module owns. A reference to a non-owned
-      # instance (a resolved `==`, a constructed dictionary) then falls through
-      # `Emit.remote_target/2`'s owner branch to a REMOTE call into the owner's
-      # module (`Cure.Std.Equatable`), where the instance is emitted exactly once.
-      # Unqualified synthesised globals (owner = nil) have no remote home, so this
-      # module must still host them.
-      self_owner = ast |> module_atom() |> Atom.to_string() |> String.replace_prefix("Cure.", "")
+    # `implementation` declarations synthesise mangled method globals that are
+    # not in the source AST; they are still this module's locals and must be
+    # emitted alongside the source-declared defs. But the coherence table also
+    # carries every AMBIENT instance a `@prelude` module makes visible — and
+    # `Std.Equatable`/`Std.Comparable` are whole-module `@prelude`, so their ~two
+    # dozen instances are ambient in EVERY module. Emitting all of them into
+    # every consumer bloats each beam with instance methods it never defines
+    # (costly on the AtomVM/ESP32 target) and needlessly duplicates code that
+    # already lives in the owning module's beam.
+    #
+    # Each mangled impl key is OWNER-QUALIFIED (`Std.Equatable#__impl_…`), so
+    # emit only the instances THIS module owns. A reference to a non-owned
+    # instance (a resolved `==`, a constructed dictionary) then falls through
+    # `Emit.remote_target/2`'s owner branch to a REMOTE call into the owner's
+    # module (`Cure.Std.Equatable`), where the instance is emitted exactly once.
+    # Unqualified synthesised globals (owner = nil) have no remote home, so this
+    # module must still host them.
+    self_owner = ast |> module_atom() |> Atom.to_string() |> String.replace_prefix("Cure.", "")
 
-      own_impls =
-        Enum.filter(impl_def_names(env), fn key ->
-          case Cure.Elab.Name.owner(key) do
-            nil -> true
-            ^self_owner -> true
-            _ambient -> false
-          end
-        end)
+    canonical_locals =
+      Enum.map(local_defs, fn name ->
+        if Cure.Elab.Name.qualified?(name),
+          do: name,
+          else: Cure.Elab.Name.qualify(self_owner, name)
+      end)
 
-      {:ok, env, local_defs ++ own_impls}
-    end
+    own_impls =
+      Enum.filter(impl_def_names(env), fn key ->
+        case Cure.Elab.Name.owner(key) do
+          nil -> true
+          ^self_owner -> true
+          _ambient -> false
+        end
+      end)
+
+    roots = Enum.uniq(canonical_locals ++ own_impls)
+
+    # Local `where` functions and other lifted runtime helpers are synthesized
+    # during elaboration and therefore do not appear in the authored AST scan.
+    # Derive the final emission set from canonical Core edges so those helpers
+    # are emitted regardless of declaration order. Qualified dependencies owned
+    # by another module stay remote and are not copied into this module.
+    Enum.uniq(roots ++ reachable_def_names(env, roots))
   end
 
   # The def keys codegen must emit, one per source `:function_def`. A member of a
@@ -1450,15 +1625,17 @@ defmodule Cure.Elab.Program do
   """
   @spec reachable_def_names(Env.t(), [atom()]) :: [atom()]
   def reachable_def_names(%Env{defs: defs} = env, roots) do
-    Enum.reduce(roots, MapSet.new(), fn root, seen ->
-      collect_reachable(env, defs, root, seen)
+    root_keys = roots |> Enum.map(&reachable_root_key(env, defs, &1)) |> Enum.reject(&is_nil/1)
+    local_owners = root_keys |> Enum.map(&Cure.Elab.Name.owner/1) |> MapSet.new()
+
+    Enum.reduce(root_keys, MapSet.new(), fn root, seen ->
+      collect_reachable(env, root, local_owners, seen)
     end)
     |> MapSet.to_list()
+    |> Enum.sort()
   end
 
-  defp collect_reachable(env, defs, name, seen) do
-    name = Env.resolve_key(env, defs, name)
-
+  defp collect_reachable(%Env{defs: defs} = env, name, local_owners, seen) do
     cond do
       MapSet.member?(seen, name) ->
         seen
@@ -1474,6 +1651,12 @@ defmodule Cure.Elab.Program do
         # its type-level references entirely.
         seen
 
+      match?(%{generated_equation: true}, Map.get(defs, name)) ->
+        # Certified defining equations are proof artifacts. Surface functions
+        # may mention them while constructing evidence, but the theorem itself
+        # has no runtime definition and must not enter the BEAM closure.
+        seen
+
       true ->
         case Map.get(defs, name) do
           nil ->
@@ -1482,38 +1665,45 @@ defmodule Cure.Elab.Program do
           d ->
             seen = MapSet.put(seen, name)
 
-            [d.type, d.body]
-            |> Enum.flat_map(&global_refs/1)
-            |> Enum.reduce(seen, &collect_reachable(env, defs, &1, &2))
+            d.body
+            |> then(&Cure.Elab.Erase.erase(env, &1))
+            |> Cure.Core.RuntimeRefs.globals()
+            |> Enum.reduce(seen, fn reference, acc ->
+              if Map.has_key?(defs, reference) and
+                   MapSet.member?(local_owners, Cure.Elab.Name.owner(reference)),
+                 do: collect_reachable(env, reference, local_owners, acc),
+                 else: acc
+            end)
         end
     end
   end
 
-  # Every `{:global, name}` atom referenced anywhere in a Core term.
+  # Callers may select a local root by its authored spelling at this public
+  # boundary. Convert that spelling once through the current module owner.
+  # Recursive closure edges are already Core identities and are never guessed.
+  defp reachable_root_key(%Env{module_owner: owner}, defs, root) when is_atom(root) do
+    canonical = if is_binary(owner), do: Cure.Elab.Name.qualify(owner, root)
+
+    cond do
+      Map.has_key?(defs, root) ->
+        root
+
+      not is_nil(canonical) and Map.has_key?(defs, canonical) ->
+        canonical
+
+      true ->
+        nil
+    end
+  end
+
+  # Semantic dependency scans (currently type-alias ordering) need globals from
+  # every Core position, unlike runtime reachability above.
   defp global_refs({:global, name}), do: [name]
-  defp global_refs({:data, _n, ps, is}), do: Enum.flat_map(ps ++ is, &global_refs/1)
-  defp global_refs({:ctor, _n, args}), do: Enum.flat_map(args, &global_refs/1)
 
-  defp global_refs({:case, s, mo, brs}),
-    do: global_refs(s) ++ global_refs(mo) ++ Enum.flat_map(brs, fn {_c, _a, b} -> global_refs(b) end)
+  defp global_refs(term) when is_tuple(term),
+    do: term |> Tuple.to_list() |> Enum.flat_map(&global_refs/1)
 
-  defp global_refs({:pi, _g, dom, cod}), do: global_refs(dom) ++ global_refs(cod)
-  defp global_refs({:lam, _g, dom, body}), do: global_refs(dom) ++ global_refs(body)
-  defp global_refs({:app, f, a}), do: global_refs(f) ++ global_refs(a)
-
-  # The `:let` binder is the seventh Core former. Without this clause it fell
-  # through to the catch-all below, and every global referenced only inside a
-  # `let` vanished from `reachable_def_names/2` — co-emitting such a closure
-  # produced a module that called a function it never defined.
-  defp global_refs({:let, _g, ty, val, body}),
-    do: global_refs(ty) ++ global_refs(val) ++ global_refs(body)
-
-  defp global_refs({:effect_type, inner}), do: global_refs(inner)
-  defp global_refs({:effect_pure, value}), do: global_refs(value)
-
-  defp global_refs({:effect_bind, effect, continuation}),
-    do: global_refs(effect) ++ global_refs(continuation)
-
+  defp global_refs(terms) when is_list(terms), do: Enum.flat_map(terms, &global_refs/1)
   defp global_refs(_leaf), do: []
 
   @doc """
@@ -1749,7 +1939,7 @@ defmodule Cure.Elab.Program do
   # carries the reflected expansion context (`MacroSyntax.record_fields/1`).
   defp declarations({:macro_def, meta, rules}) when is_list(meta) and is_list(rules) do
     MacroFamily.lowered_rules(meta, rules)
-    |> Enum.filter(&(&1[:kind] == :computed))
+    |> Enum.filter(&(&1[:kind] in [:computed, :computed_literal]))
     |> Enum.uniq_by(&Map.get(&1, :syntax_type))
     |> Enum.flat_map(fn rule ->
       MacroFamily.generated_record_declarations(meta, rule)
@@ -1786,6 +1976,14 @@ defmodule Cure.Elab.Program do
   end
 
   defp imports(ast), do: ast |> import_entries() |> Enum.flat_map(fn {sources, _meta} -> sources end)
+
+  defp qualified_module_names(ast) do
+    ast
+    |> FixityScan.collect_qualified_targets()
+    |> Enum.map(& &1.target)
+    |> Enum.reject(&(&1 == find_module_name(ast)))
+    |> Enum.uniq()
+  end
 
   # Same walk as `imports/1`, but each import's sources are paired with the import
   # node's meta so a caller can tell an author-written `use` from a compiler-injected
@@ -1968,6 +2166,7 @@ defmodule Cure.Elab.Program do
   end
 
   defp load_module_interface(module_name, path) do
+    path = Path.expand(path)
     state = Process.get(@loader_state_key)
 
     case Map.get(state.modules, module_name) do
@@ -2057,8 +2256,10 @@ defmodule Cure.Elab.Program do
   module can affect its dependents. Semantics match the internal loader cache:
   `:persistent_term`-cached for stdlib paths, recomputed otherwise.
   """
-  @spec module_interface(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  @spec module_interface(String.t(), String.t()) :: {:ok, ModuleInterface.t()} | {:error, term()}
   def module_interface(module_name, path) when is_binary(module_name) and is_binary(path) do
+    path = Path.expand(path)
+
     # Runs inside a loader session so a cold, standalone call (no enclosing
     # `elaborate/1`) still has the `@loader_state_key` generation its dependency
     # loading reads. `with_loader_session/1` reuses an existing generation when
@@ -2084,11 +2285,120 @@ defmodule Cure.Elab.Program do
   """
   @spec invalidate_module_interface(String.t()) :: :ok
   def invalidate_module_interface(path) when is_binary(path) do
+    path = Path.expand(path)
     :persistent_term.erase({__MODULE__, :module_interface, path})
     :persistent_term.erase({__MODULE__, :macro_home_env, path})
-    :persistent_term.erase({__MODULE__, :macro_home_cache_fingerprint})
+    :persistent_term.erase(macro_home_cache_fingerprint_key())
+    File.rm(module_interface_cache_path(path))
     File.rm(macro_home_cache_path(path))
     :ok
+  end
+
+  @doc """
+  Publish the canonical interface carried by a successfully emitted checked
+  module.
+
+  Publication happens only after BEAM writing succeeds. Shipped stdlib
+  interfaces retain their source-hash-keyed process and disk caches; ordinary
+  user modules remain loader-generation scoped.
+  """
+  @spec publish_checked_interface(CheckedModule.t()) :: :ok
+  def publish_checked_interface(%CheckedModule{
+        interface: %ModuleInterface{} = interface,
+        source_path: path,
+        source_hash: source_hash
+      })
+      when is_binary(path) and is_binary(source_hash) do
+    :persistent_term.erase({__MODULE__, :macro_home_env, path})
+    File.rm(macro_home_cache_path(path))
+
+    if stdlib_source_path?(path) do
+      cache_key = {__MODULE__, :module_interface, path}
+
+      case :persistent_term.get(cache_key, :missing) do
+        {:cached, previous_hash, _result} when previous_hash != source_hash ->
+          :persistent_term.erase(macro_home_cache_fingerprint_key())
+
+        _unchanged_or_missing ->
+          :ok
+      end
+
+      result =
+        case read_module_interface_cache(path, interface.module_name, source_hash) do
+          {:ok, %ModuleInterface{interface_hash: hash}} = canonical
+          when hash == interface.interface_hash ->
+            canonical
+
+          _missing_or_semantically_changed ->
+            fresh = {:ok, interface}
+            write_module_interface_cache(path, interface.module_name, source_hash, fresh)
+            fresh
+        end
+
+      :persistent_term.put(cache_key, {:cached, source_hash, result})
+    end
+
+    :ok
+  end
+
+  def publish_checked_interface(%CheckedModule{}), do: :ok
+
+  # Canonical module interfaces are immutable functions of the compiler and the
+  # source closure. Persisting successful interfaces avoids rebuilding the whole
+  # stdlib graph in every short-lived Mix VM. The fingerprint covers compiler
+  # BEAMs and every discovered stdlib source, while `source_hash` and the
+  # validated identity guard the individual entry.
+  defp read_module_interface_cache(path, module_name, source_hash) do
+    with true <- not is_nil(source_hash),
+         {:ok, binary} <- File.read(module_interface_cache_path(path)),
+         {:cure_module_interface, 2, fingerprint, expanded_path, ^module_name, ^source_hash,
+          {:ok, %ModuleInterface{} = interface} = result} <- :erlang.binary_to_term(binary),
+         true <- fingerprint == macro_home_cache_fingerprint(),
+         true <- expanded_path == Path.expand(path),
+         :ok <- ModuleInterface.validate(interface) do
+      result
+    else
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp write_module_interface_cache(
+         path,
+         module_name,
+         source_hash,
+         {:ok, %ModuleInterface{}} = result
+       )
+       when not is_nil(source_hash) do
+    destination = module_interface_cache_path(path)
+    directory = Path.dirname(destination)
+    temporary = destination <> ".#{System.unique_integer([:positive])}.tmp"
+
+    payload =
+      {:cure_module_interface, 2, macro_home_cache_fingerprint(), Path.expand(path), module_name, source_hash, result}
+      |> :erlang.term_to_binary(compressed: 6)
+
+    with :ok <- File.mkdir_p(directory),
+         :ok <- File.chmod(directory, 0o700),
+         :ok <- File.write(temporary, payload),
+         :ok <- File.chmod(temporary, 0o600),
+         :ok <- File.rename(temporary, destination) do
+      :ok
+    else
+      _ ->
+        File.rm(temporary)
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp write_module_interface_cache(_path, _module_name, _source_hash, _result), do: :ok
+
+  defp module_interface_cache_path(path) do
+    basename = :crypto.hash(:sha256, Path.expand(path)) |> Base.url_encode64(padding: false)
+    Path.join([System.tmp_dir!(), "cure-module-interface-cache", basename <> ".etf"])
   end
 
   # A definition-site macro environment is expensive to reconstruct from a
@@ -2100,7 +2410,7 @@ defmodule Cure.Elab.Program do
   # are stored; corrupt or stale files are ignored and replaced atomically.
   defp read_macro_home_cache(path) do
     with {:ok, binary} <- File.read(macro_home_cache_path(path)),
-         {:cure_macro_home, 1, fingerprint, expanded_path, {:ok, %Env{}} = result} <-
+         {:cure_macro_home, 2, fingerprint, expanded_path, {:ok, %Env{}} = result} <-
            :erlang.binary_to_term(binary),
          true <- fingerprint == macro_home_cache_fingerprint(),
          true <- expanded_path == Path.expand(path) do
@@ -2118,7 +2428,7 @@ defmodule Cure.Elab.Program do
     temporary = destination <> ".#{System.unique_integer([:positive])}.tmp"
 
     payload =
-      {:cure_macro_home, 1, macro_home_cache_fingerprint(), Path.expand(path), result}
+      {:cure_macro_home, 2, macro_home_cache_fingerprint(), Path.expand(path), result}
       |> :erlang.term_to_binary(compressed: 6)
 
     with :ok <- File.mkdir_p(directory),
@@ -2142,7 +2452,11 @@ defmodule Cure.Elab.Program do
   end
 
   defp macro_home_cache_fingerprint do
-    key = {__MODULE__, :macro_home_cache_fingerprint}
+    # Include the currently loaded Program BEAM identity in the process-cache
+    # key. Mix can reload this module in a long-lived VM; a single static key
+    # would otherwise keep the fingerprint computed by the previous compiler
+    # implementation and incorrectly bless artifacts written before the reload.
+    key = macro_home_cache_fingerprint_key()
 
     case :persistent_term.get(key, :missing) do
       :missing ->
@@ -2171,26 +2485,51 @@ defmodule Cure.Elab.Program do
     end
   end
 
+  defp macro_home_cache_fingerprint_key do
+    {__MODULE__, :macro_home_cache_fingerprint, __MODULE__.module_info(:md5)}
+  end
+
   defp cached_module_interface(module_name, path) do
     if stdlib_source_path?(path) do
       key = {__MODULE__, :module_interface, path}
+      source_hash = current_source_hash(path)
 
       case :persistent_term.get(key, :missing) do
-        :missing ->
-          case compile_module_interface(module_name, path) do
-            {:ok, _interface} = ok ->
-              :persistent_term.put(key, ok)
-              ok
-
-            {:error, _reason} = error ->
-              error
-          end
-
-        cached ->
+        {:cached, ^source_hash, {:ok, %ModuleInterface{}} = cached}
+        when not is_nil(source_hash) ->
           cached
+
+        _missing_or_stale ->
+          case read_module_interface_cache(path, module_name, source_hash) do
+            {:ok, %ModuleInterface{}} = cached ->
+              :persistent_term.put(key, {:cached, source_hash, cached})
+              cached
+
+            nil ->
+              compile_and_cache_module_interface(key, source_hash, module_name, path)
+          end
       end
     else
       compile_module_interface(module_name, path)
+    end
+  end
+
+  defp compile_and_cache_module_interface(key, source_hash, module_name, path) do
+    case compile_module_interface(module_name, path) do
+      {:ok, %ModuleInterface{} = _interface} = ok ->
+        :persistent_term.put(key, {:cached, source_hash, ok})
+        write_module_interface_cache(path, module_name, source_hash, ok)
+        ok
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp current_source_hash(path) do
+    case File.read(path) do
+      {:ok, source} -> :crypto.hash(:sha256, source)
+      {:error, _} -> nil
     end
   end
 
@@ -2234,37 +2573,275 @@ defmodule Cure.Elab.Program do
     with {:ok, source} <- File.read(path),
          {:ok, tokens} <- Lexer.tokenize(source, file: path, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, file: path, emit_events: false),
-         :ok <- validate_module_identity(ast, requested_name, path),
-         :ok <- check_declarations(ast),
-         dependencies = module_dependency_sources(ast),
-         {:ok, prelude} <- module_prelude_env(ast),
-         {:ok, imported} <- load_dependency_env(imports(ast)),
-         seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
-         {:ok, base} <- merge_env(seeded, prelude),
-         {:ok, env0_base} <- merge_env(base, imported),
-         env0 = Map.put(env0_base, :import_modules, direct_import_ids(dependencies)),
-         {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
-         {:ok, certified} <- certify_type_level_with_source(ast, env, source: source, file: path),
-         {:ok, certified} <- Cure.Elab.Equation.generate_all(certified, ast) do
-      direct_ids = direct_import_ids(imports(ast))
-
-      export_env =
-        certified
-        |> Map.put(:import_modules, direct_ids)
-        |> mark_inline_hints(find_module_name(ast))
-
-      {:ok,
-       %{
-         module_name: requested_name,
-         path: path,
-         source_hash: :crypto.hash(:sha256, source),
-         dependency_names: dependency_module_names(dependencies),
-         owned_env: export_env,
-         export_env: export_env,
-         direct_import_names: direct_ids
-       }}
+         {:ok, %CheckedModule{interface: %ModuleInterface{} = interface}} <-
+           check_ast_artifact(ast,
+             source: source,
+             file: path,
+             module_name: requested_name,
+             purpose: :interface,
+             prelude_mode: :bootstrap_safe,
+             require_module_identity: true
+           ) do
+      {:ok, interface}
     end
   end
+
+  defp validate_artifact_identity(_ast, _module_name, _file, _source, false), do: :ok
+
+  defp validate_artifact_identity(_ast, _module_name, _file, source, true)
+       when not is_binary(source),
+       do: :ok
+
+  defp validate_artifact_identity(ast, module_name, file, source, true)
+       when is_binary(file) and is_binary(source),
+       do: validate_module_identity(ast, module_name, file)
+
+  defp validate_artifact_identity(_ast, _module_name, _file, _source, true), do: :ok
+
+  defp source_context_opts(source, file) when is_binary(source) and is_binary(file),
+    do: [source: source, file: file]
+
+  defp source_context_opts(_source, _file), do: []
+
+  defp checked_module_interface(_ast, _env, _module_name, _file, source)
+       when not is_binary(source),
+       do: {:ok, nil}
+
+  defp checked_module_interface(ast, env, module_name, file, source)
+       when is_binary(file) and is_binary(source) do
+    interface_ast = without_injected_prelude_imports(ast)
+    dependencies = module_dependency_sources(ast)
+    dependency_names = dependency_module_names(dependencies)
+
+    ambient_preludes =
+      Enum.uniq(injected_prelude_sources(ast) ++ prelude_sources_for(interface_ast))
+
+    export_env = canonical_export_env(env, module_name, interface_ast, ambient_preludes)
+
+    {:ok,
+     ModuleInterface.new(%{
+       module_name: module_name,
+       source_path: file,
+       source_hash: source_hash(source),
+       dependency_interface_hashes: loaded_dependency_interface_hashes(dependency_names),
+       dependency_names: dependency_names,
+       direct_edges: module_interface_edges(interface_ast),
+       canonical_declarations: owned_declarations(export_env, module_name),
+       canonical_externs: owned_externs(export_env, module_name),
+       extension_payloads: interface_extensions(export_env, module_name),
+       source_metadata: %{dependency_source_hashes: dependency_source_hashes(dependency_names)},
+       owned_env: env,
+       export_env: export_env,
+       direct_import_names: direct_import_ids(imports(interface_ast))
+     })}
+  end
+
+  defp checked_module_interface(_ast, _env, _module_name, _file, _source), do: {:ok, nil}
+
+  defp canonical_export_env(env, module_name, interface_ast, injected_preludes) do
+    owned_keys =
+      env.defs
+      |> Map.keys()
+      |> Enum.filter(&(Cure.Elab.Name.owner(&1) == module_name))
+
+    required = env.defs |> reachable_global_closure(owned_keys) |> MapSet.new()
+    injected_owners = MapSet.new(injected_preludes)
+
+    defs =
+      Map.reject(env.defs, fn {key, _definition} ->
+        MapSet.member?(injected_owners, Cure.Elab.Name.owner(key)) and
+          not MapSet.member?(required, key)
+      end)
+
+    canonical =
+      env
+      |> Map.put(:defs, defs)
+      |> Map.put(:coherence, coherence_with_available_methods(env.coherence, defs))
+      |> install_module_visibility(interface_ast)
+
+    ambient = injected_owners
+
+    canonical
+    |> Map.put(:bare_modules, MapSet.union(canonical.bare_modules || MapSet.new(), ambient))
+    |> Map.put(:qualified_modules, MapSet.union(canonical.qualified_modules || MapSet.new(), ambient))
+  end
+
+  defp coherence_with_available_methods(nil, _defs), do: nil
+
+  defp coherence_with_available_methods(%Coherence{} = coherence, defs) do
+    available? = fn {_key, ref} ->
+      ref
+      |> Map.get(:methods, %{})
+      |> Map.values()
+      |> Enum.all?(&Map.has_key?(defs, &1))
+    end
+
+    anon = Map.filter(coherence.anon, available?)
+    named = Map.filter(coherence.named, available?)
+
+    %Coherence{
+      anon: anon,
+      named: named,
+      anon_origins: Map.take(coherence.anon_origins, Map.keys(anon)),
+      named_origins: Map.take(coherence.named_origins, Map.keys(named))
+    }
+  end
+
+  defp injected_prelude_sources(ast) do
+    ast
+    |> import_entries()
+    |> Enum.filter(fn {_sources, meta} -> Keyword.get(meta, :prelude_injected, false) end)
+    |> Enum.flat_map(&elem(&1, 0))
+    |> Enum.uniq()
+  end
+
+  defp without_injected_prelude_imports({:import, meta, _children} = node) when is_list(meta) do
+    if Keyword.get(meta, :prelude_injected, false), do: nil, else: node
+  end
+
+  defp without_injected_prelude_imports({tag, meta, children}) when is_list(children) do
+    normalized =
+      children
+      |> Enum.map(&without_injected_prelude_imports/1)
+      |> Enum.reject(&is_nil/1)
+
+    {tag, meta, normalized}
+  end
+
+  defp without_injected_prelude_imports(items) when is_list(items) do
+    items
+    |> Enum.map(&without_injected_prelude_imports/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp without_injected_prelude_imports(other), do: other
+
+  defp source_hash(source) when is_binary(source), do: :crypto.hash(:sha256, source)
+  defp source_hash(_source), do: nil
+
+  defp expanded_source_path(file, source) when is_binary(file) and is_binary(source),
+    do: Path.expand(file)
+
+  defp expanded_source_path(_file, _source), do: nil
+
+  defp emit_elaboration_event(event) do
+    case Process.get(:cure_elaboration_observer) do
+      observer when is_pid(observer) -> send(observer, {:cure_elaboration, event})
+      _ -> :ok
+    end
+  end
+
+  defp loaded_dependency_interface_hashes(dependency_names) do
+    state = Process.get(@loader_state_key)
+
+    Map.new(dependency_names, fn name ->
+      hash =
+        case state.modules[name] do
+          {:loaded, %ModuleInterface{interface_hash: interface_hash}} -> interface_hash
+          _ -> nil
+        end
+
+      {name, hash}
+    end)
+  end
+
+  defp dependency_source_hashes(dependency_names) do
+    Map.new(dependency_names, fn name ->
+      hash =
+        case resolved_module_path(name) do
+          nil ->
+            nil
+
+          path ->
+            case File.read(path) do
+              {:ok, source} -> :crypto.hash(:sha256, source)
+              {:error, _} -> nil
+            end
+        end
+
+      {name, hash}
+    end)
+  end
+
+  defp module_interface_edges(ast) do
+    owner = find_module_name(ast)
+
+    imported =
+      Enum.flat_map(import_entries(ast), fn {targets, meta} ->
+        Enum.map(targets, fn target ->
+          %{kind: :use_import, source_module: owner, target: target, line: metadata_line(meta)}
+        end)
+      end)
+
+    qualified =
+      ast
+      |> FixityScan.collect_qualified_targets()
+      |> Enum.reject(&(&1.target == owner))
+      |> Enum.map(fn reference ->
+        %{
+          kind: :qualified_reference,
+          source_module: owner,
+          target: reference.target,
+          line: reference.line
+        }
+      end)
+
+    Enum.uniq_by(imported ++ qualified, &{&1.kind, &1.target})
+  end
+
+  defp metadata_line(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{start_line: line}} -> line
+      _ -> Keyword.get(meta, :line, 1)
+    end
+  end
+
+  defp owned_declarations(%Env{} = env, owner) do
+    %{
+      defs: take_owned(env.defs, owner),
+      families: take_owned(env.families, owner),
+      ctors: take_owned(env.ctors, owner),
+      ctor_to_family:
+        Map.filter(env.ctor_to_family, fn {ctor, _family} ->
+          Cure.Elab.Name.owner(ctor) == owner
+        end),
+      equations: take_owned(env.equations, owner)
+    }
+  end
+
+  defp owned_externs(%Env{} = env, owner) do
+    env.defs
+    |> take_owned(owner)
+    |> Map.filter(fn {_key, definition} -> match?({:extern, _}, definition.body) end)
+  end
+
+  defp interface_extensions(%Env{} = env, owner) do
+    %{
+      interfaces:
+        Map.filter(env.interfaces, fn {name, _descriptor} ->
+          Map.has_key?(env.families, Cure.Elab.Name.qualify(owner, name))
+        end),
+      coherence: owned_coherence(env.coherence, owner),
+      primitives: env.primitives
+    }
+  end
+
+  defp owned_coherence(nil, _owner), do: nil
+
+  defp owned_coherence(%Coherence{} = coherence, owner) do
+    anon = Map.filter(coherence.anon, fn {_key, ref} -> instance_owned_by?(ref, owner) end)
+    named = Map.filter(coherence.named, fn {_key, ref} -> instance_owned_by?(ref, owner) end)
+
+    %Coherence{
+      anon: anon,
+      named: named,
+      anon_origins: Map.take(coherence.anon_origins, Map.keys(anon)),
+      named_origins: Map.take(coherence.named_origins, Map.keys(named))
+    }
+  end
+
+  defp take_owned(table, owner),
+    do: Map.filter(table, fn {key, _value} -> Cure.Elab.Name.owner(key) == owner end)
 
   defp validate_module_identity(ast, requested_name, path) do
     case find_module_name(ast) do
@@ -2275,12 +2852,20 @@ defmodule Cure.Elab.Program do
   end
 
   defp module_dependency_sources(ast) do
-    Enum.uniq(prelude_sources_for(ast) ++ imports(ast))
+    qualified =
+      ast
+      |> qualified_module_names()
+      |> Enum.reject(&ModuleIndex.compiler_owned?/1)
+
+    Enum.uniq(prelude_sources_for(ast) ++ imports(ast) ++ qualified)
   end
 
   defp module_prelude_env(ast) do
     if prelude_bootstrap?(find_module_name(ast)), do: {:ok, Env.empty()}, else: prelude_slice_env(ast)
   end
+
+  defp checked_prelude_env(ast, :bootstrap_safe), do: module_prelude_env(ast)
+  defp checked_prelude_env(ast, :ordinary), do: prelude_slice_env(ast)
 
   defp prelude_sources_for(ast) do
     if prelude_bootstrap?(find_module_name(ast)),
@@ -2424,6 +3009,113 @@ defmodule Cure.Elab.Program do
       {:ok, %{merged | import_modules: direct_ids}, MapSet.new()}
     end
   end
+
+  # Qualified availability is not a lexical import. We load the same canonical
+  # module interface so `M.f` and an imported `f` refer to one identity, but
+  # install no `import_modules` directness and therefore expose no bare names.
+  defp qualified_resolved_imports(ast) do
+    names = qualified_module_names(ast)
+    source_modules = Enum.reject(names, &ModuleIndex.compiler_owned?/1)
+
+    with {:ok, env} <- load_dependency_env(source_modules) do
+      {:ok,
+       %{
+         env
+         | import_modules: MapSet.new(),
+           bare_modules: MapSet.new(),
+           bare_bindings: MapSet.new(),
+           qualified_modules: MapSet.new(names)
+       }}
+    end
+  end
+
+  defp install_module_visibility(%Env{} = env, ast) do
+    explicit = direct_import_ids(imports(ast))
+
+    ambient =
+      if prelude_bootstrap?(find_module_name(ast)),
+        do: MapSet.new(),
+        else: MapSet.new(prelude_manifest(), & &1.source)
+
+    bare = MapSet.union(explicit, ambient)
+
+    qualified =
+      bare
+      |> MapSet.union(MapSet.new(qualified_module_names(ast)))
+      |> MapSet.union(ModuleIndex.compiler_modules())
+      |> MapSet.union(
+        env
+        |> all_global_keys()
+        |> Enum.map(&Cure.Elab.Name.owner/1)
+        |> Enum.reject(&is_nil/1)
+        |> MapSet.new()
+      )
+
+    env
+    |> Map.put(:import_modules, explicit)
+    |> Env.with_module_visibility(bare, qualified)
+    |> Map.put(:bare_bindings, visible_bare_bindings(env, ast, explicit))
+  end
+
+  defp visible_bare_bindings(%Env{} = env, ast, explicit_modules) do
+    owner = find_module_name(ast)
+
+    local_and_explicit =
+      all_global_keys(env)
+      |> Enum.filter(fn key ->
+        key_owner = Cure.Elab.Name.owner(key)
+        key_owner == owner or MapSet.member?(explicit_modules, key_owner)
+      end)
+
+    builtin_families =
+      env.builtins
+      |> Map.values()
+      |> MapSet.new()
+      |> MapSet.put(:"Std.Unit#Unit")
+
+    builtin_surface =
+      MapSet.to_list(builtin_families) ++
+        for(
+          {ctor, family} <- env.ctor_to_family,
+          MapSet.member?(builtin_families, family),
+          do: ctor
+        ) ++
+        Enum.filter(Map.keys(env.defs), &(Cure.Elab.Name.owner(&1) == "Std.Builtin"))
+
+    prelude_surface =
+      Enum.flat_map(prelude_manifest(), fn
+        %{source: source, names: :all} ->
+          Enum.filter(all_global_keys(env), &(Cure.Elab.Name.owner(&1) == source))
+
+        %{source: source, names: names} ->
+          selected_families =
+            env.families
+            |> Map.keys()
+            |> Enum.filter(fn key ->
+              Cure.Elab.Name.owner(key) == source and MapSet.member?(names, bare_name_atom(key))
+            end)
+            |> MapSet.new()
+
+          selected_values =
+            [env.defs, env.families]
+            |> Enum.flat_map(&Map.keys/1)
+            |> Enum.filter(fn key ->
+              Cure.Elab.Name.owner(key) == source and MapSet.member?(names, bare_name_atom(key))
+            end)
+
+          selected_values ++
+            for {ctor, family} <- env.ctor_to_family,
+                MapSet.member?(selected_families, family),
+                do: ctor
+      end)
+
+    MapSet.new(local_and_explicit ++ builtin_surface ++ prelude_surface)
+  end
+
+  defp all_global_keys(%Env{} = env),
+    do: Enum.uniq(Map.keys(env.defs) ++ Map.keys(env.families) ++ Map.keys(env.ctors))
+
+  defp bare_name_atom(key), do: key |> Cure.Elab.Name.base() |> String.to_atom()
 
   defp resolve_import_modules(sources) do
     Enum.reduce_while(sources, {:ok, []}, fn source, {:ok, acc} ->
@@ -2572,8 +3264,8 @@ defmodule Cure.Elab.Program do
   # and quietly breaking global coherence. The assertion below turns the next such
   # omission into a compile error rather than a runtime mystery.
   @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
-                      primitives interfaces coherence constrained import_modules lemmas equations module_owner
-                      current_def)a
+                      primitives interfaces coherence constrained import_modules bare_modules bare_bindings
+                      qualified_modules lemmas equations module_owner current_def)a
 
   @env_keys Map.keys(Map.from_struct(%Env{}))
   missing = @env_keys -- @merged_env_keys
@@ -2601,6 +3293,9 @@ defmodule Cure.Elab.Program do
          coherence: coherence,
          constrained: Map.merge(left.constrained, right.constrained),
          import_modules: MapSet.union(left.import_modules, right.import_modules),
+         bare_modules: merge_module_visibility(left.bare_modules, right.bare_modules),
+         bare_bindings: merge_module_visibility(left.bare_bindings, right.bare_bindings),
+         qualified_modules: merge_module_visibility(left.qualified_modules, right.qualified_modules),
          lemmas: Map.merge(left.lemmas, right.lemmas, fn _head, ls, rs -> Enum.uniq(ls ++ rs) end),
          equations: Map.merge(left.equations, right.equations, fn _owner, ls, rs -> Enum.uniq(ls ++ rs) end),
          module_owner: left.module_owner || right.module_owner,
@@ -2612,6 +3307,11 @@ defmodule Cure.Elab.Program do
     end
   end
 
+  defp merge_module_visibility(nil, nil), do: nil
+  defp merge_module_visibility(nil, %MapSet{} = right), do: right
+  defp merge_module_visibility(%MapSet{} = left, nil), do: left
+  defp merge_module_visibility(%MapSet{} = left, %MapSet{} = right), do: MapSet.union(left, right)
+
   defp merge_coherence(nil, right), do: {:ok, right}
   defp merge_coherence(left, nil), do: {:ok, left}
 
@@ -2622,24 +3322,91 @@ defmodule Cure.Elab.Program do
     # and `import_env/2` accumulates left-to-right — so only a genuine DISAGREEMENT
     # is an overlap. Named instances are exempt from uniqueness by design but their
     # names must still not collide with a different instance.
-    with {:ok, anon} <- merge_instances(left.anon, right.anon, :overlapping_instance),
-         {:ok, named} <- merge_instances(left.named, right.named, :overlapping_named_instance) do
-      {:ok, %Coherence{anon: anon, named: named}}
+    with {:ok, anon, anon_origins} <- merge_anon_instances(left, right),
+         {:ok, named, named_origins} <- merge_named_instances(left, right) do
+      {:ok,
+       %Coherence{
+         anon: anon,
+         named: named,
+         anon_origins: anon_origins,
+         named_origins: named_origins
+       }}
     end
   end
 
-  defp merge_instances(left, right, error_tag) do
-    Enum.reduce_while(right, {:ok, left}, fn {key, ref}, {:ok, acc} ->
-      case Map.fetch(acc, key) do
-        {:ok, ^ref} -> {:cont, {:ok, acc}}
-        {:ok, _other} -> {:halt, {:error, overlap_error(error_tag, key)}}
-        :error -> {:cont, {:ok, Map.put(acc, key, ref)}}
+  defp merge_anon_instances(%Coherence{} = left, %Coherence{} = right) do
+    Enum.reduce_while(right.anon, {:ok, left.anon, left.anon_origins}, fn {key = {iface, head}, ref},
+                                                                          {:ok, anon, origins} ->
+      case Map.fetch(anon, key) do
+        {:ok, ^ref} ->
+          origin = Map.get(origins, key) || Map.get(right.anon_origins, key, %{})
+          {:cont, {:ok, anon, Map.put(origins, key, origin)}}
+
+        {:ok, _other} ->
+          stored_first = Map.get(origins, key, %{})
+          stored_second = Map.get(right.anon_origins, key, %{})
+          {first, second} = merged_instance_origins(:anonymous, key, stored_first, stored_second)
+
+          {:halt,
+           {:error,
+            {:overlapping_instance,
+             %{
+               interface: iface,
+               head: head,
+               first_span: Map.get(first, :span),
+               second_span: Map.get(second, :span),
+               first_for: Map.get(first, :for),
+               second_for: Map.get(second, :for)
+             }}}}
+
+        :error ->
+          {:cont, {:ok, Map.put(anon, key, ref), Map.put(origins, key, Map.get(right.anon_origins, key, %{}))}}
       end
     end)
   end
 
-  defp overlap_error(:overlapping_instance, {iface, head}), do: {:overlapping_instance, iface, head}
-  defp overlap_error(:overlapping_named_instance, name), do: {:overlapping_named_instance, name}
+  defp merge_named_instances(%Coherence{} = left, %Coherence{} = right) do
+    Enum.reduce_while(right.named, {:ok, left.named, left.named_origins}, fn {name, ref}, {:ok, named, origins} ->
+      case Map.fetch(named, name) do
+        {:ok, ^ref} ->
+          origin = Map.get(origins, name) || Map.get(right.named_origins, name, %{})
+          {:cont, {:ok, named, Map.put(origins, name, origin)}}
+
+        {:ok, _other} ->
+          stored_first = Map.get(origins, name, %{})
+          stored_second = Map.get(right.named_origins, name, %{})
+          {first, second} = merged_instance_origins(:named, name, stored_first, stored_second)
+
+          {:halt,
+           {:error,
+            {:overlapping_named_instance,
+             %{
+               name: name,
+               interface: Map.get(ref, :iface),
+               head: Map.get(ref, :head),
+               first_interface: Map.get(first, :interface),
+               first_head: Map.get(first, :head),
+               first_span: Map.get(first, :span),
+               second_span: Map.get(second, :span),
+               first_for: Map.get(first, :for),
+               second_for: Map.get(second, :for)
+             }}}}
+
+        :error ->
+          {:cont, {:ok, Map.put(named, name, ref), Map.put(origins, name, Map.get(right.named_origins, name, %{}))}}
+      end
+    end)
+  end
+
+  defp merged_instance_origins(kind, key, stored_first, stored_second) do
+    case Cure.Elab.SourceMetadata.instance_origins(kind, key) do
+      [first | _] = origins ->
+        {Map.merge(stored_first, first), Map.merge(stored_second, List.last(origins))}
+
+      [] ->
+        {stored_first, stored_second}
+    end
+  end
 
   # Two passes so that forward references and mutual recursion resolve: first
   # every type/record is elaborated and every function *signature* is registered;
@@ -2681,6 +3448,16 @@ defmodule Cure.Elab.Program do
 
   defp contextualize_trusted_declaration_error({:error, reason} = error, items) do
     case trusted_declaration_span(reason, items) do
+      %{span: %Cure.Diagnostic.Span{}} = context ->
+        {:error,
+         {:source_context, reason,
+          Map.merge(
+            %{
+              expectation_origin: :trusted_declaration_check
+            },
+            context
+          )}}
+
       {%Cure.Diagnostic.Span{} = span, checking, category} ->
         {:error,
          {:source_context, reason,
@@ -2699,21 +3476,247 @@ defmodule Cure.Elab.Program do
   defp contextualize_trusted_declaration_error(result, _items), do: result
 
   defp trusted_declaration_span({:unknown_erasure_class, name, _class}, items),
-    do: declaration_role_span(items, name, :erases_decorator, :erasure_annotation)
+    do: erasure_source_context(items, name)
 
   defp trusted_declaration_span({:erases_on_non_opaque, name}, items),
-    do: declaration_role_span(items, name, :erases_decorator, :erasure_annotation)
+    do: erasure_source_context(items, name)
+
+  defp trusted_declaration_span({:effect_binder_erased, %{def: name, binder: binder}}, items),
+    do: effect_binder_source_context(items, name, binder)
 
   defp trusted_declaration_span({:non_strictly_positive, constructor}, items),
-    do: constructor_role_span(items, constructor)
+    do: positivity_source_context(items, constructor)
 
-  defp trusted_declaration_span({:erased_used_relevantly, %{def: name}}, items),
-    do: declaration_role_span(items, name, :body, :relevance_check)
+  defp trusted_declaration_span(
+         {:erased_used_relevantly, %{def: name, binder: binder}},
+         items
+       ) do
+    relevance_source_context(items, name, binder)
+  end
+
+  defp trusted_declaration_span(
+         {:usage_violation, %{def: name, binder: binder, kind: :param} = details},
+         items
+       ) do
+    usage_source_context(items, name, binder, details) ||
+      declaration_role_span(items, name, :body, :relevance_check)
+  end
 
   defp trusted_declaration_span({:usage_violation, %{def: name}}, items),
     do: declaration_role_span(items, name, :body, :relevance_check)
 
   defp trusted_declaration_span(_reason, _items), do: nil
+
+  # Relevance checking intentionally runs over span-free Core. At this boundary the
+  # reported de Bruijn level is still the declaration-order parameter index, so we
+  # can recover the authored binder without contaminating Core with presentation
+  # metadata. We only claim an exact use range when the surface body has one
+  # unambiguous occurrence of that name; shadowing or repeated uses fall back to the
+  # honest body range instead of pointing at a possibly unrelated token.
+  defp relevance_source_context(items, qualified_name, binder) do
+    bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {:function_def, meta, [body]} when is_list(meta) ->
+        if to_string(Keyword.get(meta, :name)) == bare_name do
+          params = Keyword.get(meta, :params, [])
+          param = Enum.at(params, binder)
+          binder_name = if param, do: param_name(param)
+          binder_span = ast_role_span(param, :name)
+          body_span = ast_role_span(body, :whole) || ast_role_span({:function_def, meta, [body]}, :body)
+
+          use_span =
+            body
+            |> surface_variable_spans(binder_name)
+            |> case do
+              [span] -> span
+              _ -> body_span
+            end
+
+          if use_span do
+            %{
+              span: use_span,
+              binder_span: binder_span,
+              binder_name: binder_name,
+              checking: qualified_name,
+              expression_category: :relevance_check
+            }
+          end
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp usage_source_context(items, qualified_name, binder, details) do
+    bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {:function_def, meta, [body]} when is_list(meta) ->
+        if to_string(Keyword.get(meta, :name)) == bare_name do
+          param = meta |> Keyword.get(:params, []) |> Enum.at(binder)
+          binder_name = if param, do: param_name(param)
+          binder_span = ast_role_span(param, :name)
+          grade_span = ast_role_span(param, :annotation)
+          use_spans = surface_variable_spans(body, binder_name)
+          body_span = ast_role_span(body, :whole) || ast_role_span({:function_def, meta, [body]}, :body)
+
+          primary_span =
+            case Map.get(details, :used) do
+              :erased -> binder_span || grade_span || body_span
+              _ -> List.last(use_spans) || body_span || binder_span
+            end
+
+          if primary_span do
+            %{
+              span: primary_span,
+              binder_span: binder_span,
+              grade_span: grade_span,
+              binder_name: binder_name,
+              use_spans: use_spans,
+              checking: qualified_name,
+              expression_category: :resource_usage
+            }
+          end
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp surface_variable_spans(_ast, nil), do: []
+
+  defp surface_variable_spans({:variable, meta, name}, name) when is_list(meta) do
+    case ast_role_span({:variable, meta, name}, :name) do
+      %Cure.Diagnostic.Span{} = span -> [span]
+      _ -> []
+    end
+  end
+
+  defp surface_variable_spans({tag, _meta, children}, name) when is_atom(tag) do
+    surface_variable_spans(children, name)
+  end
+
+  defp surface_variable_spans(list, name) when is_list(list),
+    do: Enum.flat_map(list, &surface_variable_spans(&1, name))
+
+  defp surface_variable_spans(tuple, name) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.flat_map(&surface_variable_spans(&1, name))
+  end
+
+  defp surface_variable_spans(_other, _name), do: []
+
+  defp ast_role_span({_tag, meta, _children}, role) when is_list(meta) do
+    meta
+    |> Cure.MetaAST.Metadata.source_info()
+    |> source_role_span(role)
+  end
+
+  defp ast_role_span(_ast, _role), do: nil
+
+  defp positivity_source_context(items, qualified_constructor) do
+    constructor = qualified_constructor |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {:container, container_meta, variants} when is_list(container_meta) and is_list(variants) ->
+        family = container_meta |> Keyword.get(:name) |> to_string()
+
+        Enum.find_value(variants, fn
+          {:function_def, ctor_meta, _body} when is_list(ctor_meta) ->
+            if to_string(Keyword.get(ctor_meta, :name)) == constructor do
+              constructor_span = ast_role_span({:function_def, ctor_meta, []}, :name)
+
+              negative_spans =
+                ctor_meta
+                |> Keyword.get(:params, [])
+                |> Enum.flat_map(&negative_recursive_spans(&1, family))
+                |> Enum.uniq()
+
+              {span, precise?} =
+                case negative_spans do
+                  [span] -> {span, true}
+                  _ -> {constructor_span, false}
+                end
+
+              if span do
+                %{
+                  span: span,
+                  constructor_span: constructor_span,
+                  family_name: family,
+                  checking: qualified_constructor,
+                  expression_category: :constructor_declaration,
+                  precise_occurrence: precise?
+                }
+              end
+            end
+
+          _ ->
+            nil
+        end)
+
+      _ ->
+        nil
+    end)
+  end
+
+  # Cure's strict-positivity rule rejects every recursive occurrence in a
+  # function domain, including occurrences nested further inside that domain.
+  # Continue through the codomain because it may itself contain another arrow.
+  # Other surface type constructors are covariant here, so search their children
+  # for nested arrows without marking ordinary recursive arguments as negative.
+  defp negative_recursive_spans(
+         {:function_call, meta, args},
+         family
+       )
+       when is_list(meta) and is_list(args) do
+    if Keyword.get(meta, :function_type, false) do
+      {domains, codomain} = Enum.split(args, max(length(args) - 1, 0))
+
+      Enum.flat_map(domains, &recursive_type_spans(&1, family)) ++
+        Enum.flat_map(codomain, &negative_recursive_spans(&1, family))
+    else
+      Enum.flat_map(args, &negative_recursive_spans(&1, family))
+    end
+  end
+
+  defp negative_recursive_spans({_tag, _meta, children}, family),
+    do: negative_recursive_spans(children, family)
+
+  defp negative_recursive_spans(list, family) when is_list(list),
+    do: Enum.flat_map(list, &negative_recursive_spans(&1, family))
+
+  defp negative_recursive_spans(tuple, family) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.flat_map(&negative_recursive_spans(&1, family))
+  end
+
+  defp negative_recursive_spans(_other, _family), do: []
+
+  defp recursive_type_spans({:variable, meta, family}, family) when is_list(meta) do
+    case ast_role_span({:variable, meta, family}, :name) do
+      %Cure.Diagnostic.Span{} = span -> [span]
+      _ -> []
+    end
+  end
+
+  defp recursive_type_spans({_tag, _meta, children}, family),
+    do: recursive_type_spans(children, family)
+
+  defp recursive_type_spans(list, family) when is_list(list),
+    do: Enum.flat_map(list, &recursive_type_spans(&1, family))
+
+  defp recursive_type_spans(tuple, family) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.flat_map(&recursive_type_spans(&1, family))
+  end
+
+  defp recursive_type_spans(_other, _family), do: []
 
   defp declaration_role_span(items, qualified_name, role, category) do
     bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
@@ -2724,6 +3727,62 @@ defmodule Cure.Elab.Program do
           info = Cure.MetaAST.Metadata.source_info(meta)
           span = source_role_span(info, role) || source_role_span(info, :name) || source_role_span(info, :whole)
           if span, do: {span, qualified_name, category}
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp erasure_source_context(items, qualified_name) do
+    bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {tag, meta, _body} when tag in [:container, :indexed_type] and is_list(meta) ->
+        if to_string(Keyword.get(meta, :name)) == bare_name do
+          info = Cure.MetaAST.Metadata.source_info(meta)
+          decorator = info && Map.get(info.decorators, "erases")
+          decorator_span = decorator && decorator.whole
+
+          if decorator_span do
+            %{
+              span: decorator_span,
+              decorator_span: decorator_span,
+              argument_spans: decorator.arguments,
+              name_span: info.name,
+              declaration_span: info.whole,
+              checking: qualified_name,
+              expression_category: :erasure_annotation
+            }
+          end
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp effect_binder_source_context(items, qualified_name, binder) do
+    bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {:function_def, meta, _body} when is_list(meta) ->
+        if to_string(Keyword.get(meta, :name)) == bare_name do
+          parameter = meta |> Keyword.get(:params, []) |> Enum.at(binder)
+          info = parameter && parameter |> elem(1) |> Cure.MetaAST.Metadata.source_info()
+
+          if info do
+            %{
+              span: info.annotation || info.whole,
+              parameter_span: info.whole,
+              binder_span: info.name,
+              opener_span: info.opener,
+              closer_span: info.closer,
+              binder_name: parameter && param_name(parameter),
+              checking: qualified_name,
+              expression_category: :effect_binder
+            }
+          end
         end
 
       _ ->
@@ -2744,43 +3803,6 @@ defmodule Cure.Elab.Program do
 
   defp source_role_span(_info, _role), do: nil
 
-  defp constructor_role_span(items, constructor) do
-    spelling = constructor |> to_string() |> String.split("#") |> List.last()
-
-    Enum.find_value(items, fn
-      {:container, _meta, variants} when is_list(variants) ->
-        Enum.find_value(variants, fn
-          {:function_def, meta, _} when is_list(meta) ->
-            if to_string(Keyword.get(meta, :name)) == spelling do
-              case Cure.MetaAST.Metadata.source_info(meta) do
-                %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} ->
-                  {span, constructor, :constructor_declaration}
-
-                _ ->
-                  nil
-              end
-            end
-
-          {:variable, meta, name} when is_list(meta) ->
-            if to_string(name) == spelling do
-              case Cure.MetaAST.Metadata.source_info(meta) do
-                %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} ->
-                  {span, constructor, :constructor_declaration}
-
-                _ ->
-                  nil
-              end
-            end
-
-          _ ->
-            nil
-        end)
-
-      _ ->
-        nil
-    end)
-  end
-
   defp expand_where_declarations(items) when is_list(items) do
     {expanded, _counter} =
       Enum.map_reduce(items, 0, fn
@@ -2799,10 +3821,21 @@ defmodule Cure.Elab.Program do
                 Enum.reduce(bindings, {[], %{}, counter}, fn
                   {:function_def, hmeta, hbody}, {acc, names, n} ->
                     hname = Keyword.fetch!(hmeta, :name)
+                    helper_param_names = hmeta |> Keyword.get(:params, []) |> Enum.map(&param_name/1)
 
                     captures =
                       param_names
-                      |> Enum.filter(&surface_occurs?({hbody, hmeta}, &1))
+                      |> Enum.reject(&(&1 in helper_param_names))
+                      |> Enum.filter(fn name ->
+                        surface_occurs?(hbody, name) or surface_occurs?(hmeta, name)
+                      end)
+
+                    present_captures =
+                      Enum.reject(captures, fn name ->
+                        name
+                        |> then(&Map.fetch!(param_map, &1))
+                        |> implicit_param?()
+                      end)
 
                     fresh = "#{parent}$#{hname}$#{n}"
                     lifted_params = Enum.map(captures, &Map.fetch!(param_map, &1)) ++ Keyword.get(hmeta, :params, [])
@@ -2813,11 +3846,12 @@ defmodule Cure.Elab.Program do
                       |> Keyword.put(:visibility, :private)
                       |> Keyword.put(:params, lifted_params)
                       |> Keyword.put(:arity, length(lifted_params))
+                      |> prepend_where_capture_patterns(present_captures)
                       |> Keyword.delete(:where)
 
                     {body0, _} = List.pop_at(hbody, 0)
                     helper = {:function_def, hmeta, [body0]}
-                    {[helper | acc], Map.put(names, hname, {fresh, captures}), n + 1}
+                    {[helper | acc], Map.put(names, hname, {fresh, present_captures}), n + 1}
 
                   {:where_value, _vmeta, _expr}, acc ->
                     acc
@@ -2861,13 +3895,34 @@ defmodule Cure.Elab.Program do
 
   defp expand_where_declarations(items), do: items
 
+  # Clause syntax stores its refutable parameter patterns separately from the
+  # declared parameter telescope. Lambda-lifting a captured outer parameter must
+  # extend both in lockstep; extending only `params:` shifts every clause column
+  # and leaves references to the capture unresolved in the branch body.
+  defp prepend_where_capture_patterns(meta, []), do: meta
+
+  defp prepend_where_capture_patterns(meta, captures) do
+    capture_patterns = Enum.map(captures, &{:variable, [scope: :local], &1})
+
+    Keyword.update(meta, :clauses, [], fn clauses ->
+      Enum.map(clauses, fn clause ->
+        Map.update!(clause, :params, &(capture_patterns ++ &1))
+      end)
+    end)
+  end
+
   defp param_name({:param, _meta, name}), do: name
   defp param_name({name, _type}), do: name
+
+  defp implicit_param?({:param, meta, _name}), do: Keyword.get(meta, :implicit, false)
+  defp implicit_param?({_name, _type}), do: false
 
   defp surface_occurs?(term, name) do
     case term do
       {:variable, _meta, ^name} -> true
       {tag, _meta, children} when is_atom(tag) and is_list(children) -> Enum.any?(children, &surface_occurs?(&1, name))
+      {_key, value} -> surface_occurs?(value, name)
+      map when is_map(map) -> Enum.any?(Map.values(map), &surface_occurs?(&1, name))
       list when is_list(list) -> Enum.any?(list, &surface_occurs?(&1, name))
       _ -> false
     end
@@ -2954,8 +4009,17 @@ defmodule Cure.Elab.Program do
     end)
     |> Enum.reduce_while(:ok, fn {{_owner, base}, members}, :ok ->
       case first_overlapping_pair(env, members) do
-        nil -> {:cont, :ok}
-        arity -> {:halt, {:error, {:overlapping_overload, String.to_atom(base), arity}}}
+        nil ->
+          {:cont, :ok}
+
+        overlap ->
+          {:halt,
+           {:error,
+            {:overlapping_overload,
+             Map.merge(overlap, %{
+               name: String.to_atom(base),
+               arity: length(overlap.first.parameters)
+             })}}}
       end
     end)
   end
@@ -2969,17 +4033,27 @@ defmodule Cure.Elab.Program do
   # apart and legally co-register; only a pair matching on both is a true overlap.
   defp first_overlapping_pair(env, members) do
     typed =
-      for {_key, def} <- members do
+      for {key, def} <- members do
         ptypes = param_types(def.type)
-        {ptypes, member_labels(def, length(ptypes))}
-      end
 
-    Enum.find_value(pairs(typed), fn {{ps, plabels}, {qs, qlabels}} ->
-      if length(ps) == length(qs) and plabels == qlabels and
-           Enum.all?(Enum.zip(ps, qs), fn {p, q} ->
+        %{
+          id: key,
+          parameters: ptypes,
+          labels: member_labels(def, length(ptypes)),
+          span: Cure.Elab.SourceMetadata.declaration_span(key)
+        }
+      end
+      |> Enum.sort_by(fn
+        %{span: %Cure.Diagnostic.Span{start_byte: byte}, id: id} -> {0, byte, id}
+        %{id: id} -> {1, 0, id}
+      end)
+
+    Enum.find_value(pairs(typed), fn {first, second} ->
+      if length(first.parameters) == length(second.parameters) and first.labels == second.labels and
+           Enum.all?(Enum.zip(first.parameters, second.parameters), fn {p, q} ->
              Cure.Elab.TypeConv.convertible?(env, p, q)
            end) do
-        length(ps)
+        %{first: first, second: second}
       end
     end)
   end
@@ -3280,8 +4354,15 @@ defmodule Cure.Elab.Program do
             do: key
 
     case keys_to_drop do
-      [] -> env
-      _ -> Env.put_coherence(env, %{coherence | anon: Map.drop(coherence.anon, keys_to_drop)})
+      [] ->
+        env
+
+      _ ->
+        Env.put_coherence(env, %{
+          coherence
+          | anon: Map.drop(coherence.anon, keys_to_drop),
+            anon_origins: Map.drop(coherence.anon_origins, keys_to_drop)
+        })
     end
   end
 
@@ -3341,7 +4422,7 @@ defmodule Cure.Elab.Program do
             # derived instance whose head matches a hand-written one is rejected
             # BEFORE `register_signatures` runs — the hand-written method body is
             # never overwritten). Leave it authoritative, derive nothing.
-            {:error, {:overlapping_instance, :Equatable, _head}} ->
+            {:error, {:overlapping_instance, %{interface: :Equatable}}} ->
               {:cont, {:ok, acc, fns}}
 
             {:error, _} = err ->
@@ -3351,22 +4432,24 @@ defmodule Cure.Elab.Program do
     end)
   end
 
-  # Verify every recorded `{iface, super_interface, head}` obligation against the
+  # Verify every recorded superinterface obligation against the
   # FINAL coherence table, now that all implementations in the module are
   # registered. Each `interface Big(t) requires Small(t)` obliges every
   # `implementation Big for T` to have an `implementation Small for T` present —
   # in EITHER source order. On the first unmet obligation, report
-  # `{:missing_superinterface, iface, super_interface, head}` (unchanged shape).
+  # structured `:missing_superinterface` diagnostic with its implementation source.
   defp drain_superinterface_checks(env, pending) do
     coherence = Env.coherence(env) || Coherence.new()
 
-    Enum.reduce_while(pending, :ok, fn {iface, super_interface, head}, :ok ->
+    Enum.reduce_while(pending, :ok, fn obligation, :ok ->
+      %{superinterface: super_interface, head: head} = obligation
+
       case Coherence.lookup_anon(coherence, super_interface, head) do
         {:ok, _ref} ->
           {:cont, :ok}
 
         {:error, _} ->
-          {:halt, {:error, {:missing_superinterface, iface, super_interface, head}}}
+          {:halt, {:error, {:missing_superinterface, obligation}}}
       end
     end)
   end
@@ -3409,10 +4492,33 @@ defmodule Cure.Elab.Program do
              Cure.Elab.Implementation.register(impl_ast, acc) do
         {:cont, {:ok, acc2, fns ++ mangled_fns, obligations ++ new_obligations}}
       else
-        {:error, _} = err -> {:halt, err}
+        {:error, {:source_context, _reason, _context}} = err ->
+          {:halt, err}
+
+        {:error, reason} ->
+          {:halt, {:error, {:source_context, reason, deriving_source_context(decl, name)}}}
       end
     end)
   end
+
+  defp deriving_source_context({:container, meta, _body}, interface) do
+    info = Cure.MetaAST.Metadata.source_info(meta) || %Cure.MetaAST.SourceInfo{}
+    declaration_name = Keyword.get(meta, :name)
+
+    %{
+      span: Map.get(info.fields, {:deriving_interface, interface}) || Map.get(info.fields, :deriving) || info.whole,
+      deriving_span: Map.get(info.fields, {:deriving_interface, interface}) || Map.get(info.fields, :deriving),
+      declaration_span: info.whole,
+      declaration_name_span: info.name,
+      checking: declaration_name,
+      interface: interface,
+      expectation_origin: :deriving,
+      expression_category: :deriving_clause
+    }
+  end
+
+  defp deriving_source_context(_decl, interface),
+    do: %{interface: interface, expectation_origin: :deriving, expression_category: :deriving_clause}
 
   defp register_builtin_from_meta(meta, env) do
     dec = Keyword.get(meta, :decorator)
@@ -3435,7 +4541,7 @@ defmodule Cure.Elab.Program do
     {plain, computed} = Enum.split_with(fn_decls, &(not MacroExpand.contains_computed_use?(&1)))
 
     Enum.reduce_while(plain ++ computed, {:ok, env}, fn decl, {:ok, acc} ->
-      case Declarations.elaborate_function_body(decl, acc) do
+      case elaborate_body_with_canonical_modules(decl, acc) do
         {:ok, acc2} ->
           {:cont, {:ok, acc2}}
 
@@ -3443,5 +4549,98 @@ defmodule Cure.Elab.Program do
           {:halt, err}
       end
     end)
+  end
+
+  # A computed macro can construct `M.f(...)` even when that spelling was not
+  # present in the authored AST. Resolve that failure exactly once through the
+  # canonical compile-universe index, merge M's checked interface as qualified
+  # (never lexical) availability, and retry the ordinary body elaborator. This
+  # is demand-driven module resolution, not a generated-AST dependency scan.
+  defp elaborate_body_with_canonical_modules(decl, env) do
+    case Declarations.elaborate_function_body(decl, env) do
+      {:error, reason} = error ->
+        with {:ok, module_name} <- missing_qualified_module(reason),
+             {:ok, enriched} <- load_indexed_qualified_module(env, module_name) do
+          elaborate_body_with_canonical_modules(decl, enriched)
+        else
+          _ -> error
+        end
+
+      success ->
+        success
+    end
+  end
+
+  defp missing_qualified_module({:source_context, reason, _context}),
+    do: missing_qualified_module(reason)
+
+  defp missing_qualified_module({:unknown_global, name}),
+    do: module_owner_from_dotted(name)
+
+  defp missing_qualified_module({:unknown_global, name, _details}),
+    do: module_owner_from_dotted(name)
+
+  defp missing_qualified_module(_reason), do: :error
+
+  defp module_owner_from_dotted(name) when is_atom(name) or is_binary(name) do
+    parts = name |> to_string() |> String.split(".")
+
+    case Enum.split(parts, length(parts) - 1) do
+      {[_ | _] = owner, [_name]} -> {:ok, Enum.join(owner, ".")}
+      _ -> :error
+    end
+  end
+
+  defp module_owner_from_dotted(_name), do: :error
+
+  defp load_indexed_qualified_module(env, module_name) do
+    with {:ok, source_path} <- canonical_module_path(module_name),
+         false <- module_loaded_in_env?(env, module_name),
+         {:ok, interface_env} <- load_module_interface(module_name, source_path),
+         {:ok, merged} <- merge_env(env, qualified_surface(interface_env)) do
+      qualified =
+        merge_module_visibility(
+          env.qualified_modules,
+          MapSet.new([module_name])
+        )
+
+      {:ok,
+       %{
+         merged
+         | import_modules: env.import_modules,
+           bare_modules: env.bare_modules,
+           bare_bindings: env.bare_bindings,
+           qualified_modules: qualified
+       }}
+    else
+      _ -> :error
+    end
+  end
+
+  defp canonical_module_path(module_name) do
+    case Process.get(:cure_module_index) do
+      %ModuleIndex{} = index ->
+        case ModuleIndex.fetch(index, module_name) do
+          {:ok, entry} -> {:ok, entry.source_path}
+          {:error, _} -> Cure.Compiler.SourceResolver.module_path(module_name)
+        end
+
+      _ ->
+        Cure.Compiler.SourceResolver.module_path(module_name)
+    end
+  end
+
+  defp qualified_surface(%Env{} = env) do
+    %{
+      env
+      | coherence: nil,
+        import_modules: MapSet.new(),
+        bare_modules: MapSet.new(),
+        bare_bindings: MapSet.new()
+    }
+  end
+
+  defp module_loaded_in_env?(env, owner) do
+    Enum.any?(all_global_keys(env), &(Cure.Elab.Name.owner(&1) == owner))
   end
 end

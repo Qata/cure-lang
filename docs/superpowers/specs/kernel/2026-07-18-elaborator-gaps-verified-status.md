@@ -147,7 +147,7 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
   `rel=same` (both accept); antibody `test/antigen/carried_index_invertibility_antibody_test.exs`
   (REACH RED→GREEN, CONTROL A false-measure still rejected, CONTROL B function-app-headed carried-eq
   still fires and fails closed on a wrong-family sibling). Real workaround removed:
-  `lib/std/otp_mailbox_pattern.cure`'s `deriv_sound` no longer delegates its `PTimes`/`PStar` arms
+  `metatheory/otp/src/otp_mailbox_pattern.cure`'s `deriv_sound` no longer delegates its `PTimes`/`PStar` arms
   through `ds_times`/`ds_star` helpers — they are inlined and elaborate directly. Full elab +
   oracle-replay + carried-index regression suites green (1274 tests).
 
@@ -176,7 +176,7 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
   third pattern-slot category (implicit-at-application / relevant-at-runtime) in
   `constructor_pattern`/`branch_scope`/`split_named_implicits`. Not a bounded edit.
 - Explicit-field + congruence-helper workaround still required (live in
-  `lib/std/otp_conversation.cure`).
+  `metatheory/otp/src/otp_conversation.cure`).
 
 ### E1 (headline) — sibling/context refinement on evidence match — **✅ ALREADY CLOSED** (E, no change needed; locked by oracle `e1sib` + antibody)
 > Naming: the handoff spec tracks the parent gap as **E1** ("refinement does not reach sibling

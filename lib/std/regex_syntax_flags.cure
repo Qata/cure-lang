@@ -1,0 +1,53 @@
+@group(:text)
+mod Std.Regex.Syntax.Flags
+  use Std.Regex.Syntax.Model
+
+  fn parse_literal_flags(flags: String, options: LiteralRegexOptions) -> LiteralFlags = match flags
+    [] -> LiteralFlagsParsed(options)
+    ['i' | rest] -> parse_literal_flags(rest, enable_modifier(CaselessModifier, options))
+    ['m' | rest] -> parse_literal_flags(rest, enable_modifier(MultilineModifier, options))
+    ['s' | rest] -> parse_literal_flags(rest, enable_modifier(DotallModifier, options))
+    ['x' | rest] -> parse_literal_flags(rest, enable_modifier(ExtendedModifier, options))
+    ['u' | rest] -> parse_literal_flags(rest, enable_modifier(UnicodeModifier, options))
+    ['f' | rest] -> parse_literal_flags(rest, enable_modifier(FirstlineModifier, options))
+    ['U' | rest] -> parse_literal_flags(rest, enable_modifier(UngreedyModifier, options))
+    ['E' | rest] -> parse_literal_flags(rest, enable_modifier(ExportModifier, options))
+    [_ | _] -> LiteralFlagsInvalid(:InvalidRegexModifier)
+
+  fn prepare_literal(pattern: String, options: LiteralRegexOptions) -> String = pickup
+    has_modifier(options, ExtendedModifier) -> strip_extended(pattern)
+    else -> pattern
+
+  fn strip_extended(input: String) -> String = match input
+    [] -> []
+    [char | rest] -> pickup
+      char == '\\' -> ['\\' | strip_extended_escaped(rest)]
+      char == '[' -> ['[' | strip_extended_class(rest)]
+      char == '#' -> strip_extended_comment(rest)
+      literal_extended_space(char) -> strip_extended(rest)
+      else -> [char | strip_extended(rest)]
+
+  fn literal_extended_space(char: Char) -> Bool =
+    char == ' ' or char == '\t' or char == '\n' or char == '\r' or
+      char == 12 or char == 11
+
+  fn strip_extended_escaped(input: String) -> String = match input
+    [] -> []
+    [char | rest] -> [char | strip_extended(rest)]
+
+  fn strip_extended_class(input: String) -> String = match input
+    [] -> []
+    [char | rest] -> pickup
+      char == '\\' -> ['\\' | strip_extended_class_escaped(rest)]
+      char == ']' -> [']' | strip_extended(rest)]
+      else -> [char | strip_extended_class(rest)]
+
+  fn strip_extended_class_escaped(input: String) -> String = match input
+    [] -> []
+    [char | rest] -> [char | strip_extended_class(rest)]
+
+  fn strip_extended_comment(input: String) -> String = match input
+    [] -> []
+    [char | rest] -> pickup
+      char == '\n' -> strip_extended(rest)
+      else -> strip_extended_comment(rest)

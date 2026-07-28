@@ -26,11 +26,9 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
   #            wrongly shaped) trips the gate for a human to classify. This frozen
   #            set IS the node-tag half of the contract sent to Metastatic.
   #
-  #   * INV-A / INV-B — completeness — remain a SHRINKING ALLOWLIST, because the
-  #     corpus does NOT yet satisfy them: ~265 `:bad_shape` / `:node_child` sites
-  #     hide nodes from a canonical-guard walker and are Cure-side normalization
-  #     targets. The allowlist reaching `[]` is the definition of done; each fix
-  #     deletes the bucket it eliminates.
+  #   * INV-A / INV-B — completeness — are hard invariants. The corpus must be
+  #     reachable by a canonical-guard walker; any new structural bucket is a
+  #     normalization regression.
 
   # INV-C.2 — the frozen node-tag vocabulary. Exactly the canonical-node tags that
   # occur inside a meta value across the whole corpus (derived by enumeration, not
@@ -62,15 +60,7 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
   # INV-A / INV-B — the shrinking structural allowlist. Each entry is a
   # {kind, tag, key} bucket (key always nil) whose nodes a canonical-guard walker
   # cannot reach. These are normalization targets, not permanent shape.
-  @structural_allowlist MapSet.new([
-                          {:bad_shape, :named_dom, nil},
-                          # Relevant-implicit binder `{name: Type}` — like :named_dom, a
-                          # dependent binder whose 2nd slot is a bare name, not canonical
-                          # children. Deliberate construct (E2-residual); subterms handled
-                          # by the elaborator, not a canonical-guard walker.
-                          {:bad_shape, :implicit_dom, nil},
-                          {:node_child, :gadt_ctor, nil}
-                        ])
+  @structural_allowlist MapSet.new()
 
   # Every committed first-party .cure tree. Detection is structural, so widening the
   # corpus only ever adds coverage — it never changes how a node is judged.

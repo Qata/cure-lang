@@ -38,30 +38,31 @@ defmodule :cure_std_json_test do
         s = :cure_std_json.encode({:Num, f})
         assert is_binary(s)
         # `decode(encode(f))` must recover the same float.
-        assert {:Ok, {:Num, ^f}} = :cure_std_json.decode(s)
+        assert {:ok, {:Num, ^f}} = :cure_std_json.decode(s)
       end
     end
   end
 
   describe "decode/1" do
     test "parses valid JSON into the Value ADT" do
-      assert {:Ok, {:Obj, _}} = :cure_std_json.decode(~s({"a":1,"b":[true, null, "s"]}))
+      assert {:ok, {:Obj, _}} = :cure_std_json.decode(~s({"a":1,"b":[true, null, "s"]}))
     end
 
     test "returns an error string on bad input" do
-      assert {:Error, _msg} = :cure_std_json.decode("{bogus")
+      assert {:error, _msg} = :cure_std_json.decode("{bogus")
     end
 
     test "null decodes to the nullary Null(), the bare atom :Null" do
       # `Null` is a nullary Cure constructor and erases to the bare atom `:Null`
       # on the dependent pipeline. Returning a bare `:null` (lowercase) or a
       # tuple would produce a `Value` Cure could not pattern-match.
-      assert {:Ok, :Null} = :cure_std_json.decode("null")
+      assert {:ok, :Null} = :cure_std_json.decode("null")
       assert :cure_std_json.encode(:Null) == "null"
     end
 
     test "an object decodes to JsonPair-tagged pairs" do
-      assert {:Ok, {:Obj, [{:JsonPair, "a", {:Num, 1.0}}]}} = :cure_std_json.decode(~s({"a":1}))
+      assert {:ok, {:Obj, [{:JsonPair, "a", {:Num, 1.0}}]}} =
+               :cure_std_json.decode(~s({"a":1}))
     end
   end
 

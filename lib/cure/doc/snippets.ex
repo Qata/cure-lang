@@ -1,0 +1,330 @@
+defmodule Cure.Doc.Snippets do
+  @moduledoc """
+  Discovers and compiles `cure` fenced code blocks in Markdown files and Cure
+  docstrings.
+
+  A fence is checked when its info string starts with the complete word
+  `cure`; for example, both `` ```cure `` and
+  `` ```cure path=example.cure `` are checked. The source may be a complete
+  module, a group of declarations, or an expression. Declaration and expression
+  snippets are placed in a uniquely named synthetic module.
+
+  Repository checks use tracked and untracked, non-ignored Markdown and Cure
+  files. This avoids generated documentation and dependency trees without
+  overlooking a new document before it is added to Git.
+  """
+
+  @enforce_keys [:path, :line, :code, :info]
+  defstruct [:path, :line, :code, :info]
+
+  @type t :: %__MODULE__{
+          path: Path.t(),
+          line: pos_integer(),
+          code: String.t(),
+          info: String.t()
+        }
+
+  @declaration_starts ~w[
+    @
+    data
+    effect
+    fn
+    implementation
+    interface
+    macro
+    primitive
+    precedencegroup
+    type
+    typealias
+    use
+  ]
+
+  @doc "Return every tracked or untracked, non-ignored Markdown file below `root`."
+  @spec markdown_files(Path.t()) :: [Path.t()]
+  def markdown_files(root \\ File.cwd!()) do
+    repository_files(root, "*.md")
+  end
+
+  @doc "Return every tracked or untracked, non-ignored Cure file below `root`."
+  @spec cure_files(Path.t()) :: [Path.t()]
+  def cure_files(root \\ File.cwd!()) do
+    repository_files(root, "*.cure")
+  end
+
+  defp repository_files(root, pattern) do
+    case System.cmd(
+           "git",
+           ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", pattern],
+           cd: root
+         ) do
+      {output, 0} ->
+        output
+        |> String.split(<<0>>, trim: true)
+        |> Enum.map(&Path.join(root, &1))
+        |> Enum.filter(&File.regular?/1)
+        |> Enum.sort()
+
+      {_output, _status} ->
+        Path.wildcard(Path.join(root, "**/#{pattern}"))
+        |> Enum.reject(&excluded_path?/1)
+        |> Enum.sort()
+    end
+  end
+
+  @doc "Extract checked Cure fences from one Markdown file."
+  @spec extract_file(Path.t()) :: {:ok, [t()]} | {:error, File.posix()}
+  def extract_file(path) do
+    with {:ok, markdown} <- File.read(path) do
+      {:ok, extract(markdown, path)}
+    end
+  end
+
+  @doc "Extract checked Cure fences from Cure docstrings in one source file."
+  @spec extract_cure_file(Path.t()) :: {:ok, [t()]} | {:error, File.posix()}
+  def extract_cure_file(path) do
+    with {:ok, source} <- File.read(path) do
+      {:ok, extract_cure(source, path)}
+    end
+  end
+
+  @doc "Extract checked Cure fences from doc comments in Cure source."
+  @spec extract_cure(String.t(), Path.t()) :: [t()]
+  def extract_cure(source, path \\ "nofile.cure") when is_binary(source) do
+    source
+    |> docstring_markdown()
+    |> extract(path)
+  end
+
+  @doc "Extract checked Cure fences from Markdown source."
+  @spec extract(String.t(), Path.t()) :: [t()]
+  def extract(markdown, path \\ "nofile.md") when is_binary(markdown) do
+    markdown
+    |> String.split("\n", trim: false)
+    |> Enum.with_index(1)
+    |> extract_lines(path, nil, [])
+    |> Enum.reverse()
+  end
+
+  @doc """
+  Return the whitespace/comma-separated tags following `cure`.
+
+  Attribute tokens such as `path=demo.cure` are metadata, not tags.
+  """
+  @spec tags(t() | String.t()) :: MapSet.t(String.t())
+  def tags(%__MODULE__{info: info}), do: tags(info)
+
+  def tags(info) when is_binary(info) do
+    info
+    |> String.split(~r/[\s,]+/, trim: true)
+    |> Enum.drop(1)
+    |> Enum.reject(&String.contains?(&1, "="))
+    |> MapSet.new()
+  end
+
+  @doc "Return whether a snippet carries `tag` in its fence info string."
+  @spec tagged?(t(), String.t()) :: boolean()
+  def tagged?(%__MODULE__{} = snippet, tag), do: MapSet.member?(tags(snippet), tag)
+
+  @doc "Return the single expected diagnostic code declared by the fence."
+  @spec expected_error(t()) :: nil | {:ok, String.t()} | {:error, [String.t()]}
+  def expected_error(%__MODULE__{} = snippet) do
+    codes =
+      snippet
+      |> tags()
+      |> Enum.filter(&Regex.match?(~r/^E\d{3}$/, &1))
+      |> Enum.sort()
+
+    case codes do
+      [] -> nil
+      [code] -> {:ok, code}
+      _ -> {:error, codes}
+    end
+  end
+
+  @doc """
+  Compile a snippet.
+
+  `support` is a declaration-only Cure source appended inside synthetic
+  modules. Appending it keeps diagnostics for the authored snippet aligned with
+  the Markdown line numbers.
+  """
+  @spec compile(t(), keyword()) :: {:ok, module(), [term()]} | {:error, term()}
+  def compile(%__MODULE__{} = snippet, opts \\ []) do
+    support = Keyword.get(opts, :support, "")
+    output_dir = Keyword.get(opts, :output_dir, "_build/cure/doc_snippets")
+    source = source(snippet, support)
+
+    Cure.Compiler.compile_string(source,
+      file: snippet.path,
+      output_dir: output_dir,
+      emit_events: false
+    )
+  end
+
+  @doc "Build the line-aligned Cure compilation unit for a snippet."
+  @spec source(t(), String.t()) :: String.t()
+  def source(%__MODULE__{} = snippet, support \\ "") do
+    code = String.trim_trailing(snippet.code)
+
+    if complete_module?(code) do
+      pad_to_line(code, snippet.line)
+    else
+      module = synthetic_module(snippet)
+
+      case snippet_kind(snippet.info, code) do
+        :declarations ->
+          prefix = pad_to_line("mod #{module}", max(snippet.line - 1, 1))
+          prefix <> "\n" <> indent(code) <> append_support(support)
+
+        :expression ->
+          prefix = pad_to_line("mod #{module}\n  fn snippet() =", max(snippet.line - 2, 1))
+          prefix <> "\n" <> indent(code, 4) <> append_support(support)
+      end
+    end
+  end
+
+  defp extract_lines([], _path, nil, acc), do: acc
+  defp extract_lines([], path, open, _acc), do: raise("unclosed Markdown fence in #{path}:#{open.line - 1}")
+
+  defp extract_lines([{line, number} | rest], path, nil, acc) do
+    case opening_fence(line) do
+      {:ok, marker, info} ->
+        open = %{marker: marker, info: info, line: number + 1, body: []}
+        extract_lines(rest, path, open, acc)
+
+      :error ->
+        extract_lines(rest, path, nil, acc)
+    end
+  end
+
+  defp extract_lines([{line, _number} | rest], path, open, acc) do
+    if closing_fence?(line, open.marker) do
+      acc =
+        if cure_info?(open.info) do
+          [
+            %__MODULE__{
+              path: path,
+              line: open.line,
+              code: open.body |> Enum.reverse() |> Enum.join("\n"),
+              info: open.info
+            }
+            | acc
+          ]
+        else
+          acc
+        end
+
+      extract_lines(rest, path, nil, acc)
+    else
+      extract_lines(rest, path, %{open | body: [line | open.body]}, acc)
+    end
+  end
+
+  defp opening_fence(line) do
+    case Regex.run(~r/^\s{0,3}(`{3,}|~{3,})(.*)$/, line) do
+      [_, marker, info] -> {:ok, marker, String.trim(info)}
+      _ -> :error
+    end
+  end
+
+  defp closing_fence?(line, marker) do
+    char = String.first(marker)
+    min = String.length(marker)
+    Regex.match?(~r/^\s{0,3}#{Regex.escape(char)}{#{min},}\s*$/, line)
+  end
+
+  defp cure_info?(info), do: Regex.match?(~r/^cure(?:\s|,|$)/, info)
+
+  defp complete_module?(code), do: Regex.match?(~r/^\s*(?:@\w+(?:\([^)]*\))?\s+)*mod\s+/, code)
+
+  defp snippet_kind(info, code) do
+    cond do
+      MapSet.member?(tags(info), "expr") -> :expression
+      not MapSet.disjoint?(tags(info), MapSet.new(["declaration", "declarations"])) -> :declarations
+      declaration_source?(code) -> :declarations
+      true -> :expression
+    end
+  end
+
+  defp declaration_source?(code) do
+    first =
+      code
+      |> String.split("\n")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == "" or String.starts_with?(&1, "#")))
+      |> List.first()
+
+    case first do
+      nil -> true
+      "@" <> _attribute -> true
+      line -> Enum.any?(@declaration_starts, &(line == &1 or String.starts_with?(line, &1 <> " ")))
+    end
+  end
+
+  defp synthetic_module(snippet) do
+    digest =
+      :crypto.hash(:sha256, "#{snippet.path}:#{snippet.line}:#{snippet.code}")
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 16)
+
+    "DocSnippet_#{digest}"
+  end
+
+  defp pad_to_line(source, line) when line <= 1, do: source
+  defp pad_to_line(source, line), do: String.duplicate("\n", line - 1) <> source
+
+  defp indent(source, spaces \\ 2) do
+    prefix = String.duplicate(" ", spaces)
+
+    source
+    |> String.split("\n", trim: false)
+    |> Enum.map_join("\n", fn
+      "" -> ""
+      line -> prefix <> line
+    end)
+  end
+
+  defp append_support(""), do: "\n"
+  defp append_support(support), do: "\n\n" <> indent(String.trim(support)) <> "\n"
+
+  defp excluded_path?(path) do
+    Enum.any?(["/.git/", "/_build/", "/deps/", "/site/deps/", "/doc/"], &String.contains?(path, &1))
+  end
+
+  # Turn source doc comments into a Markdown view while retaining one output
+  # line per source line. This lets diagnostics point at the original `.cure`
+  # location after a snippet is wrapped in a synthetic module.
+  defp docstring_markdown(source) do
+    {lines, _in_fence} =
+      source
+      |> String.split("\n", trim: false)
+      |> Enum.map_reduce(nil, fn line, in_fence ->
+        {rendered, next_in_fence} = docstring_line(line, in_fence)
+        {rendered, next_in_fence}
+      end)
+
+    Enum.join(lines, "\n")
+  end
+
+  defp docstring_line(line, indent) when is_binary(indent) do
+    if String.trim(line) == "###" do
+      {"", nil}
+    else
+      {String.replace_prefix(line, indent, ""), indent}
+    end
+  end
+
+  defp docstring_line(line, nil) do
+    case Regex.run(~r/^\s*##(?!#)(?: ?)(.*)$/, line) do
+      [_, body] -> {body, nil}
+      _ -> {"", doc_fence_indent(line)}
+    end
+  end
+
+  defp doc_fence_indent(line) do
+    case Regex.run(~r/^(\s*)###\s*$/, line) do
+      [_, indent] -> indent
+      _ -> nil
+    end
+  end
+end

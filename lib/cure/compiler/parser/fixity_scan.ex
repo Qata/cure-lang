@@ -12,11 +12,12 @@ defmodule Cure.Compiler.Parser.FixityScan do
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Compiler.Parser.FixityTable
 
-  @empty %{fixity: [], uses: [], prelude?: false, module: nil}
+  @empty %{fixity: [], uses: [], qualified_targets: [], prelude?: false, module: nil}
 
   @spec harvest_source(String.t(), String.t(), FixityTable.t()) :: %{
           fixity: [tuple()],
           uses: [%{target: String.t(), line: pos_integer()}],
+          qualified_targets: [%{target: String.t(), line: pos_integer()}],
           prelude?: boolean(),
           module: String.t() | nil
         }
@@ -24,10 +25,13 @@ defmodule Cure.Compiler.Parser.FixityScan do
     case Lexer.tokenize(source, file: file, emit_events: false) do
       {:ok, tokens} ->
         exprs = Parser.harvest(tokens, file, base, Cure.Edition.current())
+        facts = collect_module_facts(exprs)
+        qualified_targets = normalize_qualified_targets(collect_qualified_targets(exprs), facts.uses)
 
         %{
-          fixity: collect_fixity(exprs),
-          uses: collect_uses(exprs),
+          fixity: facts.fixity,
+          uses: facts.uses,
+          qualified_targets: qualified_targets,
           prelude?: prelude?(exprs),
           module: module_name(exprs)
         }
@@ -45,6 +49,13 @@ defmodule Cure.Compiler.Parser.FixityScan do
         {:precedencegroup, _, _} = n -> [n]
         _ -> []
       end)
+
+  @doc "Collect a harvested module's fixity declarations and imports in one walk."
+  @spec collect_module_facts(term()) :: %{fixity: [tuple()], uses: [%{target: String.t(), line: pos_integer()}]}
+  def collect_module_facts(ast) do
+    {fixity, uses} = deep_scan(ast, [], [])
+    %{fixity: Enum.reverse(fixity), uses: Enum.reverse(uses)}
+  end
 
   @doc "Return exact authored name ranges for the selected precedence groups."
   @spec group_spans(term(), [atom()]) :: [Cure.Diagnostic.Span.t()]
@@ -135,6 +146,87 @@ defmodule Cure.Compiler.Parser.FixityScan do
   @spec collect_use_targets(term()) :: [String.t()]
   def collect_use_targets(ast), do: ast |> collect_uses() |> Enum.map(& &1.target)
 
+  @doc "Collect modules named by qualified function calls without opening them lexically."
+  @spec collect_qualified_targets(term()) :: [%{target: String.t(), line: pos_integer()}]
+  def collect_qualified_targets(ast) do
+    ast
+    |> collect_qualified_targets(nil, [])
+    |> Enum.reverse()
+    |> Enum.uniq_by(&{&1.target, &1.line})
+  end
+
+  defp collect_qualified_targets(node, inherited_line, acc) when is_tuple(node) do
+    meta =
+      if tuple_size(node) >= 2 and is_list(elem(node, 1)),
+        do: elem(node, 1),
+        else: []
+
+    line = source_line(meta) || inherited_line
+
+    acc =
+      case node do
+        {:function_call, call_meta, _args} when is_list(call_meta) ->
+          case qualified_owner(Keyword.get(call_meta, :name)) do
+            nil -> acc
+            owner -> [%{target: owner, line: line || 1} | acc]
+          end
+
+        _ ->
+          acc
+      end
+
+    Enum.reduce(Tuple.to_list(node), acc, &collect_qualified_targets(&1, line, &2))
+  end
+
+  defp collect_qualified_targets(nodes, inherited_line, acc) when is_list(nodes),
+    do: Enum.reduce(nodes, acc, &collect_qualified_targets(&1, inherited_line, &2))
+
+  defp collect_qualified_targets(_leaf, _inherited_line, acc), do: acc
+
+  @doc "Collect qualified targets and canonicalize applied-type owners against explicit imports."
+  @spec collect_qualified_targets(term(), [%{target: String.t(), line: pos_integer()}]) ::
+          [%{target: String.t(), line: pos_integer()}]
+  def collect_qualified_targets(ast, uses),
+    do: ast |> collect_qualified_targets() |> normalize_qualified_targets(uses)
+
+  defp qualified_owner(name) when is_binary(name) do
+    case String.split(name, ".") do
+      [_bare] -> nil
+      parts -> parts |> Enum.drop(-1) |> Enum.join(".")
+    end
+  end
+
+  defp qualified_owner(_name), do: nil
+
+  defp source_line(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{start_line: line}} -> line
+      _ -> Keyword.get(meta, :line)
+    end
+  end
+
+  # Applied qualified types are harvested from their nested attribute-access
+  # representation. That representation's call node omits the leading segment
+  # (`Std.Otp.Raw.Selector(p)` reports `Otp.Raw`), while ordinary qualified calls
+  # retain it. If the shortened owner uniquely names the suffix of an explicit
+  # `use`, restore that canonical module identity. This removes a false dependency
+  # without guessing among unrelated modules.
+  defp normalize_qualified_targets(targets, uses) do
+    used_modules = Enum.map(uses, & &1.target)
+
+    Enum.map(targets, fn reference ->
+      matches =
+        Enum.filter(used_modules, fn used ->
+          used == reference.target or String.ends_with?(used, "." <> reference.target)
+        end)
+
+      case matches do
+        [canonical] -> %{reference | target: canonical}
+        _ -> reference
+      end
+    end)
+  end
+
   @spec prelude?(term()) :: boolean()
   def prelude?(ast) do
     deep_reduce(ast, false, fn
@@ -155,6 +247,12 @@ defmodule Cure.Compiler.Parser.FixityScan do
   @spec module_name(term()) :: String.t() | nil
   def module_name(ast) do
     deep_reduce(ast, nil, fn
+      {:lift_module, meta, _}, nil when is_list(meta) ->
+        case Keyword.get(meta, :module) do
+          name when is_binary(name) -> name
+          _macro_hole_or_missing -> nil
+        end
+
       {:container, meta, _}, nil when is_list(meta) ->
         if Keyword.get(meta, :container_type) in @module_container_types,
           do: Keyword.get(meta, :name),
@@ -167,12 +265,57 @@ defmodule Cure.Compiler.Parser.FixityScan do
 
   # -- deep walkers (mirror BuiltinFixity.collect_fixity_nodes shape) --------
 
-  defp deep_collect(node, f) when is_tuple(node) do
-    f.(node) ++ (node |> Tuple.to_list() |> deep_collect(f))
+  defp deep_collect(node, f) do
+    node
+    |> deep_collect(f, [])
+    |> Enum.reverse()
   end
 
-  defp deep_collect(list, f) when is_list(list), do: Enum.flat_map(list, &deep_collect(&1, f))
-  defp deep_collect(_other, _f), do: []
+  # Build the result backwards so a scanner never repeatedly copies the
+  # already-visited prefix with `++`. The visitor is applied before children,
+  # matching the old pre-order result; reversing the accumulated list restores
+  # the same order at the boundary.
+  defp deep_collect(node, f, acc) when is_tuple(node) do
+    acc = Enum.reduce(f.(node), acc, &[&1 | &2])
+    Enum.reduce(Tuple.to_list(node), acc, &deep_collect(&1, f, &2))
+  end
+
+  defp deep_collect(list, f, acc) when is_list(list),
+    do: Enum.reduce(list, acc, &deep_collect(&1, f, &2))
+
+  defp deep_collect(_other, _f, acc), do: acc
+
+  defp deep_scan(node, fixity, uses) when is_tuple(node) do
+    {fixity, uses} =
+      case node do
+        {:fixity, _, _} = value ->
+          {[value | fixity], uses}
+
+        {:precedencegroup, _, _} = value ->
+          {[value | fixity], uses}
+
+        {:import, meta, _} when is_list(meta) ->
+          case Keyword.get(meta, :source) do
+            source when is_binary(source) ->
+              {fixity, [%{target: source, line: Keyword.get(meta, :line, 1)} | uses]}
+
+            _ ->
+              {fixity, uses}
+          end
+
+        _ ->
+          {fixity, uses}
+      end
+
+    Enum.reduce(Tuple.to_list(node), {fixity, uses}, fn child, acc ->
+      deep_scan(child, elem(acc, 0), elem(acc, 1))
+    end)
+  end
+
+  defp deep_scan(list, fixity, uses) when is_list(list),
+    do: Enum.reduce(list, {fixity, uses}, fn child, {f, u} -> deep_scan(child, f, u) end)
+
+  defp deep_scan(_other, fixity, uses), do: {fixity, uses}
 
   defp deep_reduce(node, acc, f) when is_tuple(node) do
     acc = f.(node, acc)

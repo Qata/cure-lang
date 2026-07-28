@@ -54,4 +54,20 @@ defmodule Cure.Elab.ErasureMarkingTest do
     assert erased == 5
     assert present == 2
   end
+
+  test "named GADT fields preserve explicit source grades" do
+    src = """
+    type Tag = Only
+    type Witness indices (x: Tag)
+      WitnessOnly : Witness(Only())
+    type Box indices (x: Tag)
+      Boxed : (proof :erased Witness(x)) -> (value: Tag) -> Box(x)
+    fn consume(proof :erased Witness(Only()), value: Tag) -> Tag = value
+    fn run() -> Tag = consume(WitnessOnly(), Only())
+    """
+
+    {:ok, env} = elaborate_all(src)
+    assert Inductive.ctor_quantities(env, :Boxed) == [:erased, :erased, :unrestricted]
+    assert Env.get_def(env, :consume).plicities == [:explicit, :explicit]
+  end
 end

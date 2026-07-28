@@ -13,6 +13,15 @@ defmodule Cure.Compiler.BuildManifest do
   @manifest_version 1
   @filename ".cure_manifest"
   @toolchain_fingerprint_key {__MODULE__, :toolchain_fingerprint}
+  @non_semantic_toolchain_prefixes [
+    "Elixir.Antigen.",
+    "Elixir.Mix.Tasks.",
+    "Elixir.Cure.CLI",
+    "Elixir.Cure.Diagnostic",
+    "Elixir.Cure.LSP",
+    "Elixir.Cure.Profiler",
+    "Elixir.Cure.REPL"
+  ]
 
   @type entry :: %{
           source_path: String.t(),
@@ -93,7 +102,15 @@ defmodule Cure.Compiler.BuildManifest do
     Mix.Project.compile_path()
     |> Path.join("*.beam")
     |> Path.wildcard()
+    |> Enum.filter(&semantic_toolchain_beam?/1)
     |> Enum.sort()
+  end
+
+  @doc false
+  @spec semantic_toolchain_beam?(Path.t()) :: boolean()
+  def semantic_toolchain_beam?(path) do
+    basename = Path.basename(path, ".beam")
+    not Enum.any?(@non_semantic_toolchain_prefixes, &String.starts_with?(basename, &1))
   end
 
   defp toolchain_signature(beams) do

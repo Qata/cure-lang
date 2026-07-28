@@ -125,17 +125,19 @@ defmodule Cure.Elab.DerivingTest do
     assert apply(m, :ltEqual, []) == false
   end
 
-  # `Show` renders to `String`, but the dependent pipeline has neither a `String`
-  # surface type nor string concatenation / `Int → String` yet (both arrive with
-  # the String value surface, #27/#29). The blocker is upstream of deriving —
-  # even *declaring* `interface Show(a) … -> String` fails to resolve `String` —
-  # so `deriving Show` is fully out of reach until that lands. `Deriving.generate`
-  # reports the specific blocker at its own layer; adding `Show` is then a
-  # one-clause change and this test is retired.
-  test "deriving Show is an honest, specific blocker (needs string primitives)" do
-    {:ok, env} = Program.elaborate("mod E\n  type Unit = MkUnit\nend")
+  test "deriving Show publishes a record implementation" do
+    {:ok, env} =
+      Program.elaborate("""
+      mod E
+        type String = Text
+        interface Show(a)
+          fn show(value: a) -> String
+      end
+      """)
 
-    assert {:error, {:deriving_needs_strings, :Show}} =
-             Cure.Elab.Deriving.generate(:Show, {:container, [name: "Color"], []}, env)
+    record = {:container, [container_type: :struct, name: "Color"], []}
+
+    assert {:ok, {:implementation, [{:interface, "Show"} | _], [_method]}} =
+             Cure.Elab.Deriving.generate(:Show, record, env)
   end
 end

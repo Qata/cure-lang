@@ -14,8 +14,15 @@ defmodule Cure.Compiler.MacroUnits do
   @spec literal(map(), number(), String.t()) :: {:ok, map()} | {:error, term()}
   def literal(registry, value, suffix) when is_map(registry) and is_number(value) and is_binary(suffix) do
     case Map.fetch(registry, suffix) do
-      {:ok, unit} -> {:ok, %{kind: :unit_literal, value: value, suffix: suffix, unit: unit, scaled: value * unit.scale}}
-      :error -> {:error, {:unknown_unit, suffix}}
+      {:ok, %{scale: scale, dimension: dimension} = unit}
+      when is_number(scale) and scale > 0 and is_atom(dimension) ->
+        {:ok, %{kind: :unit_literal, value: value, suffix: suffix, unit: unit, scaled: value * scale}}
+
+      {:ok, _unit} ->
+        {:error, {:invalid_unit, suffix}}
+
+      :error ->
+        {:error, {:unknown_unit, suffix}}
     end
   end
 

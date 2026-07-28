@@ -45,6 +45,39 @@ defmodule Cure.Elab.ResolutionTest do
     assert Resolution.resolve_qualified(env, "Std.Bool.True", :value) == :error
   end
 
+  test "qualified availability does not open a module's names lexically" do
+    env =
+      %{
+        Env.empty()
+        | bare_modules: MapSet.new(),
+          qualified_modules: MapSet.new(["Std.Regex"])
+      }
+      |> Env.add_def(:"Std.Regex#same", {:type, 0}, {:type, 0})
+
+    assert Resolution.resolve_qualified(env, "Std.Regex.same", :value) ==
+             {:ok, :"Std.Regex#same"}
+
+    assert Resolution.resolve_bare(env, :same) == :none
+  end
+
+  test "transitive providers do not leak bare names" do
+    env =
+      %{
+        Env.empty()
+        | import_modules: MapSet.new(["Direct"]),
+          bare_modules: MapSet.new(["Direct"]),
+          qualified_modules: MapSet.new(["Direct", "Transitive"])
+      }
+      |> Env.add_def(:"Direct#open_name", {:type, 0}, {:type, 0})
+      |> Env.add_def(:"Transitive#hidden_name", {:type, 0}, {:type, 0})
+
+    assert Resolution.resolve_bare(env, :open_name) == {:ok, :"Direct#open_name"}
+    assert Resolution.resolve_bare(env, :hidden_name) == :none
+
+    assert Resolution.resolve_qualified(env, "Transitive.hidden_name", :value) ==
+             {:ok, :"Transitive#hidden_name"}
+  end
+
   test "bare lookup resolves one canonical provider and reports direct ambiguity" do
     env =
       %Env{import_modules: MapSet.new(["Std.Foo", "Std.Bar"])}
@@ -58,6 +91,21 @@ defmodule Cure.Elab.ResolutionTest do
     assert {:ambiguous, owners} = Resolution.resolve_bare(env, :Nat)
     assert Enum.sort(owners) == ["Std.Bar", "Std.Foo"]
     assert Enum.sort(Resolution.ambiguous_modules(env, :Nat)) == ["Std.Bar", "Std.Foo"]
+  end
+
+  test "a direct import wins over an ambient prelude provider without changing either identity" do
+    env =
+      %{
+        Env.empty()
+        | import_modules: MapSet.new(["Direct"]),
+          bare_modules: MapSet.new(["Direct", "Prelude"]),
+          qualified_modules: MapSet.new(["Direct", "Prelude"])
+      }
+      |> Env.add_def(:"Direct#same", {:type, 0}, {:type, 0})
+      |> Env.add_def(:"Prelude#same", {:type, 0}, {:type, 0})
+
+    assert Resolution.resolve_bare(env, :same) == {:ok, :"Direct#same"}
+    assert Resolution.resolve_qualified(env, "Prelude.same", :value) == {:ok, :"Prelude#same"}
   end
 
   test "the current module's canonical declaration wins a bare lookup" do

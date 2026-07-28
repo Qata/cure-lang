@@ -519,7 +519,7 @@ prove anything.
 not "to the left of an arrow" in a way that smuggles in a loop). It keeps inductive
 definitions sound.
 
-```cure
+```cure E103
 type Bad = Mk(Bad -> Bad)       # rejected: self-reference left of -> fails positivity
 ```
 
@@ -557,7 +557,8 @@ computation), this is a fact you hold as a *value* and pass around.
 fn plus_zero_right(n: Nat) -> Equivalent(Nat, plus(n, Z), n)     # a provable equality
 ```
 
-**refl / reflexive** — Reflexivity: the built-in proof that any value equals itself.
+**reflexive** — The sole constructor of `Equivalent(a, x, x)`, proving that
+any value is identical to itself. The old primitive spelling `refl` is retired.
 The seed all equality proofs grow from.
 
 ```cure
@@ -862,12 +863,12 @@ and can only ever *ask* the kernel, never bypass it.
 # A soundness bug is only dangerous if it's in the kernel; that's why it stays tiny.
 ```
 
-**Classic vs. dependent pipeline** — Cure has two compile paths: the older **classic**
-one (a non-dependent checker + codegen, being retired) and the **dependent** one
-(elaborator + kernel). New work targets the dependent pipeline.
+**Classic vs. dependent pipeline** — Historical distinction. The classic
+non-dependent checker and code generator have been deleted; every current
+program uses the dependent elaborator, kernel, erasure, and emitter.
 
 ```cure
-# The same .cure source can elaborate dependently; classic is the fallback being removed.
+# There is no unchecked fallback path.
 ```
 
 **Antigen** — Cure's property-based *metatheory* test engine: it generates kernel

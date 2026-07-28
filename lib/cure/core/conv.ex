@@ -131,14 +131,18 @@ defmodule Cure.Core.Conv do
   # rule ignores it and recurses only on the present predecessor (well-typedness
   # forces `m` to the value both sides already agree on).
   defp conv_struct?({:vbounded, a}, {:vbounded, b}, _depth, _sig), do: a == b
-  defp conv_struct?({:vbounded, 0}, {:vctor, :First, [_m]}, _depth, _sig), do: true
-  defp conv_struct?({:vctor, :First, [_m]}, {:vbounded, 0}, _depth, _sig), do: true
 
-  defp conv_struct?({:vbounded, n}, {:vctor, :Next, [_m, pred]}, depth, sig) when n > 0,
-    do: conv_val?({:vbounded, n - 1}, pred, depth, sig)
+  defp conv_struct?({:vbounded, 0}, {:vctor, name, [_m]}, _depth, _sig),
+    do: Eval.constructor_name_matches?(name, :First)
 
-  defp conv_struct?({:vctor, :Next, [_m, pred]}, {:vbounded, n}, depth, sig) when n > 0,
-    do: conv_val?(pred, {:vbounded, n - 1}, depth, sig)
+  defp conv_struct?({:vctor, name, [_m]}, {:vbounded, 0}, _depth, _sig),
+    do: Eval.constructor_name_matches?(name, :First)
+
+  defp conv_struct?({:vbounded, n}, {:vctor, name, [_m, pred]}, depth, sig) when n > 0,
+    do: Eval.constructor_name_matches?(name, :Next) and conv_val?({:vbounded, n - 1}, pred, depth, sig)
+
+  defp conv_struct?({:vctor, name, [_m, pred]}, {:vbounded, n}, depth, sig) when n > 0,
+    do: Eval.constructor_name_matches?(name, :Next) and conv_val?(pred, {:vbounded, n - 1}, depth, sig)
 
   defp conv_struct?({:vneutral, n1}, {:vneutral, n2}, depth, sig),
     do: conv_neutral?(n1, n2, depth, sig)
@@ -158,7 +162,9 @@ defmodule Cure.Core.Conv do
     do: n1 == n2 and conv_spine?(vs1, vs2, depth, sig)
 
   defp conv_struct?({:vctor, n1, vs1}, {:vctor, n2, vs2}, depth, sig),
-    do: n1 == n2 and conv_spine?(coerce_fields(n1, vs1, sig), coerce_fields(n2, vs2, sig), depth, sig)
+    do:
+      Eval.constructor_name_matches?(n1, n2) and
+        conv_spine?(coerce_fields(n1, vs1, sig), coerce_fields(n2, vs2, sig), depth, sig)
 
   # Inert effect values: congruence ONLY — same node, pointwise-convertible
   # children. No reduction, no monad laws (design §3.2). Because these are
@@ -283,7 +289,7 @@ defmodule Cure.Core.Conv do
 
   defp same_value_no_delta?({:vctor, n1, args1}, {:vctor, n2, args2}, depth, sig),
     do:
-      n1 == n2 and
+      Eval.constructor_name_matches?(n1, n2) and
         same_spine_no_delta?(coerce_fields(n1, args1, sig), coerce_fields(n2, args2, sig), depth, sig)
 
   defp same_value_no_delta?(_a, _b, _depth, _sig), do: false

@@ -259,6 +259,22 @@ defmodule Cure.Elab.Unify do
   defp abstract_exact_term({:ctor, name, arguments}, target, depth),
     do: {:ctor, name, Enum.map(arguments, &abstract_exact_term(&1, target, depth))}
 
+  defp abstract_exact_term({:case, scrutinee, motive, branches}, target, depth) do
+    {:case, abstract_exact_term(scrutinee, target, depth), abstract_exact_term(motive, target, depth),
+     Enum.map(branches, fn {constructor, arity, body} ->
+       {constructor, arity, abstract_exact_term(body, target, depth + arity)}
+     end)}
+  end
+
+  defp abstract_exact_term({:effect_type, type}, target, depth),
+    do: {:effect_type, abstract_exact_term(type, target, depth)}
+
+  defp abstract_exact_term({:effect_pure, value}, target, depth),
+    do: {:effect_pure, abstract_exact_term(value, target, depth)}
+
+  defp abstract_exact_term({:effect_bind, effect, continuation}, target, depth),
+    do: {:effect_bind, abstract_exact_term(effect, target, depth), abstract_exact_term(continuation, target, depth)}
+
   defp abstract_exact_term(leaf, _target, _depth), do: leaf
 
   defp miller_or({:ok, ctx2}, _t1, _t2, _ctx, _sig, _depth), do: {:ok, ctx2}

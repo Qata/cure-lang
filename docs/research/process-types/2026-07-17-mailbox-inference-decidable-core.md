@@ -39,7 +39,7 @@ to it. `Std.Otp.Inference` provides:
 
 All total and kernel-certified; the "is this message handled?" check the literature makes
 the programmer discharge by annotation is settled by an algorithm. Idris-mirrored
-(`test/oracle/otp/inference`, rel=same).
+(`metatheory/otp/oracle/otp/inference`, rel=same).
 
 ## What stays open (the research core)
 

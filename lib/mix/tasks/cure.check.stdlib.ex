@@ -35,10 +35,30 @@ defmodule Mix.Tasks.Cure.Check.Stdlib do
     files = Path.wildcard(Path.join(@stdlib_dir, "*.cure")) |> Enum.sort()
 
     results =
-      Enum.map(files, fn path ->
+      case Cure.Compiler.compile_files(files,
+             output_dir: @output_dir,
+             emit_events: false,
+             source_roots: [@stdlib_dir],
+             continue_on_error: true
+           ) do
+        {:ok, result} ->
+          successes =
+            Enum.map(result.compiled, fn {path, module, warnings} ->
+              {path, {:ok, module, warnings}}
+            end)
+
+          failures = Enum.map(result.errors, fn {path, reason} -> {path, {:error, reason}} end)
+          successes ++ failures
+
+        {:error, reason} ->
+          [{@stdlib_dir, {:error, reason}}]
+      end
+
+    results =
+      Enum.map(results, fn {path, outcome} ->
         name = Path.basename(path, ".cure")
 
-        case Cure.Compiler.compile_file(path, output_dir: @output_dir, emit_events: false) do
+        case outcome do
           {:ok, module, []} ->
             IO.puts("  ok  #{pad(name)} -> #{module}")
             {:pass, name}

@@ -48,8 +48,11 @@ defmodule Cure.Compiler.ParserTest do
     end
 
     test "regex" do
-      assert {:function_call, meta, [pattern, flags]} = parse!("/[a-z]+/i")
-      assert meta[:name] == "Std.Regex.literal"
+      assert {:computed_use, meta, [_expander, {:macro_input, input_meta, [pattern, flags]}]} =
+               parse!("/[a-z]+/i")
+
+      assert meta[:keyword] == "regex"
+      assert input_meta[:keyword] == "regex"
       assert {:literal, pattern_meta, "[a-z]+"} = pattern
       assert pattern_meta[:subtype] == :string
       assert {:literal, flags_meta, "i"} = flags
@@ -57,8 +60,10 @@ defmodule Cure.Compiler.ParserTest do
     end
 
     test "bare slash regex expands to the pure Cure Regex literal macro" do
-      assert {:function_call, meta, [pattern, flags]} = parse!("/[A-z]*/")
-      assert meta[:name] == "Std.Regex.literal"
+      assert {:computed_use, meta, [_expander, {:macro_input, _input_meta, [pattern, flags]}]} =
+               parse!("/[A-z]*/")
+
+      assert meta[:keyword] == "regex"
 
       assert {:literal, pattern_meta, "[A-z]*"} = pattern
       assert pattern_meta[:subtype] == :string
@@ -67,10 +72,11 @@ defmodule Cure.Compiler.ParserTest do
     end
 
     test "preserves the complete Elixir modifier string for the pure macro" do
-      assert {:function_call, meta, [_pattern, {:literal, _flags_meta, "imsxurfUE"}]} =
+      assert {:computed_use, meta,
+              [_expander, {:macro_input, _input_meta, [_pattern, {:literal, _flags_meta, "imsxurfUE"}]}]} =
                parse!("/foo/imsxurfUE")
 
-      assert meta[:name] == "Std.Regex.literal"
+      assert meta[:keyword] == "regex"
     end
 
     test "char" do

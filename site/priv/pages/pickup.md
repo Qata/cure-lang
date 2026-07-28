@@ -62,7 +62,7 @@ syntactically guaranteed.
 Each guard MUST type to `Bool`. There is no truthy / falsy coercion;
 `pickup` is uncompromising about types:
 
-```cure
+```cure E093
 # Rejected: 1 is not Bool
 pickup
   1     -> :truthy
@@ -74,11 +74,12 @@ The branch right-hand sides MUST share a common upper bound under the
 language's subtyping relation. If they do not, the program is
 rejected with `E-PICKUP-BRANCH-MISMATCH`:
 
-```cure
+```cure E093
 # Rejected: branches are Int and String
-pickup
-  cond -> 1
-  else -> "two"
+fn choose(cond: Bool) =
+  pickup
+    cond -> 1
+    else -> "two"
 # E-PICKUP-BRANCH-MISMATCH
 ```
 

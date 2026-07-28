@@ -53,7 +53,7 @@ PoD deferred). The genuinely NEW work is the COMPOSITION — proving the three f
 *this* project's `Std.Otp.*` reduction — but every part has a shape to port, and the hardest
 part (operational preservation for mailbox-typed configurations) is done.
 
-**DONE — `Std.Otp.InferenceAdequacy` (`lib/std/otp_inference_adequacy.cure`).** The
+**DONE — `Std.Otp.InferenceAdequacy` (`metatheory/otp/src/otp_inference_adequacy.cure`).** The
 SEQUENTIAL and BRANCHING first-order fragment (`BNil`/`BRecv`/`BSend`/`BSeq`) is now PROVED end
 to end, no holes: `preservation_at` (subject reduction at `infer(b)`), `coverage`
 (`SendsIn(b,t) ⟹ Member(t, infer(b))`) including the `BSeq` branches via

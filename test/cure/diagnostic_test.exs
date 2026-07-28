@@ -246,7 +246,7 @@ defmodule Cure.DiagnosticTest do
     assert diagnostic.primary.span.source_id == "record_field_mismatch.cure"
     assert diagnostic.primary.span.path == "record_field_mismatch.cure"
     assert rendered =~ "6 |   fn bad() -> Point = Point{x: S(Z()), z: Z()}"
-    assert rendered =~ "^ this field is not declared by the record"
+    assert rendered =~ "^ this constructs `Point`; this field is not declared by the record"
     refute rendered =~ "at nofile:"
   end
 
@@ -260,7 +260,7 @@ defmodule Cure.DiagnosticTest do
 
   test "kernel, module, extern, and macro rejection families have structured verdicts" do
     cases = [
-      {{:hole_in_inference_position, "h"}, "E093"},
+      {{:hole_in_inference_position, "h"}, "E014"},
       {{:ctor_requires_checking_mode, "Nat"}, "E093"},
       {{:bounded_bound_not_concrete, {:literal, 10}}, "E093"},
       {{:cyclic_typealiases, ["A", "B"]}, "E105"},
@@ -271,7 +271,6 @@ defmodule Cure.DiagnosticTest do
       {{:extern_returns_union, "foreign", {:union, []}}, "E093"},
       {{:extern_union_indistinct, "foreign", :duplicate}, "E093"},
       {{:cannot_infer_dependent_match, :branch}, "E093"},
-      {{:bidirectional_erased_field, "Ctor"}, "E093"},
       {{:named_argument_mismatch, :unknown_label, %{label: "bad", written: ["bad"]}}, "E115"},
       {{:forced_pattern_not_in_pattern, :name}, "E093"},
       {{:named_implicit_not_in_pattern, :implicit}, "E093"},
@@ -282,10 +281,10 @@ defmodule Cure.DiagnosticTest do
       {{:unknown_family, :Missing}, "E091"},
       {{:unknown_ctor, :Missing}, "E091"},
       {{:foreign_ctor, :Missing}, "E091"},
-      {{:primitive_missing_builtin, :Int}, "E092"},
-      {{:unknown_primitive_tag, :future_primitive}, "E092"},
-      {{:primitive_floor_mismatch, :Int, :node, :floor}, "E092"},
-      {{:unsupported_declaration, :future_declaration}, "E092"},
+      {{:primitive_missing_builtin, :Int}, "E120"},
+      {{:unknown_primitive_tag, :future_primitive}, "E120"},
+      {{:primitive_floor_mismatch, :Int, :node, :floor}, "E120"},
+      {{:unsupported_declaration, :future_declaration}, "E120"},
       {{:invalid_syntax_node, :attrs}, "E092"},
       {{:raw_syntax_in_expansion, [:root]}, "E092"},
       {{:invalid_macro_rules, :rules}, "E092"},
@@ -314,7 +313,6 @@ defmodule Cure.DiagnosticTest do
       {:invalid_board_buses, "E092"},
       {:invalid_board_flash, "E092"},
       {:flash_offset_out_of_bounds, "E092"},
-      {{:unsupported_hole_arity, 3}, "E092"},
       {{:bad_grade, :not_a_grade}, "E100"},
       {{:unknown_symbol, "not_loaded"}, "E100"},
       {{:ill_formed_term, {:not_core, 1}}, "E100"},
@@ -420,6 +418,30 @@ defmodule Cure.DiagnosticTest do
     assert Diagnostic.message(Adapter.from_error(:not_total)) =~ "does not terminate"
     assert Diagnostic.message(Adapter.from_error(:not_a_function)) =~ "not callable"
     assert Diagnostic.message(Adapter.from_error(:opaque_not_eliminable)) =~ "opaque value"
+  end
+
+  test "type machine payloads expose Core only in explicit debug mode" do
+    problem = %Cure.Diagnostic.TypeProblem{
+      kind: :conversion_failure,
+      actual: {:data, :Actual, [], []},
+      expected: {:data, :Expected, [], []},
+      origin: %Cure.Diagnostic.ExpectationOrigin{kind: :annotation},
+      expression: :literal,
+      debug: %{constraints: [{:cannot_unify, :actual, :expected}]}
+    }
+
+    regular = Adapter.from_error(problem)
+    debug = Adapter.from_error(problem, debug: true)
+
+    refute Map.has_key?(regular.payload, :expected_core)
+    refute Map.has_key?(regular.payload, :actual_core)
+    refute Map.has_key?(regular.payload, :debug)
+    refute Renderer.json(regular) =~ "cannot_unify"
+
+    assert debug.payload.debug.expected_core =~ "Expected"
+    assert debug.payload.debug.actual_core =~ "Actual"
+    assert debug.payload.debug.details == problem.debug
+    assert Renderer.json(debug) =~ "cannot_unify"
   end
 
   test "contextual failures retain checking context and source carets", %{registry: registry, span: span} do
@@ -567,16 +589,22 @@ defmodule Cure.DiagnosticTest do
     assert diagnostic.payload.candidates == ["Name"]
   end
 
-  test "conversion failures present Cure types and retain Core payloads", %{registry: registry, span: span} do
+  test "conversion failures present Cure types and retain Core only in debug payloads", %{
+    registry: registry,
+    span: span
+  } do
     actual = {:data, :"Std.Bool#Bool", [], []}
     expected = {:data, :"Std.Int#Int", [], []}
     diagnostic = Adapter.from_error({:conversion_failure, actual, expected}, span: span)
+    debug = Adapter.from_error({:conversion_failure, actual, expected}, span: span, debug: true)
 
     assert diagnostic.code == "E093"
     assert Diagnostic.message(diagnostic) == "Expected: Int\nFound:    Bool"
     assert diagnostic.payload.expected_surface == "Int"
     assert diagnostic.payload.actual_surface == "Bool"
-    assert diagnostic.payload.expected_core == inspect(expected)
+    refute Map.has_key?(diagnostic.payload, :expected_core)
+    assert debug.payload.debug.expected_core == inspect(expected)
+    assert debug.payload.debug.actual_core == inspect(actual)
     assert Renderer.plain(diagnostic, registry) =~ "this expression has the wrong type"
   end
 
@@ -668,7 +696,8 @@ defmodule Cure.DiagnosticTest do
     condition_terminal = Renderer.terminal(condition, registry, color: :always)
     refute condition_terminal =~ IO.ANSI.green() <> "Bool"
     refute condition_terminal =~ IO.ANSI.red() <> "Int"
-    assert condition.payload.actual_core == inspect("Int")
+    refute Map.has_key?(condition.payload, :actual_core)
+    refute Map.has_key?(condition.payload, :debug)
   end
 
   test "all contextual type origins retain specialized user-facing titles", %{span: span} do
@@ -711,14 +740,15 @@ defmodule Cure.DiagnosticTest do
            span: span,
            expression_category: :literal,
            expectation_origin: :annotation
-         }}
+         }},
+        debug: true
       )
 
     assert diagnostic.title == "Annotation does not match"
     assert diagnostic.payload.origin.kind == :annotation
     assert diagnostic.payload.origin.owner == :answer
     assert diagnostic.payload.expression_category == :literal
-    assert diagnostic.payload.debug.cause == {:conversion_failure, {:bool_type}, {:int_type}}
+    assert diagnostic.payload.debug.details.cause == {:conversion_failure, {:bool_type}, {:int_type}}
     assert Renderer.plain(diagnostic, registry) =~ "type written in its annotation"
   end
 

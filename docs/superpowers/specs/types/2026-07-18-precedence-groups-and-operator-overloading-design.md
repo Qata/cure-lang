@@ -286,7 +286,7 @@ per-operand-type hardcoding for these operators is **removed**, not kept as a
 parallel path: the primitive equality/ordering primitives (`int_eq`, `float_eq`,
 `struct_eq`, `int_lt`, `float_lt`, `Std.Bool.` `` `eq` ``) live *only* inside the
 leaf instance bodies (`Equatable for Int`, …). Because instance selection is
-resolved statically when the operand type is concrete, `1 == 2` monomorphises to
+resolved statically when the operand type is concrete, `1 == 2` lowers to
 exactly the same emitted Core spine as today — the fast path is preserved as an
 *optimisation of the single route*, never as a second definition that could drift
 or that a user cannot override.

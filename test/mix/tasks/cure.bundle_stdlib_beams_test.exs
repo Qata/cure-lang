@@ -112,8 +112,9 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
     # already cover end-to-end. Keeping this test module focused on
     # the pure helpers keeps it fast and isolated.
 
-    test "a later module can cross-call an @extern fn of an earlier module" do
-      # Regression: `bundle/2` compiles files in sorted order and each
+    test "dependency order wins over filename order for cross-module calls" do
+      # Regression: `bundle/2` must compile in dependency order, not filename
+      # order, and each
       # module's import resolver (`module_exports?`) probes the *loaded*
       # version of an imported module. If a freshly-compiled beam is not
       # loaded into the VM before the next module compiles, the probe hits
@@ -124,13 +125,13 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
       src = make_tmp!()
       dst = make_tmp!()
 
-      write_cure!(src, "a_helper.cure", """
+      write_cure!(src, "z_helper.cure", """
       mod Std.TcaHelper
         @extern(:erlang, :abs, 1)
         fn ext_helper(x: Int) -> Int
       """)
 
-      write_cure!(src, "b_user.cure", """
+      write_cure!(src, "a_user.cure", """
       mod Std.TcaUser
         use Std.TcaHelper
         fn use_it(x: Int) -> Int = ext_helper(x)
@@ -144,6 +145,40 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
       cleanup_tmps()
     end
 
+    test "a skipped dependency is loaded before a changed consumer compiles" do
+      src = make_tmp!()
+      dst = make_tmp!()
+
+      write_cure!(src, "z_helper.cure", """
+      mod Std.TcaSkippedHelper
+        @extern(:erlang, :abs, 1)
+        fn ext_helper(x: Int) -> Int
+      """)
+
+      consumer =
+        write_cure!(src, "a_user.cure", """
+        mod Std.TcaSkippedUser
+          use Std.TcaSkippedHelper
+          fn use_it(x: Int) -> Int = ext_helper(x)
+        """)
+
+      assert {:ok, %{errors: 0}} = BundleStdlibBeams.bundle(src, dst)
+
+      :code.purge(:"Cure.Std.TcaSkippedHelper")
+      :code.delete(:"Cure.Std.TcaSkippedHelper")
+      bump_mtime!(consumer, 5)
+
+      assert {:ok, %{compiled: 1, skipped: 1, errors: 0}} =
+               BundleStdlibBeams.bundle(src, dst)
+
+      assert {:module, :"Cure.Std.TcaSkippedHelper"} =
+               :code.ensure_loaded(:"Cure.Std.TcaSkippedHelper")
+    after
+      :code.purge(:"Cure.Std.TcaSkippedHelper")
+      :code.delete(:"Cure.Std.TcaSkippedHelper")
+      cleanup_tmps()
+    end
+
     test "renders the underlying structured diagnostic when a module fails" do
       src = make_tmp!()
       dst = make_tmp!()
@@ -151,7 +186,7 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
       path =
         write_cure!(src, "broken.cure", """
         mod Std.Broken
-          fn broken() -> Int = Std.String.length("missing import")
+          fn broken() -> Int = missing_value
         """)
 
       output =
@@ -160,9 +195,9 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
         end)
 
       assert output =~ "UNKNOWN VALUE [E091]"
-      assert output =~ "`Std.String.length` is not available"
+      assert output =~ "`missing_value` is not available"
       assert output =~ path
-      assert output =~ "Std.String.length(\"missing import\")"
+      assert output =~ "fn broken() -> Int = missing_value"
       assert output =~ "^^^^^^"
     after
       cleanup_tmps()

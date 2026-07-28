@@ -60,6 +60,26 @@ defmodule Cure.Compiler.MacroLiteralTest do
     assert {:literal, _, 3} = right
   end
 
+  test "a computed token-class literal becomes a deferred compile-time use" do
+    node =
+      parse!("""
+      macro RegexLiteral
+        literal regex <pattern: String> <flags: String> computed by build_regex
+
+      fn f() = /[a-z]+/im
+      """)
+
+    assert {:computed_use, meta, [elab, {:macro_input, _, [pattern, flags]}]} =
+             find_fn_body(node, "f")
+
+    assert meta[:keyword] == "regex"
+    assert {:variable, _, "build_regex"} = elab
+    assert {:literal, pattern_meta, "[a-z]+"} = pattern
+    assert pattern_meta[:subtype] == :string
+    assert {:literal, flags_meta, "im"} = flags
+    assert flags_meta[:subtype] == :string
+  end
+
   defp find_fn_body({:function_def, meta, [body]}, name),
     do: if(to_string(Keyword.get(meta, :name)) == name, do: body)
 

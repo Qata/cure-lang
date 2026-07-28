@@ -14,21 +14,6 @@ defmodule Cure.Compiler.Printer do
 
   @default_indent "  "
 
-  # Reserved words (keywords + operator words) that lex as non-identifier
-  # tokens. A definition or reference that uses one of these as an ordinary
-  # name must be re-emitted backtick-quoted (`` `not` ``) to round-trip, since
-  # the lexer only yields them as an `:identifier` inside backticks.
-  @reserved_words ~w(
-    mod fn let type typealias indexed indices rec proto impl local use as
-    interface implementation deriving
-    match pickup if elif else then for do end
-    in try catch finally throw return yield
-    spawn send receive after
-    when where and or not
-    true false nil
-    extern proof
-  )
-
   # Spec-defined formatting parameters (PICKUP §8.7 / MATCH §9.7).
   # Aligned form is dropped if the longest clause head exceeds the
   # alignment limit, falling back to the unaligned form. Wrapping is
@@ -804,10 +789,22 @@ defmodule Cure.Compiler.Printer do
   # demo built on the folded `computed directly by` surface (examples/**).
   defp to_string({:computed_use, meta, [_elab, {:macro_input, _mi, args}]}, depth, indent) do
     keyword = Keyword.fetch!(meta, :keyword)
-    segments = Keyword.get(meta, :syntax_segments, [])
-    pad = String.duplicate(indent, depth + 1)
-    {rendered, _leftover} = computed_use_segments(segments, args, depth, indent, pad)
-    keyword <> Enum.join(rendered, "")
+
+    case {keyword, args} do
+      {"regex",
+       [
+         {:literal, _pattern_meta, pattern},
+         {:literal, _flags_meta, flags}
+       ]}
+      when is_binary(pattern) and is_binary(flags) ->
+        "/" <> pattern <> "/" <> flags
+
+      _ ->
+        segments = Keyword.get(meta, :syntax_segments, [])
+        pad = String.duplicate(indent, depth + 1)
+        {rendered, _leftover} = computed_use_segments(segments, args, depth, indent, pad)
+        keyword <> Enum.join(rendered, "")
+    end
   end
 
   # -- Container (module, record, enum, protocol, and trait) ----------------
@@ -1113,18 +1110,17 @@ defmodule Cure.Compiler.Printer do
 
   # -- GADT constructor signature --------------------------------------------
   #
-  # `Name : Dom -> ... -> Result`. The third slot is a single `{:arrow_chain,
-  # [...]}` tuple (NOT a children list). A `:named_dom` element carries a
-  # dependent binder `(name: Type)` where the 2nd position is a bare string;
-  # both `:arrow_chain` and `:named_dom` are rendered here, never as their own
-  # dispatch targets.
+  # `Name : Dom -> ... -> Result`. The third slot contains one canonical
+  # `:arrow_chain` node. A `:named_dom` child carries a dependent binder
+  # `(name: Type)` in its own metadata and child list.
 
-  defp to_string({:gadt_ctor, meta, {:arrow_chain, elems}}, depth, indent) do
+  defp to_string({:gadt_ctor, meta, [{:arrow_chain, _chain_meta, elems}]}, depth, indent) do
     name = Keyword.get(meta, :name)
 
     chain =
       Enum.map_join(elems, " -> ", fn
-        {:named_dom, dname, inner} ->
+        {:named_dom, dom_meta, [inner]} ->
+          dname = Keyword.fetch!(dom_meta, :name)
           inner_rendered = render_ctor_function_type(inner, depth, indent)
 
           inner_rendered =
@@ -1141,11 +1137,15 @@ defmodule Cure.Compiler.Printer do
                 inner_rendered
             end
 
-          "(#{dname}: #{inner_rendered})"
+          case Keyword.get(dom_meta, :grade) do
+            nil -> "(#{dname}: #{inner_rendered})"
+            grade -> "(#{dname} :#{grade} #{inner_rendered})"
+          end
 
         # A RELEVANT IMPLICIT binder `{name: Type}` — implicit (solved, omitted at
         # the call site) yet retained (ω). Parallel to `:named_dom` but braced.
-        {:implicit_dom, dname, inner} ->
+        {:implicit_dom, dom_meta, [inner]} ->
+          dname = Keyword.fetch!(dom_meta, :name)
           inner_rendered = render_ctor_function_type(inner, depth, indent)
 
           inner_rendered =
@@ -1701,6 +1701,17 @@ defmodule Cure.Compiler.Printer do
     ["\n", body_pad, Enum.map_join(arms, "\n#{body_pad}", &render(&1, depth + 2, indent))]
   end
 
+  defp render_family_capture_value({:declarations_block, _meta, declarations}, depth, indent, pad)
+       when is_list(declarations) do
+    body_pad = pad <> indent
+
+    [
+      "\n",
+      body_pad,
+      Enum.map_join(declarations, "\n#{body_pad}", &render(&1, depth + 2, indent))
+    ]
+  end
+
   defp render_family_capture_value(value, depth, indent, _pad),
     do: [" ", render(value, depth + 1, indent)]
 
@@ -2214,7 +2225,7 @@ defmodule Cure.Compiler.Printer do
   # round-trips as an ordinary identifier (e.g. the `Std.Bool` connectives
   # `` `not` ``/`` `and` ``/`` `or` ``).
   defp quote_if_reserved(name) when is_binary(name) do
-    if name in @reserved_words or pure_operator_name?(name),
+    if Cure.Compiler.Lexer.reserved_word?(name) or pure_operator_name?(name),
       do: "`#{name}`",
       else: name
   end

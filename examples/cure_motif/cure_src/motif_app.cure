@@ -1,0 +1,3 @@
+## Transparent application example.
+
+app Cure.CureMotif root Cure.Motif.Orchestra

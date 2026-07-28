@@ -31,7 +31,7 @@ defmodule Cure.Elab.CanonicalModuleLoaderTest do
              mod Loader.Main
                use Loader.Left
                use Loader.Right
-               fn result() -> Int = value()
+               fn result() -> Int = Loader.Base.value()
              end
              """)
 
@@ -101,9 +101,10 @@ defmodule Cure.Elab.CanonicalModuleLoaderTest do
     assert diagnostic.primary.span.path == path
     assert diagnostic.primary.span.start_line == 5
     assert rendered =~ path
-    assert rendered =~ "non_total.cure:5:6"
+    assert rendered =~ "non_total.cure:5:36"
     assert rendered =~ "5 |   fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)"
-    assert rendered =~ "^^^^ this definition is used in a type and must always terminate"
+    assert rendered =~ "^^^^ this recursive call participates in an unproven termination cycle"
+    assert rendered =~ "this type-level function must terminate on every input"
     refute rendered =~ "at main.cure"
   end
 

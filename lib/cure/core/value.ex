@@ -25,6 +25,7 @@ defmodule Cure.Core.Value do
 
     * `{:nvar, level}`                   free variable, de Bruijn *level*
     * `{:nglobal, name}`                 uncertified global (opaque until δ, M7)
+    * `{:nhole, id}`                     unresolved authored/generated hole
     * `{:napp, neutral, value}`          stuck application
     * `{:ncase, neutral, motive_closure, branch_closures}`  stuck eliminator,
       `branch_closures :: [{ctor_name, arity, closure}]`
@@ -42,6 +43,7 @@ defmodule Cure.Core.Value do
   @type neutral ::
           {:nvar, non_neg_integer()}
           | {:nglobal, atom()}
+          | {:nhole, term()}
           | {:napp, neutral(), t()}
           | {:ncase, neutral(), closure(), [branch_closure()]}
 
@@ -106,6 +108,7 @@ defmodule Cure.Core.Value do
   @spec neutral?(term()) :: boolean()
   def neutral?({:nvar, level}), do: is_integer(level) and level >= 0
   def neutral?({:nglobal, name}), do: is_atom(name)
+  def neutral?({:nhole, _id}), do: true
   def neutral?({:napp, n, v}), do: neutral?(n) and value?(v)
 
   def neutral?({:ncase, n, motive_cl, branches}),

@@ -21,8 +21,12 @@ defmodule Cure.Elab.Resolution do
   def resolve_qualified(%Env{} = env, dotted, :value) do
     segs = String.split(dotted, ".")
     {mod_segs, [last]} = Enum.split(segs, length(segs) - 1)
-    key = Cure.Elab.Name.qualify(Enum.join(mod_segs, "."), String.to_atom(last))
-    try_keys(env, [key], :value)
+    owner = Enum.join(mod_segs, ".")
+    key = Cure.Elab.Name.qualify(owner, String.to_atom(last))
+
+    if Env.qualified_module_available?(env, owner),
+      do: try_keys(env, [key], :value),
+      else: :error
   end
 
   def resolve_qualified(%Env{} = env, dotted, :type) do
@@ -37,7 +41,16 @@ defmodule Cure.Elab.Resolution do
       Cure.Elab.Name.qualify(Enum.join(mod_segs, "."), String.to_atom(explicit_last))
     ]
 
-    try_keys(env, Enum.uniq(candidates), :type)
+    owners = [dotted, Enum.join(mod_segs, ".")]
+
+    candidates =
+      candidates
+      |> Enum.zip(owners)
+      |> Enum.filter(fn {_key, owner} -> Env.qualified_module_available?(env, owner) end)
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.uniq()
+
+    try_keys(env, candidates, :type)
   end
 
   @doc """
@@ -73,6 +86,7 @@ defmodule Cure.Elab.Resolution do
       |> Enum.flat_map(&Env.provider_keys(&1, bare))
       |> Enum.uniq()
       |> Enum.map(fn key -> {Cure.Elab.Name.owner(key), key} end)
+      |> Enum.filter(fn {_owner, key} -> Env.bare_key_available?(env, key) end)
       |> prefer_direct(env.import_modules)
 
     case matches do
@@ -101,6 +115,7 @@ defmodule Cure.Elab.Resolution do
     |> Env.provider_keys(bare)
     |> Enum.map(fn key -> {Cure.Elab.Name.owner(key), key} end)
     |> prefer_local(env.module_owner)
+    |> Enum.filter(fn {_owner, key} -> Env.bare_key_available?(env, key) end)
     |> prefer_direct(env.import_modules)
     |> Enum.map(&elem(&1, 1))
     |> Enum.uniq()
@@ -139,7 +154,8 @@ defmodule Cure.Elab.Resolution do
       :none ->
         Enum.find_value([env.ctors, env.families, env.defs], fn table ->
           Enum.find_value(Env.provider_keys(table, bare), fn key ->
-            {:ok, Cure.Elab.Name.owner(key), key}
+            owner = Cure.Elab.Name.owner(key)
+            if Env.bare_key_available?(env, key), do: {:ok, owner, key}
           end)
         end) || :error
     end
@@ -159,6 +175,7 @@ defmodule Cure.Elab.Resolution do
         owners =
           [env.ctors, env.families, env.defs]
           |> Enum.flat_map(&Env.provider_keys(&1, bare))
+          |> Enum.filter(&Env.bare_key_available?(env, &1))
           |> Enum.map(&Cure.Elab.Name.owner/1)
           |> Enum.uniq()
 

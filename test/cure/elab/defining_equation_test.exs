@@ -273,7 +273,7 @@ defmodule Cure.Elab.DefiningEquationTest do
     end
 
     assert {:ok, type_level} =
-             Program.module_interface("Std.Otp.CallResult", "lib/std/otp_call_result.cure")
+             Program.module_interface("Std.Otp.CallResult", "metatheory/otp/src/otp_call_result.cure")
 
     assert [vnat, vbool] = Env.equations(type_level.export_env, :RepVal)
     assert Enum.map([vnat, vbool], & &1.pattern_key) == ["RepVal/VNat", "RepVal/VBool"]

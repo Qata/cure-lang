@@ -1,0 +1,4 @@
+# Transparent FSM example. State and event vocabularies are user-defined.
+
+fsm Cure.TrafficLight
+  fn initial_state() -> Atom = :red

@@ -1,7 +1,8 @@
 defmodule Cure.Compiler.LiftModuleSurfaceTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Lexer, LiftModule, Parser}
+  alias Cure.Compiler.{Errors, Lexer, LiftModule, Parser}
+  alias Cure.Diagnostic.Renderer
 
   test "lift module parses behaviour and quoted callback bodies as pure data" do
     source = """
@@ -93,6 +94,88 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
 
     assert {:ok, request} = LiftModule.request_ast(ast)
     assert request.module == "Cure.Generated.Atom"
+  end
+
+  test "lifted-module validation preserves the specific rejected field" do
+    base = [module: "Cure.Generated.Valid", behaviour: :custom_behavior]
+
+    assert {:error, {:invalid_module_name, "bad.name"}} =
+             LiftModule.request_ast({:lift_module, Keyword.put(base, :module, "bad.name"), []})
+
+    assert {:error, {:invalid_behaviour, nil}} =
+             LiftModule.request_ast({:lift_module, Keyword.put(base, :behaviour, nil), []})
+
+    assert {:error, :invalid_lift_callback} =
+             LiftModule.request_ast({:lift_module, Keyword.put(base, :callbacks, :callbacks), []})
+
+    assert {:error, :invalid_lift_callback} =
+             LiftModule.request_ast({:lift_module, Keyword.put(base, :callbacks, [%{name: "ping", arity: 0}]), []})
+
+    assert {:error, :invalid_lift_declaration} =
+             LiftModule.request_ast({:lift_module, Keyword.put(base, :declarations, [42]), []})
+
+    assert {:error, :invalid_lift_import} =
+             LiftModule.request_ast({:lift_module, Keyword.put(base, :imports, [:not_text]), []})
+
+    assert {:error, :invalid_lift_inheritance} =
+             LiftModule.request_ast({:lift_module, Keyword.put(base, :inherit_imports, :sometimes), []})
+
+    assert {:error, :invalid_lift_module_ast} = LiftModule.request_ast({:lift_module, [42], []})
+    assert {:error, :invalid_lift_module_ast} = LiftModule.request_ast(:not_a_lifted_module)
+    assert {:error, {:invalid_lift_module, :request}} = LiftModule.emit(:request)
+  end
+
+  test "every lifted-module validation branch has dedicated diagnostic content" do
+    cases = [
+      {{:invalid_lift_module, :request}, "Lifted module request is malformed",
+       "BEAM emission expected a validated lifted-module request.",
+       "Build the request from a valid `lift module` declaration"},
+      {:invalid_lift_module_ast, "Lifted module syntax is malformed",
+       "A lifted module must be represented by one well-formed `lift_module` syntax node.",
+       "Use a `lift module` declaration with a name and body"},
+      {{:invalid_lift_module_name, "Worker"}, "Lifted module name is outside Cure",
+       "The generated module `Worker` is not beneath the `Cure` namespace required for lifted code.",
+       "Use a module name beginning with `Cure.`"},
+      {{:invalid_module_name, "bad.name"}, "Lifted module name is invalid",
+       "`bad.name` is not a valid qualified module name; every segment must begin with an uppercase letter.",
+       "Use a name such as `Cure.Generated.Worker`"},
+      {{:invalid_behaviour, nil}, "Lifted module behaviour is invalid",
+       "A lifted module needs a non-empty atom naming its BEAM behaviour, but this declaration uses `nil`.",
+       "Use the atom naming the implemented BEAM behaviour"},
+      {:invalid_lift_callback, "Lifted module callback is malformed",
+       "Every lifted callback needs an atom name, a non-negative arity, parameters, return type, body, and source line.",
+       "Provide a complete callback declaration matching the behaviour"},
+      {:invalid_lift_declaration, "Lifted module declaration is malformed",
+       "Every declaration copied into a lifted module must be quoted Cure syntax.",
+       "Provide quoted declaration nodes in the lifted module body"},
+      {:invalid_lift_import, "Lifted module import is malformed",
+       "Every lifted-module dependency must be a textual qualified module name.",
+       "Use qualified import names such as `Std.Actor`"},
+      {:invalid_lift_inheritance, "Lifted module inheritance option is invalid",
+       "The `inherit_imports` option must be either `true` or `false`.",
+       "Use `true` to inherit enclosing imports or `false` to isolate them"},
+      {{:lifted_module_dependency_cycle, "Cure.A"}, "Lifted modules form a dependency cycle",
+       "The generated module `Cure.A` is reached again while ordering lifted-module dependencies.",
+       "Remove or redirect one dependency in the cycle"},
+      {{:duplicate_lifted_module, "Cure.Worker"}, "Lifted module name is repeated",
+       "More than one generated declaration produces `Cure.Worker`, so the compiler cannot choose one module body.",
+       "Give every lifted module a unique qualified name"}
+    ]
+
+    Enum.each(cases, fn {reason, title, body, hint} ->
+      {diagnostic, registry} = Errors.to_diagnostic(reason, "lift.cure", "")
+      output = Renderer.plain(diagnostic, registry, width: 80)
+
+      assert diagnostic.code == "E092"
+      assert diagnostic.key == :lift_module_validation
+      assert diagnostic.title == title
+      assert String.replace(output, ~r/\s+/, " ") =~ String.replace(body, ~r/\s+/, " ")
+      assert output =~ "Hint: " <> hint
+
+      lsp = Renderer.lsp(diagnostic, registry)
+      refute Map.has_key?(lsp, "range")
+      assert lsp["message"] == title <> "\n\n" <> body
+    end)
   end
 
   test "lifted callback return types are preserved as ordinary function annotations" do

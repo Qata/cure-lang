@@ -2,12 +2,13 @@ defmodule Cure.Compiler do
   @moduledoc """
   Compiler orchestrator for the Cure programming language.
 
-  Chains together the full compilation pipeline:
+  Chains together the full dependent compilation pipeline:
 
-      source -> Lexer -> Parser -> [Checker] -> Codegen -> BeamWriter -> .beam
+      source -> Lexer -> Parser -> Elab.Program -> Core.Kernel
+             -> Elab.Erase -> Elab.Emit -> BeamWriter -> .beam
 
-  The type checker runs before codegen by default; set `check_types: false`
-  (or pass `--no-type-check` to the CLI) to opt out.
+  Elaboration and trusted Core validation are mandatory. There is no
+  unchecked classic-codegen path.
 
   Emits pipeline events at each stage boundary.
 
@@ -35,18 +36,31 @@ defmodule Cure.Compiler do
 
   - `:output_dir` -- directory for `.beam` output (default: `"_build/cure/ebin"`)
   - `:emit_events` -- whether to emit pipeline events (default: `true`)
-  - `:check_types` -- whether to run the type checker (default: `true`).
-    Set to `false` to skip type checking.
   - `:source_roots` -- directories containing sibling `.cure` modules that may
     be imported with `use` (default: the source file's directory)
   """
   @spec compile_file(String.t(), keyword()) ::
           {:ok, module(), list()} | {:error, term()}
   def compile_file(path, opts \\ []) do
+    case compile_file_with_artifact(path, opts) do
+      {:ok, module, warnings, _artifact} -> {:ok, module, warnings}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc """
+  Compile a file and return the checked module artifact consumed by codegen.
+
+  Incremental compilation uses this entry point so interface hashing reuses the
+  exact certified environment that produced the BEAM artifact.
+  """
+  @spec compile_file_with_artifact(String.t(), keyword()) ::
+          {:ok, module(), list(), Cure.Elab.CheckedModule.t() | nil} | {:error, term()}
+  def compile_file_with_artifact(path, opts \\ []) do
     case File.read(path) do
       {:ok, source} ->
         opts = Keyword.put_new(opts, :file, path)
-        compile_string(source, opts)
+        compile_string_with_artifact(source, opts)
 
       {:error, reason} ->
         {:error, {:file_read_error, path, reason}}
@@ -83,6 +97,18 @@ defmodule Cure.Compiler do
   @spec compile_string(String.t(), keyword()) ::
           {:ok, module(), list()} | {:error, term()}
   def compile_string(source, opts \\ []) do
+    case compile_string_with_artifact(source, opts) do
+      {:ok, module, warnings, _artifact} -> {:ok, module, warnings}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc """
+  Compile source and retain the checked module artifact used for emission.
+  """
+  @spec compile_string_with_artifact(String.t(), keyword()) ::
+          {:ok, module(), list(), Cure.Elab.CheckedModule.t() | nil} | {:error, term()}
+  def compile_string_with_artifact(source, opts \\ []) do
     file = Keyword.get(opts, :file, "nofile")
     output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
     emit? = Keyword.get(opts, :emit_events, true)
@@ -96,8 +122,12 @@ defmodule Cure.Compiler do
            {:ok, ast} <- migrate_warn(ast, file),
            ast = inject_prelude_uses(ast, prelude_providers),
            {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
-           {:ok, units, cg_warnings} <- codegen(ast, file, emit?, output_dir, declared_phases) do
-        write_beam_units(units, output_dir, emit?, file, cg_warnings)
+           {:ok, units, cg_warnings, artifact} <-
+             codegen(ast, source, file, emit?, output_dir, declared_phases),
+           {:ok, module, warnings} <-
+             write_beam_units(units, output_dir, emit?, file, cg_warnings) do
+        if artifact, do: Cure.Elab.Program.publish_checked_interface(artifact)
+        {:ok, module, warnings, artifact}
       end
     end)
   end
@@ -116,20 +146,138 @@ defmodule Cure.Compiler do
   Bulk drivers share this entry point so parser scope and compile order cannot
   disagree about user `@prelude` modules.
   """
-  @spec prepare_files([Path.t()]) ::
-          {:ok, %{ordered: [Path.t()], providers: [String.t()], cycles: [list()]}}
+  @spec prepare_files([Path.t()], keyword()) ::
+          {:ok,
+           %{
+             ordered: [Path.t()],
+             providers: [String.t()],
+             cycles: [list()],
+             module_index: Cure.Compiler.ModuleIndex.t()
+           }}
           | {:error, term()}
-  def prepare_files(files) when is_list(files) do
-    with {:ok, graph} <- Cure.Compiler.DepGraph.scan(files),
+  def prepare_files(files, opts \\ []) when is_list(files) do
+    with {:ok, graph} <-
+           Cure.Compiler.DepGraph.scan(files,
+             validate_dependencies: true,
+             known_modules: Keyword.get(opts, :known_modules, [])
+           ),
          {:ok, ordered, cycles} <- Cure.Compiler.DepGraph.order(graph) do
       {:ok,
        %{
          ordered: ordered,
          providers: Cure.Compiler.DepGraph.prelude_provider_names(graph),
-         cycles: cycles
+         cycles: cycles,
+         module_index: graph.module_index
        }}
     end
   end
+
+  @doc """
+  Compile a complete source universe through the canonical module graph.
+
+  Every bulk driver should use this entry point (or `Incremental.compile_dir/3`)
+  instead of sorting filenames and invoking `compile_file/2` independently.
+  The graph supplies one dependency order, prelude-provider set, module index,
+  and source-root universe to every file in the run.
+  """
+  @spec compile_files([Path.t()], keyword()) ::
+          {:ok,
+           %{
+             compiled: [{Path.t(), module(), list()}],
+             errors: [{Path.t(), term()}],
+             cycles: [list()],
+             module_index: Cure.Compiler.ModuleIndex.t()
+           }}
+          | {:error, {Path.t(), term()} | term()}
+  def compile_files(files, opts \\ []) when is_list(files) do
+    files = files |> Enum.map(&Path.expand/1) |> Enum.uniq()
+
+    with {:ok, plan} <- bulk_plan(files, Keyword.get(opts, :plan)) do
+      roots =
+        opts
+        |> Keyword.get(:source_roots, Enum.map(files, &Path.dirname/1))
+        |> List.wrap()
+        |> Enum.map(&Path.expand/1)
+        |> Enum.uniq()
+
+      compile_opts =
+        opts
+        |> Keyword.delete(:plan)
+        |> Keyword.delete(:load_emitted)
+        |> Keyword.delete(:file_options)
+        |> Keyword.delete(:continue_on_error)
+        |> Keyword.put(:source_roots, roots)
+        |> Keyword.put(:prelude_providers, plan.providers)
+        |> Keyword.put(:module_index, plan.module_index)
+
+      load? = Keyword.get(opts, :load_emitted, true)
+      continue? = Keyword.get(opts, :continue_on_error, false)
+      file_options = Keyword.get(opts, :file_options, fn _path -> [] end)
+      output_dir = Keyword.get(compile_opts, :output_dir, "_build/cure/ebin")
+
+      Enum.reduce_while(plan.ordered, {:ok, [], []}, fn path, {:ok, compiled, errors} ->
+        path_opts = Keyword.merge(compile_opts, file_options.(path))
+
+        case compile_file(path, path_opts) do
+          {:ok, module, warnings} ->
+            case if(load?, do: load_emitted(module, output_dir), else: :ok) do
+              :ok ->
+                {:cont, {:ok, [{path, module, warnings} | compiled], errors}}
+
+              {:error, reason} ->
+                bulk_compile_error(
+                  path,
+                  {:beam_load_error, module, reason},
+                  compiled,
+                  errors,
+                  continue?
+                )
+            end
+
+          {:error, reason} ->
+            bulk_compile_error(path, reason, compiled, errors, continue?)
+        end
+      end)
+      |> case do
+        {:ok, compiled, errors} ->
+          {:ok,
+           %{
+             compiled: Enum.reverse(compiled),
+             errors: Enum.reverse(errors),
+             cycles: plan.cycles,
+             module_index: plan.module_index
+           }}
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
+
+  defp bulk_plan(files, nil), do: prepare_files(files)
+
+  defp bulk_plan(files, %{ordered: ordered, providers: providers, cycles: cycles, module_index: module_index})
+       when is_list(ordered) and is_list(providers) and is_list(cycles) do
+    if MapSet.new(Enum.map(ordered, &Path.expand/1)) == MapSet.new(files) do
+      {:ok,
+       %{
+         ordered: Enum.map(ordered, &Path.expand/1),
+         providers: providers,
+         cycles: cycles,
+         module_index: module_index
+       }}
+    else
+      {:error, :bulk_compile_plan_mismatch}
+    end
+  end
+
+  defp bulk_plan(_files, _invalid), do: {:error, :invalid_bulk_compile_plan}
+
+  defp bulk_compile_error(path, reason, compiled, errors, true),
+    do: {:cont, {:ok, compiled, [{path, reason} | errors]}}
+
+  defp bulk_compile_error(path, reason, _compiled, _errors, false),
+    do: {:halt, {:error, {path, reason}}}
 
   # `BeamWriter.compile_forms/2` returns `{:error, errors, warnings}` (3-tuple)
   # on lint/compile failures, but the public `compile_string/2`,
@@ -255,7 +403,8 @@ defmodule Cure.Compiler do
            {:ok, ast} <- parse(tokens, file, emit?, edition, prelude_providers),
            ast = inject_prelude_uses(ast, prelude_providers),
            {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
-           {:ok, units, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases) do
+           {:ok, units, _cg_warnings, _artifact} <-
+             codegen(ast, source, file, emit?, nil, declared_phases) do
         # compile_and_load/2 intentionally does NOT persist bytecode to
         # disk -- it only loads into the current VM.
         compile_and_load_units(units, file)
@@ -275,7 +424,13 @@ defmodule Cure.Compiler do
       |> Enum.uniq()
 
     previous = Process.get(:cure_source_roots)
+    previous_index = Process.get(:cure_module_index)
     Process.put(:cure_source_roots, roots)
+
+    case Keyword.get(opts, :module_index) do
+      %Cure.Compiler.ModuleIndex{} = index -> Process.put(:cure_module_index, index)
+      _ -> Process.delete(:cure_module_index)
+    end
 
     try do
       fun.()
@@ -283,6 +438,10 @@ defmodule Cure.Compiler do
       if previous == nil,
         do: Process.delete(:cure_source_roots),
         else: Process.put(:cure_source_roots, previous)
+
+      if previous_index == nil,
+        do: Process.delete(:cure_module_index),
+        else: Process.put(:cure_module_index, previous_index)
     end
   end
 
@@ -421,34 +580,34 @@ defmodule Cure.Compiler do
     end
   end
 
-  defp codegen(ast, _file, _emit?, _output_dir, _declared_phases) do
+  defp codegen(ast, source, file, _emit?, _output_dir, _declared_phases) do
     case Cure.Compiler.LiftModule.collect(ast) do
       {:ok, lifted_requests} ->
-        codegen_modules(ast, Cure.Compiler.LiftModule.strip(ast), lifted_requests)
+        codegen_modules(ast, Cure.Compiler.LiftModule.strip(ast), lifted_requests, source, file)
 
       {:error, reason} ->
         {:error, {:codegen_error, reason}}
     end
   end
 
-  defp codegen_modules(original_ast, main_ast, lifted_requests) do
+  defp codegen_modules(original_ast, main_ast, lifted_requests, source, file) do
     if match?({:lift_module, _, _}, main_ast) do
       case emit_lifted_modules(lifted_requests) do
-        {:ok, lifted_units} -> {:ok, lifted_units, []}
+        {:ok, lifted_units} -> {:ok, lifted_units, [], nil}
         {:error, _} = error -> error
       end
     else
-      codegen_modules_with_main(original_ast, main_ast, lifted_requests)
+      codegen_modules_with_main(original_ast, main_ast, lifted_requests, source, file)
     end
   end
 
-  defp codegen_modules_with_main(original_ast, main_ast, lifted_requests) do
-    # Single pipeline: every module is lowered by the kernel (dependent codegen).
-    # The classic `Cure.Compiler.Codegen` branch was deleted in the #18 rip-out.
+  defp codegen_modules_with_main(original_ast, main_ast, lifted_requests, source, file) do
+    # Single pipeline: every module is elaborated, checked, erased, and emitted
+    # through the dependent Core.
     result =
       with :ok <- Cure.Elab.Program.validate_stdlib_imports(main_ast) do
-        case dependent_codegen(main_ast) do
-          {:ok, forms} -> {:ok, forms, []}
+        case dependent_codegen(main_ast, source, file) do
+          {:ok, forms, artifact} -> {:ok, forms, [], artifact}
           {:error, {:codegen_error, {:expansion_ill_typed, _} = reason}} -> {:error, reason}
           {:error, _} = err -> err
         end
@@ -459,10 +618,10 @@ defmodule Cure.Compiler do
     # Inject the module's `@group(:g)` decorator as a BEAM `-group([:g]).`
     # attribute after the ordinary dependent pipeline has produced forms.
     case result do
-      {:ok, forms, warnings} when is_list(forms) ->
+      {:ok, forms, warnings, artifact} when is_list(forms) ->
         with {:ok, lifted_units} <- emit_lifted_modules(lifted_requests) do
           main_forms = inject_group_attribute(forms, original_ast)
-          {:ok, [{forms_module(main_forms), main_forms} | lifted_units], warnings}
+          {:ok, [{forms_module(main_forms), main_forms} | lifted_units], warnings, artifact}
         end
 
       other ->
@@ -534,17 +693,57 @@ defmodule Cure.Compiler do
 
   # A dependent module is lowered by the kernel: elaborate to `Cure.Core`, erase
   # its {0,ω} index arguments, and emit the erased residue as real BEAM forms.
-  defp dependent_codegen(ast) do
-    with {:ok, env, local_defs} <- Cure.Elab.Program.check_ast_with_locals(ast),
+  defp dependent_codegen(ast, source, file) do
+    with {:ok, artifact} <-
+           Cure.Elab.Program.check_ast_artifact(ast,
+             source: source,
+             file: file,
+             prelude_mode: :bootstrap_safe
+           ),
          {:ok, forms} <-
            Cure.Elab.Emit.compile_forms(
-             env,
-             Cure.Elab.Program.module_atom(ast),
-             local_defs
+             artifact.env,
+             artifact.module,
+             artifact.local_defs
            ) do
-      {:ok, forms}
+      {:ok, forms, artifact}
     else
-      {:error, reason} -> {:error, {:codegen_error, reason}}
+      {:error, {:source_context, {:expansion_ill_typed, _details}, _context} = reason} ->
+        {:error, reason}
+
+      {:error, {:final_core_violation, name, _rejections} = reason} ->
+        {:error, {:codegen_error, {:source_context, reason, final_core_source_context(ast, name)}}}
+
+      {:error, reason} ->
+        {:error, {:codegen_error, reason}}
     end
   end
+
+  defp final_core_source_context(ast, name) do
+    span = find_definition_span(ast, Cure.Elab.Name.base(name))
+
+    %{
+      span: span,
+      checking: name,
+      codegen_stage: :final_core_validation,
+      codegen_module: Cure.Elab.Program.module_atom(ast),
+      expression_category: :function_definition
+    }
+  end
+
+  defp find_definition_span({:function_def, meta, _body}, bare_name) when is_list(meta) do
+    if to_string(Keyword.get(meta, :name)) == bare_name do
+      case Cure.MetaAST.Metadata.source_info(meta) do
+        %Cure.MetaAST.SourceInfo{whole: span} -> span
+        _ -> nil
+      end
+    end
+  end
+
+  defp find_definition_span({_tag, _meta, children}, bare_name), do: find_definition_span(children, bare_name)
+
+  defp find_definition_span(items, bare_name) when is_list(items),
+    do: Enum.find_value(items, &find_definition_span(&1, bare_name))
+
+  defp find_definition_span(_item, _bare_name), do: nil
 end

@@ -30,9 +30,9 @@ flight, and no `WT` can hold it.
 ## Trust
 
 - Kernel-checked + totality-certified in Cure (re-checked every build; stdlib preload).
-- **Idris mirror** `test/oracle/otp/preservation.{cure,idr}` — `mix cure.oracle otp` is
+- **Idris mirror** `metatheory/otp/oracle/otp/preservation.{cure,idr}` — `mix cure.oracle otp` is
   `rel=same` (both provers accept the identical proof). Frozen in oracle replay.
-- Behavioural tests `test/cure/stdlib/otp_preservation_test.exs` (4): the proof + a
+- Behavioural tests `metatheory/otp/test/otp_preservation_test.exs` (4): the proof + a
   non-vacuous config accept; a `TDec`-holding config and a `TDec` send both reject.
 
 ## Cure capability it exercised
@@ -50,11 +50,11 @@ dogfooding of the sibling-refinement work landed this session.
   and changes nothing about the invariant).
 - Not modelled: exit/link/monitor signals, timers, multiple pids / interleaving, spawn.
 - **Composed with obligation (1) for the reply TYPE — DONE.** `Std.Otp.ReplyPreservation`
-  (`lib/std/otp_reply_preservation.cure`) strengthens the payload from a tag to a
+  (`metatheory/otp/src/otp_reply_preservation.cure`) strengthens the payload from a tag to a
   request-answering reply `(r, v)`, proves the same subject reduction over it, and adds
   the `reify : HasReply(r, v) -> ReplyOf(r)` bridge showing `HasReply` faithfully reflects
   obligation (1)'s large-elimination `ReplyOf` — so the dependent reply typing is carried
-  through send/arrive/receive. Idris-mirrored (`test/oracle/otp/reply_preservation` +
+  through send/arrive/receive. Idris-mirrored (`metatheory/otp/oracle/otp/reply_preservation` +
   `reply_neg_wrong_reply`, rel=same); tests in `otp_reply_preservation_test.exs`. The
   remaining G1 piece is the LINEAR *capability*'s consumed-exactly-once as an operational
   conservation theorem over the relation (proven intrinsically via QTT today, not yet

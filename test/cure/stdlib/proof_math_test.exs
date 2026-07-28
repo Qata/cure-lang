@@ -22,6 +22,7 @@ defmodule Cure.Stdlib.ProofMathTest do
     source = """
     mod ProofMathDecisionConsumer
       use Std.Proof.Math
+      use Std.Decision
 
       fn successor_is_positive(natural: Nat) -> IsPositive(S(natural)) =
         match decide_is_positive(S(natural))
@@ -56,6 +57,7 @@ defmodule Cure.Stdlib.ProofMathTest do
     source = """
     mod ProofMathOrderBattery
       use Std.Proof.Math
+      use Std.Decision
 
       fn two_is_at_most_three() -> Decision(IsLessThanOrEqual(S(S(Z)), S(S(S(Z))))) =
         decide_is_less_than_or_equal(S(S(Z)), S(S(S(Z))))

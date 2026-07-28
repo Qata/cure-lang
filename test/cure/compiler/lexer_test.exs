@@ -22,7 +22,7 @@ defmodule Cure.Compiler.LexerTest do
       keywords = ~w(mod fn let type rec proto impl local use as
                     match if elif else then for do
                     in try catch finally throw return yield
-                    spawn send receive after when where extern)
+                    spawn send receive after when where extern unsafe)
 
       for kw <- keywords do
         tokens = lex!(kw)
@@ -498,6 +498,33 @@ defmodule Cure.Compiler.LexerTest do
     test "pipe chain" do
       tokens = lex!("x |> f |> g")
       assert [:identifier, :pipe, :identifier, :pipe, :identifier] = types(tokens)
+    end
+  end
+
+  describe "hole spans" do
+    test "a generated triple-question hole owns one token before a following declaration" do
+      source = "mod M\n  fn bad() -> Int = ???\nend\n"
+      tokens = lex!(source)
+
+      assert [%Token{type: :hole, value: "?", span: span}] =
+               Enum.filter(tokens, &(&1.type == :hole))
+
+      assert binary_part(source, span.start_byte, span.end_byte - span.start_byte) == "???"
+      assert {span.start_line, span.start_column, span.end_line, span.end_column} == {2, 21, 2, 24}
+
+      assert %Token{type: :keyword, value: :end, span: end_span} =
+               Enum.find(tokens, &(&1.type == :keyword and &1.value == :end))
+
+      assert {end_span.start_line, end_span.start_column} == {3, 1}
+    end
+
+    test "a generated triple-question hole at EOF retains the whole spelling" do
+      source = "fn bad() -> Int = ???"
+      tokens = lex!(source)
+
+      assert %Token{type: :hole, span: span} = Enum.find(tokens, &(&1.type == :hole))
+      assert binary_part(source, span.start_byte, span.end_byte - span.start_byte) == "???"
+      assert span.end_byte == byte_size(source)
     end
   end
 

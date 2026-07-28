@@ -4,7 +4,14 @@
   order: 4
 }
 ---
-FSMs are first-class language constructs in Cure. They are declaratively defined, verified at compile time for reachability and deadlock freedom, and -- in callback mode -- self-contained enough that the calling code only spawns an instance and sends events to it; everything else (state transitions, side effects, outbound notifications) lives with the `fsm` declaration.
+
+> **0.34 update:** `fsm` is an auto-preluded transparent macro. It expands to
+> an ordinary lifted module whose behavior and callbacks use the checked BEAM
+> algebra; the compiler no longer recognizes a privileged FSM object class.
+> The dependent pipeline checks the expanded declarations. The sections below
+> describe the retained FSM vocabulary and runtime behavior.
+
+FSMs are declarative state-machine surfaces in Cure. They are verified at compile time for reachability and deadlock freedom, and -- in callback mode -- self-contained enough that the calling code only spawns an instance and sends events to it; everything else (state transitions, side effects, outbound notifications) lives with the `fsm` declaration.
 
 Cure supports two compilation modes: **simple mode** (compiles to OTP `gen_statem`) and **callback mode** (compiles to a `GenServer` with inline `on_transition` handlers plus a full lifecycle, inspired by [Finitomata](https://hexdocs.pm/finitomata)).
 

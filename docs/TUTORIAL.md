@@ -107,8 +107,8 @@ the rest of the program.
 fn append(xs: Vector(T, m), ys: Vector(T, n)) -> Vector(T, m + n)
 ```
 The return type references the parameter names. At the call site, Cure
-substitutes the actual values, normalises with `Cure.Types.Reduce`,
-and compares the result. This means
+substitutes the actual values, normalises the resulting Core term, and compares
+it by definitional equality. This means
 `append(threeVec, threeVec)` is checked against `Vector(T, 6)`.
 ## 10. Holes and totality
 While writing a function you don't yet know how to finish, leave a
@@ -140,9 +140,7 @@ fn first_byte(buf: Bitstring) -> Int =
     <<b, _rest::binary>> -> b
     <<>>                 -> 0
 ```
-The type checker runs a dedicated exhaustiveness pass
-(`Cure.Types.PatternChecker.check_binary_exhaustiveness/2`) that
-reports `E031` when a set of arms does not cover every inhabitant
+The dependent coverage checker reports `E031` when a set of arms does not cover every inhabitant
 of the scrutinee. A match with at least one wildcard, or with both
 an empty-binary arm (`<<>>`) and an open-ended tail arm
 (`<<_, _rest::binary>>`), is exhaustive.
@@ -178,7 +176,7 @@ type, and protocol.
 
 ### `##` doc comments
 `##` comments on the line above a `mod`, `fn`, `type`, `rec`, or
-`proto` definition attach as its docstring. Consecutive `##` blocks
+`interface` definition attach as its docstring. Consecutive `##` blocks
 separated by blank lines are merged into a single paragraph-separated
 body, so you can write a docstring the way you would write regular
 prose:

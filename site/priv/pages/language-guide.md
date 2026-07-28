@@ -105,18 +105,24 @@ Every parameter must have a type annotation. Return types are declared after `->
 fn process(name: String, count: Int) -> String = name <> "!"
 ```
 
-Polymorphic functions use type variables (bare capitalized identifiers):
+Polymorphic functions use lowercase type variables:
 
 ```cure
-fn identity(x: T) -> T = x
-fn apply(f: A -> B, x: A) -> B = f(x)
+fn identity(x: t) -> t = x
+fn apply(f: a -> b, x: a) -> b = f(x)
 ```
 
 ## Keywords
 
-Reserved words in Cure:
+The current declaration and expression vocabulary includes:
 
-`fn`, `mod`, `rec`, `fsm`, `proto`, `impl`, `type`, `let`, `if`, `then`, `else`, `elif`, `match`, `when`, `where`, `local`, `use`, `return`, `throw`, `try`, `catch`, `finally`, `for`, `in`, `true`, `false`, `nil`, `and`, `or`, `not`
+`fn`, `mod`, `rec`, `fsm`, `actor`, `interface`, `implementation`, `type`,
+`typealias`, `primitive`, `let`, `pickup`, `else`, `match`, `with`, `when`,
+`local`, `use`, `return`, `throw`, `try`, `catch`, `finally`, `for`, `in`,
+`true`, `false`, `nil`, `and`, `or`, `not`, `quote`, and `unsafe`.
+
+Earlier-edition words such as `proto`, `impl`, `if`, `then`, and `elif`
+remain recognizable so `cure migrate` can rewrite them.
 
 ## Comments
 
@@ -320,20 +326,24 @@ fn compute(x: Int) -> Int =
 
 `let` bindings are immutable. Each `let` introduces a new binding; there is no reassignment.
 
-## If / then / else
+## Conditional dispatch
 
-`if` is an expression and always produces a value:
+`pickup` is the canonical conditional expression:
 
 ```cure
-fn abs(x: Int) -> Int = if x > 0 then x else 0 - x
+fn abs(x: Int) -> Int =
+  pickup
+    x > 0 -> x
+    else  -> 0 - x
 
 fn sign(x: Int) -> String =
-  if x > 0 then "positive"
-  elif x < 0 then "negative"
-  else "zero"
+  pickup
+    x > 0 -> "positive"
+    x < 0 -> "negative"
+    else  -> "zero"
 ```
 
-Both branches must be present when the result is used. `elif` chains multiple conditions.
+Conditions are tested top-to-bottom and `else` is the fallback.
 
 ## Match expressions
 
@@ -347,7 +357,7 @@ maps, records, and ADT constructors.
 fn unwrap(opt: Option(Int)) -> Int =
   match opt
     Some(v) -> v
-    None() -> 0
+    None -> 0
 
 fn describe_list(xs: List(Int)) -> String =
   match xs
@@ -360,8 +370,9 @@ fn handle(r: Result(Int, String)) -> Int =
     Error(_) -> -1
 ```
 
-Nullary constructors must use empty parentheses (`None()`); a bare
-`None` would bind a fresh variable.
+Nullary constructors may be bare (`None`) or use empty parentheses (`None()`).
+Bare PascalCase names resolve against the scrutinee type's constructors;
+lowercase bare names remain variable bindings.
 
 ### Records and field punning
 
@@ -585,30 +596,39 @@ fn midpoint(a: Point, b: Point) -> Point =
   Point{x: (a.x + b.x) / 2, y: (a.y + b.y) / 2}
 
 fn older_of(a: Person, b: Person) -> Person =
-  if a.age > b.age then a else b
+  pickup
+    a.age > b.age -> a
+    else          -> b
 
 fn greet(p: Person) -> String = "Hello, " <> p.name
 ```
 
-## Protocols
+## Interfaces
 
-Protocols provide ad-hoc polymorphism (similar to type classes or interfaces). Define with `proto`, implement with `impl`:
+Interfaces provide ad-hoc polymorphism. Define with `interface`, implement
+with `implementation`, and state generic obligations with `requires`:
 
 ```cure
-proto Show(T)
-  fn show(x: T) -> String
+interface Show(t)
+  fn show(x: t) -> String
 
-impl Show for Int
+implementation Show for Int
   fn show(x: Int) -> String = Std.String.from_int(x)
 
-impl Show for Bool
-  fn show(x: Bool) -> String = if x then "true" else "false"
+implementation Show for Bool
+  fn show(x: Bool) -> String =
+    pickup
+      x    -> "true"
+      else -> "false"
 
-impl Show for String
+implementation Show for String
   fn show(x: String) -> String = x
+
+fn display(x: t) -> String requires Show(t) = show(x)
 ```
 
-Protocol dispatch compiles to guard-based multi-clause BEAM functions.
+Resolution is compile-time and uses canonical interface and implementation
+identities. See the dedicated [Interfaces](/docs/protocols) guide.
 
 ## Imports
 
@@ -681,24 +701,50 @@ fn greet(name: String, age: Int) -> String =
 
 Any expression can appear inside `#{}`.
 
-## Refinement types
+## Invariants and dependent types
 
-Constrain a base type with a logical predicate:
+The classic `{x: t | predicate}` refinement former is retired from the trusted
+pipeline. Express structural invariants with indexed families and explicit
+proof arguments. Guards still narrow branches and drive coverage diagnostics;
+Z3 analysis is linting outside the trusted kernel, not proof evidence.
+
+See the [Type System](/pages/type-system) page for indexed families,
+quantitative binders, and kernel-checked equality.
+
+## User-defined syntax
+
+Macros declare surface grammar with `syntax ... becomes`. Holes are typed,
+repeatable, and hygienic:
 
 ```cure
-type NonZero = {x: Int | x != 0}
-type Positive = {x: Int | x > 0}
-type Percentage = {p: Int | p >= 0 and p <= 100}
+syntax beam_ops tell <dest: Code> <message: Code>
+  becomes Std.Otp.tell(dest, message)
 ```
 
-Functions can use `when` guards that are verified at call sites via Z3:
+`quote` builds syntax and `$(...)` splices values into it:
 
 ```cure
-fn safe_divide(a: Int, b: Int) -> Int when b != 0 = a / b
-fn positive_double(x: Int) -> Int when x > 0 = x * 2
+let ast = quote %[:ok, $(payload)]
 ```
 
-See the [Type System](/pages/type-system) page for details on how refinement types and dependent type verification work.
+`computed by` invokes a typed elaborator for expansions that cannot be
+expressed as a template. `Std.Syntax` provides lossless reflection. Expanded
+declarations keep invocation and definition provenance and enter the same
+canonical module interface as authored declarations.
+
+## Editions and migration
+
+`@edition` and `[project].edition` select a project's grammar. Use
+`cure migrate` to cross editions:
+
+```bash
+cure migrate --check src
+cure migrate --print src/old.cure
+cure migrate --strict src
+```
+
+Migration rewrites retired keywords, conditional syntax, type-variable casing,
+decorator placement, and renamed modules to the current surface.
 
 ## FSMs (Finite State Machines)
 

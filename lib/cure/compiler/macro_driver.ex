@@ -24,13 +24,16 @@ defmodule Cure.Compiler.MacroDriver do
   defp validate_base(base), do: {:error, {:invalid_driver_base, base}}
 
   defp validate_registers(registers) do
-    names = Enum.map(registers, &Map.get(&1, :name))
+    if Enum.all?(registers, &valid_register?/1) do
+      names = Enum.map(registers, &Map.fetch!(&1, :name))
 
-    cond do
-      not Enum.all?(registers, &valid_register?/1) -> {:error, :invalid_driver_register}
-      length(names) != MapSet.size(MapSet.new(names)) -> {:error, :duplicate_driver_register}
-      overlapping?(registers) -> {:error, :overlapping_driver_register}
-      true -> :ok
+      cond do
+        length(names) != MapSet.size(MapSet.new(names)) -> {:error, :duplicate_driver_register}
+        overlapping?(registers) -> {:error, :overlapping_driver_register}
+        true -> :ok
+      end
+    else
+      {:error, :invalid_driver_register}
     end
   end
 
@@ -42,11 +45,14 @@ defmodule Cure.Compiler.MacroDriver do
   defp valid_register?(_), do: false
 
   defp overlapping?(registers) do
-    ranges = Enum.map(registers, fn %{offset: offset, width: width} -> {offset, offset + div(width, 8)} end)
+    ranges =
+      registers
+      |> Enum.with_index()
+      |> Enum.map(fn {%{offset: offset, width: width}, index} -> {index, offset, offset + div(width, 8)} end)
 
-    Enum.any?(ranges, fn {start, finish} ->
-      Enum.any?(ranges, fn {other_start, other_finish} ->
-        start != other_start and start < other_finish and other_start < finish
+    Enum.any?(ranges, fn {index, start, finish} ->
+      Enum.any?(ranges, fn {other_index, other_start, other_finish} ->
+        index < other_index and start < other_finish and other_start < finish
       end)
     end)
   end

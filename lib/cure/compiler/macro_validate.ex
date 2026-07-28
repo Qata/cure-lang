@@ -80,8 +80,22 @@ defmodule Cure.Compiler.MacroValidate do
               :rule_unpinned,
               :example_mismatch,
               :example_type_mismatch,
-              :computed_example_error
+              :computed_example_error,
+              :expansion_ill_typed,
+              :unsupported_hole_type,
+              :generated_hole_not_well_typed,
+              :invalid_macro_segment,
+              :unsupported_surface_filler,
+              :missing_hole_filler,
+              :invalid_repeated_hole_filler
             ] do
+    {:error, {:source_context, reason, validation_source_context(reason, meta, rules)}}
+  end
+
+  defp contextualize_validation(
+         {:error, {:reserved_syntax_field, _field, _keywords} = reason},
+         {:macro_def, meta, rules}
+       ) do
     {:error, {:source_context, reason, validation_source_context(reason, meta, rules)}}
   end
 
@@ -149,6 +163,131 @@ defmodule Cure.Compiler.MacroValidate do
       expression_category: :macro_example_validation
     }
   end
+
+  defp validation_source_context({:reserved_syntax_field, field, keywords}, meta, rules) do
+    offending =
+      for rule <- rules,
+          rule[:kind] == :computed,
+          rule.keyword in keywords,
+          hole_span <- List.wrap(get_in(rule, [:field_spans, field])) do
+        %{hole_span: hole_span, rule_span: rule[:head_span] || rule[:source_span]}
+      end
+
+    hole_spans = offending |> Enum.map(& &1.hole_span) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    rule_spans = offending |> Enum.map(& &1.rule_span) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    macro_span = macro_source_span(meta)
+
+    %{
+      span: List.first(hole_spans) || List.first(rule_spans) || macro_span,
+      macro_span: macro_span,
+      hole_spans: hole_spans,
+      rule_spans: rule_spans,
+      related_spans: rule_spans ++ Enum.drop(hole_spans, 1),
+      macro: Keyword.get(meta, :name),
+      expression_category: :macro_validation
+    }
+  end
+
+  defp validation_source_context({:expansion_ill_typed, details}, meta, rules) do
+    keyword = Map.get(details, :keyword)
+    rule = Enum.find(rules, &(&1[:kind] in [:syntax, :computed] and &1[:keyword] == keyword))
+    macro_span = macro_source_span(meta)
+    rule_span = rule && (rule[:head_span] || rule[:source_span])
+    authored_span = rule && (rule[:body_span] || rule_span)
+
+    %{
+      span: authored_span || rule_span || macro_span,
+      macro_span: macro_span,
+      rule_span: rule_span,
+      related_spans: Enum.reject([rule_span], &is_nil/1),
+      macro: Keyword.get(meta, :name),
+      rule_kind: rule && rule[:kind],
+      keyword: keyword,
+      expression_category: :macro_expansion_proof
+    }
+  end
+
+  defp validation_source_context({:unsupported_hole_type, category}, meta, rules) do
+    offenders =
+      for rule <- rules,
+          rule[:kind] in [:syntax, :computed],
+          field <- fields_with_category(rule[:segments] || [], category),
+          span <- List.wrap(get_in(rule, [:field_spans, field])) do
+        %{field: field, keyword: rule[:keyword], span: span}
+      end
+
+    spans = offenders |> Enum.map(& &1.span) |> Enum.uniq()
+    macro_span = macro_source_span(meta)
+
+    %{
+      span: List.first(spans) || macro_span,
+      hole_spans: spans,
+      offenders: offenders,
+      related_spans: Enum.drop(spans, 1),
+      macro_span: macro_span,
+      macro: Keyword.get(meta, :name),
+      category: category,
+      expression_category: :macro_expansion_proof
+    }
+  end
+
+  defp validation_source_context({:generated_hole_not_well_typed, details}, meta, rules) do
+    category = if is_map(details), do: Map.get(details, :category), else: nil
+    hole = if is_map(details), do: Map.get(details, :hole), else: nil
+
+    spans =
+      for rule <- rules,
+          rule[:kind] in [:syntax, :computed],
+          field <- fields_with_category(rule[:segments] || [], category),
+          is_nil(hole) or field == hole,
+          span <- List.wrap(get_in(rule, [:field_spans, field])) do
+        span
+      end
+      |> Enum.uniq()
+
+    macro_span = macro_source_span(meta)
+
+    %{
+      span: List.first(spans) || macro_span,
+      hole_spans: spans,
+      related_spans: Enum.drop(spans, 1),
+      macro_span: macro_span,
+      macro: Keyword.get(meta, :name),
+      category: category,
+      hole: hole,
+      expression_category: :macro_proof_generator_invariant
+    }
+  end
+
+  defp validation_source_context({kind, detail}, meta, rules)
+       when kind in [
+              :invalid_macro_segment,
+              :unsupported_surface_filler,
+              :missing_hole_filler,
+              :invalid_repeated_hole_filler
+            ] do
+    rule_span =
+      rules
+      |> Enum.find_value(fn rule ->
+        if rule[:kind] in [:syntax, :computed], do: Map.get(rule, :source_span)
+      end)
+
+    %{
+      span: rule_span || macro_source_span(meta),
+      macro: Keyword.get(meta, :name),
+      hole: if(kind in [:missing_hole_filler, :invalid_repeated_hole_filler], do: detail),
+      expectation_origin: :macro_proof_input,
+      expression_category: :macro_rule
+    }
+  end
+
+  defp fields_with_category(segments, category) when is_list(segments),
+    do: Enum.flat_map(segments, &fields_with_category(&1, category))
+
+  defp fields_with_category({:hole, %{name: name, kind: category}}, category), do: [name]
+  defp fields_with_category({:repeat, segment}, category), do: fields_with_category(segment, category)
+  defp fields_with_category({:optional, segments}, category), do: fields_with_category(segments, category)
+  defp fields_with_category(_segment, _category), do: []
 
   defp macro_source_span(meta) do
     case Metadata.source_info(meta) do

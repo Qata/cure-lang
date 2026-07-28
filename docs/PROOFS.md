@@ -1,49 +1,96 @@
 # Proofs in Cure
 
-`proof` containers are currently a legacy proof-shape feature. They let source
-code group law-shaped declarations, and the legacy checker requires each binding
-to return an `Eq(...)`-looking type or a refinement type. They do not yet
-elaborate those propositions to `Cure.Core.Kernel`.
+Proofs are ordinary Cure values checked by the dependent kernel. There is no
+runtime equality token and no separate legacy checker: a declaration proving a
+proposition elaborates to checked Core, and proof-only values are erased before
+BEAM emission.
 
-That distinction matters: a function in a `proof` container can return
-`:cure_refl`, but the trusted dependent kernel is not yet proving the stated
-law from Cure source.
+## Propositional equality
 
-## Shape
-
-A proof container looks like a module:
+`Std.Equivalent` defines the kernel-recognised identity family:
 
 ```cure
-proof Laws.Arithmetic
-  fn plus_zero(_n: Int) -> Eq(Int, n, n) = :cure_refl
-  fn plus_comm(_a: Int, _b: Int) -> Eq(Int, a, b) = :cure_refl
+@builtin(:eq)
+type Equivalent(a: Type) indices (x: a, y: a)
+  reflexive : Equivalent(a, w, w)
 ```
 
-Every function's return type must be proof-shaped. The body is usually the
-runtime atom `:cure_refl`, matching the current `Std.Equal` compatibility API.
+An inhabitant of `Equivalent(a, x, y)` is evidence that `x` and `y` are the
+same value. This differs from `Std.Equatable`: `x == y` computes a runtime
+`Bool`, while `Equivalent(a, x, y)` is a proposition checked at compile time.
 
-## Current Use
+`reflexive` closes a goal whose endpoints are definitionally equal. Matching on
+an equality proof identifies the endpoints, so transport and the usual laws
+are written without a primitive `rewrite` node:
 
-- A `proof` keyword documents intent: everything inside is intended as a law,
-  not computation.
-- The checker applies only a shape gate today. This is useful as a migration
-  staging point, but it is not an Idris/Agda-style proof checker.
-- `Std.Proof` remains a catalog of law-shaped declarations until public
-  `Eq`/`refl`/`rewrite` elaborates to Core.
+```cure
+use Std.Equivalent
 
-## Available Legacy Laws In `Std.Proof`
+fn symmetric(
+  {a: Type},
+  {x: a},
+  {y: a},
+  proof: Equivalent(a, x, y)
+) -> Equivalent(a, y, x) =
+  match proof
+    reflexive -> reflexive
+```
 
-| Law | Signature |
-|-----|-----------|
-| `plus_zero/1` | `Eq(Int, n, n)` |
-| `zero_plus/1` | `Eq(Int, n, n)` |
-| `plus_comm/2` | `Eq(Int, a, a)` |
-| `append_nil/1` | `Eq(List(T), xs, xs)` |
-| `map_id/1` | `Eq(List(T), xs, xs)` |
+`Std.Equivalent` supplies `sym`, `trans`, and `cong` using this same
+single-constructor elimination.
 
-## Related Features
+## Indexed propositions
 
-- `Cure.Core` already has equality and rewrite nodes with kernel tests.
-- `Std.Equal` is still a runtime-token compatibility module.
-- `assert_type expr : T` is a compile-time type assertion that erases at
-  runtime, but it is separate from the trusted dependent proof kernel.
+Any indexed family can be a proposition. Its constructors are the valid proof
+rules:
+
+```cure
+type IsEven indices (n: Nat)
+  even_zero : IsEven(Z)
+  even_step : IsEven(n) -> IsEven(S(S(n)))
+```
+
+A function returning `IsEven(n)` must construct evidence for that exact index.
+Impossible branches can be marked `impossible` when constructor-index
+unification proves that no value can reach them.
+
+## Proof authoring surface
+
+- `have name = expression` introduces a checked local fact.
+- `proof chain` gives equality composition a readable surface.
+- `because` blocks provide directed rewrites, simplification, and induction
+  commands that elaborate to ordinary proof terms.
+- `?name` and `??` create typed holes and report the goal plus local context.
+- Generated defining equations are theorem members available to completion and
+  hover.
+
+These commands are elaboration syntax. They do not add unchecked Core nodes and
+do not survive erasure.
+
+## Trust
+
+`postulate`, bodyless `@extern`, and `believe_me` are explicit trust roots. The
+compiler records their canonical identities and dependency reachability:
+
+```bash
+cure audit trust My.Module
+```
+
+The report distinguishes a theorem proved from definitions from one that
+depends on an axiom. SMT guard coverage is linting outside the trusted kernel;
+it can warn about coverage or shadowing but does not manufacture proof
+evidence.
+
+## Standard proof modules
+
+- `Std.Equivalent` — identity, symmetry, transitivity, and congruence.
+- `Std.Proof` — structural equality laws over `Std.Nat`.
+- `Std.Proof.Math` — positive-natural and ordering evidence.
+- `Std.Decision` — decidable propositions carrying either evidence or a
+  refutation.
+- `Std.Proof.LinearArithmetic` — checked linear-arithmetic reflection and its
+  semantics.
+
+See [Dependent Types](DEPENDENT_TYPES.md) for indexed programming and
+[Kernel](KERNEL.md) for conversion, totality certificates, and the trusted
+boundary.

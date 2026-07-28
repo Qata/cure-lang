@@ -21,7 +21,7 @@ defmodule Cure.Elab.Emit do
   """
 
   alias Cure.Compiler.BeamWriter
-  alias Cure.Core.{Grade, Env, Inductive, Validator}
+  alias Cure.Core.{Grade, Env, Inductive, RuntimeRefs, Validator}
   alias Cure.Elab.{Erase, Name}
 
   @line 1
@@ -40,7 +40,8 @@ defmodule Cure.Elab.Emit do
     origins = Keyword.get(opts, :origins, %{})
     emit_opts = Keyword.take(opts, [:prefix, :local_owners])
 
-    with :ok <- reject_holes(env, names) do
+    with :ok <- validate_emission_closure(env, names),
+         :ok <- reject_holes(env, names) do
       BeamWriter.compile_and_load(module_forms(env, module, names, origins, emit_opts))
     end
   end
@@ -99,7 +100,8 @@ defmodule Cure.Elab.Emit do
     # Hole-check the FULL name set first — an unfilled obligation in a type-level
     # def is still refused (#102 firewall) — then drop the type-level defs from the
     # set that actually reaches emission.
-    with :ok <- reject_holes(env, names) do
+    with :ok <- validate_emission_closure(env, names),
+         :ok <- reject_holes(env, names) do
       emit_names = Enum.reject(names, &type_level_def?(env, &1))
 
       try do
@@ -108,6 +110,114 @@ defmodule Cure.Elab.Emit do
         e in ArgumentError -> {:error, {:cannot_emit, Exception.message(e)}}
       end
     end
+  end
+
+  @doc """
+  Validate that every selected definition and every Core global reachable from
+  it resolves to a real definition, compiler primitive, or extern boundary.
+
+  This runs before Erlang lowering so a malformed closure is a structured
+  compiler diagnostic rather than an `ArgumentError` from `function_form/2`.
+  """
+  @spec validate_emission_closure(Env.t(), [atom()]) :: :ok | {:error, term()}
+  def validate_emission_closure(%Env{} = env, names) do
+    selected =
+      names
+      |> Enum.map(&Env.resolve_key(env, env.defs, &1))
+      |> MapSet.new()
+
+    selected_owners =
+      selected
+      |> Enum.map(&Name.owner/1)
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new()
+
+    Enum.reduce_while(selected, :ok, fn key, :ok ->
+      case validate_selected_definition(env, key, selected, selected_owners) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_selected_definition(env, key, selected, selected_owners) do
+    definition = Map.get(env.defs, key)
+
+    cond do
+      is_nil(definition) ->
+        closure_error(:emission_closure_missing, env, key, nil)
+
+      is_map(definition) and type_level_def?(env, key) ->
+        :ok
+
+      true ->
+        case definition do
+          %{body: nil, builtin_op: builtin_op} when not is_nil(builtin_op) ->
+            :ok
+
+          %{body: {:extern, {_module, _function, arity}}} when is_integer(arity) and arity >= 0 ->
+            :ok
+
+          %{body: body} ->
+            body
+            |> then(&Erase.erase(env, &1))
+            |> RuntimeRefs.globals()
+            |> MapSet.new()
+            |> Enum.reduce_while(:ok, fn reference, :ok ->
+              case validate_emission_reference(env, reference, key, selected, selected_owners) do
+                :ok -> {:cont, :ok}
+                {:error, _} = error -> {:halt, error}
+              end
+            end)
+
+          invalid ->
+            closure_error(:emission_closure_invalid, env, key, nil, value: invalid)
+        end
+    end
+  end
+
+  defp validate_emission_reference(env, reference, referenced_by, selected, selected_owners) do
+    case Map.get(env.defs, reference) do
+      nil ->
+        if not is_nil(Env.builtin_op(env, reference)) or
+             not is_nil(Env.inline_hint(env, reference)) do
+          :ok
+        else
+          closure_error(:emission_closure_missing, env, reference, referenced_by)
+        end
+
+      %{body: nil, builtin_op: builtin_op} when not is_nil(builtin_op) ->
+        :ok
+
+      %{body: {:extern, {_module, _function, arity}}} when is_integer(arity) and arity >= 0 ->
+        :ok
+
+      %{body: _body} ->
+        owner = Name.owner(reference)
+
+        if owner == env.module_owner and MapSet.member?(selected_owners, owner) and
+             not MapSet.member?(selected, reference) do
+          closure_error(:emission_closure_incomplete, env, reference, referenced_by)
+        else
+          :ok
+        end
+
+      definition ->
+        closure_error(:emission_closure_invalid, env, reference, referenced_by, value: definition)
+    end
+  end
+
+  defp closure_error(kind, env, definition, referenced_by, extra \\ []) do
+    details =
+      extra
+      |> Map.new()
+      |> Map.merge(%{
+        definition: definition,
+        referenced_by: referenced_by,
+        module: env.module_owner
+      })
+
+    {:error, {kind, details}}
   end
 
   # A definition is TYPE-LEVEL when its type's ultimate codomain (after peeling the
@@ -163,6 +273,7 @@ defmodule Cure.Elab.Emit do
     Process.put(:cure_emit_origins, origins)
     Process.put(:cure_emit_prefix, prefix)
     Process.put(:cure_emit_local_owners, local_owners)
+    Process.put(:cure_emit_fresh_counter, 0)
 
     aliases =
       Enum.flat_map(names, fn name ->
@@ -175,7 +286,13 @@ defmodule Cure.Elab.Emit do
 
     try do
       fn_forms = Enum.map(names, &function_form(env, &1))
-      exports = Enum.map(fn_forms, fn {:function, _l, name, arity, _cls} -> {name, arity} end)
+
+      exports =
+        fn_forms
+        |> Enum.reject(fn {:function, _line, name, _arity, _clauses} ->
+          String.match?(Atom.to_string(name), ~r/\$[^$]+\$\d+$/)
+        end)
+        |> Enum.map(fn {:function, _l, name, arity, _cls} -> {name, arity} end)
 
       [
         {:attribute, @line, :module, module},
@@ -187,6 +304,7 @@ defmodule Cure.Elab.Emit do
       Process.delete(:cure_emit_prefix)
       Process.delete(:cure_emit_local_owners)
       Process.delete(:cure_emit_aliases)
+      Process.delete(:cure_emit_fresh_counter)
     end
   end
 
@@ -739,6 +857,11 @@ defmodule Cure.Elab.Emit do
     end
   end
 
+  # `Effect(T)` is direct-style, so the unsafe `run` boundary has no runtime
+  # representation. The erased type argument is already absent here.
+  defp lower_builtin_op(:effect_run, [value], env, ctx), do: lower(env, value, ctx)
+  defp lower_builtin_op(:effect_run, args, env, ctx), do: curry_apply(builtin_op_wrapper(:effect_run), args, env, ctx)
+
   defp lower_builtin_op(op, args, env, ctx) do
     case args do
       [a, b] -> {:op, @line, erl_binop(op), lower(env, a, ctx), lower(env, b, ctx)}
@@ -765,6 +888,9 @@ defmodule Cure.Elab.Emit do
 
   defp builtin_op_wrapper(:bnot),
     do: fun1(:BopA, {:op, @line, :bnot, {:var, @line, :BopA}})
+
+  defp builtin_op_wrapper(:effect_run),
+    do: fun1(:BopA, {:var, @line, :BopA})
 
   defp builtin_op_wrapper(op) do
     body = {:op, @line, erl_binop(op), {:var, @line, :BopL}, {:var, @line, :BopR}}
@@ -1064,7 +1190,10 @@ defmodule Cure.Elab.Emit do
     fields =
       for i <- indices(arity) do
         q = Enum.at(quantities, i, :unrestricted)
-        if q == :unrestricted, do: {:unrestricted, fresh_var("V")}, else: {:erased, fresh_var("_f")}
+
+        if Grade.present?(q),
+          do: {:present, fresh_var("V")},
+          else: {:erased, fresh_var("_f")}
       end
 
     field_names = Enum.map(fields, fn {_q, n} -> n end)
@@ -1072,7 +1201,7 @@ defmodule Cure.Elab.Emit do
     body_form = lower(env, body, new_ctx)
 
     present =
-      for {:unrestricted, n} <- fields,
+      for {:present, n} <- fields,
           do: underscore_if_unused({:var, @line, n}, body_form)
 
     pattern =
@@ -1084,8 +1213,8 @@ defmodule Cure.Elab.Emit do
     {:clause, @line, [pattern], [], [body_form]}
   end
 
-  # A synthetic BEAM variable name, unique across the *entire* compilation run
-  # (not just within one lexical nesting chain). Binder names used to be derived
+  # A synthetic BEAM variable name, unique across one emitted module (not just
+  # within one lexical nesting chain). Binder names used to be derived
   # from `length(ctx)` (de-Bruijn context depth): sound along a single ancestor
   # chain, but two SIBLING subterms lowered from the same `ctx` (e.g. independent
   # arguments to a ctor/call, or independent elements of a list literal) could
@@ -1095,23 +1224,28 @@ defmodule Cure.Elab.Emit do
   # name) or — worse — silently REBIND: a nested case whose fresh field name
   # happens to equal an already-bound ancestor variable stops introducing a new
   # binding and instead matches against the ancestor's *value*, corrupting the
-  # program. `System.unique_integer/1` sidesteps both: every call reserves one
-  # globally-fresh id, so no two synthetic binders can ever collide, siblings or
-  # not. (Each field of a multi-field clause must call this once per field —
+  # program. A module-scoped monotonic counter sidesteps both: every call reserves
+  # one fresh id, so no two synthetic binders in the module can ever collide,
+  # siblings or not. Resetting it at `module_forms/5` also makes BEAM output
+  # independent of what compiled earlier in the VM. (Each field of a multi-field
+  # clause must call this once per field —
   # never derive further names by adding an offset to one reserved id, since
   # that reintroduces the exact same collision class against other reserved ids.)
   #
   # The `_` between prefix and id is load-bearing, not decoration. Positional
   # parameter binders use a SEPARATE scheme — `V<pos>` / `_e<pos>` (see
   # `peel_params/4`, ~line 455), where `<pos>` is a small de Bruijn index — and
-  # are NOT minted here. `System.unique_integer/1` is only unique among ITS OWN
-  # ids; it can (and early in the VM's life does) return a small value like `1`,
-  # so a bare `:"V#{1}"` would alias the parameter `V1`. In Erlang an already-bound
+  # are NOT minted here. The counter can return a small value like `1`, so a bare
+  # `:"V#{1}"` would alias the parameter `V1`. In Erlang an already-bound
   # `V1` in `[V1|V2]` is an equality match, not a fresh bind, corrupting the clause
   # (a non-deterministic `CaseClauseError`). The separator makes the fresh
   # namespace `<prefix>_<digits>` provably disjoint from the positional
   # `<prefix><digits>` shape — no fresh binder can ever spell a positional name.
-  defp fresh_var(prefix), do: :"#{prefix}_#{System.unique_integer([:positive, :monotonic])}"
+  defp fresh_var(prefix) do
+    id = Process.get(:cure_emit_fresh_counter, 0) + 1
+    Process.put(:cure_emit_fresh_counter, id)
+    :"#{prefix}_#{id}"
+  end
 
   # `erl_lint` flags a bound-but-unused variable (`unused_var`). An erased proof
   # discards its parameters — an equality proof erases to the runtime-irrelevant
@@ -1176,7 +1310,9 @@ defmodule Cure.Elab.Emit do
   defp bounded_present_args(env, name, args) do
     case Inductive.ctor_quantities(env, name) do
       qs when is_list(qs) and length(qs) == length(args) ->
-        for {a, :unrestricted} <- Enum.zip(args, qs), do: a
+        for {arg, quantity} <- Enum.zip(args, qs),
+            Grade.present?(quantity),
+            do: arg
 
       _ ->
         args

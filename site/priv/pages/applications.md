@@ -4,6 +4,13 @@
   order: 6
 }
 ---
+
+> **0.34 update:** `app` is an auto-preluded transparent macro over ordinary
+> lifted modules, callbacks, and checked OTP operations. The generated
+> declarations pass through the same canonical module interfaces and dependent
+> kernel as authored Cure code. The release resource and runtime behavior
+> described below remain the output contract.
+
 Cure 0.26.0 takes the supervision surface landed in v0.25.0 and wraps it in a full OTP application lifecycle. A project with a single `app` container compiles to three artefacts in one pass:
 
 1. A loaded BEAM module `:"Cure.App.<Name>"` implementing the `:application` behaviour (`start/2`, `stop/1`, and, when applicable, `start_phase/3`).

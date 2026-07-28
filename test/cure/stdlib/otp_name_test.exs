@@ -46,6 +46,7 @@ defmodule Cure.Stdlib.OtpNameTest do
     mod NameDemo
       use Std.Otp
       use Std.Bool
+      use Std.Option
       type Cmd = Inc | Dec
       # Register the calling process under a typed name, confirm the lookup finds it, then unregister and
       # confirm the lookup is now empty. Returns %[registered?, found_after?, found_after_unregister_is_none?].

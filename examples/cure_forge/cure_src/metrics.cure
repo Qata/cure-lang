@@ -1,0 +1,8 @@
+## Transparent metrics actor with a typed tuple state.
+
+actor Cure.Metrics state Tuple(Int, Int) initial %[0, 0] messages Atom handle_cast
+  pickup
+    message == :reset -> %[:noreply, %[0, 0]]
+    message == :ok -> %[:noreply, %[state.1 + 1, state.2]]
+    message == :error -> %[:noreply, %[state.1, state.2 + 1]]
+    else -> %[:noreply, state]

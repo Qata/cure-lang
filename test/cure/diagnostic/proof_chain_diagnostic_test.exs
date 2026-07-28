@@ -206,6 +206,19 @@ defmodule Cure.Diagnostic.ProofChainDiagnosticTest do
       assert diagnostic.payload.command
       assert diagnostic.payload.theorem
       assert diagnostic.payload.goal
+
+      if kind == :reverse_only do
+        assert [
+                 %{
+                   applicability: :machine_applicable,
+                   edits: [%{replacement: " backwards", span: insertion}]
+                 }
+               ] = diagnostic.suggestions
+
+        assert insertion.start_byte == insertion.end_byte
+        assert binary_part(source, insertion.start_byte - 7, 7) == "rewrite"
+        assert binary_part(source, insertion.start_byte, 6) == " using"
+      end
     end
   end
 

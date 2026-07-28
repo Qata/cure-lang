@@ -1,97 +1,127 @@
 # Cure Dependent Types Guide
 
-This page describes the dependent features that are backed by the current
-trusted Core kernel. Older modules under `Cure.Types.*` still exist as
-compatibility APIs, but a Cure source feature should only be described as
-trusted dependent typing when it elaborates to `Cure.Core`, is checked by
-`Cure.Core.Kernel`, and is erased/emitted from that checked Core term.
+Every accepted Cure program follows the dependent path: surface syntax
+elaborates to `Cure.Core`, `Cure.Core.Kernel` validates it, and quantitative
+erasure removes compile-time-only evidence before BEAM emission. The former
+`Cure.Types.*` classic pipeline has been deleted.
 
-## Trusted Surface Today
+## Indexed families
 
-The dependent compiler path currently handles:
-
-- indexed families declared with `indexed type ... where`;
-- typed erased parameters such as `{a: Type}` and `{n: Nat}`;
-- dependent global calls whose erased arguments are inferred at call sites;
-- `Sigma(x: A, B)` dependent pairs, pair literals `%[a, b]`, and projections
-  `p.1` / `p.2`;
-- holes inside dependent programs, which typecheck but block codegen;
-- type-level reduction through Core normalization, exposed to legacy callers by
-  `Cure.Types.Reduce`.
-
-The compiler routes modules using indexed types, typed erased parameters, or
-Sigma/projection surface forms through the dependent compiler even if they do
-not also declare an indexed family.
-
-## Indexed Families
-
-Indexed families let data carry type indices checked by the kernel:
+Parameters are uniform across constructors; indices may vary:
 
 ```cure
-type Nat = Z | S(Nat)
-
-indexed type Vector(a: Type, n: Nat) where
-  empty : Vector(a, Z)
+type Vector(a: Type) indices (n: Nat)
+  empty   : Vector(a, Z)
   prepend : a -> Vector(a, n) -> Vector(a, S(n))
 ```
 
-The constructor index arguments are erased. Runtime `Vector` values are ordinary
-constructors, while the Core checker verifies the length index.
+The checker preserves constructor index equations. A match on `Vector(a, n)`
+therefore refines `n` independently in each branch, and a constructor whose
+indices cannot unify is impossible.
 
-## Typed Erased Parameters
-
-Braced parameters are implicit and erased when they have explicit types:
+Empty families use `= |`; a single constructor needs no leading bar:
 
 ```cure
-fn id_nat({n: Nat}, x: Nat) -> Nat = x
+type Void = |
+type Wrapper = Wrap(Int)
 ```
 
-The source function has two parameters, but the emitted BEAM function has arity
-one. Untyped `{T}` syntax still parses for compatibility, but the trusted
-dependent path currently requires explicit parameter types such as `{T: Type}`.
+## Dependent functions and implicits
 
-## Sigma Types
+A result type may mention explicit arguments:
 
-Sigma types pair a value with a type that may depend on that value:
+```cure
+fn append(
+  {a: Type},
+  {m: Nat},
+  {n: Nat},
+  xs: Vector(a, m),
+  ys: Vector(a, n)
+) -> Vector(a, plus(m, n))
+```
+
+Braced parameters are implicit. The elaborator solves them from explicit
+arguments, postponing constraints when necessary so argument order does not
+decide typability. Grade-`0` arguments are checked but erased and do not change
+the emitted BEAM arity.
+
+## Sigma types
+
+`Sigma(x: a, b)` pairs a witness `x` with a second component whose type may
+mention that witness:
 
 ```cure
 fn pack(d: Dec) -> Sigma(x: Dec, Dec) = %[d, d]
 fn recover(p: Sigma(x: Dec, Dec)) -> Dec = p.2
 ```
 
-`Sigma(x: A, B)` elaborates to Core `Σ`; `%[a, b]` elaborates to pair
-introduction, and `p.1` / `p.2` elaborate to projections. Runtime pairs emit as
-2-tuples.
+Sigma introduction uses the tuple surface and dependent projections use `.1`
+and `.2`. Runtime pairs emit as ordinary BEAM tuples after evidence erasure.
 
-## Type-Level Reduction
+## Definitional equality
 
-`Cure.Types.Reduce` is now a compatibility facade over Core normalization.
-Before normalization it substitutes requested source-level bindings, then
-translates the supported expression fragment to Core, evaluates with
-normalization-by-evaluation, and reads the result back. Arithmetic, Boolean
-operations, comparisons, and literal tuple projection are covered by this bridge;
-irreducible source syntax is kept structurally and its children are normalized.
+The kernel decides type equality with normalization by evaluation. Beta
+reduction, projections, dependent-case iota reduction, and certified global
+definitions participate automatically. A global definition unfolds only when
+its size-change totality certificate validates, preventing conversion from
+running arbitrary nonterminating code.
+
+## Propositional equality
+
+`Std.Equivalent` declares the inductive identity type:
+
+```cure
+@builtin(:eq)
+type Equivalent(a: Type) indices (x: a, y: a)
+  reflexive : Equivalent(a, w, w)
+```
+
+`reflexive` closes goals whose endpoints are definitionally equal. Matching an
+equality proof against `reflexive` identifies the endpoints, which is enough to
+implement transport, symmetry, transitivity, and congruence as ordinary Cure
+functions. Primitive `Eq`, `refl`, and `rewrite` Core nodes are retired.
+
+`Equivalent` is proof equality. `Std.Equatable` is a separate runtime
+comparison interface returning `Bool`.
+
+## Impossible and forced patterns
+
+When index unification proves that a constructor cannot inhabit the scrutinee
+type, the branch may be written `impossible`. A forced (`.`) pattern records
+that a value is already determined by surrounding indices. These forms are
+checked rather than trusted.
+
+## Quantitative binders
+
+Binders carry grades from `{0, 1, ω}`, with affine usage available:
+
+- `0` values are compile-time-only;
+- `1` / `:linear` values are consumed exactly once;
+- `:affine` values are consumed at most once;
+- `ω` values are unrestricted.
+
+The kernel rejects returning, scrutinizing, or reusing erased data at runtime.
+This same discipline checks typed OTP capabilities before they are erased or
+lowered.
 
 ## Holes
 
-`?name` holes are real in dependent programs. The kernel accepts a hole at the
-declared goal type so tooling can report the goal and local context, but codegen
-rejects any definition that still contains a hole.
+`?name` and `??` create typed holes. Tooling reports the expected type and local
+context, but final emission rejects any reachable definition that still
+contains a hole.
 
-## Not Trusted Kernel Surface Yet
+## Trust boundary
 
-The following pieces remain compatibility or design surface, not completed
-trusted Cure dependent typing:
+Strict positivity, totality certification, conversion, dependent case, and
+usage checking live inside the trusted kernel. `postulate`, bodyless `@extern`,
+and `believe_me` are explicit axiom roots and are recorded in the trust ledger:
 
-- Public `Eq(T, a, b)`, `refl`, and `rewrite` syntax is not fully elaborated
-  from Cure source to Core yet. Core has equality/rewrite nodes and kernel tests,
-  but `Std.Equal` still returns runtime `Atom` witnesses.
-- `proof` containers are currently a legacy proof-shape gate. They require
-  proof-looking return types, but they do not validate the proposition in the
-  trusted Core kernel.
-- `Cure.Types.Pi`, `Cure.Types.Sigma`, `Cure.Types.Equality`, and
-  `Cure.Types.Holes` are compatibility helpers unless the source program
-  also routes through `Cure.Elab.Program`.
+```bash
+cure audit trust My.Module
+```
 
-The next dependency work should turn the unsupported items above into either
-Core-backed user features or explicit compile-time rejections.
+Z3 guard coverage and shadow analysis are useful lint diagnostics but are
+outside the trusted kernel and never synthesize proof evidence.
+
+See [Type System](TYPE_SYSTEM.md), [Proofs](PROOFS.md), and
+[Kernel](KERNEL.md) for more detail.

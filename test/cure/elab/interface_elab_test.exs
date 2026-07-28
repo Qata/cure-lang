@@ -43,6 +43,7 @@ defmodule Cure.Elab.InterfaceElabTest do
     # interface block — or it parses as an unrelated top-level def with a
     # free/unbound `a`, and `Bad` ends up with only the (consistent) `m1`,
     # never exercising the inconsistent-head-kind check at all.
-    assert {:error, {:inconsistent_head_kind, :Bad}} = Program.elaborate(src)
+    assert {:error, error} = Program.elaborate(src)
+    assert {:inconsistent_head_kind, :Bad} = Program.semantic_error(error)
   end
 end

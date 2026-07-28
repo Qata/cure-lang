@@ -62,7 +62,7 @@ defmodule Cure.Diagnostic.SourceRegistry do
   def line(%__MODULE__{} = registry, %Span{source_id: source_id}, line_number) do
     with {:ok, source} <- fetch(registry, source_id),
          line when is_binary(line) <- Enum.at(String.split(source, "\n"), line_number - 1) do
-      {:ok, line}
+      {:ok, String.trim_trailing(line, "\r")}
     else
       _ -> :error
     end
@@ -79,7 +79,7 @@ defmodule Cure.Diagnostic.SourceRegistry do
     with {:ok, source} <- fetch(registry, span.source_id),
          true <- byte <= byte_size(source) do
       prefix = binary_part(source, 0, byte)
-      line_prefix = prefix |> String.split("\n") |> List.last()
+      line_prefix = prefix |> String.split("\n") |> List.last() |> lsp_line_text()
       {:ok, %{"line" => line - 1, "character" => encoded_length(line_prefix, encoding)}}
     else
       :error -> {:error, :unknown_source}
@@ -94,6 +94,10 @@ defmodule Cure.Diagnostic.SourceRegistry do
   end
 
   defp encoded_length(text, :utf32), do: String.length(text)
+
+  # LSP positions are measured within the logical line. In a CRLF buffer the
+  # carriage return belongs to the line terminator, not to the line's text.
+  defp lsp_line_text(text), do: String.trim_trailing(text, "\r")
 
   # Columns are Unicode scalar columns. LSP's UTF-16 conversion belongs in its adapter.
   defp coordinates(source, byte) do

@@ -56,8 +56,7 @@ are reserved for a future release.
 
 ## Type-checker semantics
 
-`Cure.Types.Checker.bind_pattern_vars/3` gained a `:bin_segment`
-clause in v0.21.0. Every segment's inner variable picks up the
+The dependent elaborator assigns every binary segment's inner variable the
 type implied by the segment specifier:
 
 | Specifier type        | Bound variable type |
@@ -76,7 +75,7 @@ once the SMT translator gains the corresponding arithmetic.
 
 ## Exhaustiveness
 
-`Cure.Types.PatternChecker.check_binary_exhaustiveness/2` runs
+The dependent coverage checker runs
 whenever the scrutinee of a `match` is a `Bitstring` (or a
 `Bitstring` refinement). It reports `E031` when a set of arms does
 not cover every inhabitant:

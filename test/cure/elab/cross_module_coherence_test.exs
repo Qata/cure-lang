@@ -98,7 +98,7 @@ defmodule Cure.Elab.CrossModuleCoherenceTest do
 
     src = "mod P\n  use Std.CoOne\n  use Std.CoTwo\n  fn ignore() -> Int = 0\nend\n"
 
-    assert {:error, {:overlapping_named_instance, :fast}} = Program.elaborate(src)
+    assert {:error, {:overlapping_named_instance, %{name: :fast}}} = Program.elaborate(src)
   end
 
   test "two imported modules supplying the same ANONYMOUS instance is an overlap error", %{
@@ -137,7 +137,8 @@ defmodule Cure.Elab.CrossModuleCoherenceTest do
 
     src = "mod P\n  use Std.AnonOne\n  use Std.AnonTwo\n  fn ignore() -> Int = 0\nend\n"
 
-    assert {:error, {:overlapping_instance, :Eqs, :"Std.Int#Int"}} = Program.elaborate(src)
+    assert {:error, {:overlapping_instance, %{interface: :Eqs, head: :"Std.Int#Int"}}} =
+             Program.elaborate(src)
   end
 
   test "a transitively imported module can use builtin globals", %{tmp: tmp} do

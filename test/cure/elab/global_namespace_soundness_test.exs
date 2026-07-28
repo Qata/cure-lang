@@ -44,7 +44,7 @@ defmodule Cure.Elab.GlobalNamespaceSoundnessTest do
     src =
       "mod A\n  fn foo(x: Int) -> Int = x\n  fn foo(y: Int) -> Int = y\nend\n"
 
-    assert {:error, {:overlapping_overload, :foo, 1}} = check(src)
+    assert {:error, {:overlapping_overload, %{name: :foo, arity: 1}}} = check(src)
   end
 
   test "a fn/ctor name collision within one module is rejected outright" do

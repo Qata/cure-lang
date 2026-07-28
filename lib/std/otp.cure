@@ -6,6 +6,24 @@ mod Std.Otp
   use Std.Option
   use Std.Beam
 
+  ## Public names for the sealed raw carriers used by this module's signatures.
+  ## These aliases make the `Std.Otp` interface self-contained without leaking
+  ## every bare name imported from `Std.Otp.Raw` into downstream modules.
+  typealias Plain = Std.Otp.Raw.Plain
+  typealias Server = Std.Otp.Raw.Server
+  typealias RawPid(m, r, k) = Std.Otp.Raw.RawPid(m, r, k)
+  typealias RawServerPid(m, q, r) = Std.Otp.Raw.RawServerPid(m, q, r)
+  typealias RawDepServerPid(m: Type, q: Type, rep: (q) -> Type) = Std.Otp.Raw.RawDepServerPid(m, q, rep)
+  typealias RawFsmPid(event, state, data) = Std.Otp.Raw.RawFsmPid(event, state, data)
+  typealias RawSupervisorPid = Std.Otp.Raw.RawSupervisorPid
+  typealias NoMessage = Std.Otp.Raw.NoMessage
+  typealias BarePid = Std.Otp.Raw.BarePid
+  typealias Ref = Std.Otp.Raw.Ref
+  typealias MonitorRef = Std.Otp.Raw.MonitorRef
+  typealias TimerRef = Std.Otp.Raw.TimerRef
+  typealias RawTerm = Std.Otp.Raw.RawTerm
+  typealias Selector(p) = Std.Otp.Raw.Selector(p)
+
   ## Transparent process-operation syntax. Each rule produces ordinary Cure
   ## syntax; the checked algebra remains the only semantic implementation.
   macro BeamOps
@@ -96,8 +114,7 @@ mod Std.Otp
   ## A DEPENDENT `gen_server` handle: requests `q`, reply computed PER REQUEST by `rep : q -> Type` (an
   ## `ReplyOf`). The SAME server answers different requests at different reply types. A real datatype INDEXED by
   ## `rep` (mirroring `Std.Sigma`), so `call_dep` recovers the reply family from the handle — a phantom typealias
-  ## could not. Wraps the raw server pid and shares its bare-pid representation. The reply soundness (a reply
-  ## really has type `rep(req)`, consumed once) is `Std.Otp.Proof`.
+  ## could not. Wraps the raw server pid and shares its bare-pid representation.
   type DepGenServer(q: Type, rep: (q) -> Type) indices ()
     mk_dep_server : (raw: RawPid(q, Unit, Server)) -> DepGenServer(q, rep)
 
@@ -133,8 +150,7 @@ mod Std.Otp
   ## Typed SELECTIVE RECEIVE (Gleam-style `Selector`). Accumulate handlers over several subjects of DIFFERENT
   ## message types — each mapped into a common payload `p` by `select_map` — then `selector_receive` returns
   ## whichever arrives first, typed as `p`. `select` is the identity case (the subject's messages ARE the
-  ## payload). Building a selector is pure; only the receive is an `Effect`. The safety of merging heterogeneous
-  ## channels into one exhaustively-handled payload is what `Std.Otp.SelectiveReceive` proves.
+  ## payload). Building a selector is pure; only the receive is an `Effect`.
   fn new_selector({p: Type}) -> Selector(p) = raw_selector_new()
 
   ## Add `subject`, mapping its messages into the selector's payload `p`.
@@ -370,8 +386,7 @@ mod Std.Otp
   ## Synchronous DEPENDENT `gen_server` call: send `request`, block for the reply at the request's OWN type
   ## `rep(request)`. The dependent counterpart of `call` — one server answers heterogeneous requests, each at its
   ## own reply type, checked at the call site. `rep(request)` is fixed by the EXPLICIT request argument (not a
-  ## return-only implicit), so it threads through the extern. Soundness is `Std.Otp.Proof` (oracle
-  ## `dep_call_boundary`); same PARTIAL caveat as `call`.
+  ## return-only implicit), so it threads through the extern. Same PARTIAL caveat as `call`.
   ## Project the wrapped raw pid (constant, non-Effect motive so the dependent match is trivial).
   local fn dep_raw({q: Type}, {rep: (q) -> Type}, server: DepGenServer(q, rep)) -> RawPid(q, Unit, Server) =
     match server

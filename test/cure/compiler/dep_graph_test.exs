@@ -20,6 +20,64 @@ defmodule Cure.Compiler.DepGraphTest do
       {:ok, order, []} = DepGraph.order(graph)
 
       assert order == [a, b]
+      assert graph.module_index.entries["LibA"].source_path == a
+      assert graph.module_index.entries["UserB"].source_path == b
+    end
+
+    test "bulk compilation uses the graph when filenames oppose dependency order", %{tmp_dir: dir} do
+      output = Path.join(dir, "ebin")
+      provider = write!(dir, "zz_provider.cure", "mod Bulk.Provider\n  fn value() -> Int = 41\n")
+
+      consumer =
+        write!(
+          dir,
+          "aa_consumer.cure",
+          "mod Bulk.Consumer\n  use Bulk.Provider\n  fn run() -> Int = value() + 1\n"
+        )
+
+      assert {:ok, result} =
+               Cure.Compiler.compile_files([consumer, provider],
+                 output_dir: output,
+                 emit_events: false
+               )
+
+      assert Enum.map(result.compiled, &elem(&1, 0)) == [provider, consumer]
+      assert apply(:"Cure.Bulk.Consumer", :run, []) == 42
+    after
+      :code.purge(:"Cure.Bulk.Consumer")
+      :code.delete(:"Cure.Bulk.Consumer")
+      :code.purge(:"Cure.Bulk.Provider")
+      :code.delete(:"Cure.Bulk.Provider")
+    end
+
+    test "bulk drivers can reuse one validated graph plan", %{tmp_dir: dir} do
+      output = Path.join(dir, "planned_ebin")
+      provider = write!(dir, "zz_planned.cure", "mod Planned.Provider\n  fn value() -> Int = 8\n")
+
+      consumer =
+        write!(
+          dir,
+          "aa_planned.cure",
+          "mod Planned.Consumer\n  use Planned.Provider\n  fn run() -> Int = value()\n"
+        )
+
+      assert {:ok, plan} = Cure.Compiler.prepare_files([consumer, provider])
+
+      assert {:ok, result} =
+               Cure.Compiler.compile_files([consumer, provider],
+                 plan: plan,
+                 output_dir: output,
+                 emit_events: false
+               )
+
+      assert Enum.map(result.compiled, &elem(&1, 0)) == [provider, consumer]
+      assert apply(:"Cure.Planned.Consumer", :run, []) == 8
+      assert {:error, :bulk_compile_plan_mismatch} = Cure.Compiler.compile_files([consumer], plan: plan)
+    after
+      :code.purge(:"Cure.Planned.Consumer")
+      :code.delete(:"Cure.Planned.Consumer")
+      :code.purge(:"Cure.Planned.Provider")
+      :code.delete(:"Cure.Planned.Provider")
     end
 
     test "deterministic: shuffled input, identical output", %{tmp_dir: dir} do
@@ -101,6 +159,47 @@ defmodule Cure.Compiler.DepGraphTest do
 
       assert graph.nodes[a].order_deps == [] or
                Enum.all?(graph.nodes[a].order_deps, &(&1.target in ["Std.List", "NotInSet"]))
+    end
+
+    test "strict bulk scans reject an unavailable dependency before body elaboration", %{tmp_dir: dir} do
+      source =
+        write!(
+          dir,
+          "missing.cure",
+          "mod MissingConsumer\n  fn value() -> Int = Definitely.Missing.value()\n"
+        )
+
+      assert {:error, {:module_dependency_missing, edge}} =
+               DepGraph.scan([source], validate_dependencies: true)
+
+      assert edge.kind == :qualified_reference
+      assert edge.source_module == "MissingConsumer"
+      assert edge.target == "Definitely.Missing"
+      assert edge.line == 2
+    end
+
+    test "strict scans recognize generated modules provided by the same source", %{tmp_dir: dir} do
+      source =
+        write!(
+          dir,
+          "generated_provider.cure",
+          """
+          mod GeneratedProvider
+            lift module Cure.Generated.Worker
+              fn value() -> Int = 1
+            fn run() -> Int = Cure.Generated.Worker.value()
+          """
+        )
+
+      assert {:ok, graph} = DepGraph.scan([source], validate_dependencies: true)
+      assert "Cure.Generated.Worker" in graph.module_index.entries["GeneratedProvider"].provided_modules
+
+      assert {:ok, owner_entry} =
+               Cure.Compiler.ModuleIndex.fetch(graph.module_index, "Cure.Generated.Worker")
+
+      assert owner_entry.module_name == "GeneratedProvider"
+      assert owner_entry.source_path == source
+      assert graph.modules["Cure.Generated.Worker"] == source
     end
 
     test "blank placeholders sort last; parse failures are isolated nodes", %{tmp_dir: dir} do
@@ -186,18 +285,59 @@ defmodule Cure.Compiler.DepGraphTest do
     end
   end
 
+  describe "priority-aware toposort/3" do
+    test "sorts an ambient prelude provider before an implicit consumer", %{tmp_dir: dir} do
+      provider = write!(dir, "z_provider.cure", "@prelude\nmod LiteralProvider\n  fn make() -> Int = 1\n")
+      consumer = write!(dir, "a_consumer.cure", "mod Consumer\n  fn value() -> Int = 2\n")
+
+      {:ok, graph} = DepGraph.scan([consumer, provider])
+      deps = DepGraph.order_deps_map(graph)
+
+      assert deps["Consumer"] == []
+      assert DepGraph.toposort(deps, Map.keys(deps), ["LiteralProvider"]) == ["LiteralProvider", "Consumer"]
+    end
+
+    test "does not add a prelude back-edge into its bootstrap dependencies", %{tmp_dir: dir} do
+      dependency = write!(dir, "z_dependency.cure", "mod Dependency\n  fn base() -> Int = 1\n")
+
+      provider =
+        write!(
+          dir,
+          "a_provider.cure",
+          "@prelude\nmod Provider\n  use Dependency\n  fn make() -> Int = base()\n"
+        )
+
+      consumer = write!(dir, "b_consumer.cure", "mod Consumer\n  fn value() -> Int = 2\n")
+
+      {:ok, graph} = DepGraph.scan([consumer, provider, dependency])
+      deps = DepGraph.order_deps_map(graph)
+
+      assert deps["Provider"] == ["Dependency"]
+      refute "Provider" in deps["Dependency"]
+
+      assert DepGraph.toposort(deps, Map.keys(deps), ["Provider"]) == [
+               "Dependency",
+               "Provider",
+               "Consumer"
+             ]
+    end
+  end
+
   describe "closure edges" do
     test "qualified-call targets become closure deps when in the known universe", %{tmp_dir: dir} do
       lib = write!(dir, "libm.cure", "mod LibM\n  fn get(x: Int) -> Int = x\n")
 
       user =
-        write!(dir, "userq.cure", "mod UserQ\n  fn f(x: Int) -> Int = LibM.get(x)\n")
+        write!(dir, "userq.cure", "mod UserQ\n\n  fn f(x: Int) -> Int = LibM.get(x)\n")
 
       {:ok, graph} = DepGraph.scan([lib, user])
 
       assert "LibM" in graph.nodes[user].closure_deps
       # qualified call is NOT an order edge (spec fact 2)
       assert graph.nodes[user].order_deps == []
+
+      assert [%{kind: :qualified_reference, target: "LibM", line: 3}] =
+               graph.module_index.entries["UserQ"].direct_edges
     end
 
     test "out-of-universe qualified targets are dropped", %{tmp_dir: dir} do

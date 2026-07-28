@@ -92,7 +92,53 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     end
     """
 
-    assert {:error, {:overlapping_overload, :dup, 2}} = elaborate_error(src)
+    assert {:error, {:overlapping_overload, %{name: :dup, arity: 2} = details}} = elaborate_error(src)
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:overlapping_overload, details}, "overlap.cure", src)
+
+    assert Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- OVERLOADS OF `DUP` CANNOT BE DISTINGUISHED [E105] -------------- overlap.cure
+
+             Both declarations accept the same parameter types and required argument labels.
+             A call cannot provide enough information to choose between them.
+
+             at overlap.cure:3:3
+             2 |   fn dup(a: Int, b: Int) -> Int = a
+               |   --------------------------------- the first indistinguishable `dup` overload is here
+             3 |   fn dup(a: Int, b: Int) -> Int = b
+               |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this overload has the same callable signature as the first
+
+             Hint: Change a parameter type or required argument label, or rename one function
+             """)
+
+    lsp = Cure.Diagnostic.Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 2, "character" => 2},
+             "end" => %{"line" => 2, "character" => 35}
+           }
+
+    assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+             %{
+               "start" => %{"line" => 1, "character" => 2},
+               "end" => %{"line" => 1, "character" => 35}
+             }
+           ]
+
+    assert lsp["data"]["payload"] == %{
+             "arity" => 2,
+             "first_id" => "OverlapReject#dup~0",
+             "first_signature" => "dup(Int, Int)",
+             "kind" => "overlapping_overload",
+             "name" => "dup",
+             "second_id" => "OverlapReject#dup~1",
+             "second_signature" => "dup(Int, Int)"
+           }
+
+    fixed = String.replace(src, "fn dup(a: Int, b: Int) -> Int = b", "fn dup_other(a: Int, b: Int) -> Int = b")
+    assert {:ok, _environment} = Cure.Elab.Program.elaborate(fixed)
   end
 
   # Slice C — argument labels break an otherwise-overlapping pair. Both members
@@ -120,7 +166,7 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     end
     """
 
-    assert {:error, {:overlapping_overload, :move, 1}} = elaborate_error(src)
+    assert {:error, {:overlapping_overload, %{name: :move, arity: 1}}} = elaborate_error(src)
   end
 
   # Task 5 — call-site pruning failure. When no member's parameter types match
@@ -139,7 +185,46 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     """
 
     assert {:error, err} = compile_and_load_error(src)
-    assert match?({:no_matching_overload, :plus, _}, unwrap_inner(err))
+    assert match?({:no_matching_overload, %{name: :plus}}, unwrap_inner(err))
+
+    assert {:codegen_error, diagnostic_error} = err
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(diagnostic_error, "no_match.cure", src)
+
+    assert Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- NO OVERLOAD OF `PLUS` MATCHES [E093] -------------------------- no_match.cure
+
+             This call supplies argument types `Int, Int`.
+
+             These overloads are available:
+
+             - `OvlNoMatch.plus(Grams, Grams)`
+             - `OvlNoMatch.plus(Meters, Meters)`
+
+             at no_match.cure:6:27
+             6 |   fn bad() -> Int = match plus(1, 2)
+               |                           ^^^^^^^^^^ these arguments do not match any `plus` overload
+
+             Hint: Change the arguments to match one of the listed signatures
+             """)
+
+    lsp = Cure.Diagnostic.Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 5, "character" => 26},
+             "end" => %{"line" => 5, "character" => 36}
+           }
+
+    assert lsp["data"]["payload"]["arguments"] == ["Int", "Int"]
+
+    assert Enum.map(lsp["data"]["payload"]["candidates"], & &1["signature"]) == [
+             "OvlNoMatch.plus(Grams, Grams)",
+             "OvlNoMatch.plus(Meters, Meters)"
+           ]
+
+    fixed = String.replace(src, "plus(1, 2)", "plus(MkM(1), MkM(2))")
+    assert {:ok, module} = Cure.Compiler.compile_and_load(fixed, emit_events: false)
+    assert apply(module, :bad, []) == 0
   end
 
   # Task 7 — inertness. A module with no same-name group must be untouched by the
@@ -409,6 +494,45 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
 
     assert {:error, err} = compile_multi_error(dir, files)
     assert match?({:ambiguous_overload, :foo, _}, unwrap_inner(err))
+
+    assert {:compile_failed, {:codegen_error, diagnostic_error}} = err
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic(diagnostic_error, "main.cure", files["main.cure"])
+
+    assert Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- CALL TO `FOO` IS AMBIGUOUS [E093] --------------------------------- main.cure
+
+             Both `OvlAmbA.foo` and `OvlAmbB.foo` accept the arguments at this call site.
+             Cure cannot choose one without changing the program's meaning.
+
+             at main.cure:4:22
+             4 |   fn pick() -> Int = foo(1)
+               |                      ^^^^^^ qualify this call with the module you intend
+
+             Hint: Choose `OvlAmbA.foo(...)` or `OvlAmbB.foo(...)`
+             """)
+
+    lsp = Cure.Diagnostic.Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 3, "character" => 21},
+             "end" => %{"line" => 3, "character" => 27}
+           }
+
+    assert lsp["data"]["payload"] == %{
+             "kind" => "ambiguous_overload",
+             "name" => "foo",
+             "owners" => ["OvlAmbA", "OvlAmbB"],
+             "qualified_candidates" => ["OvlAmbA.foo", "OvlAmbB.foo"]
+           }
+
+    fixed_files =
+      Map.update!(files, "main.cure", &String.replace(&1, "foo(1)", "OvlAmbA.foo(1)"))
+
+    assert {:ok, module} = compile_multi(dir, fixed_files, "Cure.OvlAmbC")
+    assert apply(module, :pick, []) == 1
   end
 
   @tag :tmp_dir

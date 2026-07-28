@@ -59,7 +59,8 @@ defmodule Cure.Elab.TypeclassDispatchBoundariesTest do
       end
       """
 
-      assert {:error, {:ambiguous_method, :size, [:Eqs, :Ord]}} = Program.elaborate(src)
+      assert {:error, error} = Program.elaborate(src)
+      assert {:ambiguous_method, :size, [:Eqs, :Ord]} = Program.semantic_error(error)
     end
 
     test "distinct method names across two interfaces are fine" do
@@ -189,7 +190,8 @@ defmodule Cure.Elab.TypeclassDispatchBoundariesTest do
           for_int("int_eq(x, y)") <>
           "  implementation Eqs for MyInt\n    fn eqs(x: MyInt, y: MyInt) -> Bool = int_eq(x, y)\nend\n"
 
-      assert {:error, {:overlapping_instance, :Eqs, :"Std.Int#Int"}} = Program.elaborate(src)
+      assert {:error, {:overlapping_instance, %{interface: :Eqs, head: :"Std.Int#Int"}}} =
+               Program.elaborate(src)
     end
 
     test "a lone alias instance registers under the unfolded head, so bare `Int` dispatch finds it" do
@@ -213,7 +215,8 @@ defmodule Cure.Elab.TypeclassDispatchBoundariesTest do
           for_int("int_eq(x, y)") <>
           "  implementation Eqs for Yours\n    fn eqs(x: Yours, y: Yours) -> Bool = int_eq(x, y)\nend\n"
 
-      assert {:error, {:overlapping_instance, :Eqs, :"Std.Int#Int"}} = Program.elaborate(src)
+      assert {:error, {:overlapping_instance, %{interface: :Eqs, head: :"Std.Int#Int"}}} =
+               Program.elaborate(src)
     end
 
     test "an alias of a data family resolves to the family, not the alias name" do

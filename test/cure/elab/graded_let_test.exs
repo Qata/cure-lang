@@ -255,7 +255,8 @@ defmodule Cure.Elab.GradedLetTest do
           "  fn ap(g :linear (Int) -> Int, n: Int) -> Int = g(n)\n" <>
           "  fn f(n: Int) -> Int =\n    let h :linear = #{@lam}\n    ap(h, n)\nend\n"
 
-      assert {:error, {:source_context, {:graded_let_needs_annotation, "h", _}, _}} = Program.elaborate(src)
+      assert {:error, {:source_context, {:graded_let_needs_annotation, %{name: "h"}}, _}} =
+               Program.elaborate(src)
     end
 
     test "ascribing it makes the same program work, with the grade preserved" do
@@ -284,7 +285,7 @@ defmodule Cure.Elab.GradedLetTest do
           "  fn ap(g: (Int) -> Int, n: Int) -> Int = g(n)\n" <>
           "  fn f(n: Int) -> Int =\n    let h = #{@lam}\n    ap(h, n) + ap(h, n)\nend\n"
 
-      assert {:error, {:source_context, {:let_needs_annotation, "h", _}, _}} = Program.elaborate(src)
+      assert {:error, {:source_context, {:let_needs_annotation, %{name: "h"}}, _}} = Program.elaborate(src)
     end
   end
 end

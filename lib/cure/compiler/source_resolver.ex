@@ -15,9 +15,28 @@ defmodule Cure.Compiler.SourceResolver do
 
   @spec module_path(String.t()) :: {:ok, Path.t()} | :not_found
   def module_path(name) when is_binary(name) do
-    case stdlib_path(name) do
-      {:ok, _} = ok -> ok
-      :not_found -> user_path(name)
+    case indexed_path(name) do
+      {:ok, _} = indexed ->
+        indexed
+
+      :not_found ->
+        case stdlib_path(name) do
+          {:ok, _} = ok -> ok
+          :not_found -> user_path(name)
+        end
+    end
+  end
+
+  defp indexed_path(name) do
+    case Process.get(:cure_module_index) do
+      %Cure.Compiler.ModuleIndex{} = index ->
+        case Cure.Compiler.ModuleIndex.fetch(index, name) do
+          {:ok, entry} -> {:ok, entry.source_path}
+          {:error, _} -> :not_found
+        end
+
+      _ ->
+        :not_found
     end
   end
 

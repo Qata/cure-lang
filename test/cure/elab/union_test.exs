@@ -12,7 +12,9 @@ defmodule Cure.Elab.UnionTest do
   """
   use ExUnit.Case, async: true
 
+  alias Cure.Compiler.Errors
   alias Cure.Core.{Env, Inductive}
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.{Program, Union}
 
   defp unwrap_lams({:lam, _g, _dom, body}), do: unwrap_lams(body)
@@ -508,7 +510,13 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:source_context, {:unsupported_expression, {:lambda, _, _}}, _}} = Program.elaborate(src)
+      assert {:error,
+              {:source_context,
+               {:let_needs_annotation, %{name: "n", reason: :shadowed_before_use, shadow_span: shadow_span}}, _}} =
+               Program.elaborate(src)
+
+      assert shadow_span.start_line == 7
+      assert shadow_span.start_column == 7
     end
 
     test "a nested match rebinding the sub-union arm's name is refused, not silently corrupted" do
@@ -537,7 +545,65 @@ defmodule Cure.Elab.UnionTest do
       # `:shadowed_tuple`, `:shadowed_catchall`, …) is refused here too, with an
       # honest, correctly-labelled diagnostic instead of a confusing downstream
       # type error.
-      assert {:error, {:source_context, {:unsupported_pattern, :shadowed_sub_union}, _}} = Program.elaborate(src)
+      assert {:error,
+              {:source_context,
+               {:unsupported_pattern, %{reason: :shadowed_sub_union, name: "rest", shadow_span: shadow_span}}, _} =
+                error} =
+               Program.elaborate(src)
+
+      assert shadow_span.start_line == 7
+      assert shadow_span.start_column == 11
+
+      {diagnostic, registry} = Errors.to_diagnostic(error, "shadowed_union.cure", src)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- NESTED PATTERN SHADOWS `REST` [E090] -------------------- shadowed_union.cure
+
+               The outer `rest` represents a narrowed union value. This nested pattern binds
+               another value with the same name, so rewriting uses of the outer value could
+               capture the inner one.
+
+               at shadowed_union.cure:7:11
+               5 |       rest: Bool | Atom ->
+                 |       ----  ----------- this outer pattern binds `rest`; this branch keeps the remaining union members
+               6 |         match rest
+               7 |           rest: Bool -> not rest
+                 |           ^^^^ rename this inner binder so it does not shadow `rest`
+
+               Hint: Give the nested binder a different name and update its branch body
+               """)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+
+      assert lsp["range"] == %{
+               "start" => %{"line" => 6, "character" => 10},
+               "end" => %{"line" => 6, "character" => 14}
+             }
+
+      assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+               %{
+                 "start" => %{"line" => 4, "character" => 6},
+                 "end" => %{"line" => 4, "character" => 10}
+               },
+               %{
+                 "start" => %{"line" => 4, "character" => 12},
+                 "end" => %{"line" => 4, "character" => 23}
+               }
+             ]
+
+      assert lsp["data"]["payload"] == %{
+               "checking" => "describe",
+               "kind" => "unsupported_pattern",
+               "name" => "rest",
+               "reason" => "shadowed_sub_union"
+             }
+
+      fixed =
+        src
+        |> String.replace("rest: Bool -> not rest", "value: Bool -> not value")
+
+      assert {:ok, _environment} = Program.elaborate(fixed, file: "shadowed_union_fixed.cure")
     end
 
     test "a lambda parameter rebinding the sub-union arm's name is refused, not silently corrupted" do
@@ -557,7 +623,149 @@ defmodule Cure.Elab.UnionTest do
       # rewritten to reference the OUTER Bool|Atom union value instead of the
       # lambda's own Bool parameter. Refused outright, for the same reason as
       # the nested-match case above.
-      assert {:error, {:source_context, {:unsupported_pattern, :shadowed_sub_union}, _}} = Program.elaborate(src)
+      assert {:error,
+              {:source_context,
+               {:unsupported_pattern, %{reason: :shadowed_sub_union, name: "rest", shadow_span: shadow_span}}, _}} =
+               Program.elaborate(src)
+
+      assert shadow_span.start_line == 6
+      assert shadow_span.start_column == 37
+    end
+
+    test "a nested binder shadowing a named literal member gets both source roles" do
+      src = """
+      mod L
+        fn f(x: Int | 3) -> Int = match x
+          n: Int -> n
+          n: 3 ->
+            let g : (Int) -> Int = fn(n) -> n
+            g(1)
+      end
+      """
+
+      assert {:error,
+              {:source_context,
+               {:unsupported_pattern, %{reason: :shadowed_literal_member, name: "n", shadow_span: shadow_span}}, _} =
+                error} =
+               Program.elaborate(src)
+
+      assert shadow_span.start_line == 5
+      assert shadow_span.start_column == 33
+
+      {diagnostic, registry} = Errors.to_diagnostic(error, "literal_shadow.cure", src)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- NESTED PATTERN SHADOWS `N` [E090] ----------------------- literal_shadow.cure
+
+               The outer `n` stands for a literal union member. This nested pattern binds
+               another value with the same name, so rewriting uses of the literal could capture
+               the inner value.
+
+               at literal_shadow.cure:5:33
+               4 |     n: 3 ->
+                 |     -  - this outer pattern binds `n`; this branch names a literal union member
+               5 |       let g : (Int) -> Int = fn(n) -> n
+                 |                                 ^ rename this inner binder so it does not shadow `n`
+
+               Hint: Give the nested binder a different name and update its branch body
+               """)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+
+      assert lsp["range"] == %{
+               "start" => %{"line" => 4, "character" => 32},
+               "end" => %{"line" => 4, "character" => 33}
+             }
+
+      assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+               %{
+                 "start" => %{"line" => 3, "character" => 4},
+                 "end" => %{"line" => 3, "character" => 5}
+               },
+               %{
+                 "start" => %{"line" => 3, "character" => 7},
+                 "end" => %{"line" => 3, "character" => 8}
+               }
+             ]
+
+      assert lsp["data"]["payload"] == %{
+               "checking" => "f",
+               "kind" => "unsupported_pattern",
+               "name" => "n",
+               "reason" => "shadowed_literal_member"
+             }
+
+      fixed = String.replace(src, "fn(n) -> n", "fn(value) -> value")
+      assert {:ok, _environment} = Program.elaborate(fixed, file: "literal_shadow_fixed.cure")
+    end
+
+    test "a nested binder shadowing an as-pattern labels the reconstructed pattern" do
+      src = """
+      mod A
+        type Nat = Z | S(Nat)
+        fn f(x: Nat) -> Nat = match x
+          whole @ S(n) ->
+            let g : (Nat) -> Nat = fn(whole) -> whole
+            g(n)
+          Z() -> Z()
+      end
+      """
+
+      assert {:error,
+              {:source_context,
+               {:unsupported_pattern, %{reason: :shadowed_as, name: "whole", shadow_span: shadow_span}}, _} = error} =
+               Program.elaborate(src)
+
+      assert shadow_span.start_line == 5
+      assert shadow_span.start_column == 33
+
+      {diagnostic, registry} = Errors.to_diagnostic(error, "as_shadow.cure", src)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) ==
+               String.trim_trailing("""
+               -- NESTED PATTERN SHADOWS `WHOLE` [E090] ------------------------ as_shadow.cure
+
+               The outer `whole` binds the complete value matched by this as-pattern. A nested
+               binder uses the same name, so substituting the reconstructed value could capture
+               the inner binding.
+
+               at as_shadow.cure:5:33
+               4 |     whole @ S(n) ->
+                 |     -----   ---- this outer pattern binds `whole`; this is the pattern reconstructed for the outer binding
+               5 |       let g : (Nat) -> Nat = fn(whole) -> whole
+                 |                                 ^^^^^ rename this inner binder so it does not shadow `whole`
+
+               Hint: Give the nested binder a different name and update its branch body
+               """)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+
+      assert lsp["range"] == %{
+               "start" => %{"line" => 4, "character" => 32},
+               "end" => %{"line" => 4, "character" => 37}
+             }
+
+      assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+               %{
+                 "start" => %{"line" => 3, "character" => 4},
+                 "end" => %{"line" => 3, "character" => 9}
+               },
+               %{
+                 "start" => %{"line" => 3, "character" => 12},
+                 "end" => %{"line" => 3, "character" => 16}
+               }
+             ]
+
+      assert lsp["data"]["payload"] == %{
+               "checking" => "f",
+               "kind" => "unsupported_pattern",
+               "name" => "whole",
+               "reason" => "shadowed_as"
+             }
+
+      fixed = String.replace(src, "fn(whole) -> whole", "fn(value) -> value")
+      assert {:ok, _environment} = Program.elaborate(fixed, file: "as_shadow_fixed.cure")
     end
   end
 
@@ -702,7 +910,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+      assert {:extern_union_indistinct, :raw, _} = semantic_error(src)
     end
 
     # SUPERSEDED. This originally asserted `Bool | Atom` was REJECTED, on the grounds
@@ -780,7 +988,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+      assert {:extern_union_indistinct, :raw, _} = semantic_error(src)
     end
 
     test "a THREE-member union with a refining guard orders correctly" do
@@ -848,7 +1056,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_returns_union, :head, _}} = Program.elaborate(src)
+      assert {:extern_returns_union, :head, _} = semantic_error(src)
     end
   end
 
@@ -883,7 +1091,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+      assert {:extern_union_indistinct, :raw, _} = semantic_error(src)
     end
 
     test "Bool true and Atom :true collide too" do
@@ -894,7 +1102,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+      assert {:extern_union_indistinct, :raw, _} = semantic_error(src)
     end
 
     test "but INSIDE Cure they stay distinct — injection is by literal SYNTAX" do
@@ -1014,7 +1222,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_union_indistinct, :look, _}} = Program.elaborate(src)
+      assert {:extern_union_indistinct, :look, _} = semantic_error(src)
     end
   end
 
@@ -1044,7 +1252,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+      assert {:extern_union_indistinct, :raw, _} = semantic_error(src)
     end
 
     test "a union NESTED under an Effect (not its head) is still rejected" do
@@ -1055,7 +1263,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:extern_returns_union, :raw, _}} = Program.elaborate(src)
+      assert {:extern_returns_union, :raw, _} = semantic_error(src)
     end
 
     test "an effectful lookup returning a declared-erasure carrier or a literal" do
@@ -1079,5 +1287,10 @@ defmodule Cure.Elab.UnionTest do
       assert apply(:"Cure.EFU4", :look, [:cure_union_no_such_name]) ==
                :"Union<Atom#:undefined|EFU4#Handle>$Atom#:undefined"
     end
+  end
+
+  defp semantic_error(source) do
+    assert {:error, error} = Program.elaborate(source)
+    Program.semantic_error(error)
   end
 end

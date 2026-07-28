@@ -90,7 +90,7 @@ At the start of this work the following is already present and must be reused:
   `Hypotheses`, `FarkasWitness`, `Valuation`, dimension checks, affine
   combination, goal negation, and `check_lia_candidate/3`.
 - The accepted/forged/short/dimension/boundary computation probes exist in
-  `test/oracle/otp/linear_arithmetic_compute.{cure,idr}` and
+  `metatheory/otp/oracle/otp/linear_arithmetic_compute.{cure,idr}` and
   `test/cure/stdlib/linear_arithmetic_compute_test.exs`.
 - The affine semantic lemmas needed by the soundness proof have begun landing in
   `Std.Proof.IntOrder` and the proof-language ergonomics now exist.
@@ -406,7 +406,7 @@ The checked implementation lives in
 `Std.Otp.MailboxSemilinear`, importing and reusing
 `Std.Otp.MailboxPattern`; do not duplicate `Tag`, `MS`, `Pat`, or `Accepts`.
 The differential mirror is
-`test/oracle/otp/mailbox_semilinear.{cure,idr}`, and focused host tests live in
+`metatheory/otp/oracle/otp/mailbox_semilinear.{cure,idr}`, and focused host tests live in
 `test/cure/stdlib/otp_mailbox_semilinear_test.exs`. Producer/recognizer code
 lives under `Cure.Elab.Solver.Semilinear*`, separate from the checked stdlib.
 

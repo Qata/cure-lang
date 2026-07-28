@@ -433,6 +433,75 @@ defmodule Cure.Compiler.MacroDefParseTest do
     end
   end
 
+  test "every structured-family relationship failure identifies its authored declaration" do
+    cases = [
+      {"duplicate_names.cure",
+       "macro Bad\n  syntax family Item\n    value Type\n  syntax family Item\n    other Type\n",
+       {:duplicate_syntax_family, ["Item"]}, "Syntax family name is repeated",
+       "The same syntax family name is declared more than once: `Item`.",
+       "Rename one family or combine their fields into a single declaration", 3, 16,
+       "this family name is declared again"},
+      {"expander_only.cure", "macro Bad\n  syntax family Item\n    value Type\n  expands with build\n",
+       :expander_without_accepts, "Macro expander has no accepted family",
+       "This macro declares how to expand a syntax family but never declares which family it accepts.",
+       "Add `accepts FamilyName` for the expander's input", 3, 2,
+       "this expander has no matching `accepts` declaration"},
+      {"accepts_only.cure", "macro Bad\n  accepts Item\n  expands with build\n", :accepts_without_syntax_family,
+       "Accepted syntax family is not declared",
+       "This macro accepts a syntax family but does not declare any syntax-family shape for that input.",
+       "Declare the accepted family with `syntax family`", 1, 10, "this accepted family has no declaration"},
+      {"no_expander.cure", "macro Bad\n  syntax family Item\n    value Type\n  accepts Item\n",
+       :accepts_without_expander, "Accepted syntax family has no expander",
+       "This macro accepts structured syntax but does not declare the function that expands it.",
+       "Add `expands with function_name`", 3, 10, "this accepted family has no expander"},
+      {"two_accepts.cure",
+       "macro Bad\n  syntax family Item\n    value Type\n  accepts Item\n  accepts Item\n  expands with build\n",
+       :multiple_accepts_declarations, "Macro accepts more than one family",
+       "A structured macro can have only one `accepts` declaration, but this macro has more than one.",
+       "Keep exactly one `accepts` declaration", 4, 10, "remove this additional `accepts` declaration"},
+      {"two_expanders.cure",
+       "macro Bad\n  syntax family Item\n    value Type\n  accepts Item\n  expands with first\n  expands with second\n",
+       :multiple_expands_declarations, "Macro declares more than one expander",
+       "A structured macro can have only one `expands with` declaration, but this macro has more than one.",
+       "Keep exactly one `expands with` declaration", 5, 2, "remove this additional expander declaration"}
+    ]
+
+    for {file, source, reason, title, body, hint, line, character, label} <- cases do
+      assert {:ok, tokens} = Lexer.tokenize(source, file: file, emit_events: false)
+
+      assert {:error, [{:invalid_macro_family, %{reason: ^reason}} = error]} =
+               Parser.parse(tokens, emit_events: false, prelude_macros: false)
+
+      {diagnostic, registry} = Errors.to_diagnostic(error, file, source)
+      output = Renderer.plain(diagnostic, registry, width: 80)
+
+      assert diagnostic.title == title
+      assert output =~ label
+      assert output =~ "Hint: " <> hint
+
+      lsp = Renderer.lsp(diagnostic, registry)
+      assert lsp["range"]["start"] == %{"line" => line, "character" => character}
+      assert lsp["message"] == title <> "\n\n" <> body
+    end
+  end
+
+  test "malformed structured-family host data returns a verdict instead of raising" do
+    assert {:error, :invalid_macro_rules} = Cure.Compiler.MacroFamily.validate([42])
+    assert {:error, :invalid_macro_rules} = Cure.Compiler.MacroFamily.validate([%{kind: :syntax_family}])
+    assert {:error, :invalid_macro_rules} = Cure.Compiler.MacroFamily.computed_rule([], [42])
+
+    {diagnostic, registry} = Errors.to_diagnostic(:invalid_macro_rules, "family.cure", "")
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- MACRO RULE LIST IS MALFORMED [E092] -----------------------------------------
+
+             Structured macro validation expected a list of well-formed macro rules.
+
+             Hint: Provide a list of parsed macro rules
+             """)
+  end
+
   test "an open category and qualified category extension are retained" do
     node =
       parse!(

@@ -25,7 +25,7 @@ defmodule Cure.Diagnostic.SuggestTest do
   end
 
   test "plain candidates remain deterministic and capped" do
-    candidates = [:alpha, :alphi, :alpho, :alphe]
+    candidates = [:alpha, :alphi, :alpho, :alphe, :completely_unrelated]
 
     assert Enum.map(Suggest.rank(candidates, "alpah", :value), & &1.name) ==
              ["alpha", "alphe", "alphi"]

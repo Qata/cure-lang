@@ -472,8 +472,8 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {2, 21}
     assert diagnostic.primary.span.end_column == 28
     assert rendered =~ "2 |   fn bad() -> Int = spawn 1"
-    assert rendered =~ "^^^^^^^ use a supported asynchronous boundary"
-    assert rendered =~ "`spawn` is not supported by the dependent runtime yet"
+    assert rendered =~ "^^^^^^^ this asynchronous operation has no dependent-runtime lowering"
+    assert rendered =~ "The dependent runtime cannot lower `spawn`"
   end
 
   test "under-saturated calls report the callee arity without rejecting valid partial application" do
@@ -881,6 +881,78 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this condition has the wrong type"
   end
 
+  test "an inferred conditional branch mismatch does not leak constructor resolution" do
+    source = "fn choose(cond: Bool) = if cond then 1 else \"two\"\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "conditional_branch.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "conditional_branch.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :branch
+    assert diagnostic.payload.origin.owner == :if
+    assert diagnostic.payload.origin.index == 1
+    assert rendered =~ "Expected: Int"
+    assert rendered =~ "Found:    String (List(Bounded(1114112)))"
+    refute rendered =~ "does not belong"
+  end
+
+  test "a pickup branch mismatch does not leak String's List constructors" do
+    source = """
+    fn choose(cond: Bool) =
+      pickup
+        cond -> 1
+        else -> "two"
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "pickup_branch.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "pickup_branch.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :branch
+    assert diagnostic.payload.origin.index == 1
+    assert rendered =~ "Expected: Int"
+    assert rendered =~ "Found:    String (List(Bounded(1114112)))"
+    refute rendered =~ "`Cons`"
+    refute rendered =~ "does not belong"
+  end
+
+  test "a user typealias is shown with its expanded type in a branch mismatch" do
+    source = """
+    mod M
+      typealias UserId = Int
+      fn choose(cond: Bool, id: UserId) -> UserId =
+        pickup
+          cond -> id
+          else -> true
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "aliased_branch.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "aliased_branch.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert rendered =~ "Expected: UserId (Int)"
+    assert rendered =~ "Found:    Bool"
+  end
+
   test "a branch failure names the checking function and authored arms" do
     reason =
       {:source_context, :branch_type,
@@ -1252,7 +1324,7 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.primary.span.start_line == 5
     assert diagnostic.primary.span.start_column == 29
     assert rendered =~ "5 |   fn bad() -> Point = Point{xx: 1, y: 2}"
-    assert rendered =~ "^^ this field is not declared by the record"
+    assert rendered =~ "----- ^^ this constructs `Point`; this field is not declared by the record"
     assert rendered =~ "Did you mean `x`?"
 
     assert [suggestion] = diagnostic.suggestions
@@ -1265,7 +1337,7 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert action["title"] == "Replace it with `x`"
   end
 
-  test "a missing record field names the field without inventing a source range" do
+  test "a missing record field names the field and points at the owned closing brace" do
     source =
       "mod M\n" <>
         "  rec Point\n" <>
@@ -1286,10 +1358,10 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.code == "E022"
     assert diagnostic.title == "Missing record field"
     assert diagnostic.payload.missing == [:y]
-    assert diagnostic.primary.span.start_column == 23
+    assert diagnostic.primary.span.start_column == 33
     assert rendered =~ "missing `y`"
-    assert rendered =~ "add the missing field here"
-    assert diagnostic.suggestions == []
+    assert rendered =~ "add the missing field `y` before this closing brace"
+    assert [%{applicability: :manual, edits: []}] = diagnostic.suggestions
   end
 
   test "a whole-record mismatch retains the authored record boundary" do

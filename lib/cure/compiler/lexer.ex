@@ -47,7 +47,7 @@ defmodule Cure.Compiler.Lexer do
     band bor bxor bsl bsr bnot
     true false nil
     extern proof
-    quote
+    quote unsafe
   )a
 
   # Contextual words are identifiers lexically. The parser promotes them only
@@ -69,6 +69,11 @@ defmodule Cure.Compiler.Lexer do
 
   @doc "Words lexed as identifiers and promoted contextually by the parser."
   def contextual_keywords, do: @contextual_keywords
+
+  @doc "True when a bare word is tokenized as a keyword/operator rather than an identifier."
+  @spec reserved_word?(String.t()) :: boolean()
+  def reserved_word?(word) when is_binary(word), do: MapSet.member?(@keyword_string_set, word)
+  def reserved_word?(_word), do: false
 
   # -- Lexer state -----------------------------------------------------------
 
@@ -736,8 +741,9 @@ defmodule Cure.Compiler.Lexer do
       end)
 
     {name, state} =
-      if name == "" and peek(state) == ?? do
-        {"?", advance(state, 1)}
+      if name == "" do
+        {questions, state} = consume_while(state, &(&1 == ??))
+        {if(questions == "", do: "", else: "?"), state}
       else
         {name, state}
       end
