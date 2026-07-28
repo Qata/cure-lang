@@ -486,7 +486,7 @@ defmodule Cure.Elab.Declarations do
          {:ok, level} <- typealias_universe(ctx, name, rhs_core, meta, rhs) do
       type_core = wrap_binders(:pi, telescope, quantities, {:type, level})
       body = wrap_binders(:lam, telescope, quantities, rhs_core)
-      env1 = Env.add_def(env, name, type_core, body, quantities)
+      env1 = env |> Env.add_def(name, type_core, body, quantities) |> Env.put_typealias(name)
       {:ok, maybe_certify(env1, name)}
     end
   end

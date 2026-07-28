@@ -610,6 +610,26 @@ defmodule Cure.CLITest do
   end
 
   describe "cure test" do
+    test "does not compile intentionally invalid oracle and fixture sources" do
+      root = Path.join(System.tmp_dir!(), "cure_cli_negative_corpus_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(root, "test/oracle"))
+      File.mkdir_p!(Path.join(root, "test/fixtures"))
+
+      invalid = "mod Negative\n  fn broken() -> Int = missing_name\n"
+      File.write!(Path.join(root, "test/oracle/broken.cure"), invalid)
+      File.write!(Path.join(root, "test/fixtures/broken.cure"), invalid)
+      on_exit(fn -> File.rm_rf!(root) end)
+
+      output =
+        capture_io(fn ->
+          File.cd!(root, fn -> Cure.CLI.main(["test"]) end)
+        end)
+
+      assert output =~ "No runnable test files found"
+      assert output =~ "0 passed, 0 failed"
+      refute output =~ "UNKNOWN VALUE [E091]"
+    end
+
     test "runtime failures use an operational diagnostic" do
       root = Path.join(System.tmp_dir!(), "cure_cli_test_#{System.unique_integer([:positive])}")
       test_dir = Path.join(root, "test")

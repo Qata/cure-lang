@@ -74,8 +74,8 @@ defmodule Cure.CLI do
           title: :string,
           main: :string,
           extras: :keep,
-          # v0.31.0 -- monomorphisation + PGO
-          monomorphise: :boolean,
+          # Retained v0.31 profile-file options. The classic optimizer itself
+          # was deleted with the classic compiler.
           pgo: :boolean,
           record_profile: :boolean,
           profile_dir: :string,
@@ -867,12 +867,18 @@ defmodule Cure.CLI do
     dependency_roots = dependency_source_roots(project)
     load_project_lib(project)
 
-    test_files = Path.wildcard("test/**/*.cure")
+    test_files =
+      Path.wildcard("test/**/*.cure")
+      # Oracle and fixture sources are compiled by their dedicated regression
+      # runners; many are intentionally invalid and must not be executable
+      # project tests.
+      |> Enum.reject(&non_runnable_test_source?/1)
 
-    if test_files == [] do
-      info("No test files found in test/")
-    else
-      results =
+    results =
+      if test_files == [] do
+        info("No runnable test files found in test/ (oracle and fixture sources are excluded)")
+        []
+      else
         Enum.map(test_files, fn file ->
           source = File.read!(file)
 
@@ -916,33 +922,38 @@ defmodule Cure.CLI do
           end
         end)
         |> List.flatten()
-
-      results =
-        if doctests? do
-          results ++ run_doctests(filter)
-        else
-          results
-        end
-
-      pass = Enum.count(results, fn {s, _} -> s == :pass end)
-      fail = Enum.count(results, fn {s, _} -> s == :fail end)
-
-      Enum.each(results, fn
-        {:pass, name} -> info("  PASS #{name}")
-        {:fail, name} -> info("  FAIL #{name}")
-      end)
-
-      info("#{pass} passed, #{fail} failed")
-
-      if cover? do
-        results_cov = Cure.Cover.collect()
-        _ = Cure.Cover.summary(results_cov)
-        _ = Cure.Cover.report(results_cov)
-        info("Coverage HTML written to _build/cure/cover/index.html")
       end
 
-      if fail > 0, do: exit({:shutdown, 1})
+    results =
+      if doctests? do
+        results ++ run_doctests(filter)
+      else
+        results
+      end
+
+    pass = Enum.count(results, fn {s, _} -> s == :pass end)
+    fail = Enum.count(results, fn {s, _} -> s == :fail end)
+
+    Enum.each(results, fn
+      {:pass, name} -> info("  PASS #{name}")
+      {:fail, name} -> info("  FAIL #{name}")
+    end)
+
+    info("#{pass} passed, #{fail} failed")
+
+    if cover? do
+      results_cov = Cure.Cover.collect()
+      _ = Cure.Cover.summary(results_cov)
+      _ = Cure.Cover.report(results_cov)
+      info("Coverage HTML written to _build/cure/cover/index.html")
     end
+
+    if fail > 0, do: exit({:shutdown, 1})
+  end
+
+  defp non_runnable_test_source?(path) do
+    expanded = Path.expand(path)
+    String.contains?(expanded, "/test/oracle/") or String.contains?(expanded, "/test/fixtures/")
   end
 
   # Compile and load every `lib/**/*.cure` in the current project so

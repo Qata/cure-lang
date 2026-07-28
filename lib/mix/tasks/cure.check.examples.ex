@@ -18,9 +18,8 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
   ## Exit code
 
-  A classified gap is reported with its first failing stage. Unclassified
-  fixtures and stale manifest entries are errors, as is any unexpected
-  compilation, execution, or output failure.
+  Unclassified fixtures and stale manifest entries are errors, as is any
+  unexpected compilation, execution, or output failure.
   """
 
   use Mix.Task
@@ -30,10 +29,6 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   @shortdoc "Compile and run every .cure example and check their output"
 
   @examples_dir "examples"
-
-  @gap_manifest %{
-    "specialise" => %{category: :optimizer, stage: :optimization, reason: "specialized clone assertions"}
-  }
 
   @expected %{
     "adt" => "42",
@@ -72,7 +67,6 @@ defmodule Mix.Tasks.Cure.Check.Examples do
     "result_handling" => "0",
     "sigma_pairs" => :compile_only,
     "sigma_vector" => "5",
-    "specialise" => "49",
     "test_showcase" => ":ok",
     "totality" => "120",
     "totality_enforcement" => "142",
@@ -96,11 +90,10 @@ defmodule Mix.Tasks.Cure.Check.Examples do
     results = Enum.map(files, &run_one/1)
 
     passed = Enum.count(results, &match?({:pass, _}, &1))
-    skipped = Enum.count(results, &match?({:skip, _}, &1))
     failed = Enum.filter(results, &match?({:fail, _}, &1))
 
     if failed == [] do
-      IO.puts("\nexamples: #{passed} passed, #{skipped} skipped, 0 failed")
+      IO.puts("\nexamples: #{passed} passed, 0 skipped, 0 failed")
       :ok
     else
       IO.puts("\nexamples: #{passed} passed, #{length(failed)} failed")
@@ -114,25 +107,15 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   defp run_one(path) do
     name = Path.basename(path, ".cure")
 
-    if gap = Map.get(@gap_manifest, name) do
-      if gap.category != :optimizer and gap_now_passes?(name, path) do
-        IO.puts("  FAIL #{pad(name)} stale gap manifest entry (now passes)")
-        {:fail, name}
-      else
-        IO.puts("  skip #{pad(name)} (#{gap.category}, first fails at #{gap.stage}: #{gap.reason})")
-        {:skip, name}
-      end
-    else
-      # Temporary directories used by the task's diagnostic tests deliberately
-      # contain synthetic fixtures. The real repository is made exhaustive by
-      # `validate_manifest!/1`; outside it, an unknown fixture is compile-only.
-      expected = Map.get(@expected, name, :compile_only)
+    # Temporary directories used by the task's diagnostic tests deliberately
+    # contain synthetic fixtures. The real repository is made exhaustive by
+    # `validate_manifest!/1`; outside it, an unknown fixture is compile-only.
+    expected = Map.get(@expected, name, :compile_only)
 
-      case {expected, main_fn?(path)} do
-        {:compile_only, _} -> compile_only(name, path)
-        {_, false} -> compile_only(name, path)
-        {val, true} when is_binary(val) -> run_and_compare(name, path, val)
-      end
+    case {expected, main_fn?(path)} do
+      {:compile_only, _} -> compile_only(name, path)
+      {_, false} -> compile_only(name, path)
+      {val, true} when is_binary(val) -> run_and_compare(name, path, val)
     end
   end
 
@@ -222,23 +205,6 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   end
 
   defp pad(name), do: String.pad_trailing(name, 26)
-
-  defp gap_now_passes?(name, path) do
-    expected = Map.fetch!(@expected, name)
-
-    with {:ok, source} <- normalized_source(path),
-         {:ok, module} <- Cure.Compiler.compile_and_load(source, file: path, emit_events: false) do
-      case {expected, main_fn?(path)} do
-        {:compile_only, _} -> true
-        {_, false} -> true
-        {value, true} when is_binary(value) -> inspect(module.main()) == value
-      end
-    else
-      _ -> false
-    end
-  catch
-    _, _ -> false
-  end
 
   defp validate_manifest!(files) do
     if File.exists?("mix.exs") do

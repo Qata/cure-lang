@@ -3652,9 +3652,13 @@ defmodule Cure.Diagnostic.Adapter.Type do
     Doc.concat([Doc.text(head), Doc.text("("), args_doc, Doc.text(")")])
   end
 
+  defp plain_type_doc({:diagnostic_alias, name, original}),
+    do: Doc.text("#{name} (#{print_core(original)})")
+
   defp plain_type_doc(type) when is_binary(type), do: Doc.text(type)
   defp plain_type_doc(type), do: Doc.text(print_core(type))
 
+  defp surface_type({:diagnostic_alias, name, original}), do: "#{name} (#{print_core(original)})"
   defp surface_type(type) when is_binary(type), do: type
   defp surface_type(type), do: print_core(type)
 
@@ -3668,6 +3672,9 @@ defmodule Cure.Diagnostic.Adapter.Type do
 
   defp printable_core(term) when is_tuple(term) do
     case elem(term, 0) do
+      :diagnostic_alias ->
+        term
+
       :var ->
         term
 

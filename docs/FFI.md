@@ -63,12 +63,13 @@ declared. The compiler cannot see the external implementation, so the declared
 types are the *only* contract it has. Without them the signature would silently
 default to `Any` and the type checker would be blind at every call site.
 
-```cure
+```cure E056
 # rejected (E056): parameter `x` and the return type are missing
 @extern(:erlang, :abs, 1)
 fn abs(x)
+```
 
-# ok
+```cure
 @extern(:erlang, :abs, 1)
 fn abs(x: Int) -> Int
 ```
@@ -88,18 +89,21 @@ run. To stop that silent discard from misleading a reader, a body is an error.
 This applies to both body forms: a `= ...` body and a multi-clause `|`
 definition.
 
-```cure
+```cure E057
 # rejected (E057): the `= x` body is ignored by codegen
 @extern(:erlang, :abs, 1)
 fn abs(x: Int) -> Int = x
+```
 
+```cure E057
 # rejected (E057): multi-clause bodies are ignored too
 @extern(:erlang, :abs, 1)
 fn abs(x: Int) -> Int
   | 0 -> 0
   | n -> n
+```
 
-# ok
+```cure
 @extern(:erlang, :abs, 1)
 fn abs(x: Int) -> Int
 ```

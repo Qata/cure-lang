@@ -50,7 +50,7 @@ defmodule Cure.Diagnostic.Registry do
 
   alias Cure.Diagnostic.Registry.Entry
 
-  @retired ~w[E001 E002 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E063 E064 E071 E072 E073 E074 E075 E079 E080 E085 E086 H083 H084 W081 W082 W088]
+  @retired ~w[E001 E002 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E063 E071 E072 E073 E074 E075 E079 E080 E085 E086 H083 H084 W081 W082 W088]
   @operational ~w[E008 E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002 W003]
   @retirement_reasons %{
     "E001" => "No first-party producer remains; contextual E093 is the active type-mismatch path.",
@@ -82,7 +82,6 @@ defmodule Cure.Diagnostic.Registry do
     "E037" => "No first-party producer remains; binary segment failures use generic type checking.",
     "E063" =>
       "No first-party producer remains; parser recovery retains and reports the original contextual E094 error.",
-    "E064" => "No first-party producer remains; monomorphisation budget warnings are not emitted.",
     "E071" => "No first-party producer remains; function payload failures use name/type diagnostics.",
     "E072" => "No first-party producer remains; multiline type layout failures use syntax diagnostics.",
     "E073" => "No first-party producer remains; empty pickup blocks use E076.",
@@ -1021,33 +1020,6 @@ defmodule Cure.Diagnostic.Registry do
 
     Fix: address the root syntax error. E063 diagnostics are
     informational and do not indicate a new, independent bug.
-    """,
-    "E064" => """
-    E064: Monomorphisation Budget Exhausted
-
-    The optimiser's monomorphisation pass synthesises one specialised
-    clone of a polymorphic function per unique call-site type
-    substitution. To keep BEAM bytecode size bounded, the pass caps
-    the number of specialisations at `[compiler].monomorph_budget`
-    (default 16) per source function.
-
-    When a function has more than the configured number of distinct
-    concrete call shapes in a single compilation unit, the pass keeps
-    the first N specialisations, falls back to the original generic
-    clone for the rest, and emits this warning. Calls that fell back
-    are still correct -- they just dispatch through the generic
-    function instead of a tighter clone.
-
-    Example:
-      fn id(x: T) -> T = x
-      # 17 distinct concrete types call id/1 -> the 17th and beyond
-      # use the generic implementation; the warning lists the count.
-
-    Fix: either accept the generic fallback (it is fully correct), or
-    raise the budget in `Cure.toml`:
-
-      [compiler]
-      monomorph_budget = 32
     """,
     "E065" => """
     E065: Proof File Missing

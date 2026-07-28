@@ -410,9 +410,9 @@ bit-level indexing, reintroducing general refinements, changing the primitive.
 that is neither a macro (macros are type-blind → could only do runtime
 dispatch) nor kernel (no dependent language puts instance resolution in its
 kernel). Three layers: dictionaries = ordinary Core records (zero kernel
-delta); resolution = E-layer instance search (§6.3); erasure =
-monomorphization to direct calls — better than Haskell's runtime dictionaries,
-zero overhead on ESP32. Buys: constraints usable inside dependent types, zero
+delta); resolution = E-layer instance search (§6.3); elaboration lowers
+resolved methods to direct calls — avoiding runtime dictionary lookup on ESP32.
+Buys: constraints usable inside dependent types, zero
 device cost, coherence plus statable laws. Its open ledger (superclasses,
 deriving, overlap/orphans, defaults, MPTC/associated types deferred) is
 resolved by the later approved specs below.
@@ -537,7 +537,7 @@ syntactic and non-overloadable; TCB untouched.
   backtick functions in Std.Bool — no interface. **Sole-route invariant:** the
   typeclass method is the ONLY route to `==`/`!=`/`<`/… — build_binop
   hardcoding removed; primitive comparisons live only inside leaf instance
-  bodies; monomorphization preserves emitted-code parity. Universal structural
+  bodies; static instance selection preserves emitted-code parity. Universal structural
   `==` becomes an auto-derived per-type Equatable instance (overridable for
   user types, primitives locked by coherence; NOT a blanket instance);
   `Comparable` is NOT auto-derived. Equatable/Comparable are ambient via
@@ -678,7 +678,7 @@ guard: optic `AffineKind` (focus may be absent) and the QTT `:affine` grade
 - `2026-07-02-lean-shape-matching-design.md` — unification-driven generalizing match with carried stuck-index equations; five-rule unifier; HEq gap.
 - `2026-07-02-param-index-split-design.md` — `indices (…)` surface and the params-never-refined invariant through `{:vdata}`/motive/unifier.
 - `2026-07-09-type-directed-search-design.md` — one untrusted-AND-checked backward-chaining search engine; instance vs hint/lemma profiles; `by search`.
-- `2026-07-09-typeclasses-elaborator-feature-design.md` — why proto/impl is an elaborator feature: Core-record dictionaries, E-layer search, monomorphizing erasure.
+- `2026-07-09-typeclasses-elaborator-feature-design.md` — why proto/impl is an elaborator feature: Core-record dictionaries, E-layer search, and compile-time resolution.
 - `2026-07-10-length-indexed-binary-design.md` — deferred `Binary(n)` design with explicit build triggers and non-triggers.
 - `2026-07-10-overloading-and-argument-labels-design.md` — parent overload spec: identity key, Swift labels with optional-by-default divergence, phases.
 - `2026-07-10-primitive-type-declarations-design.md` — `@builtin(:tag) primitive` declarations replacing hardcoded primitive seeding.

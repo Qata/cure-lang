@@ -1,0 +1,143 @@
+defmodule Cure.Doc.SnippetsTest do
+  use ExUnit.Case, async: true
+
+  alias Cure.Doc.Snippets
+
+  test "extracts backtick and tilde Cure fences with authored line numbers" do
+    markdown = """
+    prose
+
+    ```cure
+    fn answer() -> Int = 42
+    ```
+
+    ~~~~cure expr
+    40 + 2
+    ~~~~
+
+    ```elixir
+    :ignored
+    ```
+    """
+
+    assert [
+             %Snippets{line: 4, info: "cure", code: "fn answer() -> Int = 42"},
+             %Snippets{line: 8, info: "cure expr", code: "40 + 2"}
+           ] = Snippets.extract(markdown, "guide.md")
+  end
+
+  test "does not mistake longer language names for Cure" do
+    assert [] = Snippets.extract("```curescript\nvalue\n```\n")
+  end
+
+  test "extracts Cure fences from ## docstrings with source line numbers" do
+    source = """
+    mod Demo
+      ## ## Examples
+      ##
+      ## ```cure expr
+      ## 40 + 2
+      ## ```
+      fn answer() -> Int = 42
+    """
+
+    assert [%Snippets{path: "demo.cure", line: 5, info: "cure expr", code: "40 + 2"}] =
+             Snippets.extract_cure(source, "demo.cure")
+  end
+
+  test "extracts fences inside ### docstring bodies" do
+    source = """
+    mod Demo
+      ###
+      Examples:
+
+      ```cure expr
+      40 + 2
+      ```
+      ###
+      fn answer() -> Int = 42
+    """
+
+    assert [%Snippets{path: "demo.cure", line: 6, info: "cure expr", code: "40 + 2"}] =
+             Snippets.extract_cure(source, "demo.cure")
+  end
+
+  test "parses tags separately from fence attributes" do
+    [snippet] =
+      Snippets.extract("""
+      ```cure E091,expr path=broken.cure start=4
+      missing
+      ```
+      """)
+
+    assert Snippets.tags(snippet) == MapSet.new(["E091", "expr"])
+    assert Snippets.expected_error(snippet) == {:ok, "E091"}
+    refute Snippets.tagged?(snippet, "path=broken.cure")
+  end
+
+  test "rejects multiple expected diagnostic tags" do
+    [snippet] = Snippets.extract("```cure E091 E093\nmissing\n```\n")
+
+    assert Snippets.expected_error(snippet) == {:error, ["E091", "E093"]}
+  end
+
+  test "wraps declarations and expressions at their authored lines" do
+    declaration = %Snippets{
+      path: "guide.md",
+      line: 8,
+      info: "cure",
+      code: "fn answer() -> Int = 42"
+    }
+
+    expression = %{declaration | line: 12, info: "cure expr", code: "40 + 2"}
+
+    declaration_source = Snippets.source(declaration)
+    expression_source = Snippets.source(expression)
+
+    assert Enum.at(String.split(declaration_source, "\n"), 7) == "  fn answer() -> Int = 42"
+    assert Enum.at(String.split(expression_source, "\n"), 11) == "    40 + 2"
+  end
+
+  test "treats attributed declarations as declarations" do
+    snippet = %Snippets{
+      path: "ffi.md",
+      line: 3,
+      info: "cure E056",
+      code: "@extern(:erlang, :abs, 1)\nfn abs(x)"
+    }
+
+    source = Snippets.source(snippet)
+
+    assert source =~ "mod DocSnippet_"
+    assert source =~ "  @extern(:erlang, :abs, 1)\n  fn abs(x)"
+    refute source =~ "fn snippet()"
+  end
+
+  test "compiles complete modules, declarations, and expressions" do
+    snippets = [
+      %Snippets{path: "one.md", line: 1, info: "cure", code: "mod Complete\n  fn value() = 1"},
+      %Snippets{path: "two.md", line: 3, info: "cure", code: "fn value() -> Int = 1"},
+      %Snippets{path: "three.md", line: 5, info: "cure expr", code: "1 + 1"}
+    ]
+
+    for snippet <- snippets do
+      assert {:ok, _module, []} = Snippets.compile(snippet)
+    end
+  end
+
+  test "appended support declarations are available without shifting snippet source" do
+    snippet = %Snippets{
+      path: "support.md",
+      line: 7,
+      info: "cure expr",
+      code: "documented_helper(42)"
+    }
+
+    support = "fn documented_helper(value: Int) -> Int = value"
+
+    assert Enum.at(String.split(Snippets.source(snippet, support), "\n"), 6) ==
+             "    documented_helper(42)"
+
+    assert {:ok, _module, []} = Snippets.compile(snippet, support: support)
+  end
+end

@@ -1,0 +1,11 @@
+# Declarations available to Markdown snippets that need ordinary example
+# scaffolding. Keep this deliberately small: public library APIs in docs should
+# be brought into scope with their real `use Std.*` imports.
+
+fn assert(_condition: Bool) -> Unit = ()
+
+fn assert_equal({a: Type}, _expected: a, _actual: a) -> Unit = ()
+
+fn print({a: Type}, _value: a) -> Unit = ()
+
+fn println({a: Type}, _value: a) -> Unit = ()

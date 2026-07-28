@@ -881,6 +881,78 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this condition has the wrong type"
   end
 
+  test "an inferred conditional branch mismatch does not leak constructor resolution" do
+    source = "fn choose(cond: Bool) = if cond then 1 else \"two\"\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "conditional_branch.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "conditional_branch.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :branch
+    assert diagnostic.payload.origin.owner == :if
+    assert diagnostic.payload.origin.index == 1
+    assert rendered =~ "Expected: Int"
+    assert rendered =~ "Found:    String (List(Bounded(1114112)))"
+    refute rendered =~ "does not belong"
+  end
+
+  test "a pickup branch mismatch does not leak String's List constructors" do
+    source = """
+    fn choose(cond: Bool) =
+      pickup
+        cond -> 1
+        else -> "two"
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "pickup_branch.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "pickup_branch.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :branch
+    assert diagnostic.payload.origin.index == 1
+    assert rendered =~ "Expected: Int"
+    assert rendered =~ "Found:    String (List(Bounded(1114112)))"
+    refute rendered =~ "`Cons`"
+    refute rendered =~ "does not belong"
+  end
+
+  test "a user typealias is shown with its expanded type in a branch mismatch" do
+    source = """
+    mod M
+      typealias UserId = Int
+      fn choose(cond: Bool, id: UserId) -> UserId =
+        pickup
+          cond -> id
+          else -> true
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "aliased_branch.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "aliased_branch.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert rendered =~ "Expected: UserId (Int)"
+    assert rendered =~ "Found:    Bool"
+  end
+
   test "a branch failure names the checking function and authored arms" do
     reason =
       {:source_context, :branch_type,

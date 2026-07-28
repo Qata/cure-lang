@@ -227,6 +227,17 @@ defmodule Cure.Core.Env do
   @spec get_def(t(), atom()) :: map() | nil
   def get_def(%__MODULE__{} = env, name), do: Map.get(env.defs, resolve_key(env, env.defs, name))
 
+  @doc "Mark a definition as an authored transparent type alias."
+  @spec put_typealias(t(), atom()) :: t()
+  def put_typealias(%__MODULE__{} = env, name) do
+    key = resolve_key(env, env.defs, name)
+
+    case Map.fetch(env.defs, key) do
+      {:ok, definition} -> %{env | defs: Map.put(env.defs, key, Map.put(definition, :typealias, true))}
+      :error -> env
+    end
+  end
+
   @doc "Return the owner-qualified key for a declaration in the current module."
   @spec owned_name(t(), atom() | String.t()) :: atom()
   def owned_name(%__MODULE__{module_owner: owner}, name) when is_binary(name),

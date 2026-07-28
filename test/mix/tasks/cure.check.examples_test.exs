@@ -76,18 +76,4 @@ defmodule Mix.Tasks.Cure.Check.ExamplesTest do
     assert stderr =~ "INVALID COMMAND USAGE [E099]"
     assert stderr =~ "Usage: mix cure.check.examples"
   end
-
-  test "the optimizer-only fixture remains explicitly deferred", %{dir: dir} do
-    File.write!(
-      Path.join(dir, "examples/specialise.cure"),
-      "mod Specialise\n  fn main() -> Int = 49\nend\n"
-    )
-
-    Mix.Task.reenable("cure.check.examples")
-
-    output = ExUnit.CaptureIO.capture_io(fn -> assert Mix.Task.run("cure.check.examples", []) == :ok end)
-
-    assert output =~ "skip specialise"
-    assert output =~ "(optimizer"
-  end
 end

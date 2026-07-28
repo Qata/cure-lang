@@ -477,7 +477,7 @@ below. Coverage:
   higher-order kinds. **Single-argument `Type → Type` HKT (`Functor`) IS in v1**
   (§3.1) — it is a faithfulness requirement, not deferred.
 - Superclass/interface inheritance, multi-parameter interfaces, functional
-  dependencies, and monomorphising specialisation (v1 threads runtime
+  dependencies, and compile-time instance selection (v1 threads runtime
   dictionaries at abstract sites; specialisation is a perf optimisation later).
 
 ## 9. Non-goals

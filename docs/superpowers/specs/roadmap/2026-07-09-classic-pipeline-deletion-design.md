@@ -30,7 +30,7 @@ either designed or landed (§4).
 exception. Macros are type-blind (upstream of the elaborator), so a macro can
 only emit *runtime* dispatch — not real, type-directed typeclasses. `proto`/
 `impl` therefore become an **elaborator feature** (dictionaries as Core records,
-resolution in the E-layer, erased by monomorphization), specified separately as
+resolution in the E-layer, lowered to direct calls during elaboration), specified separately as
 the fifth enabler (§4). fsm/actor/sup/app remain macros; they are effectful code
 generators, which is exactly what the macro facility is for.
 

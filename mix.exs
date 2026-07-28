@@ -194,7 +194,6 @@ defmodule Cure.MixProject do
         "docs/BLESS.md",
         "docs/REPLAY.md",
         "docs/JOHN.md",
-        "docs/MONOMORPHISATION.md",
         "docs/PGO.md",
         "docs/PROOF_CARRYING.md",
         "docs/EXPORT_TYPES.md",

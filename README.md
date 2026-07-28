@@ -425,9 +425,8 @@ authoritative compilation/runtime checks for the root example corpus. See
   deps), cross-module protocol registry, `cure test` with `Std.Test`.
 - **v0.13.0 -- Depth Over Breadth**: dependent-type verification at call
   sites, type-level arithmetic in return types, LSP code actions /
-  definition / incremental compile, advanced optimizer (inlining /
-  monomorphisation / guard simplification), `Std.Map` / `Std.Set` /
-  `Std.Option` / `Std.Functor`.
+  definition / incremental compile, experimental AST optimizer,
+  `Std.Map` / `Std.Set` / `Std.Option` / `Std.Functor`.
 - **v0.12.0 -- The Complete Rewrite**: rewrite from Erlang to Elixir,
   import resolution, dependent-type representation, typeclass derive, LSP
   symbols, Z3 model parser, FSM type-safety analysis, Levenshtein-based

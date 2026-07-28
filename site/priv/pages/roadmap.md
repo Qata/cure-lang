@@ -38,10 +38,10 @@ emitter.
   iterator surface.
 - **Tooling** -- editions and `cure migrate`, trust-ledger auditing,
   structured diagnostics, canonical multi-file builds, and an authoritative
-  example runner. The root corpus currently has 40 passing examples and one
-  optimizer-only skip.
+  example runner. The root corpus currently has 40 passing examples with no
+  skips or failures.
 
-Specialization is intentionally deferred to a later optimizer release. See
+Optimization over validated dependent Core is future work. See
 [`ROADMAP-0.34.md`](https://github.com/am-kantox/cure-lang/blob/main/ROADMAP-0.34.md)
 and the Unreleased changelog for the full engineering inventory.
 
@@ -154,31 +154,11 @@ narrative.
   and `cure help`; `mix.exs` version 0.32.0; four new doc pages
   registered in Hex extras.
 
-## Implemented: v0.31.0 -- Specialise & Steer
+## Implemented: v0.31.0 -- Profile & Draw
 
-The optimisation release. Cure stops paying for polymorphism it
-doesn't use, and starts steering its own optimiser with profiling
-data. Two long-deferred items from the `## Future` block finally
-land: monomorphisation and profile-guided optimisation. ASCII-art
-diagrams (`cure draw`) graduate from `stuff/TODO-IDEAS.md` as a
-static counterpart to the v0.27.0 Mermaid emitter for terminals
-that cannot render Mermaid.
-
-- **Monomorphisation** (`Cure.Optimizer.Monomorphise`) -- new MetaAST
-  pass wired in front of `Cure.Optimizer.Inline`. Walks the module
-  body, identifies polymorphic `function_def` nodes (declared
-  signature mentions `{:type_var, _}`), unifies formal parameter
-  types against inferred call-site argument types, and synthesises
-  one specialised clone per unique substitution. Mangled name
-  `original__<6-hex-hash>` (stable across recompiles). The original
-  generic is **always retained** alongside the clones; cross-module
-  callers, protocol-registry dispatch, and dynamic `apply/3` keep
-  working unchanged. Per-function soft cap of 16 specialisations
-  (tunable via `[compiler].monomorph_budget`). Surfaces under code
-  **E064 Monomorphisation Budget Exhausted**. Specialised clones get
-  `nowarn_unused_function` automatically so erl_lint stays quiet
-  when the inliner devours their call sites. CLI: `cure compile`
-  defaults to `--monomorphise`; opt out with `--no-monomorphise`.
+This release added profile-data plumbing and terminal diagrams to the classic
+compiler. That optimizer and its PGO stack were later deleted with the classic
+pipeline; the profile format remains historical design material.
 - **Profile-Guided Optimisation** (`Cure.PGO`, `Cure.PGO.Profile`,
   `Cure.PGO.Recorder`) -- runtime-profile capture + compile-time
   consumption. `Cure.PGO.Recorder` is a `GenServer`-backed ETS
@@ -207,16 +187,7 @@ that cannot render Mermaid.
   `!`/`?` event suffixes, supervisor children as a `├──`/`└──`
   vertical tree, applications as a panel summarising vsn, root,
   and declared `applications`.
-- **Codegen `nowarn_unused_function` attribute** -- per-module
-  attribute synthesised whenever the module's body contains a
-  `function_def` with a `:specialised_from` meta. Keeps the
-  monomorphisation + inliner cycle warning-free.
-- **New error code: E064 Monomorphisation Budget Exhausted.**
-- **New docs:** `docs/MONOMORPHISATION.md`, `docs/PGO.md`. Both
-  added to the Hex documentation extras list.
-- **New example:** `examples/specialise.cure` -- small showcase that
-  exercises `id/1` and `pair_first/2` against four distinct
-  substitutions.
+- **New docs:** `docs/PGO.md`, retained as historical optimizer design.
 
 Deferred to v0.33.0 and beyond:
 - **Cure-native notebook** (v0.33.0 target) -- first-class `.cnb`
@@ -232,8 +203,6 @@ Deferred to v0.33.0 and beyond:
 - **`cure export-types --target typescript` and `--target rust`** --
   the Protobuf backend (v0.32.0) proved the extractor API; additional
   emitters are additive.
-- **Cross-module monomorphisation** -- whole-program specialisation
-  across compilation unit boundaries.
 
 ## Implemented: v0.30.0 -- John
 

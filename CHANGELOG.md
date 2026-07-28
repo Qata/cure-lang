@@ -109,8 +109,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   module loading, user-prelude discovery, and sound cache invalidation.
 - `mix cure.check.examples` compiles every root example and executes every
   recorded `main/0` expectation. The corpus currently reports 40 passing
-  examples and one explicit optimizer-only skip; specialization remains
-  deferred to a later release.
+  examples with no skips or failures.
 
 ### Added -- canonical `%[A, B]` tuple-type syntax
 
@@ -1266,8 +1265,6 @@ raw-mode line editor with live syntax highlighting.
 
 ### Deferred to v0.25.0
 
-- Monomorphisation of polymorphic functions whose call sites all use
-  concrete types.
 - Profile-guided optimisation wiring between `Cure.Profiler` and the
   inliner / pattern-aware SMT encoder.
 - First-class Helix / Zed configurations and a VS Code extension
@@ -2271,9 +2268,8 @@ ported, primarily the type optimizer and 5 LSP modules).
 - Debounced diagnostic publication
 - SMT feedback: refinement type info on hover, inline counterexamples
 
-### Added -- Advanced Optimizer (Phase 4)
+### Added -- Experimental Optimizer (Phase 4)
 - Function inlining (small pure functions, recursion-safe)
-- Monomorphization at concrete call sites
 - Guard simplification (algebraic rules, clause merging, redundancy elimination)
 - Pattern-aware SMT encoding for precise exhaustiveness checking
 - Deep pipe chain optimizer (Result propagation, Ok wrap/unwrap elimination)

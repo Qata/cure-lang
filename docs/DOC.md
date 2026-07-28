@@ -243,7 +243,7 @@ The `###` fence still works for cases where a docstring would
 otherwise collide with indentation-sensitive parent containers.
 Leading indentation common to every body line is stripped:
 
-```cure
+````cure
 mod MyApp
   ###
   Longform prose here.
@@ -255,7 +255,7 @@ mod MyApp
   ```
   ###
   fn run() -> Atom = :ok
-```
+````
 
 ### `## Examples` blocks
 
@@ -266,6 +266,17 @@ compile. The Cure stdlib enforces this end-to-end: the examples in
 four high-traffic `Std.Core` functions (`compose`, `map_ok`,
 `and_then`, `map_option`) carry per-function examples on top of the
 module-level block.
+
+Repository Markdown and `.cure` docstrings follow the same rule. `mix cure.check.docs`
+compiles every fence whose info string begins with the complete word
+`cure`, including attributed forms such as `` ```cure path=demo.cure ``.
+A fence may add `expr` or `declarations` when its shape is ambiguous.
+An intentionally rejected example names its expected diagnostic, for example
+`` ```cure E093 ``. The checker requires that exact error code and fails if a
+different error appears, the example starts compiling, or the compiler crashes.
+Multiple `EXXX` tags on one fence are invalid. An incomplete design sketch is
+not Cure source and uses a plain `text` fence. Ordinary `cure` fences always
+have to compile.
 
 ## See also
 

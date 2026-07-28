@@ -27,7 +27,7 @@ mod Std.Equatable
   ## The minimal basis is a single primitive method, `` `==` ``; `` `!=` `` is a
   ## derived, `where`-constrained top-level function (`not (a == b)`), written
   ## without the operator to avoid regress. It is a standalone function rather
-  ## than an interface default so it is never monomorphised per instance (an
+  ## than an interface default so it is never specialized per instance (an
   ## instance-specialised default that re-dispatches `` `==` `` at a concrete
   ## operand cannot be elaborated for every leaf today).
   ##

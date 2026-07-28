@@ -1031,7 +1031,7 @@ defmodule Cure.Elab.Elaborator do
 
             case elaborate_expr_checked(e, t_type_core, names, ctx, env) do
               {:error, reason} ->
-                {:error, attach_expectation_context(reason, e, :branch, :if, 1)}
+                {:error, normalize_branch_check_error(reason, e, t_type_core, names, ctx, env, :if, 1)}
 
               {:ok, e_core} ->
                 {:ok, bool_case(c_core, t_type_core, t_core, e_core, ctx), t_type}
@@ -1954,7 +1954,7 @@ defmodule Cure.Elab.Elaborator do
       # An indexed family (Bounded — Char) erases to a native int but is not a
       # monomorphic twin, so it takes the polymorphic struct_eq path directly. This
       # is a concrete-type primitive fast path (Bounded erases to a BEAM int, so
-      # struct_eq IS its native equality), monomorphising to the identical spine
+      # struct_eq IS its native equality), lowering to the identical spine
       # the `Equatable for Char` (keyed `:Bounded`) instance would — kept as an
       # optimisation of the single route. It is NOT routed to the method because
       # that instance is index-specialised to Char's `Bounded(1114112)` and would
@@ -1965,7 +1965,7 @@ defmodule Cure.Elab.Elaborator do
       # `Atom` is a sealed Int-tier primitive base type (`{:vatom_type}`): a BEAM
       # atom is its own canonical value, so `:ok == :ok` is native primitive
       # equality, no more a typeclass obligation than `1 == 1`. This concrete fast
-      # path monomorphises to the identical `struct_eq(Atom, ·, ·)` spine the
+      # path lowers to the identical `struct_eq(Atom, ·, ·)` spine the
       # `Equatable for Atom` instance emits — an optimisation of the single route,
       # never reached for an abstract/rigid/ADT operand (those fall to `:error`).
       # It is required for the bootstrap-closure OTP/syntax modules, which compare
@@ -2742,12 +2742,12 @@ defmodule Cure.Elab.Elaborator do
       {:ok, c_core} ->
         case branch.(t) do
           {:error, reason} ->
-            {:error, attach_expectation_context(reason, t, :branch, :if, 0)}
+            {:error, normalize_branch_check_error(reason, t, expected_core, names, ctx, env, :if, 0)}
 
           {:ok, t_core} ->
             case branch.(e) do
               {:error, reason} ->
-                {:error, attach_expectation_context(reason, e, :branch, :if, 1)}
+                {:error, normalize_branch_check_error(reason, e, expected_core, names, ctx, env, :if, 1)}
 
               {:ok, e_core} ->
                 {:ok, bool_case(c_core, expected_core, t_core, e_core, ctx)}
@@ -2967,6 +2967,64 @@ defmodule Cure.Elab.Elaborator do
 
   defp attach_expectation_context(reason, expression, origin, owner, index) do
     {:source_context, reason, expectation_context(expression, origin, owner, index)}
+  end
+
+  # A conditional checks each branch against one shared result type. Constructor
+  # syntax can make a perfectly valid branch fail that check at a low level as
+  # `:foreign_ctor` (notably String, which elaborates to the List constructors
+  # Nil/Cons). At this boundary that is a branch-type mismatch, not a name error.
+  #
+  # Infer the branch independently after the failed check. If it is valid on its
+  # own, report its actual type against the branch goal through the contextual
+  # E093 route. If independent inference also fails, preserve that authored
+  # branch error instead of hiding it behind a synthetic mismatch.
+  defp normalize_branch_check_error(reason, expression, expected_core, names, ctx, env, owner, index) do
+    normalized_reason =
+      case elaborate_expr_typed(expression, names, ctx, env) do
+        {:ok, _term, actual_type} ->
+          actual_core = Quote.reify(actual_type, Context.length(ctx), Context.signature(ctx))
+          actual_diagnostic = diagnostic_type_alias(expression, actual_core, ctx, env)
+          expected_diagnostic = diagnostic_type_alias(nil, expected_core, ctx, env)
+          {:cannot_unify, actual_diagnostic, expected_diagnostic}
+
+        {:error, _independent_reason} ->
+          reason
+      end
+
+    attach_expectation_context(normalized_reason, expression, :branch, owner, index)
+  end
+
+  defp diagnostic_type_alias(expression, core, ctx, env) do
+    alias_name =
+      case expression do
+        {:literal, _meta, value} when is_binary(value) -> resolve_typealias_name(env, :String)
+        _ -> typealias_head(core, env)
+      end
+
+    case alias_name && Env.get_def(env, alias_name) do
+      %{typealias: true, body: body} ->
+        original = Cure.Core.Normalise.nf(ctx, body)
+        {:diagnostic_alias, Cure.Elab.Name.base(alias_name), original}
+
+      _ ->
+        core
+    end
+  end
+
+  defp typealias_head({:global, name}, env) do
+    case Env.get_def(env, name) do
+      %{typealias: true} -> name
+      _ -> nil
+    end
+  end
+
+  defp typealias_head(_core, _env), do: nil
+
+  defp resolve_typealias_name(env, name) do
+    case Env.get_def(env, name) do
+      %{typealias: true, name: resolved} -> resolved
+      _ -> nil
+    end
   end
 
   defp expectation_context(expression, origin, owner, index) do

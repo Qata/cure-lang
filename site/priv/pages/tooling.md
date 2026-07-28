@@ -285,8 +285,7 @@ mix cure.diagnostics.audit
 and runs every recorded `main/0` expectation. A manifest distinguishes
 language, library, migration, and optimizer-only status, fails on silently
 omitted files, and treats a passing skipped fixture as stale. The current
-corpus has 40 passing examples and one explicit specialization skip;
-specialization is deferred to a later optimizer release.
+corpus has 40 passing examples, no skips, and no failures.
 
 ## v0.33.0 additions
 
@@ -674,8 +673,8 @@ returns its capabilities. Tools are listed via `tools/list` and invoked via
 
 > **Deferred in 0.34:** the sections below document the v0.31 classic-AST
 > optimizer. That input pipeline was removed with the classic compiler.
-> Specialization and PGO will return in a later release over validated
-> dependent Core; current compile/run commands do not advertise these passes.
+> A future optimizer must consume validated dependent Core; current
+> compile/run commands do not advertise these passes.
 
 The optimizer runs 5 transformation passes on the MetaAST between type
 checking and code generation. Enable it with `--optimize` on the CLI or
@@ -762,25 +761,25 @@ Individual passes can be run in isolation:
 Cure uses structured error codes. Each code has a detailed explanation
 accessible via `cure explain <code>`.
 
-**E001: Type Mismatch** -- A function's body type does not match its declared
+**E093: Type Mismatch** -- A function's body type does not match its declared
 return type, or an argument type does not match the parameter type.
 
-```cure
+```cure E093
 fn add(a: Int, b: Int) -> String = a + b
-# error E001: declared return type String but body has type Int
+# error E093: declared return type String but body has type Int
 ```
 
-**E002: Unbound Variable** -- A variable is referenced that has not been defined.
+**E091: Unknown Value** -- A value is referenced that has not been defined.
 
-```cure
+```cure E091
 fn foo() -> Int = x + 1
-# error E002: undefined variable 'x'
+# error E091: unknown value 'x'
 ```
 
 **E003: Arity Mismatch** -- A function is called with the wrong number of
 arguments.
 
-```cure
+```cure E003
 fn add(a: Int, b: Int) -> Int = a + b
 fn main() -> Int = add(1)
 # error E003: expects 2 arguments, got 1

@@ -519,7 +519,7 @@ prove anything.
 not "to the left of an arrow" in a way that smuggles in a loop). It keeps inductive
 definitions sound.
 
-```cure
+```cure E103
 type Bad = Mk(Bad -> Bad)       # rejected: self-reference left of -> fails positivity
 ```
 
