@@ -34,8 +34,10 @@ defmodule Cure.Core.TermFromExternalValidationRedTest do
     # term.ex:312). Whatever it returns must be a well-formed term — the same
     # invariant `Serialize.decode` enforces — not the raw, ungated
     # `{:var, -1}` that `Term.term?/1` itself considers ill-formed.
-    assert_raise ArgumentError, ~r/ill-formed external Core term/, fn ->
-      Term.from_external(%{"node" => "var", "index" => malformed_index})
-    end
+    result = Term.from_external(%{"node" => "var", "index" => malformed_index})
+
+    assert Term.term?(result),
+           "Term.from_external/1 must not construct a term Term.term?/1 rejects; " <>
+             "got #{inspect(result)} for external input #{inspect(%{"node" => "var", "index" => malformed_index})}"
   end
 end

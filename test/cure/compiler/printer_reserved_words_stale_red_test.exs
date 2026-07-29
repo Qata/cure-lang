@@ -39,18 +39,11 @@ defmodule Cure.Compiler.Printer.ReservedWordsStaleRedTest do
     # `band` now lexes as the `:band_op` keyword.
     reparsed = parse!(out)
 
-    assert contains_function?(reparsed, "band"),
+    assert {:container, _, body} = reparsed
+    assert Enum.any?(body, fn
+             {:function_def, meta, _} -> Keyword.get(meta, :name) == "band"
+             _ -> false
+           end),
            "expected the re-parsed AST to still contain a function named `band`, got:\n#{inspect(reparsed)}"
   end
-
-  defp contains_function?({:function_def, meta, _body}, name),
-    do: Keyword.get(meta, :name) == name
-
-  defp contains_function?({_tag, _meta, children}, name) when is_list(children),
-    do: Enum.any?(children, &contains_function?(&1, name))
-
-  defp contains_function?(children, name) when is_list(children),
-    do: Enum.any?(children, &contains_function?(&1, name))
-
-  defp contains_function?(_ast, _name), do: false
 end
