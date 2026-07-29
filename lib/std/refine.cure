@@ -1,3 +1,6 @@
+## Refinement-oriented proof helpers for numeric predicates. Prefer ordinary
+## indexed data and explicit propositions for new APIs; this module remains for
+## compatibility with existing refinement clients.
 @group(:core)
 mod Std.Refine
   use Std.Proof.Math

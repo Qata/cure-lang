@@ -1,3 +1,5 @@
+## The structured FSM surface reuses the generic family parser.
+
 @group(:concurrency)
 mod Std.Fsm
   use Std.Syntax
@@ -7,7 +9,6 @@ mod Std.Fsm
   use Std.ExitReason
   use Std.ActorBehavior
 
-  ## The structured FSM surface reuses the generic family parser.
   macro fsm <name: ModuleName>
     syntax family FsmDefinition
       state Type

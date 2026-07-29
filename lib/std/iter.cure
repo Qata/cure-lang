@@ -1,59 +1,60 @@
+## Lazy iterators.
+##
+## Cure comprehensions and `Std.List` are eager: every step
+## materialises a new cons list. `Std.Iter` is the lazy half of the
+## collections story. An iterator is an inductive wrapper around a
+## step function. Each step returns either `Some(Yield(element, next))`
+## or `None()`, so the element and continuation stay typed without
+## falling back to `Any`.
+##
+## ## The `lazy` idiom
+##
+## The recommended way to spell a lazy pipeline is to mark the entry
+## point with `lazy/1` and let the rest of the chain stay in
+## `Std.Iter`:
+##
+## ```cure
+## use Std.Iter
+##
+## # Squares of the first five even integers in [1, 1_000_000].
+## [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+##   |> lazy
+##   |> filter(fn(x) -> x % 2 == 0)
+##   |> map(fn(x) -> x * x)
+##   |> take(5)
+## # => [4, 16, 36, 64, 100]
+## ```
+##
+## Nothing materialises until the terminal `take/2` (which returns a
+## plain list). For an open-ended chain, end with `to_list/1` --
+## guard infinite producers with `take/2` or `take_while/2` first.
+##
+## ## Examples
+##
+## ```cure
+## use Std.Iter
+##
+## # Sum of the integers in [1, 10] via the iterator API.
+## fold(range(1, 10), 0, fn(x) -> fn(acc) -> acc + x)
+## # => 55
+## ```
+##
+## ```cure
+## use Std.Iter
+##
+## # First five Fibonacci numbers from an infinite producer.
+## let pair_step = fn(p) ->
+##   match p
+##     %[a, b] -> Some(Emit(a, %[b, a + b]))
+## unfold(%[0, 1], pair_step) |> take(5)
+## # => [0, 1, 1, 2, 3]
+## ```
+
+# Group tag consumed by `Cure.Stdlib.Preload`.
+
 @group(:collections)
 mod Std.Iter
   use Std.Option
-  ## Lazy iterators.
-  ##
-  ## Cure comprehensions and `Std.List` are eager: every step
-  ## materialises a new cons list. `Std.Iter` is the lazy half of the
-  ## collections story. An iterator is an inductive wrapper around a
-  ## step function. Each step returns either `Some(Yield(element, next))`
-  ## or `None()`, so the element and continuation stay typed without
-  ## falling back to `Any`.
-  ##
-  ## ## The `lazy` idiom
-  ##
-  ## The recommended way to spell a lazy pipeline is to mark the entry
-  ## point with `lazy/1` and let the rest of the chain stay in
-  ## `Std.Iter`:
-  ##
-  ## ```cure
-  ## use Std.Iter
-  ##
-  ## # Squares of the first five even integers in [1, 1_000_000].
-  ## [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-  ##   |> lazy
-  ##   |> filter(fn(x) -> x % 2 == 0)
-  ##   |> map(fn(x) -> x * x)
-  ##   |> take(5)
-  ## # => [4, 16, 36, 64, 100]
-  ## ```
-  ##
-  ## Nothing materialises until the terminal `take/2` (which returns a
-  ## plain list). For an open-ended chain, end with `to_list/1` --
-  ## guard infinite producers with `take/2` or `take_while/2` first.
-  ##
-  ## ## Examples
-  ##
-  ## ```cure
-  ## use Std.Iter
-  ##
-  ## # Sum of the integers in [1, 10] via the iterator API.
-  ## fold(range(1, 10), 0, fn(x) -> fn(acc) -> acc + x)
-  ## # => 55
-  ## ```
-  ##
-  ## ```cure
-  ## use Std.Iter
-  ##
-  ## # First five Fibonacci numbers from an infinite producer.
-  ## let pair_step = fn(p) ->
-  ##   match p
-  ##     %[a, b] -> Some(Emit(a, %[b, a + b]))
-  ## unfold(%[0, 1], pair_step) |> take(5)
-  ## # => [0, 1, 1, 2, 3]
-  ## ```
-
-  ## Group tag consumed by `Cure.Stdlib.Preload`.
   type StepToken = Step
   type Iter(a) = Iter(StepToken -> Option(IterStep(a)))
   type IterStep(a) = Yield(a, Iter(a))

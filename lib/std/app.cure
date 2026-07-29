@@ -1,9 +1,10 @@
+## The structured application surface is source-defined.
+
 @group(:system)
 mod Std.App
   use Std.Syntax
   use Std.ActorBehavior
 
-  ## The structured application surface is source-defined.
   macro app <name: ModuleName>
     syntax family ApplicationDefinition
       root ModuleName

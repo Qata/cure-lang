@@ -1,3 +1,5 @@
+## The structured actor surface is a source-defined family.
+
 @group(:concurrency)
 mod Std.Actor
   use Std.Syntax
@@ -6,7 +8,6 @@ mod Std.Actor
   use Std.String
   use Std.ActorBehavior
 
-  ## The structured actor surface is a source-defined family.
   macro actor <name: ModuleName>
     syntax family ActorQueryDefinition
       syntax on_call <request: Name> (<parameters: Parameters>) returns <reply_type: Type>

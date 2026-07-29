@@ -1,44 +1,45 @@
+## SEALED unsafe raw base for the typed BEAM process algebra.
+##
+## Honest, permissive, effect-typed externs over stock Erlang/OTP BIFs — the
+## only trust boundary for concurrency. `Std.Otp` narrows these into a typed
+## algebra (`Pid(m)`, session channels) and is the sanctioned surface; nothing
+## here is meant for direct use. Every operation that performs a BEAM side
+## effect returns `Effect(T)` (design 2026-07-09-effect-type-former §3.3,
+## 2026-07-10-checked-beam-concurrency §2), which the old pure `@extern` types
+## (the "purity lie") did not.
+##
+## The effect discipline forbids duplicating, dropping, or reordering an
+## OPERATION — that is a statement about the PROGRAM'S EFFECT SEQUENCE, not
+## about the mailbox. The BEAM itself guarantees far less, and nothing here may
+## assume otherwise:
+##
+##   * NO DELIVERY. A `send` to a dead process silently succeeds. Nothing here
+##     promises a message arrives, and no typed op sequences on arrival.
+##   * ORDERING IS PAIRWISE ONLY. Signals from the SAME sender to the SAME
+##     target arrive in order — messages and exit signals alike. Order between
+##     DIFFERENT senders is unspecified.
+##
+## (Bereczky/Horpácsi/Thompson, *A Formalisation of Core Erlang*, Thm. 2 and Ex. 3;
+## verified against AtomVM in
+## docs/research/process-types/raw-algebra-conformance-checklist.md.)
+##
+## Messages and replies are POLYMORPHIC, not `Any`: the type variable is the
+## narrow point where `Std.Otp` supplies the message-set code `m`. Payloads must
+## be first-order serialisable data (the BEAM copies messages); the typed layer
+## enforces that.
+##
+## Process creation receives a function, never a bare `Effect` value. The
+## function boundary is the honest raw representation of a fresh BEAM
+## process; typed wrappers choose the indexed handle exposed to callers.
+
+## Which BEAM protocol a process handle speaks — a PHANTOM TAG, carried as `RawPid`'s
+## third type argument. A plain process answers only raw sends; a `gen_server`
+## additionally answers `call`/`cast`/`stop`. Neither tag has values and neither
+## reaches the BEAM: the distinction is erased entirely.
+
 @group(:concurrency)
 mod Std.Otp.Raw
   use Std.Option
-  ## SEALED unsafe raw base for the typed BEAM process algebra.
-  ##
-  ## Honest, permissive, effect-typed externs over stock Erlang/OTP BIFs — the
-  ## only trust boundary for concurrency. `Std.Otp` narrows these into a typed
-  ## algebra (`Pid(m)`, session channels) and is the sanctioned surface; nothing
-  ## here is meant for direct use. Every operation that performs a BEAM side
-  ## effect returns `Effect(T)` (design 2026-07-09-effect-type-former §3.3,
-  ## 2026-07-10-checked-beam-concurrency §2), which the old pure `@extern` types
-  ## (the "purity lie") did not.
-  ##
-  ## The effect discipline forbids duplicating, dropping, or reordering an
-  ## OPERATION — that is a statement about the PROGRAM'S EFFECT SEQUENCE, not
-  ## about the mailbox. The BEAM itself guarantees far less, and nothing here may
-  ## assume otherwise:
-  ##
-  ##   * NO DELIVERY. A `send` to a dead process silently succeeds. Nothing here
-  ##     promises a message arrives, and no typed op sequences on arrival.
-  ##   * ORDERING IS PAIRWISE ONLY. Signals from the SAME sender to the SAME
-  ##     target arrive in order — messages and exit signals alike. Order between
-  ##     DIFFERENT senders is unspecified.
-  ##
-  ## (Bereczky/Horpácsi/Thompson, *A Formalisation of Core Erlang*, Thm. 2 and Ex. 3;
-  ## verified against AtomVM in
-  ## docs/research/process-types/raw-algebra-conformance-checklist.md.)
-  ##
-  ## Messages and replies are POLYMORPHIC, not `Any`: the type variable is the
-  ## narrow point where `Std.Otp` supplies the message-set code `m`. Payloads must
-  ## be first-order serialisable data (the BEAM copies messages); the typed layer
-  ## enforces that.
-  ##
-  ## Process creation receives a function, never a bare `Effect` value. The
-  ## function boundary is the honest raw representation of a fresh BEAM
-  ## process; typed wrappers choose the indexed handle exposed to callers.
-
-  ## Which BEAM protocol a process handle speaks — a PHANTOM TAG, carried as `RawPid`'s
-  ## third type argument. A plain process answers only raw sends; a `gen_server`
-  ## additionally answers `call`/`cast`/`stop`. Neither tag has values and neither
-  ## reaches the BEAM: the distinction is erased entirely.
   opaque type Plain
   opaque type Server
 

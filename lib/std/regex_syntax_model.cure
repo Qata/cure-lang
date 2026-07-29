@@ -1,11 +1,12 @@
+## Compile-time-only literal syntax tree. It is consumed by `expand_literal`
+## and never appears in generated matching code.
+
 @group(:text)
 mod Std.Regex.Syntax.Model
   type LiteralCharacterRange = LiteralCharacterRange(Char, Char)
   type LiteralClassKinds = LiteralClassKinds(List(LiteralClassKind))
   type LiteralRegexOptions = LiteralRegexOptions(List(LiteralModifier))
 
-  ## Compile-time-only literal syntax tree. It is consumed by `expand_literal`
-  ## and never appears in generated matching code.
   type LiteralPattern =
     | LiteralEmpty
     | LiteralExact(Char)

@@ -1,3 +1,5 @@
+## Compile-time parser for regex literal patterns. It validates the complete
+## literal and returns a structured syntax-tree error when parsing stops early.
 @group(:text)
 mod Std.Regex.Syntax.Parser
   use Std.Regex.Syntax.Model

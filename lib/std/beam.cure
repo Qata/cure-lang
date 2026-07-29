@@ -1,10 +1,11 @@
+## Opaque native term at the foreign boundary. It can be passed to trusted
+## primitives, but ordinary Cure code cannot inspect it or claim a type for it.
+
 @group(:concurrency)
 mod Std.Beam
   use Std.Otp.Raw
   use Std.Result
 
-  ## Opaque native term at the foreign boundary. It can be passed to trusted
-  ## primitives, but ordinary Cure code cannot inspect it or claim a type for it.
   typealias BeamTerm = RawTerm
   typealias EncodedTerm = RawTerm
   typealias BarePid = Std.Otp.Raw.BarePid

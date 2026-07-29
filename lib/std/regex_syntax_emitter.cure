@@ -1,3 +1,5 @@
+## Compile-time emitter for regex syntax trees. It turns parsed patterns into
+## the matcher representation consumed by `Std.Regex`.
 @group(:text)
 mod Std.Regex.Syntax.Emitter
   use Std.Regex.Syntax.Model

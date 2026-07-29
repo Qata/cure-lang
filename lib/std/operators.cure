@@ -1,5 +1,7 @@
 @group(:core)
 @prelude
+## Prelude fixity declarations for Cure's built-in operators. This module is
+## loaded automatically; it does not expose a runtime API.
 mod Std.Operators
 
 # The fixity-declaration authority for Cure's core operators — the operators

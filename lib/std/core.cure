@@ -1,41 +1,42 @@
+## Identity, composition, booleans, comparison, and the `Result` /
+## `Option` sum types.
+##
+## These are the most commonly used combinators in Cure programs.
+## `Result(T, E)` and `Option(T)` lower to `{:ok, v}` / `{:error, e}`
+## and `{:some, v}` / `{:none}` respectively so they round-trip with
+## Elixir and Erlang without wrappers.
+##
+## ## Examples
+##
+## ```cure
+## use Std.Core
+##
+## let inc    = fn(x: Int) -> Int = x + 1
+## let double = fn(x: Int) -> Int = x * 2
+## let pipeline = compose(double, inc)
+## pipeline(3)                       # => 8
+## ```
+##
+## ```cure
+## use Std.Core
+##
+## ok(42)
+##   |> map_ok(fn(x) -> x * 2)
+##   |> and_then(fn(x) ->
+##        pickup
+##          x > 0 -> ok(x)
+##          else  -> error(:neg))
+##   |> unwrap_ok(0)                 # => 84
+## ```
+
+# Group tag consumed by `Cure.Stdlib.Preload`.
+
 @group(:core)
 mod Std.Core
   use Std.Comparable
   use Std.Result
   use Std.Option
 
-  ## Identity, composition, booleans, comparison, and the `Result` /
-  ## `Option` sum types.
-  ##
-  ## These are the most commonly used combinators in Cure programs.
-  ## `Result(T, E)` and `Option(T)` lower to `{:ok, v}` / `{:error, e}`
-  ## and `{:some, v}` / `{:none}` respectively so they round-trip with
-  ## Elixir and Erlang without wrappers.
-  ##
-  ## ## Examples
-  ##
-  ## ```cure
-  ## use Std.Core
-  ##
-  ## let inc    = fn(x: Int) -> Int = x + 1
-  ## let double = fn(x: Int) -> Int = x * 2
-  ## let pipeline = compose(double, inc)
-  ## pipeline(3)                       # => 8
-  ## ```
-  ##
-  ## ```cure
-  ## use Std.Core
-  ##
-  ## ok(42)
-  ##   |> map_ok(fn(x) -> x * 2)
-  ##   |> and_then(fn(x) ->
-  ##        pickup
-  ##          x > 0 -> ok(x)
-  ##          else  -> error(:neg))
-  ##   |> unwrap_ok(0)                 # => 84
-  ## ```
-
-  ## Group tag consumed by `Cure.Stdlib.Preload`.
   # -- Combinators ------------------------------------------------------------
 
   ## Identity function: returns its argument unchanged.

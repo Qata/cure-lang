@@ -1,3 +1,5 @@
+## Trusted semantic lemmas used by the linear-arithmetic proof modules.
+## The declarations relate coefficient lists and their evaluated sums.
 @group(:core)
 mod Std.Proof.LinearArithmetic.Semantics
   use Std.Nat

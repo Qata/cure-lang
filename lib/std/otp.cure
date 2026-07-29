@@ -1,3 +1,7 @@
+## Public names for the sealed raw carriers used by this module's signatures.
+## These aliases make the `Std.Otp` interface self-contained without leaking
+## every bare name imported from `Std.Otp.Raw` into downstream modules.
+
 @group(:concurrency)
 mod Std.Otp
   use Std.Otp.Raw
@@ -6,9 +10,6 @@ mod Std.Otp
   use Std.Option
   use Std.Beam
 
-  ## Public names for the sealed raw carriers used by this module's signatures.
-  ## These aliases make the `Std.Otp` interface self-contained without leaking
-  ## every bare name imported from `Std.Otp.Raw` into downstream modules.
   typealias Plain = Std.Otp.Raw.Plain
   typealias Server = Std.Otp.Raw.Server
   typealias RawPid(m, r, k) = Std.Otp.Raw.RawPid(m, r, k)

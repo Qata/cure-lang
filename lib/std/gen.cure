@@ -1,30 +1,31 @@
+## Tiny stateless generator API for property-based testing (v0.19.0).
+##
+## Generators are plain zero-argument lambdas returning a fresh
+## value on every call. Randomness is delegated to Erlang's `:rand`
+## module. Used in tandem with `Std.Test.forall/3` to drive
+## property-based tests, with optional shrinkers below.
+##
+## ## Examples
+##
+## ```cure
+## use Std.Gen
+##
+## let g = fn(_) -> int_in(1, 100)
+## Std.Test.forall_default(g, fn(x) -> x > 0)   # => :ok
+## ```
+##
+## ```cure
+## use Std.Gen
+##
+## # Generate a list of 0..10 small ints.
+## list_int(10, 0, 5)                           # e.g. [3, 0, 2, 5]
+## ```
+
+# Group tag consumed by `Cure.Stdlib.Preload`.
+
 @group(:test)
 mod Std.Gen
   use Std.List
-  ## Tiny stateless generator API for property-based testing (v0.19.0).
-  ##
-  ## Generators are plain zero-argument lambdas returning a fresh
-  ## value on every call. Randomness is delegated to Erlang's `:rand`
-  ## module. Used in tandem with `Std.Test.forall/3` to drive
-  ## property-based tests, with optional shrinkers below.
-  ##
-  ## ## Examples
-  ##
-  ## ```cure
-  ## use Std.Gen
-  ##
-  ## let g = fn(_) -> int_in(1, 100)
-  ## Std.Test.forall_default(g, fn(x) -> x > 0)   # => :ok
-  ## ```
-  ##
-  ## ```cure
-  ## use Std.Gen
-  ##
-  ## # Generate a list of 0..10 small ints.
-  ## list_int(10, 0, 5)                           # e.g. [3, 0, 2, 5]
-  ## ```
-
-  ## Group tag consumed by `Cure.Stdlib.Preload`.
   type RandomAlgorithm = Default | Exsss | Exsplus | Exs1024
 
   local fn random_algorithm_atom(algorithm: RandomAlgorithm) -> Atom = match algorithm

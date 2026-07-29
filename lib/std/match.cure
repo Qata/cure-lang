@@ -1,41 +1,42 @@
+## Convenience helpers built on top of v0.18.0 deep destructuring.
+##
+## Every function here is implemented with nested patterns and
+## serves as a smoke test for the pattern engine. They also double
+## as lightweight convenience utilities when you want a single-call
+## `fst`/`snd`, `uncons`, etc.
+##
+## Tuples are the parameterised `Tuple(...)` of `Std.Tuple`: a pair
+## is `Tuple(a, b)`, so `fst`/`snd` are total projections at their
+## true component types. List splitters that can fail on a short list
+## return an `Option` rather than a padded tuple, matching the
+## Haskell-style `uncons`.
+##
+## ## Examples
+##
+## ```cure
+## use Std.Match
+##
+## fst(%[42, "x"])                         # => 42
+## uncons([1, 2, 3])                       # => Some(%[1, [2, 3]])
+## uncons([])                              # => None()
+## first_two([1, 2, 3, 4])                 # => Some(%[1, 2, [3, 4]])
+## ```
+##
+## ```cure
+## use Std.Match
+##
+## unwrap_ok(Ok(42), 0)                    # => 42
+## unwrap_some(Some("ok"), "fallback")     # => "ok"
+## unwrap_some(None(), "fallback")         # => "fallback"
+## ```
+
+# Group tag consumed by `Cure.Stdlib.Preload`.
+
 @group(:collections)
 mod Std.Match
   use Std.Result
   use Std.Option
 
-  ## Convenience helpers built on top of v0.18.0 deep destructuring.
-  ##
-  ## Every function here is implemented with nested patterns and
-  ## serves as a smoke test for the pattern engine. They also double
-  ## as lightweight convenience utilities when you want a single-call
-  ## `fst`/`snd`, `uncons`, etc.
-  ##
-  ## Tuples are the parameterised `Tuple(...)` of `Std.Tuple`: a pair
-  ## is `Tuple(a, b)`, so `fst`/`snd` are total projections at their
-  ## true component types. List splitters that can fail on a short list
-  ## return an `Option` rather than a padded tuple, matching the
-  ## Haskell-style `uncons`.
-  ##
-  ## ## Examples
-  ##
-  ## ```cure
-  ## use Std.Match
-  ##
-  ## fst(%[42, "x"])                         # => 42
-  ## uncons([1, 2, 3])                       # => Some(%[1, [2, 3]])
-  ## uncons([])                              # => None()
-  ## first_two([1, 2, 3, 4])                 # => Some(%[1, 2, [3, 4]])
-  ## ```
-  ##
-  ## ```cure
-  ## use Std.Match
-  ##
-  ## unwrap_ok(Ok(42), 0)                    # => 42
-  ## unwrap_some(Some("ok"), "fallback")     # => "ok"
-  ## unwrap_some(None(), "fallback")         # => "fallback"
-  ## ```
-
-  ## Group tag consumed by `Cure.Stdlib.Preload`.
   # -- Pair -------------------------------------------------------------------
 
   ## Return a pair unchanged (identity destructure of a `Tuple(a, b)`).

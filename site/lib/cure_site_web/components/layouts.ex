@@ -77,14 +77,14 @@ defmodule CureSiteWeb.Layouts do
           <a
             href={~p"/actors"}
             class={nav_class(@current_path, ~p"/actors")}
-            title="Typed supervision trees, the Melquiades Operator, actor and sup containers (v0.25.0)"
+            title="Typed supervision trees, the Melquiades Operator, actor and sup containers"
           >
             Actors
           </a>
           <a
             href={~p"/applications"}
             class={nav_class(@current_path, ~p"/applications")}
-            title="First-class OTP applications and BEAM releases, the app container, cure release (v0.26.0)"
+            title="First-class OTP applications and BEAM releases, the app container, cure release"
           >
             Apps
           </a>

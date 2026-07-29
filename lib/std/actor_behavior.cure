@@ -1,12 +1,13 @@
+## Shared compile-time substrate for actor-like abstractions.  Both public
+## `actor` declarations and constrained actors such as `fsm` supply ordinary
+## checked declarations here; this function emits the final direct BEAM
+## behaviour module without introducing a runtime container or dispatcher.
+
 @group(:concurrency)
 mod Std.ActorBehavior
   use Std.Syntax
   use Std.List
 
-  ## Shared compile-time substrate for actor-like abstractions.  Both public
-  ## `actor` declarations and constrained actors such as `fsm` supply ordinary
-  ## checked declarations here; this function emits the final direct BEAM
-  ## behaviour module without introducing a runtime container or dispatcher.
   fn behavior_module(module_name: SynLit, kind: Atom, imports: List(Syntax), declarations: List(Syntax)) -> Syntax =
     lift_module_isolated(module_name, kind, append(imports, declarations))
 

@@ -1,3 +1,5 @@
+## Compile-time support for Cure's regex literal syntax. The macro parses a
+## pattern and lowers it to the runtime `Std.Regex` representation.
 @group(:text)
 mod Std.Regex.Syntax
   use Std.Regex.Syntax.Model

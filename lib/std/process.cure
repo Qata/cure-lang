@@ -1,37 +1,38 @@
+## Raw process primitives: links, monitors, trap_exit.
+##
+## These wrappers call `:erlang` BIFs directly via `@extern`; they
+## do not go through the actor runtime, so they work on any BEAM
+## process (actors, FSMs, or plain `spawn/1` results).
+##
+## The monitor reference returned by `monitor/1` uses the `Ref`
+## primitive type introduced for typed concurrency; see
+## `docs/TYPE_SYSTEM.md`.
+##
+## ## Examples
+##
+## ```cure
+## use Std.Process
+##
+## let me = self()
+## is_alive(me)                            # => true
+## ```
+##
+## ```cure
+## use Std.Process
+##
+## # Monitor a child and wait for its down message.
+## let child = Std.Otp.spawn(fn() -> unit())
+## let ref   = monitor(child)
+## trap_exit(true)
+## ```
+
+# Group tag consumed by `Cure.Stdlib.Preload`.
+## Link the calling process to `pid`. Exits from either side
+## propagate as `:EXIT` messages.
+
 @group(:concurrency)
 mod Std.Process
   use Std.ExitReason
-  ## Raw process primitives: links, monitors, trap_exit.
-  ##
-  ## These wrappers call `:erlang` BIFs directly via `@extern`; they
-  ## do not go through the actor runtime, so they work on any BEAM
-  ## process (actors, FSMs, or plain `spawn/1` results).
-  ##
-  ## The monitor reference returned by `monitor/1` uses the `Ref`
-  ## primitive type introduced for typed concurrency; see
-  ## `docs/TYPE_SYSTEM.md`.
-  ##
-  ## ## Examples
-  ##
-  ## ```cure
-  ## use Std.Process
-  ##
-  ## let me = self()
-  ## is_alive(me)                            # => true
-  ## ```
-  ##
-  ## ```cure
-  ## use Std.Process
-  ##
-  ## # Monitor a child and wait for its down message.
-  ## let child = Std.Otp.spawn(fn() -> unit())
-  ## let ref   = monitor(child)
-  ## trap_exit(true)
-  ## ```
-
-  ## Group tag consumed by `Cure.Stdlib.Preload`.
-  ## Link the calling process to `pid`. Exits from either side
-  ## propagate as `:EXIT` messages.
   @extern(:erlang, :link, 1)
   local fn raw_link(pid: Pid) -> Atom
 

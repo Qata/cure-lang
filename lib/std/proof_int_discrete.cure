@@ -1,3 +1,6 @@
+## Discreteness of the inductive integers: strict comparison against `right`
+## is the same Boolean proposition as non-strict comparison against `right-1`.
+
 @group(:core)
 mod Std.Proof.IntDiscrete
   use Std.Bool
@@ -24,8 +27,6 @@ mod Std.Proof.IntDiscrete
         S(left_predecessor) ->
           lt_nat_is_le_successor_left(left_predecessor, right_predecessor)
 
-  ## Discreteness of the inductive integers: strict comparison against `right`
-  ## is the same Boolean proposition as non-strict comparison against `right-1`.
   fn lt_int_is_le_predecessor(left: Int, right: Int) -> Equivalent(Bool,
     lt_int(left, right), le_int(left, pred_int(right))) =
     match left
