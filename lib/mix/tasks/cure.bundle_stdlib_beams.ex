@@ -20,10 +20,11 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
 
   ## Idempotency
 
-  Per-module mtime comparison: a `.cure` source triggers a recompile
-  only when the expected `.beam` in the destination is missing or
-  older than the source. The module name baked into the BEAM filename
-  is parsed from the source's `mod ...` declaration (the same regex
+  Per-module source fingerprints: a `.cure` source triggers a recompile when
+  the expected `.beam` is missing or its adjacent SHA-256 sidecar does not
+  match the source. This remains correct across branch switches and merges,
+  where filesystem mtimes are not reliable provenance. The module name baked
+  into the BEAM filename is parsed from the source's `mod ...` declaration (the same regex
   `Cure.Stdlib.Preload` uses at Elixir compile time). Sources we
   cannot classify are compiled unconditionally, since `Cure.Compiler`
   itself produces the canonical filename.
@@ -47,6 +48,7 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
   @shortdoc "Compile Cure stdlib sources into priv/ebin/"
 
   @source_dir Path.join(["lib", "std"])
+  @fingerprint_suffix ".cure-source-sha256"
 
   @impl Mix.Task
   def run(_args) do
@@ -97,6 +99,7 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
         {:ok, %{compiled: 0, skipped: 0, errors: 0}}
 
       true ->
+        Process.delete(:cure_bundle_compiler_fingerprint)
         File.mkdir_p!(dest_dir)
 
         files = source_dir |> Path.join("*.cure") |> Path.wildcard()
@@ -185,6 +188,7 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
         # uses canonical source-hash-keyed module interfaces and does not
         # inspect loaded BEAM exports.
         refresh_loaded_beam(module, dest_dir)
+        write_source_fingerprint(src, Path.join(dest_dir, "#{module}.beam"))
         {:ok, %{counts | compiled: counts.compiled + 1}}
 
       {:error, reason} ->
@@ -249,14 +253,68 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
 
   @doc false
   @spec should_compile?(String.t(), String.t()) :: boolean()
-  # True when the BEAM is missing entirely or the source has been
-  # touched more recently than the BEAM. mtime comparison is enough for
-  # our purposes (same rationale as `Mix.Tasks.Cure.BundleStdlib.should_copy?/2`).
+  # A source fingerprint is authoritative. Git checkouts and merges can leave
+  # a source's mtime older than a beam produced by a different revision, so an
+  # mtime-only check can silently retain incompatible generated code. Beams
+  # without a fingerprint are conservatively stale and are rebuilt once.
   def should_compile?(src, beam_path) do
-    case {File.stat(src, time: :posix), File.stat(beam_path, time: :posix)} do
-      {{:ok, src_stat}, {:ok, beam_stat}} -> src_stat.mtime > beam_stat.mtime
-      {{:ok, _}, _} -> true
-      _ -> false
+    cond do
+      not File.regular?(src) ->
+        false
+
+      not File.regular?(beam_path) ->
+        true
+
+      true ->
+        case File.read(fingerprint_path(beam_path)) do
+          {:ok, stored_fingerprint} ->
+            String.trim(stored_fingerprint) != fingerprint(src)
+
+          {:error, _} ->
+            true
+        end
+    end
+  end
+
+  @doc "Return the sidecar path storing a bundled BEAM's source fingerprint."
+  @spec fingerprint_path(String.t()) :: String.t()
+  def fingerprint_path(beam_path), do: beam_path <> @fingerprint_suffix
+
+  @doc "Return the SHA-256 fingerprint of a Cure source file."
+  @spec source_fingerprint(String.t()) :: String.t()
+  def source_fingerprint(source_path) do
+    :crypto.hash(:sha256, File.read!(source_path))
+    |> Base.encode16(case: :lower)
+  end
+
+  @doc "Return the source and compiler fingerprint stored beside a BEAM."
+  @spec fingerprint(String.t()) :: String.t()
+  def fingerprint(source_path) do
+    source_fingerprint(source_path) <> ":" <> compiler_fingerprint()
+  end
+
+  defp write_source_fingerprint(source_path, beam_path) do
+    if File.regular?(beam_path) do
+      File.write!(fingerprint_path(beam_path), fingerprint(source_path) <> "\n")
+    end
+  end
+
+  defp compiler_fingerprint do
+    case Process.get(:cure_bundle_compiler_fingerprint) do
+      nil ->
+        files = ["mix.exs" | Path.wildcard("lib/cure/**/*.ex")] |> Enum.sort()
+
+        payload =
+          Enum.map_join(files, <<0>>, fn path ->
+            path <> <<0>> <> File.read!(path)
+          end)
+
+        value = :crypto.hash(:sha256, payload) |> Base.encode16(case: :lower)
+        Process.put(:cure_bundle_compiler_fingerprint, value)
+        value
+
+      value ->
+        value
     end
   end
 end

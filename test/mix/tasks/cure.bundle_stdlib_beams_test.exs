@@ -57,7 +57,7 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
       cleanup_tmps()
     end
 
-    test "returns false when the BEAM is strictly newer than the source" do
+    test "returns true for an unfingerprinted BEAM even when it is newer" do
       src = make_tmp!()
       dst = make_tmp!()
       source_path = write_cure!(src, "list.cure", "mod Std.List\n")
@@ -65,6 +65,21 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
       File.write!(beam_path, "fake beam bytes")
 
       # Bump the beam mtime well past the source mtime so the gate says "skip".
+      bump_mtime!(beam_path, 5)
+
+      assert BundleStdlibBeams.should_compile?(source_path, beam_path)
+    after
+      cleanup_tmps()
+    end
+
+    test "returns false when the source fingerprint matches" do
+      src = make_tmp!()
+      dst = make_tmp!()
+      source_path = write_cure!(src, "list.cure", "mod Std.List\n")
+      beam_path = Path.join(dst, "Cure.Std.List.beam")
+      File.write!(beam_path, "fake beam bytes")
+      File.write!(BundleStdlibBeams.fingerprint_path(beam_path), BundleStdlibBeams.fingerprint(source_path))
+
       bump_mtime!(beam_path, 5)
 
       refute BundleStdlibBeams.should_compile?(source_path, beam_path)
@@ -166,7 +181,7 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
 
       :code.purge(:"Cure.Std.TcaSkippedHelper")
       :code.delete(:"Cure.Std.TcaSkippedHelper")
-      bump_mtime!(consumer, 5)
+      File.write!(consumer, File.read!(consumer) <> "\n# changed\n")
 
       assert {:ok, %{compiled: 1, skipped: 1, errors: 0}} =
                BundleStdlibBeams.bundle(src, dst)
