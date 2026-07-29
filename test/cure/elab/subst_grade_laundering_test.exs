@@ -45,7 +45,7 @@ defmodule Cure.Elab.SubstGradeLaunderingTest do
                  fn f(x: C) -> Int =
                    match x
                      A() ->
-                       let p :erased = 1
+                       let @erased p : = 1
                        p
                      _ -> 0
                """)
@@ -57,7 +57,7 @@ defmodule Cure.Elab.SubstGradeLaunderingTest do
                  fn f(x: C) -> Int =
                    match x
                      A() ->
-                       let v :linear = 1
+                       let @linear v : = 1
                        0
                      _ -> 0
                """)
@@ -67,11 +67,11 @@ defmodule Cure.Elab.SubstGradeLaunderingTest do
       # The obligation must be ENFORCED, not merely reintroduced as a blanket rejection.
       assert {:ok, _} =
                elab("""
-                 fn sink(x :linear Int) -> Int = x
+                 fn sink(@linear x : Int) -> Int = x
                  fn f(x: C) -> Int =
                    match x
                      A() ->
-                       let v :linear = 1
+                       let @linear v : = 1
                        sink(v)
                      _ -> 0
                """)
@@ -86,7 +86,7 @@ defmodule Cure.Elab.SubstGradeLaunderingTest do
                  fn g(x: Two) -> Int =
                    match x
                      T() ->
-                       let p :erased = 1
+                       let @erased p : = 1
                        p
                      F() -> 0
                """)
@@ -99,7 +99,7 @@ defmodule Cure.Elab.SubstGradeLaunderingTest do
                  fn g(x: Two) -> Int =
                    match x
                      T() ->
-                       let v :linear = 1
+                       let @linear v : = 1
                        0
                      F() -> 0
                """)

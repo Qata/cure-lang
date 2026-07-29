@@ -75,7 +75,7 @@ defmodule Cure.DiagnosticExerciserTest do
        "mod DiagnosticRelevance\n  type Nat = Z | S(Nat)\n  type SNat indices (n: Nat)\n    szero : SNat(Z)\n    ssuc : SNat(n) -> SNat(S(n))\n  type NV indices (n: Nat)\n    vz : NV(Z)\n    vs : SNat(n) -> NV(S(n))\n  fn bad({n: Nat}, value: NV(n)) -> Nat = n\nend\n",
        :erased_value_used_relevantly},
       {"resource usage violation", "E117",
-       "mod DiagnosticUsage\n  fn consume(value: Int) -> Int = value\n  fn bad(value :linear Int) -> Int = consume(value)\nend\n",
+       "mod DiagnosticUsage\n  fn consume(value: Int) -> Int = value\n  fn bad(@linear value : Int) -> Int = consume(value)\nend\n",
        :resource_usage_violation},
       {"pattern coverage", "E118",
        "mod DiagnosticCoverage\n  type Choice = First | Second\n  fn choose(value: Choice) -> Choice = match value\n    First() -> First()\nend\n",

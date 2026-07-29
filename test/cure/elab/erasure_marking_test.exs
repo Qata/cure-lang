@@ -61,8 +61,8 @@ defmodule Cure.Elab.ErasureMarkingTest do
     type Witness indices (x: Tag)
       WitnessOnly : Witness(Only())
     type Box indices (x: Tag)
-      Boxed : (proof :erased Witness(x)) -> (value: Tag) -> Box(x)
-    fn consume(proof :erased Witness(Only()), value: Tag) -> Tag = value
+      Boxed : (@erased proof : Witness(x)) -> (value: Tag) -> Box(x)
+    fn consume(@erased proof : Witness(Only()), value: Tag) -> Tag = value
     fn run() -> Tag = consume(WitnessOnly(), Only())
     """
 

@@ -47,8 +47,8 @@ defmodule Cure.Elab.JoinGradeTest do
     test "a linear variable used once per branch through a catch-all is ACCEPTED" do
       src =
         "mod JG\n  #{@enum}" <>
-          "  fn sink(x :linear Int) -> Int = x\n" <>
-          "  fn f(x: C) -> Int =\n    let v :linear = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n"
+          "  fn sink(@linear x : Int) -> Int = x\n" <>
+          "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n"
 
       assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
     end
@@ -56,8 +56,8 @@ defmodule Cure.Elab.JoinGradeTest do
     test "an affine variable captured by a catch-all is ACCEPTED" do
       src =
         "mod JG\n  #{@enum}" <>
-          "  fn sink(x :linear Int) -> Int = x\n" <>
-          "  fn f(x: C) -> Int =\n    let v :affine = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n"
+          "  fn sink(@linear x : Int) -> Int = x\n" <>
+          "  fn f(x: C) -> Int =\n    let @affine v : = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n"
 
       assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
     end
@@ -70,7 +70,7 @@ defmodule Cure.Elab.JoinGradeTest do
       src =
         "mod JG\n  #{@enum}" <>
           "  fn use2(a: Int, b: Int) -> Int = a\n" <>
-          "  fn f(x: C) -> Int =\n    let v :linear = 1\n    match x\n      A() -> use2(v, v)\n      _ -> use2(v, v)\nend\n"
+          "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> use2(v, v)\n      _ -> use2(v, v)\nend\n"
 
       assert {:error, {:usage_violation, %{declared: :linear, used: :unrestricted}}} =
                Program.semantic_result(Program.elaborate(src))
@@ -81,9 +81,9 @@ defmodule Cure.Elab.JoinGradeTest do
       # path where the match returns and then `add` runs. Must reject.
       src =
         "mod JG\n  #{@enum}" <>
-          "  fn sink(x :linear Int) -> Int = x\n" <>
+          "  fn sink(@linear x : Int) -> Int = x\n" <>
           "  fn add(a: Int, b: Int) -> Int = a\n" <>
-          "  fn f(x: C) -> Int =\n    let v :linear = 1\n" <>
+          "  fn f(x: C) -> Int =\n    let @linear v : = 1\n" <>
           "    let r = match x\n      A() -> sink(v)\n      _ -> sink(v)\n    add(r, sink(v))\nend\n"
 
       assert {:error, {:usage_violation, %{declared: :linear}}} = Program.semantic_result(Program.elaborate(src))
@@ -94,8 +94,8 @@ defmodule Cure.Elab.JoinGradeTest do
       # violated. (This is the same answer the per-branch form gives via `alt`.)
       src =
         "mod JG\n  #{@enum}" <>
-          "  fn sink(x :linear Int) -> Int = x\n" <>
-          "  fn f(x: C) -> Int =\n    let v :linear = 1\n    match x\n      A() -> 0\n      _ -> sink(v)\nend\n"
+          "  fn sink(@linear x : Int) -> Int = x\n" <>
+          "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> 0\n      _ -> sink(v)\nend\n"
 
       assert {:error, {:usage_violation, %{declared: :linear}}} = Program.semantic_result(Program.elaborate(src))
     end
@@ -104,7 +104,7 @@ defmodule Cure.Elab.JoinGradeTest do
   describe "the un-joined let binder's OWN grade is still enforced (red-team F1/F2)" do
     # `join_view` fires on ANY user `let g = λ …` over a `case`, not only the
     # compiler's join. The un-join inlines the join binder — so if it also skipped the
-    # let binder's OWN grade obligation, a `let g :linear = λ` applied in only some
+    # let binder's OWN grade obligation, a `let @linear g : = λ` applied in only some
     # branches would drop g's linear resource and be accepted. The un-join must only
     # fire when the let grade is unrestricted; a restricted let-grade falls back to the
     # generic `:let`, which enforces it. (Found by the un-join red-team; the
@@ -115,8 +115,8 @@ defmodule Cure.Elab.JoinGradeTest do
     test "a linear let-bound closure applied in only some branches is REJECTED" do
       src =
         "mod JG\n  #{@two_lg}" <>
-          "  fn sink(x :linear Int) -> Int = x\n" <>
-          "  fn f(x: Two) -> Int =\n    let g :linear (Int) -> Int = fn(k) -> sink(k)\n" <>
+          "  fn sink(@linear x : Int) -> Int = x\n" <>
+          "  fn f(x: Two) -> Int =\n    let @linear g : (Int) -> Int = fn(k) -> sink(k)\n" <>
           "    match x\n      T() -> 0\n      F() -> g(1)\nend\n"
 
       assert {:error, {:usage_violation, %{declared: :linear}}} = Program.semantic_result(Program.elaborate(src))
@@ -125,8 +125,8 @@ defmodule Cure.Elab.JoinGradeTest do
     test "a linear let-bound closure applied in EVERY branch is accepted" do
       src =
         "mod JG\n  #{@two_lg}" <>
-          "  fn sink(x :linear Int) -> Int = x\n" <>
-          "  fn f(x: Two) -> Int =\n    let g :linear (Int) -> Int = fn(k) -> sink(k)\n" <>
+          "  fn sink(@linear x : Int) -> Int = x\n" <>
+          "  fn f(x: Two) -> Int =\n    let @linear g : (Int) -> Int = fn(k) -> sink(k)\n" <>
           "    match x\n      T() -> g(0)\n      F() -> g(1)\nend\n"
 
       assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
@@ -135,7 +135,7 @@ defmodule Cure.Elab.JoinGradeTest do
     test "an erased let-bound closure applied at runtime is REJECTED" do
       src =
         "mod JG\n  #{@two_lg}" <>
-          "  fn f(x: Two) -> Int =\n    let g :erased (Int) -> Int = fn(k) -> k\n" <>
+          "  fn f(x: Two) -> Int =\n    let @erased g : (Int) -> Int = fn(k) -> k\n" <>
           "    match x\n      T() -> 0\n      F() -> g(1)\nend\n"
 
       assert {:error, _} = Program.semantic_result(Program.elaborate(src))
@@ -158,7 +158,7 @@ defmodule Cure.Elab.JoinGradeTest do
       src =
         "mod JG\n  #{@two_a}" <>
           "  fn add(a: Int, b: Int) -> Int = a\n" <>
-          "  fn f(x: Two) -> Int =\n    let v :linear = 1\n" <>
+          "  fn f(x: Two) -> Int =\n    let @linear v : = 1\n" <>
           "    let j : (Int) -> Int = fn(z) -> add(z, z)\n" <>
           "    match x\n      T() -> j(v)\n      F() -> j(v)\nend\n"
 
@@ -172,7 +172,7 @@ defmodule Cure.Elab.JoinGradeTest do
       src =
         "mod JG\n  #{@two_a}" <>
           "  fn dup(a: Int, b: Int) -> Int = a\n" <>
-          "  fn f(x: Two, w :affine Int) -> Int =\n" <>
+          "  fn f(x: Two, @affine w : Int) -> Int =\n" <>
           "    let j : (Int) -> Int = fn(z) -> 0\n" <>
           "    match x\n      T() -> j(dup(w, w))\n      F() -> 0\nend\n"
 
@@ -185,7 +185,7 @@ defmodule Cure.Elab.JoinGradeTest do
       # combine to `:linear` (add(:linear,:erased)) instead of `:unrestricted`.
       src =
         "mod JG\n  #{@two_a}" <>
-          "  fn f(x: Two) -> Int =\n    let v :linear = 1\n    let x2 = v\n" <>
+          "  fn f(x: Two) -> Int =\n    let @linear v : = 1\n    let x2 = v\n" <>
           "    let j : (Int) -> Int = fn(z) -> 0\n" <>
           "    match x\n      T() -> j(v)\n      F() -> x2\nend\n"
 
@@ -208,9 +208,9 @@ defmodule Cure.Elab.JoinGradeTest do
     test "a let-bound lambda applied twice per path, capturing a linear var, is REJECTED" do
       src =
         "mod JG\n  #{@two}" <>
-          "  fn sink(x :linear Int) -> Int = x\n" <>
+          "  fn sink(@linear x : Int) -> Int = x\n" <>
           "  fn add(a: Int, b: Int) -> Int = a\n" <>
-          "  fn f(x: Two) -> Int =\n    let v :linear = 1\n" <>
+          "  fn f(x: Two) -> Int =\n    let @linear v : = 1\n" <>
           "    let g : (Int) -> Int = fn(k) -> sink(v)\n" <>
           "    match x\n      T() -> add(g(1), g(2))\n      F() -> add(g(1), g(2))\nend\n"
 
@@ -225,9 +225,9 @@ defmodule Cure.Elab.JoinGradeTest do
       # unsoundness. The tight gate rejects.
       src =
         "mod JG\n  #{@two}" <>
-          "  fn asink(x :affine Int) -> Int = x\n" <>
+          "  fn asink(@affine x : Int) -> Int = x\n" <>
           "  fn add(a: Int, b: Int) -> Int = a\n" <>
-          "  fn f(x: Two) -> Int =\n    let v :affine = 1\n" <>
+          "  fn f(x: Two) -> Int =\n    let @affine v : = 1\n" <>
           "    let g : (Int) -> Int = fn(k) -> asink(v)\n" <>
           "    match x\n      T() -> add(g(1), g(2))\n      F() -> add(g(1), g(2))\nend\n"
 

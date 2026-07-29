@@ -10,10 +10,10 @@ mod Target
     MkCap : ReplyCap(r)
   type Replied = Done
   type Pair = MkPair(Replied, Replied)
-  fn reply({r: Req}, cap :linear ReplyCap(r), v: ReplyOf(r)) -> Replied =
+  fn reply({r: Req}, @linear cap : ReplyCap(r), v: ReplyOf(r)) -> Replied =
     match cap
       MkCap() -> Done
-  fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = with r
+  fn handle(r: Req, @linear cap : ReplyCap(r)) -> Replied = with r
     GetCount()  -> reply(cap, R0)
     SetName(_)  -> reply(cap, R1a)
     Ping()      -> reply(cap, R1b)

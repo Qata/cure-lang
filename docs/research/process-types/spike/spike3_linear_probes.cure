@@ -1,6 +1,6 @@
 mod LinCheckPos
-  # PROBE L0 (positive): does `:linear` on a fn binder parse AND accept a body that
+  # PROBE L0 (positive): does `` on a fn binder parse AND accept a body that
   # consumes the binder exactly once? Baseline that surface linearity works at all.
   type Box = MkBox
-  fn consume(x :linear Box) -> Box = x
+  fn consume(@linear x : Box) -> Box = x
 end

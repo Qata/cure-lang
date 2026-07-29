@@ -9,6 +9,34 @@ defmodule Cure.Compiler.ParserTest do
     ast
   end
 
+  describe "binder grade decorators" do
+    test "precede the binder and preserve external labels" do
+      ast = parse!("mod M\n  fn f(@linear label c : Box, @affine h : Handle) -> Box = c\n")
+
+      {:container, _, [{:function_def, meta, _}]} = ast
+      [{:param, linear_meta, "c"}, {:param, affine_meta, "h"}] = meta[:params]
+
+      assert linear_meta[:grade] == :linear
+      assert linear_meta[:label] == "label"
+      assert affine_meta[:grade] == :affine
+    end
+
+    test "supports graded implicit binders" do
+      ast = parse!("mod M\n  fn f({@erased n : Nat}) -> Nat = n\n")
+
+      {:container, _, [{:function_def, meta, _}]} = ast
+      [{:param, param_meta, "n"}] = meta[:params]
+      assert param_meta[:implicit]
+      assert param_meta[:grade] == :erased
+    end
+
+    test "supports graded local bindings" do
+      ast = parse!("mod M\n  fn f() -> Int =\n    let @linear c : Int = 1\n    c\n")
+
+      assert {:container, _, [{:function_def, _, [{:block, _, _}]}]} = ast
+    end
+  end
+
   # ── Literals ──────────────────────────────────────────────────────────
 
   describe "literals" do

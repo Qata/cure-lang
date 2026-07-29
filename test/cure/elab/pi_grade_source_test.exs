@@ -155,8 +155,8 @@ defmodule Cure.Elab.PiGradeSourceTest do
 
   describe "the implicit-app slot iterator handles a linear/affine explicit param" do
     # `bidir_app_slot/5` (the implicit-insertion application path, taken whenever a
-    # callee has a leading implicit `{...}`) only had clauses for :erased and
-    # :unrestricted domain grades; a :linear (or :affine) explicit param made it
+    # callee has a leading implicit `{...}`) only had @erased clauses for : and
+    # :unrestricted domain grades; @linear a : (@affine or :) explicit param made it
     # RAISE `FunctionClauseError` rather than elaborate. The plain-application path
     # (`solve_arg/3`) already treats `grade in [:unrestricted, :linear, :affine]`
     # as "consume one supplied argument"; this brings the implicit path to parity.
@@ -170,8 +170,8 @@ defmodule Cure.Elab.PiGradeSourceTest do
       src = """
       mod CallLinearImplicit
         type Box = MkBox
-        fn use_box({t: Type}, x: t, c :linear Box) -> Box = c
-        fn g(y: Int, c :linear Box) -> Box = use_box(y, c)
+        fn use_box({t: Type}, x: t, @linear c : Box) -> Box = c
+        fn g(y: Int, @linear c : Box) -> Box = use_box(y, c)
       end
       """
 
@@ -186,8 +186,8 @@ defmodule Cure.Elab.PiGradeSourceTest do
       src = """
       mod DropLinearImplicit
         type Box = MkBox
-        fn use_box({t: Type}, x: t, c :linear Box) -> Box = MkBox
-        fn g(y: Int, c :linear Box) -> Box = use_box(y, c)
+        fn use_box({t: Type}, x: t, @linear c : Box) -> Box = MkBox
+        fn g(y: Int, @linear c : Box) -> Box = use_box(y, c)
       end
       """
 
@@ -223,11 +223,11 @@ defmodule Cure.Elab.PiGradeSourceTest do
 
         type Replied = Done
 
-        fn reply({r: Req}, cap :linear ReplyCap(r), v: ReplyOf(r)) -> Replied =
+        fn reply({r: Req}, @linear cap : ReplyCap(r), v: ReplyOf(r)) -> Replied =
           match cap
             MkCap() -> Done
 
-        fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = match r
+        fn handle(r: Req, @linear cap : ReplyCap(r)) -> Replied = match r
           GetCount()  -> reply(cap, R0)
           SetName(_)  -> reply(cap, R1a)
           Ping()      -> reply(cap, R1b)

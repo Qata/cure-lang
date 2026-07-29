@@ -3,7 +3,7 @@ mod ReplyLinearSplit
   # in scope during a match (no convoy):
   #   - handle(r) -> ReplyOf(r): the per-constructor dependent reply VALUE. This is
   #     the spike1 shape (dependent return refined per branch) — already ACCEPTs.
-  #   - reply({r}, cap:linear ReplyCap(r), v: ReplyOf(r)): consume the cap linearly.
+  #   - reply({r}, @linear cap : ReplyCap(r), v: ReplyOf(r)): consume the cap linearly.
   #   - serve: reply(cap, handle(r)) with r ABSTRACT — ReplyOf(r) unifies with itself,
   #     no sibling refinement needed, cap used exactly once.
   type Reply0 = R0
@@ -20,7 +20,7 @@ mod ReplyLinearSplit
 
   type Replied = Done
 
-  fn reply({r: Req}, cap :linear ReplyCap(r), v: ReplyOf(r)) -> Replied =
+  fn reply({r: Req}, @linear cap : ReplyCap(r), v: ReplyOf(r)) -> Replied =
     match cap
       MkCap() -> Done
 
@@ -29,5 +29,5 @@ mod ReplyLinearSplit
     SetName(_)  -> R1a
     Ping()      -> R1b
 
-  fn serve(r: Req, cap :linear ReplyCap(r)) -> Replied = reply(cap, handle(r))
+  fn serve(r: Req, @linear cap : ReplyCap(r)) -> Replied = reply(cap, handle(r))
 end

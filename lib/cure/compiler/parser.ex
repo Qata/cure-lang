@@ -6426,6 +6426,8 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
     state = advance(state)
 
+    {grade_prefix, state} = parse_binder_grade_prefix(state)
+
     # Parse pattern (LHS) at high enough BP to NOT consume `=`: one above the
     # assignment operator's left binding power, read from the fixity table.
     {pattern, state} = parse_expr(state, bp_above(state, "="))
@@ -6438,7 +6440,8 @@ defmodule Cure.Compiler.Parser do
         _ -> "let binding"
       end
 
-    {grade, type_ann, state, annotation_span} = parse_binder_annotation(state, let_name, [:assign])
+    {_ignored_grade, type_ann, state, annotation_span} = parse_binder_annotation(state, let_name, [:assign])
+    grade = grade_prefix && elem(grade_prefix, 1)
 
     # A grade attaches to a SIMPLE VARIABLE binder only. A destructuring `let` lowers
     # to a `case`, whose binders take their grades from the constructor's field
@@ -8480,6 +8483,9 @@ defmodule Cure.Compiler.Parser do
       %Token{type: type} when type in [:identifier, :keyword, :star] ->
         parse_explicit_param(state)
 
+      %Token{type: :at} ->
+        parse_explicit_param(state)
+
       %Token{type: :operator, value: "**"} ->
         parse_explicit_param(state)
 
@@ -8499,113 +8505,93 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  # QTT grades (plan slice 5). A grade REPLACES the binder's colon and sits at the
-  # binding site: `c :linear Chan(Cmd)`, `{n :erased Nat}`. An absent grade means
+  # QTT grades (plan slice 5). Grades are binder decorators and sit before the
+  # complete binder (including an external label): `@linear c : Chan(Cmd)`,
+  # `{@erased n : Nat}`. An absent grade means
   # `ω`, so every existing program is unchanged.
   #
   # The grade belongs to the ARROW, not to the name and not to the type: Core spells
   # it `{:pi, g, dom, cod}` and `Conv` compares `g` as part of the Pi while `dom` is
-  # an ordinary type. `linear c` would decorate the name; `c: linear T` would claim
-  # `linear T` is a type, and Core has no modality former.
+  # an ordinary type. The decorator is parsed as part of the binder, rather than
+  # being attached as a declaration-level decorator.
   #
-  # Idris spells quantities as bare numerals (`Idris/Parser.idr:647-653`) and Cure
-  # cannot: `fn f(x: 1)` already parses with `1` as a literal type, and `?` is
-  # already the hole token, so neither `:1` nor `1?` is free. Idris has no affine
-  # grade to port a spelling from anyway. These atoms already lex as single tokens,
-  # are unambiguous after a binder name, and — being atoms, not keywords — steal no
-  # identifiers.
-  #
-  # `:unrestricted` is deliberately NOT a spelling: `ω` is written by omission, so
-  # each grade has exactly ONE surface form.
+  # `@unrestricted` is deliberately NOT a spelling: `ω` is written by omission.
   @grade_atoms [:erased, :linear, :affine]
 
-  # After a binder NAME, an ATOM token is unambiguously a grade slot — a type
-  # annotation needs a colon first (`x: :ok`), whereas the grade's fused `:name`
-  # form lexes as one atom. So `:erased/:linear/:affine` → that grade; any OTHER
-  # atom (`:bogus`, or `:unrestricted`, which has no spelling) → a NAMED
-  # `{:unknown_grade, …}` rather than a silent no-op that desyncs the param list.
-  defp parse_grade(state) do
+  # Parse the grade decorator used on parameters and local bindings. This is
+  # intentionally separate from parse_at/1: a binder decorator is part of the
+  # binder grammar, not a declaration-level decorator attached to an AST node.
+  defp parse_binder_grade_prefix(state) do
     case peek(state) do
-      %Token{type: :atom, value: g} = token when g in @grade_atoms ->
-        {:grade, g, token, advance(state)}
+      %Token{type: :at} = at_token ->
+        state = advance(state)
 
-      %Token{type: :atom, value: bad} = tok ->
-        {:unknown, bad, tok, advance(state)}
+        case peek(state) do
+          %Token{type: type, value: value} = name_token
+          when type in [:identifier, :keyword] ->
+            grade =
+              case value do
+                :erased -> :erased
+                :linear -> :linear
+                :affine -> :affine
+                "erased" -> :erased
+                "linear" -> :linear
+                "affine" -> :affine
+                _ -> nil
+              end
+
+            if grade in @grade_atoms do
+              {{:grade_prefix, grade, at_token, name_token}, advance(state)}
+            else
+              state =
+                add_error(state, {
+                  :unknown_binder_decorator,
+                  %{
+                    decorator: value,
+                    span: name_token.span,
+                    supported: @grade_atoms,
+                    line: name_token.line,
+                    column: name_token.col
+                  }
+                })
+
+              {nil, state}
+            end
+
+          %Token{} = bad_token ->
+            state =
+              add_error(state, {
+                :unknown_binder_decorator,
+                %{
+                  decorator: bad_token.value || bad_token.type,
+                  span: bad_token.span,
+                  supported: @grade_atoms,
+                  line: bad_token.line,
+                  column: bad_token.col
+                }
+              })
+
+            {nil, state}
+        end
 
       _ ->
-        {:none, state}
+        {nil, state}
     end
   end
 
-  # Tokens that cannot begin a type — after a grade, one of these means the required
-  # type is missing, so name THAT rather than let `parse_type_expr` swallow the token.
-  @non_type_tokens [:rparen, :rbrace, :rbracket, :comma, :assign, :newline, :indent, :dedent, :eof]
-
-  # A binder's annotation: `: Type`, or the graded `:g Type`. `name` labels the binder
+  # A binder's annotation: `: Type`. `name` labels the binder
   # for diagnostics.
-  #
-  # `stop_on` names the tokens that may legally FOLLOW a grade in place of a type. A
-  # parameter has none, so `c :linear` is an error — there is nothing to grade. A
-  # `let` stops on `=`, because Idris's `letBinder` leaves the type optional even when
-  # graded (`Idris/Parser.idr:821-824`) and `let_inferred/8` will synthesise it.
-  defp parse_binder_annotation(state, name, stop_on \\ []) do
+  # `stop_on` allows an inferred local binding to omit its type before `=`.
+  defp parse_binder_annotation(state, _name, _stop_on \\ []) do
     annotation_start = peek(state)
 
-    case parse_grade(state) do
-      {:none, state} ->
-        case peek(state) do
-          %Token{type: :colon} ->
-            {type_ast, state} = parse_type_expr(advance(state))
-            {nil, type_ast, state, annotation_span(annotation_start, type_ast, state)}
+    case peek(state) do
+      %Token{type: :colon} ->
+        {type_ast, state} = parse_type_expr(advance(state))
+        {nil, type_ast, state, annotation_span(annotation_start, type_ast, state)}
 
-          _ ->
-            {nil, nil, state, nil}
-        end
-
-      {:unknown, bad, tok, state} ->
-        # Consume the stray atom (already advanced past it) and name it, so the error
-        # points at the grade rather than cascading onto the next real token.
-        state =
-          if peek(state).type in @non_type_tokens do
-            state
-          else
-            {_discarded_type, state} = parse_type_expr(state)
-            state
-          end
-
-        {nil, nil,
-         add_error(state, {
-           :unknown_grade,
-           %{grade: bad, span: tok.span, supported: @grade_atoms, line: tok.line, column: tok.col}
-         }), tok.span}
-
-      {:grade, grade, grade_token, state} ->
-        grade_span = through_spans(annotation_start.span, grade_token.span) || grade_token.span
-
-        cond do
-          peek(state).type in stop_on ->
-            {grade, nil, state, grade_span}
-
-          peek(state).type in @non_type_tokens ->
-            tok = peek(state)
-
-            {grade, nil,
-             add_error(state, {
-               :grade_requires_type,
-               %{
-                 name: name,
-                 grade: grade,
-                 span: grade_span,
-                 observed_span: tok.span,
-                 line: tok.line,
-                 column: tok.col
-               }
-             }), grade_span}
-
-          true ->
-            {type_ast, state} = parse_type_expr(state)
-            {grade, type_ast, state, annotation_span(annotation_start, type_ast, state)}
-        end
+      _ ->
+        {nil, nil, state, nil}
     end
   end
 
@@ -8629,6 +8615,7 @@ defmodule Cure.Compiler.Parser do
   defp parse_implicit_param(state) do
     start_token = peek(state)
     state = advance(state)
+    {grade_prefix, state} = parse_binder_grade_prefix(state)
     name_token = peek(state)
 
     {name, state} =
@@ -8654,7 +8641,15 @@ defmodule Cure.Compiler.Parser do
           {"_invalid_implicit_parameter", state}
       end
 
-    {grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
+    {_ignored_grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
+    grade = grade_prefix && elem(grade_prefix, 1)
+
+    state =
+      if grade && is_nil(type_ast) do
+        add_error(state, {:grade_requires_type, %{name: name, grade: grade, span: elem(grade_prefix, 3).span}})
+      else
+        state
+      end
 
     {state, close_token} =
       expect_container_close(state, :rbrace, :implicit_parameter, start_token, [type_ast], false, %{
@@ -8677,7 +8672,8 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp parse_explicit_param(state) do
-    start_token = peek(state)
+    {grade_prefix, state} = parse_binder_grade_prefix(state)
+    start_token = (grade_prefix && elem(grade_prefix, 2)) || peek(state)
 
     # Check for variadic: *name or **name
     {kind, marker_span, state} =
@@ -8746,7 +8742,15 @@ defmodule Cure.Compiler.Parser do
       end
 
     # Optional type annotation `: Type`, or a graded one `:g Type`.
-    {grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
+    {_ignored_grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
+    grade = grade_prefix && elem(grade_prefix, 1)
+
+    state =
+      if grade && is_nil(type_ast) do
+        add_error(state, {:grade_requires_type, %{name: name, grade: grade, span: elem(grade_prefix, 3).span}})
+      else
+        state
+      end
 
     # Optional default value: = expr
     {default, assign_token, state} =
@@ -9149,29 +9153,7 @@ defmodule Cure.Compiler.Parser do
         {[], state}
 
       _ ->
-        token = peek(state)
-
-        {param, state} =
-          case token do
-            %Token{type: :identifier} ->
-              meta = put_token_source_info([], token, :name)
-              {{:param, meta, to_string(token.value)}, advance(state)}
-
-            %Token{} ->
-              error =
-                {:invalid_parameter_name,
-                 %{
-                   lambda: true,
-                   observed: token.value || token.type,
-                   token_type: token.type,
-                   span: token.span,
-                   line: token.line,
-                   column: token.col
-                 }}
-
-              placeholder = {:param, [invalid: true], "_invalid_lambda_parameter"}
-              {placeholder, state |> add_error(error) |> advance()}
-          end
+        {param, state} = parse_explicit_param(state)
 
         case peek(state) do
           %Token{type: :comma} ->
@@ -10322,27 +10304,32 @@ defmodule Cure.Compiler.Parser do
   # The named form yields a canonical `:named_dom` node; everything else
   # falls through to `parse_type_atom` byte-for-byte (unnamed args unchanged).
   defp parse_ctor_dom(state) do
-    la2 = peek_at(state, 2)
+    la2 =
+      case peek_at(state, 1) do
+        %Token{type: :at} = at -> at
+        _ -> peek_at(state, 2)
+      end
 
     case {peek(state), la2} do
-      {%Token{type: :lparen}, %Token{type: kind, value: value}}
-      when kind == :colon or (kind == :atom and value in @grade_atoms) ->
+      {%Token{type: :lparen}, %Token{type: kind}}
+      when kind == :colon or kind == :at ->
         open_token = peek(state)
         state = advance(state)
+        {grade_prefix, state} = parse_binder_grade_prefix(state)
         name_token = peek(state)
         name = to_string(name_token.value)
         state = advance(state)
 
         {grade, state} =
-          case parse_grade(state) do
-            {:grade, grade, _grade_token, next} ->
-              {grade, next}
+          case grade_prefix do
+            {:grade_prefix, prefix_grade, _at_token, _grade_token} ->
+              case expect_token(state, :colon) do
+                {:ok, _colon, next} -> {prefix_grade, next}
+                {:error, next} -> {prefix_grade, next}
+              end
 
-            {:unknown, bad, tok, next} ->
-              {nil, add_error(next, {:unknown_grade, bad, tok.line, tok.col})}
-
-            {:none, next} ->
-              case expect_token(next, :colon) do
+            nil ->
+              case expect_token(state, :colon) do
                 {:ok, _token, next} -> {nil, next}
                 {:error, next} -> {nil, next}
               end

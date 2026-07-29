@@ -129,11 +129,11 @@ Every binder carries a usage grade from the `{0, 1, ω}` semiring (with
 `affine` built in). Grades on parameters and `let`:
 
 ```cure
-fn f(c :linear Box) -> Widget = let x = c in consume(x)
+fn f(@linear c : Box) -> Widget = let x = c in consume(x)
 ```
 
 `0` = erased (compile-time only, erased from the BEAM output),
-`1`/`:linear` = used exactly once, `ω` = unrestricted. The kernel
+`@linear` = used exactly once, `ω` = unrestricted. The kernel
 rejects returning, scrutinising, or re-applying an erased binder.
 
 ---

@@ -602,21 +602,21 @@ mod Std.Regex
     EncodesUnit : Encodes(UnitC, Cons(UnitEvidence(), rest), rest)
     EncodesCharacter : (char: Char) -> Encodes(CharC, Cons(CharacterEvidence(char), rest), rest)
     EncodesString : (value: String) -> Encodes(StringC, Cons(StringEvidence(value), rest), rest)
-    EncodesPair : (right :erased Encodes(right_shape, pair_evidence, left_evidence)) -> (left :erased Encodes(left_shape, left_evidence, rest)) -> Encodes(PairC(left_shape, right_shape), Cons(PairEvidence(), pair_evidence), rest)
-    EncodesLeft : (branch :erased Encodes(left, branch_evidence, rest)) -> Encodes(ChoiceC(left, right), Cons(LeftEvidence(), branch_evidence), rest)
-    EncodesRight : (branch :erased Encodes(right, branch_evidence, rest)) -> Encodes(ChoiceC(left, right), Cons(RightEvidence(), branch_evidence), rest)
-    EncodesList : (items :erased EncodesMany(inner, items_evidence, rest)) -> Encodes(ListC(inner), Cons(EndListEvidence(), items_evidence), rest)
+    EncodesPair : (@erased right : Encodes(right_shape, pair_evidence, left_evidence)) -> (@erased left : Encodes(left_shape, left_evidence, rest)) -> Encodes(PairC(left_shape, right_shape), Cons(PairEvidence(), pair_evidence), rest)
+    EncodesLeft : (@erased branch : Encodes(left, branch_evidence, rest)) -> Encodes(ChoiceC(left, right), Cons(LeftEvidence(), branch_evidence), rest)
+    EncodesRight : (@erased branch : Encodes(right, branch_evidence, rest)) -> Encodes(ChoiceC(left, right), Cons(RightEvidence(), branch_evidence), rest)
+    EncodesList : (@erased items : EncodesMany(inner, items_evidence, rest)) -> Encodes(ListC(inner), Cons(EndListEvidence(), items_evidence), rest)
 
   type EncodesMany indices (shape: ShapeCode, input: List(Evidence), rest: List(Evidence))
     EncodesManyEmpty : EncodesMany(shape, Cons(BeginListEvidence(), rest), rest)
-    EncodesManyItem : (item :erased Encodes(shape, item_evidence, prior_evidence)) -> (prior :erased EncodesMany(shape, prior_evidence, rest)) -> EncodesMany(shape, item_evidence, rest)
+    EncodesManyItem : (@erased item : Encodes(shape, item_evidence, prior_evidence)) -> (@erased prior : EncodesMany(shape, prior_evidence, rest)) -> EncodesMany(shape, item_evidence, rest)
 
   ## A successful decoding existentially exposes the evidence prefix consumed
   ## for one Pattern and proves that the untouched suffix reconstructs the
   ## original evidence stream. This is the proof-producing boundary between
   ## the unindexed VM representation and total, shape-indexed extraction.
   type EvidenceDecoding indices (shape: ShapeCode, input: List(Evidence))
-    EvidenceDecoded : (rest: List(Evidence)) -> (value: Sem(shape)) -> (encoding :erased Encodes(shape, input, rest)) -> EvidenceDecoding(shape, input)
+    EvidenceDecoded : (rest: List(Evidence)) -> (value: Sem(shape)) -> (@erased encoding : Encodes(shape, input, rest)) -> EvidenceDecoding(shape, input)
 
   fn decode_atomic_evidence({shape: ShapeCode}, pattern: Pattern(shape), evidence: List(Evidence)) -> Option(EvidenceDecoding(shape, evidence)) = match pattern
     PatternEmpty() -> match evidence
@@ -634,7 +634,7 @@ mod Std.Regex
     _ -> None()
 
   type ManyEvidenceDecoding indices (shape: ShapeCode, input: List(Evidence))
-    ManyEvidenceDecoded : (rest: List(Evidence)) -> (values: List(Sem(shape))) -> (encoding :erased EncodesMany(shape, input, rest)) -> ManyEvidenceDecoding(shape, input)
+    ManyEvidenceDecoded : (rest: List(Evidence)) -> (values: List(Sem(shape))) -> (@erased encoding : EncodesMany(shape, input, rest)) -> ManyEvidenceDecoding(shape, input)
 
   fn decode_many_evidence({shape: ShapeCode}, pattern: Pattern(shape), evidence: List(Evidence)) -> Option(ManyEvidenceDecoding(shape, evidence)) = with evidence
     [] -> None()
@@ -648,7 +648,7 @@ mod Std.Regex
   fn decode_many_item_tail({shape: ShapeCode}, pattern: Pattern(shape), {evidence: List(Evidence)}, decoded: EvidenceDecoding(shape, evidence)) -> Option(ManyEvidenceDecoding(shape, evidence)) = match decoded
     EvidenceDecoded(after_item, item_value, item) -> decode_many_prior(pattern, item_value, item, decode_many_evidence(pattern, after_item))
 
-  fn decode_many_prior({shape: ShapeCode}, pattern: Pattern(shape), {evidence: List(Evidence)}, {after_item: List(Evidence)}, item_value: Sem(shape), item :erased Encodes(shape, evidence, after_item), decoded: Option(ManyEvidenceDecoding(shape, after_item))) -> Option(ManyEvidenceDecoding(shape, evidence)) = match decoded
+  fn decode_many_prior({shape: ShapeCode}, pattern: Pattern(shape), {evidence: List(Evidence)}, {after_item: List(Evidence)}, item_value: Sem(shape), @erased item : Encodes(shape, evidence, after_item), decoded: Option(ManyEvidenceDecoding(shape, after_item))) -> Option(ManyEvidenceDecoding(shape, evidence)) = match decoded
     None() -> None()
     Some(ManyEvidenceDecoded(final_rest, prior_values, prior)) -> Some(ManyEvidenceDecoded(final_rest, [item_value | prior_values], EncodesManyItem(item, prior)))
 

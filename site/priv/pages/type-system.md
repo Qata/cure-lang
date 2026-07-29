@@ -126,8 +126,8 @@ does not turn `Any` into an escape hatch.
 Each binder carries a usage grade in `{0, 1, ω}`:
 
 - `0` — compile-time only and erased;
-- `1` / `:linear` — used exactly once;
-- `:affine` — used at most once;
+- `@linear` — used exactly once;
+- `@affine` — used at most once;
 - `ω` — unrestricted.
 
 The kernel rejects returning, scrutinizing, or reusing an erased value at

@@ -166,7 +166,7 @@ Full quantitative type theory grades `{0, 1, affine, ω}` on Core binders
 Semantics: closures scale outer usage by ω; match branches combine by
 per-branch agreement, grade-aware (an affine binder may be dropped in one
 branch and used in another — deliberately more permissive than Idris). Surface:
-grade replaces the colon (`c :linear Chan(Cmd)`); numeral spellings impossible
+grades are decorators before the complete binder (`@linear c : Chan(Cmd)`); numeral spellings impossible
 (collide with literal types/holes); a graded `let` must produce a real `:let`
 Core node or error `{:graded_let_needs_annotation}`; graded destructuring is a
 parse error. Stored Π types are rebuilt from the demoted quantity vector and a

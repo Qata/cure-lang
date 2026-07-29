@@ -33,7 +33,7 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
         MkCap : ReplyCap(r)
       type Replied = Done
       type Pair = MkPair(Replied, Replied)
-      fn reply({r: Req}, cap :linear ReplyCap(r), v: ReplyOf(r)) -> Replied =
+      fn reply({r: Req}, @linear cap : ReplyCap(r), v: ReplyOf(r)) -> Replied =
         match cap
           MkCap() -> Done
     #{defs}
@@ -48,7 +48,7 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
 
   test "branching handler consuming the linear capability once per path is accepted" do
     defs = """
-      fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = with r
+      fn handle(r: Req, @linear cap : ReplyCap(r)) -> Replied = with r
         GetCount()  -> reply(cap, R0)
         SetName(_)  -> reply(cap, R1a)
         Ping()      -> reply(cap, R1b)
@@ -59,7 +59,7 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
 
   test "a branch that DROPS the linear capability is rejected" do
     defs = """
-      fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = with r
+      fn handle(r: Req, @linear cap : ReplyCap(r)) -> Replied = with r
         GetCount()  -> Done
         SetName(_)  -> reply(cap, R1a)
         Ping()      -> reply(cap, R1b)
@@ -70,7 +70,7 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
 
   test "a branch that DUPLICATES the linear capability is rejected" do
     defs = """
-      fn handle(r: Req, cap :linear ReplyCap(r)) -> Pair = with r
+      fn handle(r: Req, @linear cap : ReplyCap(r)) -> Pair = with r
         GetCount()  -> MkPair(reply(cap, R0), reply(cap, R0))
         SetName(_)  -> MkPair(reply(cap, R1a), Done)
         Ping()      -> MkPair(reply(cap, R1b), Done)
@@ -93,11 +93,11 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
         type Cap2(r: Req) indices ()
           MkC2 : Cap2(r)
         type Replied = Done
-        fn use_both({r: Req}, c1 :linear Cap1(r), c2 :linear Cap2(r), v: ReplyOf(r)) -> Replied =
+        fn use_both({r: Req}, @linear c1 : Cap1(r), @linear c2 : Cap2(r), v: ReplyOf(r)) -> Replied =
           match c1
             MkC1() -> match c2
               MkC2() -> Done
-        fn use1({r: Req}, c1 :linear Cap1(r), v: ReplyOf(r)) -> Replied = match c1
+        fn use1({r: Req}, @linear c1 : Cap1(r), v: ReplyOf(r)) -> Replied = match c1
           MkC1() -> Done
       #{handle}
       end
@@ -111,7 +111,7 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
 
     test "two linear siblings each consumed once per path is accepted" do
       handle = """
-        fn handle(r: Req, c1 :linear Cap1(r), c2 :linear Cap2(r)) -> Replied = with r
+        fn handle(r: Req, @linear c1 : Cap1(r), @linear c2 : Cap2(r)) -> Replied = with r
           A() -> use_both(c1, c2, R0)
           B() -> use_both(c1, c2, R0)
       """
@@ -121,7 +121,7 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
 
     test "dropping the second sibling in a branch is rejected" do
       handle = """
-        fn handle(r: Req, c1 :linear Cap1(r), c2 :linear Cap2(r)) -> Replied = with r
+        fn handle(r: Req, @linear c1 : Cap1(r), @linear c2 : Cap2(r)) -> Replied = with r
           A() -> use1(c1, R0)
           B() -> use_both(c1, c2, R0)
       """
@@ -131,7 +131,7 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
 
     test "duplicating a sibling in a branch is rejected" do
       handle = """
-        fn handle(r: Req, c1 :linear Cap1(r), c2 :linear Cap2(r)) -> Replied = with r
+        fn handle(r: Req, @linear c1 : Cap1(r), @linear c2 : Cap2(r)) -> Replied = with r
           A() -> let x = use1(c1, R0) in use_both(c1, c2, R0)
           B() -> use_both(c1, c2, R0)
       """
@@ -146,7 +146,7 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
     # ergonomic OTP handler needs no `with`. Linearity is still enforced.
     test "plain-match handler consuming cap once per path is accepted" do
       defs = """
-        fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = match r
+        fn handle(r: Req, @linear cap : ReplyCap(r)) -> Replied = match r
           GetCount()  -> reply(cap, R0)
           SetName(_)  -> reply(cap, R1a)
           Ping()      -> reply(cap, R1b)
@@ -157,7 +157,7 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
 
     test "plain-match: a branch that DROPS the capability is rejected" do
       defs = """
-        fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = match r
+        fn handle(r: Req, @linear cap : ReplyCap(r)) -> Replied = match r
           GetCount()  -> Done
           SetName(_)  -> reply(cap, R1a)
           Ping()      -> reply(cap, R1b)
@@ -168,7 +168,7 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
 
     test "plain-match: a branch that DUPLICATES the capability is rejected" do
       defs = """
-        fn handle(r: Req, cap :linear ReplyCap(r)) -> Pair = match r
+        fn handle(r: Req, @linear cap : ReplyCap(r)) -> Pair = match r
           GetCount()  -> MkPair(reply(cap, R0), reply(cap, R0))
           SetName(_)  -> MkPair(reply(cap, R1a), Done)
           Ping()      -> MkPair(reply(cap, R1b), Done)

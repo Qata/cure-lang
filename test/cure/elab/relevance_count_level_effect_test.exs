@@ -36,7 +36,7 @@ defmodule Cure.Elab.RelevanceCountLevelEffectTest do
   @effect_preamble """
   mod CA
     @extern(:erlang, :display, 1)
-    fn lsink(v :linear Int) -> Effect(Int)
+    fn lsink(@linear v : Int) -> Effect(Int)
     type Two = T | F
   """
 
@@ -46,7 +46,7 @@ defmodule Cure.Elab.RelevanceCountLevelEffectTest do
       src =
         @effect_preamble <>
           """
-            fn f(x: Two, n :affine Int) -> Effect(Int) =
+            fn f(x: Two, @affine n : Int) -> Effect(Int) =
               let k : (Int) -> Effect(Int) = fn(y) -> lsink(n)
               match x
                 T() ->
@@ -64,9 +64,9 @@ defmodule Cure.Elab.RelevanceCountLevelEffectTest do
       # un-join, and ω-scales the closure. Identical meaning; opposite verdict, before the fix.
       src = """
       mod CP
-        fn psink(v :linear Int) -> Int = v
+        fn psink(@linear v : Int) -> Int = v
         type Two = T | F
-        fn h(x: Two, n :affine Int) -> Int =
+        fn h(x: Two, @affine n : Int) -> Int =
           let k : (Int) -> Int = fn(y) -> psink(n)
           match x
             T() ->
@@ -86,7 +86,7 @@ defmodule Cure.Elab.RelevanceCountLevelEffectTest do
       src =
         @effect_preamble <>
           """
-            fn g(x: Two, n :affine Int) -> Effect(Int) =
+            fn g(x: Two, @affine n : Int) -> Effect(Int) =
               let k : (Int) -> Effect(Int) = fn(y) -> lsink(n)
               match x
                 T() -> k(0)

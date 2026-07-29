@@ -14,7 +14,7 @@ Each was pushed at the elaborator with `Cure.Elab.Program.elaborate/1`.
 |-------|------|--------|---------------------|
 | (a) large elim `ReplyOf : Req -> Type` | `spike1`, `spike2` | ACCEPT | Type-valued match on a user ADT works, incl. a ctor with a field and stdlib Int/Atom/String replies. (Already regression-tested by `test/oracle/largeelim/le01`.) |
 | (b) dependent return `handle(r) -> ReplyOf(r)` | `spike1`, `spike2`, `spike7_return_control` | ACCEPT | Each branch body is checked against `ReplyOf` reduced *after* the scrutinee refines. The **return/motive** refines per branch. |
-| linear surface grade, consume-once | `spike3` | ACCEPT | `c :linear T` on a fn binder parses and accepts a once-consuming body. |
+| linear surface grade, consume-once | `spike3` | ACCEPT | ` c : T` on a fn binder parses and accepts a once-consuming body. |
 | linear neg-controls (drop / dup) | `spike3_neg_drop`, `spike3_neg_dup` | REJECT ✓ | `:usage_violation` — dropping (`used: :erased`) and duplicating (`used: :unrestricted`) a linear binder are both caught. |
 | linear usage JOINED across branches | `spike4` | ACCEPT | A linear binder used once *per branch* of a match on another scrutinee = once total. QTT joins (max), does not sum. |
 | linear one-branch-drops | `spike4_neg_branch_drop` | REJECT ✓ | A path that forgets to consume is ill-typed — exactly "consumed on every path". |

@@ -96,8 +96,8 @@ checked rather than trusted.
 Binders carry grades from `{0, 1, ω}`, with affine usage available:
 
 - `0` values are compile-time-only;
-- `1` / `:linear` values are consumed exactly once;
-- `:affine` values are consumed at most once;
+- `@linear` values are consumed exactly once;
+- `@affine` values are consumed at most once;
 - `ω` values are unrestricted.
 
 The kernel rejects returning, scrutinizing, or reusing erased data at runtime.

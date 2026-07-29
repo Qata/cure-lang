@@ -2,8 +2,8 @@ defmodule Cure.Elab.GradedLetTest do
   @moduledoc """
   Slice 5b: QTT grades on `let`.
 
-      let c :linear = mk()            -- rhs infers: no ascription needed
-      let c :linear Chan(Cmd) = e     -- rhs is check-only: ascription REQUIRED
+      let @linear c : = mk()            -- rhs infers: no ascription needed
+      let @linear c : Chan(Cmd) = e     -- rhs is check-only: ascription REQUIRED
 
   Idris's `letBinder` is `multiplicity >> pat >> option (":" type) >> "=" >> val`
   (`Idris/Parser.idr:821-824`), so the type stays **optional even when graded**. The
@@ -38,7 +38,7 @@ defmodule Cure.Elab.GradedLetTest do
   # `mk/0` is inferable; `sink/1` consumes linearly; `use2/2` consumes at omega.
   @preamble "mod L\n" <>
               "  fn mk() -> Int = 1\n" <>
-              "  fn sink(x :linear Int) -> Int = x\n" <>
+              "  fn sink(@linear x : Int) -> Int = x\n" <>
               "  fn use2(a: Int, b: Int) -> Int = a\n"
 
   defp elab(body),
@@ -69,22 +69,24 @@ defmodule Cure.Elab.GradedLetTest do
 
   describe "the parser records a grade on a let binder" do
     test "a graded let needs no type when the rhs will infer" do
-      meta = assignment_metas(@preamble <> "  fn f() -> Int =\n    let c :linear = mk()\n    c\nend\n") |> List.first()
+      meta =
+        assignment_metas(@preamble <> "  fn f() -> Int =\n    let @linear c : = mk()\n    c\nend\n") |> List.first()
+
       assert Keyword.get(meta, :grade) == :linear
       refute Keyword.has_key?(meta, :type_annotation)
     end
 
     test "a graded let may carry a type as well" do
       meta =
-        assignment_metas(@preamble <> "  fn f() -> Int =\n    let c :linear Int = mk()\n    c\nend\n") |> List.first()
+        assignment_metas(@preamble <> "  fn f() -> Int =\n    let @linear c : Int = mk()\n    c\nend\n") |> List.first()
 
       assert Keyword.get(meta, :grade) == :linear
       assert Keyword.has_key?(meta, :type_annotation)
     end
 
     test "affine and erased are spellable too" do
-      assert :affine = let_grade(@preamble <> "  fn f() -> Int =\n    let c :affine = mk()\n    0\nend\n")
-      assert :erased = let_grade(@preamble <> "  fn f() -> Int =\n    let c :erased = mk()\n    0\nend\n")
+      assert :affine = let_grade(@preamble <> "  fn f() -> Int =\n    let @affine c : = mk()\n    0\nend\n")
+      assert :erased = let_grade(@preamble <> "  fn f() -> Int =\n    let @erased c : = mk()\n    0\nend\n")
     end
 
     test "an ungraded let records no grade — absent means omega" do
@@ -106,12 +108,12 @@ defmodule Cure.Elab.GradedLetTest do
     test "a graded DESTRUCTURING let is a parse error, not a dropped annotation" do
       # A destructuring `let` becomes a `case`; its binders take their grades from the
       # constructor's field quantities, so there is no binder for this grade.
-      src = "mod L\n  fn f(xs: List(Int)) -> Int =\n    let [h | _t] :linear = xs\n    h\nend\n"
+      src = "mod L\n  fn f(xs: List(Int)) -> Int =\n    let @linear [h | _t] = xs\n    h\nend\n"
       assert {:error, _} = Compiler.parse_source(src)
     end
 
     test "a graded destructuring let labels the pattern and its grade" do
-      src = "mod L\n  fn f(xs: List(Int)) -> Int =\n    let [h | _t] :linear = xs\n    h\nend\n"
+      src = "mod L\n  fn f(xs: List(Int)) -> Int =\n    let @linear [h | _t] = xs\n    h\nend\n"
 
       assert {:error, {:parse_error, [{:graded_let_requires_variable, details}]}} =
                Compiler.parse_source(src, file: "graded_let.cure")
@@ -139,7 +141,7 @@ defmodule Cure.Elab.GradedLetTest do
                or destructured bindings.
 
                at graded_let.cure:3:9
-               3 |     let [h | _t] :linear = xs
+               3 |     let @linear [h | _t] = xs
                  |         ^^^^^^^^ ------- this pattern is not a single variable binding; this grade applies to the binding
 
                Hint: Bind the value to one graded variable, then destructure it in a separate `let`
@@ -171,7 +173,7 @@ defmodule Cure.Elab.GradedLetTest do
 
   describe "the grade reaches the Core :let binder" do
     test "a linear let builds {:let, :linear, …}" do
-      assert {:ok, env} = elab("    let c :linear = mk()\n    sink(c)\n")
+      assert {:ok, env} = elab("    let @linear c : = mk()\n    sink(c)\n")
       assert [{:let, :linear, _ty, _val, _body}] = lets(env, :f)
     end
 
@@ -183,26 +185,26 @@ defmodule Cure.Elab.GradedLetTest do
 
   describe "the usage check enforces a let's declared grade" do
     test "a linear let consumed exactly once by a linear position is accepted" do
-      assert {:ok, _} = elab("    let c :linear = mk()\n    sink(c)\n")
+      assert {:ok, _} = elab("    let @linear c : = mk()\n    sink(c)\n")
     end
 
     test "a linear let used zero times is REJECTED" do
       assert {:error, {:usage_violation, %{kind: :let, declared: :linear, used: :erased}}} =
-               elab("    let c :linear = mk()\n    0\n")
+               elab("    let @linear c : = mk()\n    0\n")
     end
 
     test "a linear let used twice is REJECTED" do
       assert {:error, {:usage_violation, %{kind: :let, declared: :linear, used: :unrestricted}}} =
-               elab("    let c :linear = mk()\n    use2(c, c)\n")
+               elab("    let @linear c : = mk()\n    use2(c, c)\n")
     end
 
     test "a linear let handed to an omega position is REJECTED" do
       assert {:error, {:usage_violation, %{kind: :let, declared: :linear, used: :unrestricted}}} =
-               elab("    let c :linear = mk()\n    use2(c, 0)\n")
+               elab("    let @linear c : = mk()\n    use2(c, 0)\n")
     end
 
     test "an affine let used zero times is ACCEPTED" do
-      assert {:ok, _} = elab("    let c :affine = mk()\n    0\n")
+      assert {:ok, _} = elab("    let @affine c : = mk()\n    0\n")
     end
   end
 
@@ -216,16 +218,16 @@ defmodule Cure.Elab.GradedLetTest do
     # runtime; the lie is in the annotation, not in erasure.
     test "returning an erased let binder is REJECTED" do
       assert {:error, {:erased_used_relevantly, %{site: :returned}}} =
-               elab("    let c :erased = mk()\n    c\n")
+               elab("    let @erased c : = mk()\n    c\n")
     end
 
     test "passing an erased let binder in a present position is REJECTED" do
       assert {:error, {:erased_used_relevantly, %{site: :present_arg}}} =
-               elab("    let c :erased = mk()\n    use2(c, 0)\n")
+               elab("    let @erased c : = mk()\n    use2(c, 0)\n")
     end
 
     test "an unused erased let binder is fine" do
-      assert {:ok, _} = elab("    let c :erased = mk()\n    0\n")
+      assert {:ok, _} = elab("    let @erased c : = mk()\n    0\n")
     end
 
     test "an erased LAMBDA binder is policed the same way" do
@@ -252,8 +254,8 @@ defmodule Cure.Elab.GradedLetTest do
     test "a graded let with a non-inferable rhs is REJECTED, not silently substituted" do
       src =
         "mod L\n" <>
-          "  fn ap(g :linear (Int) -> Int, n: Int) -> Int = g(n)\n" <>
-          "  fn f(n: Int) -> Int =\n    let h :linear = #{@lam}\n    ap(h, n)\nend\n"
+          "  fn ap(@linear g : (Int) -> Int, n: Int) -> Int = g(n)\n" <>
+          "  fn f(n: Int) -> Int =\n    let @linear h : = #{@lam}\n    ap(h, n)\nend\n"
 
       assert {:error, {:source_context, {:graded_let_needs_annotation, %{name: "h"}}, _}} =
                Program.elaborate(src)
@@ -262,8 +264,8 @@ defmodule Cure.Elab.GradedLetTest do
     test "ascribing it makes the same program work, with the grade preserved" do
       src =
         "mod L\n" <>
-          "  fn ap(g :linear (Int) -> Int, n: Int) -> Int = g(n)\n" <>
-          "  fn f(n: Int) -> Int =\n    let h :linear (Int) -> Int = #{@lam}\n    ap(h, n)\nend\n"
+          "  fn ap(@linear g : (Int) -> Int, n: Int) -> Int = g(n)\n" <>
+          "  fn f(n: Int) -> Int =\n    let @linear h : (Int) -> Int = #{@lam}\n    ap(h, n)\nend\n"
 
       assert {:ok, env} = Program.elaborate(src)
       assert [{:let, :linear, _, _, _}] = lets(env, :f)

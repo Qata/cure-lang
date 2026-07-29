@@ -9,13 +9,13 @@ mod Ob1TwoDrop
   type Cap2(r: Req) indices ()
     MkC2 : Cap2(r)
   type Replied = Done
-  fn use_both({r: Req}, c1 :linear Cap1(r), c2 :linear Cap2(r), v: ReplyOf(r)) -> Replied =
+  fn use_both({r: Req}, @linear c1 : Cap1(r), @linear c2 : Cap2(r), v: ReplyOf(r)) -> Replied =
     match c1
       MkC1() -> match c2
         MkC2() -> Done
-  fn use1({r: Req}, c1 :linear Cap1(r), v: ReplyOf(r)) -> Replied = match c1
+  fn use1({r: Req}, @linear c1 : Cap1(r), v: ReplyOf(r)) -> Replied = match c1
     MkC1() -> Done
-  fn handle(r: Req, c1 :linear Cap1(r), c2 :linear Cap2(r)) -> Replied = with r
+  fn handle(r: Req, @linear c1 : Cap1(r), @linear c2 : Cap2(r)) -> Replied = with r
     A() -> use1(c1, R0)
     B() -> use_both(c1, c2, R0)
 end

@@ -5,7 +5,7 @@ mod LinBranch
   # an obligation-(1) handler: reply exactly once on every path.
   type Box = MkBox
   type Sel = A | B
-  fn pick(s: Sel, x :linear Box) -> Box = match s
+  fn pick(s: Sel, @linear x : Box) -> Box = match s
     A() -> x
     B() -> x
 end

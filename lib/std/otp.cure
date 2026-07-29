@@ -422,7 +422,7 @@ mod Std.Otp
 
   ## Send one reply through a callback's linear `from` capability. Generated
   ## actor callbacks use this direct operation and return `noreply`.
-  fn reply({r: Type}, from :linear Reply(r), value: r) -> Effect(Unit) =
+  fn reply({r: Type}, @linear from : Reply(r), value: r) -> Effect(Unit) =
     let answered = raw_reply(from, value)
     ()
 

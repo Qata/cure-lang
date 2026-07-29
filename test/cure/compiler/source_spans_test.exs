@@ -78,7 +78,7 @@ defmodule Cure.Compiler.SourceSpansTest do
   end
 
   test "parameter source info owns the authored annotation range" do
-    source = "fn answer({value: Int}, count :linear Nat) -> Int = count\n"
+    source = "fn answer({value: Int}, @linear count : Nat) -> Int = count\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "params.cure", emit_events: false)
     assert {:ok, ast} = Parser.parse(tokens, file: "params.cure", emit_events: false, prelude_macros: false)
 
@@ -86,7 +86,7 @@ defmodule Cure.Compiler.SourceSpansTest do
     [{:param, implicit_meta, "value"}, {:param, explicit_meta, "count"}] = Keyword.fetch!(meta, :params)
 
     assert slice(source, Metadata.source_info(implicit_meta).annotation) == ": Int"
-    assert slice(source, Metadata.source_info(explicit_meta).annotation) == ":linear Nat"
+    assert slice(source, Metadata.source_info(explicit_meta).annotation) == ": Nat"
   end
 
   test "all parameter forms own binder, annotation, initializer, and whole ranges" do

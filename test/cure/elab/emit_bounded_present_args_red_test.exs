@@ -30,7 +30,7 @@ defmodule Cure.Elab.EmitBoundedPresentArgsRedTest do
   alias Cure.Core.{Env, Grade, Inductive}
   alias Cure.Elab.Emit
 
-  test "a :linear-graded single-field ctor routed through the Bounded path keeps its value" do
+  test "@linear a :-graded single-field ctor routed through the Bounded path keeps its value" do
     dummy_type = {:type, 0}
 
     # A single constructor, `Nxt`, whose one field is `:linear` (present).

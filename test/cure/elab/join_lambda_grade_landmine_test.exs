@@ -29,7 +29,7 @@ defmodule Cure.Elab.JoinLambdaGradeLandmineTest do
     ])
   end
 
-  # `f(v :linear Nat)` whose body is:
+  # `f(@linear v : Nat)` whose body is:
   #   let x2 = v                          -- v used once (level 0)
   #   let j = (λ z:erased. Z())           -- a continuation that IGNORES z
   #   match x2                            -- (an ungraded Nat scrutinee)

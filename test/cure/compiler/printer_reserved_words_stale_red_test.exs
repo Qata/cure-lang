@@ -40,6 +40,7 @@ defmodule Cure.Compiler.Printer.ReservedWordsStaleRedTest do
     reparsed = parse!(out)
 
     assert {:container, _, body} = reparsed
+
     assert Enum.any?(body, fn
              {:function_def, meta, _} -> Keyword.get(meta, :name) == "band"
              _ -> false

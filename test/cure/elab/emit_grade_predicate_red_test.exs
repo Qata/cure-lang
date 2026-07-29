@@ -23,7 +23,7 @@ defmodule Cure.Elab.EmitGradePredicateRedTest do
   alias Cure.Core.{Env, Grade, Inductive}
   alias Cure.Elab.Emit
 
-  test "a :linear-graded constructor field is emitted as present, matching Grade.present?/1" do
+  test "@linear a :-graded constructor field is emitted as present, matching Grade.present?/1" do
     dummy_type = {:type, 0}
 
     # `Box` has exactly one constructor, `MkBox`, with a SINGLE field graded

@@ -25,7 +25,7 @@ mod Std.Otp.Proof
   ## multiplicity and large elimination), where all four probes agree:
   ##   * `ob1_reply_linear`   — accept  / accept   (this module's `serve`)
   ##   * `ob1_neg_wrong_reply`— reject  / reject   (a reply value not `ReplyOf(req)`)
-  ##   * `ob1_neg_drop_cap`   — reject  / reject   (capability dropped: `used :erased`)
+  ##   * `ob1_neg_drop_cap`   — reject  / reject   (capability dropped: `@erased used :`)
   ##   * `ob1_neg_dup_cap`    — reject  / reject   (capability duplicated: `used ω`)
   ##
   ## **The example vocabulary** is a three-request server whose replies genuinely
@@ -59,12 +59,12 @@ mod Std.Otp.Proof
   ## The acknowledgement that a reply has been sent.
   type Replied = Done
 
-  ## **The reply rule.** `reply` consumes the capability `cap` LINEARLY (`:linear`,
+  ## **The reply rule.** `reply` consumes the capability `cap` LINEARLY (`@linear`,
   ## grade 1) and demands the value `v` at exactly the request's reply type
   ## `ReplyOf(r)`. Matching `cap` consumes it once; there is no path that keeps it.
   ## The kernel's QTT check (`Cure.Elab.Relevance`, the Idris `LinearCheck` dual)
   ## enforces the grade; the dependent domain `ReplyOf(r)` enforces obligation (1.1).
-  fn reply({r: Req}, cap :linear ReplyCap(r), v: ReplyOf(r)) -> Replied =
+  fn reply({r: Req}, @linear cap : ReplyCap(r), v: ReplyOf(r)) -> Replied =
     match cap
       MkCap() -> Done
 
@@ -86,7 +86,7 @@ mod Std.Otp.Proof
   ## residual multiplicity is 0. Leaving `r` abstract here keeps `ReplyOf(r)`
   ## definitionally equal to `handle`'s result type, so no sibling refinement is
   ## needed; the per-constructor content is carried entirely by `handle`.
-  fn serve(r: Req, cap :linear ReplyCap(r)) -> Replied = reply(cap, handle(r))
+  fn serve(r: Req, @linear cap : ReplyCap(r)) -> Replied = reply(cap, handle(r))
 
   ## ── Obligation (2): send-safety for a clause-DERIVED pid message index (F-1) ──
   ##

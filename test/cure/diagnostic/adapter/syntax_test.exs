@@ -7,7 +7,7 @@ defmodule Cure.Diagnostic.Adapter.SyntaxTest do
   alias Cure.Diagnostic.SourceRegistry
 
   test "grade syntax producers are owned directly and retain token repairs" do
-    source = "[h | t] :linear :liner c :affine\n"
+    source = "[h | t] :linear :@affine liner c :\n"
 
     registry =
       SourceRegistry.new()

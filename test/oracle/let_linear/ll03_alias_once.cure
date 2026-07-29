@@ -3,7 +3,7 @@ mod LlAliasOnce
   type Widget = MkWidget
   type Pair = MkPair(Box, Box)
   type WPair = MkWPair(Widget, Widget)
-  fn consume(c :linear Box) -> Widget = match c
+  fn consume(@linear c : Box) -> Widget = match c
     MkBox() -> MkWidget
-  fn f(c :linear Box) -> Widget = let x = c in consume(x)
+  fn f(@linear c : Box) -> Widget = let x = c in consume(x)
 end

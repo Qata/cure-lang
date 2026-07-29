@@ -336,8 +336,8 @@ Empty families use `type Void = |`.
 
 ### Quantitative binders
 
-Core binders carry a grade in `{0, 1, ω}`. The surface supports erased,
-`:linear`, `:affine`, and unrestricted parameters and local bindings. Grade
+Core binders carry a grade in `{0, 1, ω}`. The surface supports `@erased`,
+`@linear`, `@affine`, and unrestricted parameters and local bindings. Grade
 `0` values are checked but erased. The kernel rejects using erased data in
 runtime computation and rejects duplicating or dropping a linear value.
 

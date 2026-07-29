@@ -5,7 +5,7 @@ defmodule Cure.Elab.UsageDiagnosticTest do
   alias Cure.Elab.Program
 
   test "a dropped linear parameter points to its authored binding" do
-    src = "mod M\n  fn f(c :linear Int) -> Int = 0\nend\n"
+    src = "mod M\n  fn f(@linear c : Int) -> Int = 0\nend\n"
     {diagnostic, registry} = diagnostic(src, "unused.cure", :linear, :erased)
 
     assert Renderer.plain(diagnostic, registry, width: 80) ==
@@ -16,7 +16,7 @@ defmodule Cure.Elab.UsageDiagnosticTest do
              This function does not use it.
 
              at unused.cure:2:8
-             2 |   fn f(c :linear Int) -> Int = 0
+             2 |   fn f(@linear c : Int) -> Int = 0
                |        ^ this linear parameter must be used exactly once
 
              Hint: Use `c` once on every path, or declare it `:affine` if it may be dropped
@@ -27,7 +27,7 @@ defmodule Cure.Elab.UsageDiagnosticTest do
 
   test "passing a linear parameter to an unrestricted callee points to that use" do
     src =
-      "mod M\n  fn use2(x: Int) -> Int = x\n  fn f(c :linear Int) -> Int = use2(c)\nend\n"
+      "mod M\n  fn use2(x: Int) -> Int = x\n  fn f(@linear c : Int) -> Int = use2(c)\nend\n"
 
     {diagnostic, registry} = diagnostic(src, "scaled.cure", :linear, :unrestricted)
 
@@ -39,7 +39,7 @@ defmodule Cure.Elab.UsageDiagnosticTest do
              number of times.
 
              at scaled.cure:3:37
-             3 |   fn f(c :linear Int) -> Int = use2(c)
+             3 |   fn f(@linear c : Int) -> Int = use2(c)
                |        -                            ^ this parameter is declared `linear` here; this use does not preserve linear ownership
 
              Hint: Pass `c` only to linear parameters, and consume it exactly once on every path
@@ -53,7 +53,7 @@ defmodule Cure.Elab.UsageDiagnosticTest do
   end
 
   test "duplicating an affine parameter labels both authored uses" do
-    src = "mod M\n  fn f(h :affine Int) -> Int = h + h\nend\n"
+    src = "mod M\n  fn f(@affine h : Int) -> Int = h + h\nend\n"
     {diagnostic, registry} = diagnostic(src, "duplicate.cure", :affine, :unrestricted)
 
     assert Renderer.plain(diagnostic, registry, width: 80) ==
@@ -64,7 +64,7 @@ defmodule Cure.Elab.UsageDiagnosticTest do
              used once or not at all.
 
              at duplicate.cure:2:36
-             2 |   fn f(h :affine Int) -> Int = h + h
+             2 |   fn f(@affine h : Int) -> Int = h + h
                |        -                       -   ^ this parameter is declared `affine` here; another use on this path is here; this use does not preserve affine ownership
 
              Hint: Pass `h` only to affine or linear parameters, and use it at most once

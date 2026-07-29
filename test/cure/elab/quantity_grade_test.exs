@@ -58,20 +58,20 @@ defmodule Cure.Elab.QuantityGradeTest do
       assert {:ctor, :mk, [{:ctor, :S, [{:ctor, :Z, []}]}]} = Erase.erase(env, term)
     end
 
-    test "an :erased argument is dropped" do
+    test "@erased an : argument is dropped" do
       env = env_with([Grade.zero(), Grade.unrestricted()])
       term = {:ctor, :mk, [{:ctor, :Z, []}, {:ctor, :Z, []}]}
       assert {:ctor, :mk, [_only_one]} = Erase.erase(env, term)
     end
 
-    test "a :linear argument survives erasure — it is used exactly once, not zero times" do
+    test "@linear a : argument survives erasure — it is used exactly once, not zero times" do
       env = env_with([Grade.zero(), Grade.one()])
       term = {:ctor, :mk, [{:ctor, :Z, []}, {:ctor, :S, [{:ctor, :Z, []}]}]}
 
       assert {:ctor, :mk, [{:ctor, :S, [{:ctor, :Z, []}]}]} = Erase.erase(env, term)
     end
 
-    test "an :affine argument survives erasure" do
+    test "@affine an : argument survives erasure" do
       env = env_with([Grade.zero(), Grade.affine()])
       term = {:ctor, :mk, [{:ctor, :Z, []}, {:ctor, :S, [{:ctor, :Z, []}]}]}
 

@@ -1,5 +1,5 @@
 mod CallLinearPlain
   type Box = MkBox
-  fn f(c :linear Box) -> Box = c
-  fn g(c :linear Box) -> Box = f(c)
+  fn f(@linear c : Box) -> Box = c
+  fn g(@linear c : Box) -> Box = f(c)
 end

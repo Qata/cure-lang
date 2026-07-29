@@ -2,30 +2,29 @@ defmodule Cure.Elab.GradeSyntaxTest do
   @moduledoc """
   Slice 5a: surface syntax for QTT grades on function parameters.
 
-  The grade replaces the parameter's colon and sits at the **binding site**:
+  The grade is a decorator immediately before the complete binder:
 
-      fn run({n :erased Nat}, c :linear Chan(Cmd), h :affine Handle, budget: Int)
+      fn run({@erased n : Nat}, @linear c : Chan(Cmd), @affine h : Handle, budget: Int)
 
   An absent grade means `ω` — so every existing program is unchanged, and there is
   exactly ONE spelling of each grade (no `:unrestricted` keyword, no numerals).
 
-  ## Why atoms, and why after the name
+  ## Why decorators, and why before the name
 
   The grade is a property of the **arrow**, not of the parameter's name and not of
   its type: Core spells it `{:pi, g, dom, cod}`, and `Conv` compares `g` as part of
   the Pi while `dom` is an ordinary type (`conv.ex:124`). `(1 c : Chan) -> Chan` and
   `(c : Chan) -> Chan` are different function types over the *same* `Chan`. So
   `linear c` (which decorates the name) and `c: linear Chan` (which would make
-  `linear Chan` a type Cure has no former for) are both misleading. `c :linear Chan`
+  `linear Chan` a type Cure has no former for) are both misleading. `@linear c : Chan`
   decorates the binding.
 
   Idris spells its quantities as bare numerals (`Parser.idr:647-653`), and Cure
   cannot: `fn f(x: 1) -> Int` already parses, with `1` as a literal type, so `:1`
   collides with real syntax; `?` is already the hole token, so `1?` would overload
   it; and Idris has **no affine grade** to port a spelling from in the first place.
-  `:erased` / `:linear` / `:affine` already lex as single `atom` tokens, are
-  unambiguous in annotation position, and — being atoms rather than keywords — steal
-  no identifiers.
+  `@erased`, `@linear`, and `@affine` are parsed in the binder grammar, so they
+  cannot be confused with type annotations or declaration-level decorators.
 
   ## What this slice does and does not do
 
@@ -71,19 +70,19 @@ defmodule Cure.Elab.GradeSyntaxTest do
 
   describe "the parser records a grade at the binding site" do
     test "an explicit linear parameter" do
-      assert [{"c", :linear}] = grades("mod G\n  fn f(c :linear Int) -> Int = c\nend\n")
+      assert [{"c", :linear}] = grades("mod G\n  fn f(@linear c : Int) -> Int = c\nend\n")
     end
 
     test "an explicit affine parameter" do
-      assert [{"h", :affine}] = grades("mod G\n  fn f(h :affine Int) -> Int = 0\nend\n")
+      assert [{"h", :affine}] = grades("mod G\n  fn f(@affine h : Int) -> Int = 0\nend\n")
     end
 
     test "an explicit erased parameter" do
-      assert [{"n", :erased}] = grades("mod G\n  fn f(n :erased Int) -> Int = 0\nend\n")
+      assert [{"n", :erased}] = grades("mod G\n  fn f(@erased n : Int) -> Int = 0\nend\n")
     end
 
     test "an implicit parameter carries the grade INSIDE the brace" do
-      src = "mod G\n  fn f({n :erased Int}, x: Int) -> Int = x\nend\n"
+      src = "mod G\n  fn f({@erased n : Int}, x: Int) -> Int = x\nend\n"
       assert [{"n", :erased}, {"x", nil}] = grades(src)
     end
 
@@ -92,7 +91,7 @@ defmodule Cure.Elab.GradeSyntaxTest do
     end
 
     test "grades mix freely with ungraded parameters" do
-      src = "mod G\n  fn f(c :linear Int, x: Int, h :affine Int) -> Int = c\nend\n"
+      src = "mod G\n  fn f(@linear c : Int, x: Int, @affine h : Int) -> Int = c\nend\n"
       assert [{"c", :linear}, {"x", nil}, {"h", :affine}] = grades(src)
     end
   end
@@ -107,7 +106,7 @@ defmodule Cure.Elab.GradeSyntaxTest do
     end
 
     test "a graded parameter must still have a type" do
-      assert {:error, _} = Compiler.parse_source("mod G\n  fn f(c :linear) -> Int = 0\nend\n")
+      assert {:error, _} = Compiler.parse_source("mod G\n  fn f(@linear c :) -> Int = 0\nend\n")
     end
 
     test "`x: 1` still parses as a literal type annotation — no numeral collision" do
@@ -117,13 +116,13 @@ defmodule Cure.Elab.GradeSyntaxTest do
 
   describe "the grade reaches the def's quantities vector" do
     test "an explicit grade overrides the omega default" do
-      assert [:linear] = quantities("mod G\n  fn f(c :linear Int) -> Int = c\nend\n")
+      assert [:linear] = quantities("mod G\n  fn f(@linear c : Int) -> Int = c\nend\n")
     end
 
     test "an explicit grade overrides the erased default on an implicit" do
       # `c` must be consumed by a LINEAR position — handing it to `plus`'s omega
       # parameter would scale it to omega and (correctly) break the obligation.
-      src = "mod G\n  fn sink(y :linear Int) -> Int = y\n  fn f({c :linear Int}, x: Int) -> Int = sink(c)\nend\n"
+      src = "mod G\n  fn sink(@linear y : Int) -> Int = y\n  fn f({@linear c : Int}, x: Int) -> Int = sink(c)\nend\n"
       assert [:linear, :unrestricted] = quantities(src)
     end
 
@@ -134,35 +133,35 @@ defmodule Cure.Elab.GradeSyntaxTest do
 
   describe "the usage check enforces the declared grade end to end" do
     test "a linear parameter used exactly once is accepted" do
-      assert {:ok, _} = Program.elaborate("mod G\n  fn f(c :linear Int) -> Int = c\nend\n")
+      assert {:ok, _} = Program.elaborate("mod G\n  fn f(@linear c : Int) -> Int = c\nend\n")
     end
 
     test "a linear parameter used zero times is REJECTED" do
       assert {:error, {:usage_violation, %{declared: :linear, used: :erased}}} =
-               Program.semantic_result(Program.elaborate("mod G\n  fn f(c :linear Int) -> Int = 0\nend\n"))
+               Program.semantic_result(Program.elaborate("mod G\n  fn f(@linear c : Int) -> Int = 0\nend\n"))
     end
 
     test "an affine parameter used zero times is accepted" do
-      assert {:ok, _} = Program.elaborate("mod G\n  fn f(h :affine Int) -> Int = 0\nend\n")
+      assert {:ok, _} = Program.elaborate("mod G\n  fn f(@affine h : Int) -> Int = 0\nend\n")
     end
 
     test "a linear parameter passed to an unrestricted position is REJECTED" do
       # `use` declares `x` at omega, so `mul(omega, linear) = omega` and the linear
       # obligation is broken. This is the callee-scaling half of the usage check.
-      src = "mod G\n  fn use2(x: Int) -> Int = x\n  fn f(c :linear Int) -> Int = use2(c)\nend\n"
+      src = "mod G\n  fn use2(x: Int) -> Int = x\n  fn f(@linear c : Int) -> Int = use2(c)\nend\n"
 
       assert {:error, {:usage_violation, %{declared: :linear, used: :unrestricted}}} =
                Program.semantic_result(Program.elaborate(src))
     end
 
     test "a linear parameter passed to a LINEAR position is accepted" do
-      src = "mod G\n  fn sink(x :linear Int) -> Int = x\n  fn f(c :linear Int) -> Int = sink(c)\nend\n"
+      src = "mod G\n  fn sink(@linear x : Int) -> Int = x\n  fn f(@linear c : Int) -> Int = sink(c)\nend\n"
       assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
     end
 
     test "a global application accepts a linear explicit parameter" do
       src =
-        "mod Cure.LinearGlobalCall\n  fn sink(value :linear Int) -> Int = value\n  fn use(value: Int) -> Int = sink(value)\nend\n"
+        "mod Cure.LinearGlobalCall\n  fn sink(@linear value : Int) -> Int = value\n  fn use(value: Int) -> Int = sink(value)\nend\n"
 
       assert {:ok, _} = Compiler.compile_and_load(src, emit_events: false)
     end
@@ -174,7 +173,7 @@ defmodule Cure.Elab.GradeSyntaxTest do
     # runtime, so it must be counted. Otherwise `@extern(:m, :f, 1)` on a def with
     # one linear parameter is rejected as an arity mismatch against a computed 0.
     test "an extern with a linear parameter accepts its true present arity" do
-      src = "mod G\n  @extern(:erlang, :abs, 1)\n  fn f(c :linear Int) -> Int\nend\n"
+      src = "mod G\n  @extern(:erlang, :abs, 1)\n  fn f(@linear c : Int) -> Int\nend\n"
       assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
     end
 
@@ -200,14 +199,14 @@ defmodule Cure.Elab.GradeSyntaxTest do
     end
 
     test "a grade with a missing required type names the grade, not `expected rparen`" do
-      errs = errors("mod G\n  fn f(c :linear) -> Int = 0\nend\n")
+      errs = errors("mod G\n  fn f(@linear c :) -> Int = 0\nend\n")
 
       assert Enum.any?(errs, &match?({:grade_requires_type, %{name: "c", grade: :linear}}, &1)),
              "expected a {:grade_requires_type, …}, got #{inspect(errs)}"
     end
 
     test "an implicit graded binder with a missing type also names the grade" do
-      errs = errors("mod G\n  fn f({n :erased}) -> Int = 0\nend\n")
+      errs = errors("mod G\n  fn f({@erased n :}) -> Int = 0\nend\n")
 
       assert Enum.any?(errs, &match?({:grade_requires_type, %{name: "n", grade: :erased}}, &1)),
              "expected a {:grade_requires_type, …}, got #{inspect(errs)}"
@@ -269,7 +268,7 @@ defmodule Cure.Elab.GradeSyntaxTest do
     end
 
     test "a missing grade type points at the complete authored grade" do
-      src = "mod G\n  fn f(c :linear) -> Int = 0\nend\n"
+      src = "mod G\n  fn f(@linear c :) -> Int = 0\nend\n"
       {diagnostic, registry} = diagnostic(src, "missing.cure")
       rendered = Renderer.plain(diagnostic, registry, width: 80)
 
@@ -286,10 +285,10 @@ defmodule Cure.Elab.GradeSyntaxTest do
                follows it.
 
                at missing.cure:2:10
-               2 |   fn f(c :linear) -> Int = 0
+               2 |   fn f(@linear c :) -> Int = 0
                  |          ^^^^^^^ add the parameter type after this grade
 
-               Hint: Write `c :linear TypeName`
+               Hint: Write `@linear c : TypeName`
                """)
 
       assert Renderer.lsp(diagnostic, registry)["range"] == %{
@@ -306,7 +305,7 @@ defmodule Cure.Elab.GradeSyntaxTest do
     end
 
     test "a well-formed grade still parses (no false positive)" do
-      assert {:ok, _} = Compiler.parse_source("mod G\n  fn f(c :linear Int) -> Int = c\nend\n")
+      assert {:ok, _} = Compiler.parse_source("mod G\n  fn f(@linear c : Int) -> Int = c\nend\n")
     end
   end
 end

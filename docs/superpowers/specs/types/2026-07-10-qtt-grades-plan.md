@@ -274,7 +274,7 @@ half-migrated tree.
       changes (stdlib: 44 passed, 0 failed).
 
       ```
-      fn run({n :erased Nat}, c :linear Chan(Cmd), h :affine Handle, budget: Int) -> Unit
+      fn run({ n : Nat},  c : Chan(Cmd),  h : Handle, budget: Int) -> Unit
       ```
 
       **The numeral spelling this plan originally specified is impossible, measured.**
@@ -288,7 +288,7 @@ half-migrated tree.
       **The grade decorates the ARROW, not the name and not the type.** Core spells it
       `{:pi, g, dom, cod}`; `Conv` compares `g` while `dom` is an ordinary type. So
       `linear c` (decorates the name) and `c: linear T` (would make `linear T` a type
-      Cure has no former for) are both wrong. `c :linear T` decorates the binding.
+      Cure has no former for) are both wrong. ` c : T` decorates the binding.
       `:unrestricted` is deliberately **not** a spelling — `ω` is written by omission,
       so each grade has exactly one surface form.
 
@@ -306,8 +306,8 @@ half-migrated tree.
       *Gate:* 3872 passed / 0 failed. Antigen 314/314 cells, 300-run campaign → 0
       infections. Oracle replay 65/65. `mix dialyzer` passes. stdlib 44/44.
 
-- [x] **5b. Surface syntax — `let`.** LANDED. `let c :linear = e` when `e` infers;
-      `let c :linear T = e` when it does not.
+- [x] **5b. Surface syntax — `let`.** LANDED. `let  c = e` when `e` infers;
+      `let  c : T = e` when it does not.
 
       Idris's `letBinder` is `multiplicity >> pat >> option (":" type) >> "=" >> val`
       (`Idris/Parser.idr:821-824`), so the type stays **optional even when graded** —
@@ -371,7 +371,7 @@ half-migrated tree.
 
       The extern path is coherent by construction (Pi from `sig.quantities`, no body to
       demote). A graded function's TYPE now advertises its grade, so `Conv`
-      distinguishes `(c :linear T) -> R` from `(c: T) -> R` and linearity survives
+      distinguishes `( c : T) -> R` from `(c: T) -> R` and linearity survives
       passing `f` itself as a value.
 
       *Deferred, deliberately:* making `quantities` a *pure projection* of the Pi (a
