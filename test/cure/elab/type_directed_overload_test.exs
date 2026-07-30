@@ -595,7 +595,8 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     with {:ok, project} <- Cure.Project.load(dir),
          {:ok, %{modules: modules}} <-
            Cure.Project.compile_project(project, output_dir: ebin, check_types: false) do
-      Code.prepend_path(ebin)
+      artifact_root = Cure.Compiler.Artifacts.Writer.resolve(ebin)
+      Code.prepend_path(artifact_root)
       # `compile_project/2` load-after-compiles each beam so downstream modules
       # resolve imports; purge that already-current version before our own reload
       # so a second `load_file` does not trip `:not_purged` on the old code.

@@ -1,7 +1,8 @@
 defmodule Cure.Compiler.IncrementalTest do
   use ExUnit.Case, async: false
 
-  alias Cure.Compiler.{BuildManifest, DepGraph, Incremental}
+  alias Cure.Compiler.{Artifacts, BuildManifest, DepGraph, Incremental}
+  alias Cure.Compiler.Artifacts.Writer
 
   # A 3-module chain Leaf <- Mid <- Top via `use`, plus `Amb`, an extra module
   # that `Top` `use`s and calls. Surface syntax is the real Cure form
@@ -105,6 +106,9 @@ defmodule Cure.Compiler.IncrementalTest do
     Incremental.compile_dir(paths(src), out, Keyword.put_new(opts, :source_roots, [src]))
   end
 
+  defp artifact_root(out), do: Writer.resolve(out)
+  defp manifest(out), do: BuildManifest.load(artifact_root(out))
+
   test "first build compiles every module", %{src: src, out: out} do
     assert {:ok, s} = compile(src, out)
     assert Enum.sort(s.compiled) == ["Amb", "Leaf", "Mid", "Top"]
@@ -117,6 +121,147 @@ defmodule Cure.Compiler.IncrementalTest do
     assert {:ok, s} = compile(src, out)
     assert s.compiled == []
     assert Enum.sort(s.skipped_fresh) == ["Amb", "Leaf", "Mid", "Top"]
+  end
+
+  test "incremental edit sequences remain equivalent to clean builds", %{
+    src: src,
+    out: out,
+    write: write
+  } do
+    edits = [
+      fn -> :ok end,
+      fn -> write.("leaf.cure", @leaf_v2_comment) end,
+      fn -> write.("leaf.cure", @leaf_v3_public) end,
+      fn -> write.("extra.cure", "mod Extra\n  fn value() -> Int = 9\n") end,
+      fn -> File.rm!(Path.join(src, "extra.cure")) end
+    ]
+
+    edits
+    |> Enum.with_index()
+    |> Enum.each(fn {edit, index} ->
+      edit.()
+      assert {:ok, incremental} = compile(src, out)
+      assert incremental.errors == []
+
+      clean = Path.join(Path.dirname(out), "clean-#{index}")
+
+      assert {:ok, clean_summary} =
+               Incremental.compile_dir(paths(src), clean,
+                 source_roots: [src],
+                 force: true
+               )
+
+      assert clean_summary.errors == []
+      assert {:ok, incremental_set} = Artifacts.open_verified_set(out, verification: :full)
+      assert {:ok, clean_set} = Artifacts.open_verified_set(clean, verification: :full)
+      assert semantic_set(incremental_set) == semantic_set(clean_set)
+    end)
+  end
+
+  test "simultaneous writers serialize and publish one verified generation", %{src: src, out: out} do
+    results =
+      1..2
+      |> Task.async_stream(fn _ -> compile(src, out) end,
+        max_concurrency: 2,
+        timeout: 120_000
+      )
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert Enum.all?(results, &match?({:ok, %{errors: []}}, &1))
+    assert {:ok, _set} = Cure.Compiler.Artifacts.open_verified_set(out)
+    refute File.exists?(Path.join(out, ".cure_artifact.lock"))
+  end
+
+  test "a stale writer lock is recovered before the sweep", %{src: src, out: out} do
+    lock = Path.join(out, ".cure_artifact.lock")
+
+    {:ok, host} = :inet.gethostname()
+
+    File.write!(
+      lock,
+      :erlang.term_to_binary(
+        %{
+          node: "retired@#{host}",
+          pid: "#PID<0.0.0>",
+          os_pid: "999999999",
+          host: List.to_string(host),
+          acquired_at: System.os_time(:second) - 3_601,
+          output_root: out,
+          intended_generation: :pending
+        },
+        [:deterministic]
+      )
+    )
+
+    File.touch!(lock, System.os_time(:second) - 3_601)
+
+    assert {:ok, %{errors: []}} = compile(src, out)
+    refute File.exists?(lock)
+    assert {:ok, _set} = Cure.Compiler.Artifacts.open_verified_set(out)
+  end
+
+  test "a fresh lock owned by a dead local process is recovered immediately", %{src: src, out: out} do
+    lock = Path.join(out, ".cure_artifact.lock")
+    {:ok, host} = :inet.gethostname()
+
+    File.write!(
+      lock,
+      :erlang.term_to_binary(
+        %{
+          node: "retired@#{host}",
+          pid: "#PID<0.0.0>",
+          os_pid: "999999999",
+          host: List.to_string(host),
+          acquired_at: System.os_time(:second),
+          output_root: out,
+          intended_generation: :pending
+        },
+        [:deterministic]
+      )
+    )
+
+    assert {:ok, %{errors: []}} = compile(src, out)
+    refute File.exists?(lock)
+    assert {:ok, _set} = Cure.Compiler.Artifacts.open_verified_set(out)
+  end
+
+  test "an abandoned staging generation is removed by the next writer", %{src: src, out: out} do
+    abandoned = Path.join(out, ".cure_staging_abandoned")
+    File.mkdir_p!(abandoned)
+    File.write!(Path.join(abandoned, "partial.beam"), "partial")
+
+    assert {:ok, %{errors: []}} = compile(src, out)
+    refute File.exists?(abandoned)
+  end
+
+  test "a reader keeps the published generation while a staged writer is interrupted", %{
+    src: src,
+    out: out
+  } do
+    assert {:ok, _} = compile(src, out)
+    pointer_before = File.read!(Path.join(out, "current"))
+    parent = self()
+
+    writer =
+      Task.async(fn ->
+        Writer.transact(out, fn stage ->
+          assert File.regular?(Path.join(stage, BuildManifest.filename()))
+          send(parent, {:stage_ready, stage})
+
+          receive do
+            :interrupt -> {:error, :injected_interruption}
+          end
+        end)
+      end)
+
+    assert_receive {:stage_ready, stage}, 5_000
+    assert {:ok, _set} = Cure.Compiler.Artifacts.open_verified_set(out)
+    assert File.read!(Path.join(out, "current")) == pointer_before
+    send(writer.pid, :interrupt)
+    assert {:error, :injected_interruption} = Task.await(writer)
+    refute File.exists?(stage)
+    assert File.read!(Path.join(out, "current")) == pointer_before
+    assert {:ok, _set} = Cure.Compiler.Artifacts.open_verified_set(out)
   end
 
   test "editing a leaf's comment (interface-invariant) recompiles only the leaf",
@@ -180,15 +325,74 @@ defmodule Cure.Compiler.IncrementalTest do
 
   test "a missing beam forces recompile even when the hash matches", %{src: src, out: out} do
     assert {:ok, _} = compile(src, out)
-    File.rm!(Path.join(out, "Cure.Leaf.beam"))
+    File.rm!(Path.join(artifact_root(out), "Cure.Leaf.beam"))
     assert {:ok, s} = compile(src, out)
     assert "Leaf" in s.compiled
   end
 
+  test "a stale Semigroup BEAM cannot be loaded as fresh" do
+    root = Path.join(System.tmp_dir!(), "cure_semigroup_stale_#{System.unique_integer([:positive])}")
+    src = Path.join(root, "src")
+    out = Path.join(root, "ebin")
+    File.mkdir_p!(src)
+    on_exit(fn -> File.rm_rf!(root) end)
+
+    source = Path.join(src, "semigroup.cure")
+
+    File.write!(source, """
+    mod Fixture.Semigroup
+      fn current_marker() -> Int = 34
+    """)
+
+    assert {:ok, %{errors: [], compiled: ["Fixture.Semigroup"]}} =
+             Incremental.compile_dir([source], out,
+               source_roots: [src],
+               artifact_kind: :stdlib
+             )
+
+    stale_forms = [
+      {:attribute, 1, :module, :"Cure.Fixture.Semigroup"},
+      {:attribute, 1, :export, [old_marker: 0]},
+      {:function, 1, :old_marker, 0, [{:clause, 1, [], [], [{:integer, 1, 25}]}]}
+    ]
+
+    stale_result = :compile.forms(stale_forms, [:return, :binary])
+
+    {:ok, :"Cure.Fixture.Semigroup", stale_binary} =
+      case stale_result do
+        {:ok, module, binary, _warnings} -> {:ok, module, binary}
+        {:ok, module, binary} -> {:ok, module, binary}
+      end
+
+    File.write!(Path.join(artifact_root(out), "Cure.Fixture.Semigroup.beam"), stale_binary)
+
+    assert {:ok, repaired} =
+             Incremental.compile_dir([source], out,
+               source_roots: [src],
+               artifact_kind: :stdlib
+             )
+
+    assert repaired.compiled == ["Fixture.Semigroup"]
+    assert :artifact_hash_mismatch in repaired.rebuild_reasons["Fixture.Semigroup"]
+
+    beam = Path.join(artifact_root(out), "Cure.Fixture.Semigroup.beam")
+
+    {:ok, {:"Cure.Fixture.Semigroup", [exports: exports]}} =
+      :beam_lib.chunks(String.to_charlist(beam), [:exports])
+
+    assert {:current_marker, 0} in exports
+    refute {:old_marker, 0} in exports
+  end
+
   test "a toolchain change forces a full rebuild", %{src: src, out: out} do
     assert {:ok, _} = compile(src, out)
-    m = BuildManifest.load(out)
-    BuildManifest.save(%{m | toolchain: <<0>>}, out)
+    m = manifest(out)
+
+    BuildManifest.save(
+      %{m | workspace_key: <<0>>, context: Map.put(m.context, :compiler_hash, <<0>>)},
+      artifact_root(out)
+    )
+
     assert {:ok, s} = compile(src, out)
     assert Enum.sort(s.compiled) == ["Amb", "Leaf", "Mid", "Top"]
   end
@@ -198,53 +402,63 @@ defmodule Cure.Compiler.IncrementalTest do
     File.rm!(Path.join(src, "top.cure"))
     assert {:ok, s} = compile(src, out)
     assert "Top" in s.deleted
-    refute File.exists?(Path.join(out, "Cure.Top.beam"))
-    refute Map.has_key?(BuildManifest.load(out).modules, "Top")
+    refute File.exists?(Path.join(artifact_root(out), "Cure.Top.beam"))
+    refute Map.has_key?(manifest(out).modules, "Top")
   end
 
   test "a toolchain bump in the same build as a deleted source still deletes the beam",
        %{src: src, out: out} do
     assert {:ok, _} = compile(src, out)
-    m = BuildManifest.load(out)
-    BuildManifest.save(%{m | toolchain: <<0>>}, out)
+    m = manifest(out)
+
+    BuildManifest.save(
+      %{m | workspace_key: <<0>>, context: Map.put(m.context, :compiler_hash, <<0>>)},
+      artifact_root(out)
+    )
+
     File.rm!(Path.join(src, "top.cure"))
     assert {:ok, s} = compile(src, out)
     assert "Top" in s.deleted
-    refute File.exists?(Path.join(out, "Cure.Top.beam"))
+    refute File.exists?(Path.join(artifact_root(out), "Cure.Top.beam"))
   end
 
-  test "a foreign manifest entry (outside this run's roots) is left untouched", %{src: src, out: out} do
+  test "an unclaimed Cure BEAM is removed instead of entering the next generation", %{src: src, out: out} do
     assert {:ok, _} = compile(src, out)
-    # Simulate a stdlib entry from a prior build sharing this output dir.
-    File.write!(Path.join(out, "Cure.Std.Fake.beam"), "stub")
-    m = BuildManifest.load(out)
-
-    foreign =
-      Map.put(m.modules, "Std.Fake", %{
-        source_path: "lib/std/fake.cure",
-        source_hash: <<1>>,
-        interface_hash: <<2>>,
-        deps: [],
-        beams: ["Cure.Std.Fake.beam"]
-      })
-
-    BuildManifest.save(%{m | modules: foreign}, out)
+    File.write!(Path.join(artifact_root(out), "Cure.Std.Fake.beam"), "stub")
 
     assert {:ok, s} = compile(src, out)
-    refute "Std.Fake" in s.deleted
-    assert File.exists?(Path.join(out, "Cure.Std.Fake.beam"))
-    assert Map.has_key?(BuildManifest.load(out).modules, "Std.Fake")
+    assert "Cure.Std.Fake.beam" in s.deleted
+    refute File.exists?(Path.join(artifact_root(out), "Cure.Std.Fake.beam"))
+    refute Map.has_key?(manifest(out).modules, "Std.Fake")
+  end
+
+  test "an unclaimed legacy lowercase BEAM is not carried into a new generation", %{
+    src: src,
+    out: out
+  } do
+    assert {:ok, _} = compile(src, out)
+    contaminated = artifact_root(out)
+    File.write!(Path.join(contaminated, "lists.beam"), "legacy")
+
+    assert {:error, {:artifact_set_invalid, %{orphans: ["lists.beam"]}}} =
+             Cure.Compiler.Artifacts.open_verified_set(out)
+
+    assert {:ok, _summary} = compile(src, out)
+    refute File.exists?(Path.join(artifact_root(out), "lists.beam"))
+    assert {:ok, _set} = Cure.Compiler.Artifacts.open_verified_set(out)
   end
 
   test "a compile error keeps the module dirty and does not advance the manifest",
        %{src: src, out: out, write: write} do
     assert {:ok, _} = compile(src, out)
+    published_before = File.read!(Path.join(out, "current"))
     write.("leaf.cure", "mod Leaf\n  fn pubval() -> Int = nonexistent_fn()\n")
     assert {:ok, s} = compile(src, out)
     # Leaf errors; its use-dependents (Mid, Top) cannot resolve the broken chain
     # and error too — a correct cascade. The contract under test is that the
     # failing module is reported and the manifest is not advanced.
     assert Enum.any?(s.errors, fn {m, _} -> m == "Leaf" end)
+    assert File.read!(Path.join(out, "current")) == published_before
     # manifest NOT advanced: next run still sees Leaf as dirty
     assert {:ok, s2} = compile(src, out)
     assert "Leaf" in (s2.compiled ++ Enum.map(s2.errors, &elem(&1, 0)))
@@ -271,6 +485,59 @@ defmodule Cure.Compiler.IncrementalTest do
     assert {:ok, _} = compile(src, out)
     assert {:ok, s} = compile(src, out, force: true)
     assert Enum.sort(s.compiled) == ["Amb", "Leaf", "Mid", "Top"]
+  end
+
+  test "a code-generation option change rebuilds the complete set", %{src: src, out: out} do
+    assert {:ok, _} = compile(src, out, compile_opts: [check_types: false])
+
+    assert {:ok, summary} =
+             compile(src, out, compile_opts: [check_types: true])
+
+    assert Enum.sort(summary.compiled) == ["Amb", "Leaf", "Mid", "Top"]
+
+    assert Enum.all?(summary.rebuild_reasons, fn {_module, reasons} ->
+             :compiler_context_mismatch in reasons
+           end)
+  end
+
+  test "edition, target, OTP, and Elixir context changes rebuild the complete set", %{
+    src: src,
+    out: out
+  } do
+    assert {:ok, _} = compile(src, out)
+
+    for field <- [:language_edition, :target, :otp_release, :elixir_version] do
+      current = manifest(out)
+      changed = %{current | context: Map.put(current.context, field, {:changed, field})}
+      BuildManifest.save(changed, artifact_root(out))
+
+      assert {:ok, summary} = compile(src, out)
+      assert Enum.sort(summary.compiled) == ["Amb", "Leaf", "Mid", "Top"]
+
+      assert Enum.all?(summary.rebuild_reasons, fn {_module, reasons} ->
+               :compiler_context_mismatch in reasons
+             end)
+    end
+  end
+
+  test "stdlib and package generation changes rebuild consumers", %{src: src, out: out} do
+    assert {:ok, _} =
+             compile(src, out,
+               stdlib_artifact_digest: <<1>>,
+               package_artifact_digests: %{"dep" => <<1>>}
+             )
+
+    assert {:ok, summary} =
+             compile(src, out,
+               stdlib_artifact_digest: <<2>>,
+               package_artifact_digests: %{"dep" => <<2>>}
+             )
+
+    assert Enum.sort(summary.compiled) == ["Amb", "Leaf", "Mid", "Top"]
+
+    assert Enum.all?(summary.rebuild_reasons, fn {_module, reasons} ->
+             :dependency_artifact_digest_mismatch in reasons
+           end)
   end
 
   # Proves `beams_for/3` does not over-match on Cure's dotted module-naming
@@ -300,8 +567,8 @@ defmodule Cure.Compiler.IncrementalTest do
     assert {:ok, s} = compile(src, out)
     assert "Ns.Base" in s.deleted
     refute "Ns.Base.Child" in s.deleted
-    assert File.exists?(Path.join(out, "Cure.Ns.Base.Child.beam"))
-    assert Map.has_key?(BuildManifest.load(out).modules, "Ns.Base.Child")
+    assert File.exists?(Path.join(artifact_root(out), "Cure.Ns.Base.Child.beam"))
+    assert Map.has_key?(manifest(out).modules, "Ns.Base.Child")
   end
 
   # Regression (compile-order soundness): the driver must compile every module
@@ -480,8 +747,10 @@ defmodule Cure.Compiler.IncrementalTest do
   # any project output dir.
   test "stdlib_fingerprint/0 tracks the resolved stdlib beam dir, not a project output dir" do
     beam_dir = Path.join(System.tmp_dir!(), "cure_stdlib_beams_#{:erlang.unique_integer([:positive])}")
+    source_dir = Path.join(System.tmp_dir!(), "cure_stdlib_sources_#{:erlang.unique_integer([:positive])}")
     proj_out = Path.join(System.tmp_dir!(), "cure_proj_out_#{:erlang.unique_integer([:positive])}")
     File.mkdir_p!(beam_dir)
+    File.mkdir_p!(source_dir)
     File.mkdir_p!(proj_out)
 
     previous = Application.get_env(:cure, :stdlib_beam_dir)
@@ -494,15 +763,29 @@ defmodule Cure.Compiler.IncrementalTest do
       end
 
       File.rm_rf!(beam_dir)
+      File.rm_rf!(source_dir)
       File.rm_rf!(proj_out)
     end)
 
-    fake_beam = Path.join(beam_dir, "Cure.Std.Fake.beam")
-    File.write!(fake_beam, <<1, 2, 3>>)
+    source = Path.join(source_dir, "fake.cure")
+    File.write!(source, "mod Std.Fake\n  fn value() -> Int = 1\n")
+
+    assert {:ok, %{errors: []}} =
+             Incremental.compile_dir([source], beam_dir,
+               source_roots: [source_dir],
+               artifact_kind: :stdlib
+             )
+
     h1 = Incremental.stdlib_fingerprint()
 
-    # The real stdlib changed: the resolved fingerprint MUST move.
-    File.write!(fake_beam, <<9, 9, 9>>)
+    File.write!(source, "mod Std.Fake\n  fn value() -> Int = 2\n")
+
+    assert {:ok, %{errors: []}} =
+             Incremental.compile_dir([source], beam_dir,
+               source_roots: [source_dir],
+               artifact_kind: :stdlib
+             )
+
     h2 = Incremental.stdlib_fingerprint()
     assert h1 != h2
 
@@ -609,5 +892,16 @@ defmodule Cure.Compiler.IncrementalTest do
            "cold build must not require a prebuilt beam for an injected @prelude import"
 
     assert Enum.sort(s.compiled) == ["Std.AlphaFixture", "Std.AmbientFixture"]
+  end
+
+  defp semantic_set(set) do
+    Map.new(set.modules, fn {name, entry} ->
+      artifacts =
+        entry.artifacts
+        |> Enum.map(&{&1.module, &1.exports_hash})
+        |> Enum.sort()
+
+      {name, %{interface_hash: entry.interface_hash, edges: entry.edges, artifacts: artifacts}}
+    end)
   end
 end

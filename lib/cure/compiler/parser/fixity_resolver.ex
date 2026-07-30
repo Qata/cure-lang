@@ -41,7 +41,7 @@ defmodule Cure.Compiler.Parser.FixityResolver do
         {:ok, path} ->
           case File.read(path) do
             {:ok, source} ->
-              scan = FixityScan.harvest_source(source, path, base)
+              scan = FixityScan.harvest_source(source, diagnostic_source_path(path), base)
               next = rest ++ Enum.map(scan.uses, & &1.target)
               gather(next, seen, acc ++ scan.fixity, base)
 
@@ -147,6 +147,19 @@ defmodule Cure.Compiler.Parser.FixityResolver do
     case Keyword.get(meta, :source_info) do
       %SourceInfo{} = info -> Map.get(info, role) || info.whole
       _ -> nil
+    end
+  end
+
+  defp diagnostic_source_path(path) do
+    expanded = Path.expand(path)
+
+    if Enum.any?(Cure.Stdlib.Paths.source_dirs(), fn root ->
+         root = Path.expand(root)
+         expanded == root or String.starts_with?(expanded, root <> "/")
+       end) do
+      Path.join(["lib", "std", Path.basename(path)])
+    else
+      path
     end
   end
 end

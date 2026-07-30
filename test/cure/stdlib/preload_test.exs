@@ -143,60 +143,38 @@ defmodule Cure.Stdlib.PreloadTest do
     # is elsewhere on disk and asserts the preload picks it up.
     test "honours :stdlib_beam_dir app-env override" do
       tmp = make_tmp!()
+      module = :"Cure.Std.Core"
+      assert {:ok, _} = Cure.Compiler.Artifacts.copy_verified_set("_build/cure/ebin", tmp)
 
-      # Seed the tmp dir with a single real stdlib BEAM harvested from
-      # the legacy build output (we expect the project's `mix compile`
-      # to have produced them). If the source of truth isn't present
-      # we skip -- the happy path below in `load_from_candidates` is
-      # already exercised by `kind: :all` above.
-      case staged_sample_beam() do
-        {:ok, module, binary} ->
-          File.write!(Path.join(tmp, "#{module}.beam"), binary)
-          # Evict the module from the VM so we can observe the reload.
-          :code.purge(module)
-          :code.delete(module)
+      previous = Application.get_env(:cure, :stdlib_beam_dir)
+      Application.put_env(:cure, :stdlib_beam_dir, tmp)
 
-          previous = Application.get_env(:cure, :stdlib_beam_dir)
-          Application.put_env(:cure, :stdlib_beam_dir, tmp)
+      try do
+        assert Preload.preload(kind: :all, source_jit: false) == :ok
+        assert Code.ensure_loaded?(module)
+      after
+        case previous do
+          nil -> Application.delete_env(:cure, :stdlib_beam_dir)
+          value -> Application.put_env(:cure, :stdlib_beam_dir, value)
+        end
 
-          try do
-            assert Preload.preload(kind: :all, source_jit: false) == :ok
-            assert Code.ensure_loaded?(module)
-          after
-            case previous do
-              nil -> Application.delete_env(:cure, :stdlib_beam_dir)
-              value -> Application.put_env(:cure, :stdlib_beam_dir, value)
-            end
-
-            File.rm_rf!(tmp)
-
-            # C1: the try reloaded the STAGED module, which re-marked it sticky
-            # (purge/delete never removed the sticky entry, and a sticky module
-            # cannot be overwritten by preload). Evict it, reload the CANONICAL
-            # bytes from `_build/cure/ebin`, then re-stick.
-            :code.unstick_mod(module)
-            :code.purge(module)
-            :code.delete(module)
-            Cure.Stdlib.Preload.preload(kind: :all)
-            :code.stick_mod(module)
-          end
-
-          assert :code.is_sticky(module)
-
-          # Consistency guard: the loaded bytes equal the canonical beam. As at
-          # Site 1 this is a consistency assertion rather than a discriminating
-          # red-check — the staged beam is harvested from the canonical
-          # `_build/cure/ebin`, so it is md5-identical regardless of eviction. Kept
-          # for symmetry and to catch the `priv/ebin`-fallback case.
-          canonical_beam = String.to_charlist("_build/cure/ebin/#{module}.beam")
-          {:ok, {^module, disk_md5}} = :beam_lib.md5(canonical_beam)
-          assert module.module_info(:md5) == disk_md5
-
-        :skip ->
-          File.rm_rf!(tmp)
-          # Missing legacy BEAMs; nothing to assert against.
-          :ok
+        File.rm_rf!(tmp)
       end
+
+      assert :code.is_sticky(module)
+    end
+
+    test "rejects an unmanifested partial override instead of mixing candidates" do
+      tmp = make_tmp!()
+      canonical = Cure.Compiler.Artifacts.Writer.resolve("_build/cure/ebin")
+      File.cp!(Path.join(canonical, "Cure.Std.Core.beam"), Path.join(tmp, "Cure.Std.Core.beam"))
+
+      assert {:error, {:no_verified_artifact_set, _}} =
+               Preload.preload(
+                 kind: :all,
+                 stdlib_ebin: tmp,
+                 source_jit: false
+               )
     end
   end
 
@@ -267,7 +245,13 @@ defmodule Cure.Stdlib.PreloadTest do
       # kept as insurance for any future JIT path whose bytes could drift.
       # (`module_info(:md5)` is the loaded module's md5; `:beam_lib.md5/1` is the
       # on-disk canonical's — verified equal for a module loaded from its own beam.)
-      {:ok, {^module, disk_md5}} = :beam_lib.md5(~c"_build/cure/ebin/Cure.Std.List.beam")
+      canonical =
+        "_build/cure/ebin"
+        |> Cure.Compiler.Artifacts.Writer.resolve()
+        |> Path.join("Cure.Std.List.beam")
+        |> String.to_charlist()
+
+      {:ok, {^module, disk_md5}} = :beam_lib.md5(canonical)
       assert module.module_info(:md5) == disk_md5
     end
 
@@ -279,9 +263,11 @@ defmodule Cure.Stdlib.PreloadTest do
       Application.put_env(:cure, :stdlib_source_dir, empty)
 
       try do
-        # `:collections` selects several modules; none of them will
-        # have a backing source in `empty`, but the call must succeed.
-        assert Preload.compile_missing_from_sources(:collections) == :ok
+        assert {:error, _reason} =
+                 Preload.compile_missing_from_sources(:collections,
+                   stdlib_ebin: empty,
+                   stdlib_source_dir: empty
+                 )
       after
         case previous_beam do
           nil -> Application.delete_env(:cure, :stdlib_beam_dir)
@@ -306,19 +292,6 @@ defmodule Cure.Stdlib.PreloadTest do
 
     File.mkdir_p!(path)
     path
-  end
-
-  # Find any one compiled stdlib BEAM we can reuse for the
-  # `:stdlib_beam_dir` override check. Returns `{:ok, module, binary}`
-  # when a harvestable BEAM is available on disk, `:skip` otherwise.
-  defp staged_sample_beam do
-    ["_build/cure/ebin", Path.join(["priv", "ebin"])]
-    |> Enum.find_value(:skip, fn dir ->
-      case dir |> Path.join("Cure.Std.Core.beam") |> File.read() do
-        {:ok, binary} -> {:ok, :"Cure.Std.Core", binary}
-        _ -> nil
-      end
-    end)
   end
 
   # Remove every directory currently on the Erlang code path that

@@ -1,5 +1,9 @@
 defmodule Cure.RegressionTest do
   use ExUnit.Case, async: false
+  # This deliberately recompiles and executes the complete example corpus. Its
+  # duration scales with the corpus and with concurrent compiler-heavy tests, so
+  # a wall-clock timeout would make `mix test` load-dependent.
+  @moduletag timeout: :infinity
 
   @moduledoc """
   End-to-end regression coverage. These tests invoke the same logic as

@@ -46,48 +46,30 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
       true ->
         Mix.shell().info("Compiling Cure standard library (#{length(cure_files)} modules)")
 
-        # Add to code path
         File.mkdir_p!(output_dir)
-        abs_dir = Path.expand(output_dir)
 
-        unless abs_dir in :code.get_path() do
-          :code.add_patha(String.to_charlist(abs_dir))
-        end
-
-        case Cure.Compiler.Incremental.compile_dir(cure_files, output_dir,
+        case Cure.Compiler.Artifacts.sweep(
                source_roots: [stdlib_dir],
+               output_dir: output_dir,
+               kind: :stdlib,
+               repair: true,
                compile_opts: [emit_events: false]
              ) do
-          {:ok, summary} ->
-            Enum.each(summary.cycles, fn walk ->
+          {:ok, result} ->
+            Enum.each(result.cycles, fn walk ->
               Mix.shell().error(render_host_diagnostic({:import_cycle, walk}, stdlib_dir))
             end)
 
             Mix.shell().info(
-              "  #{length(summary.compiled)} compiled, " <>
-                "#{length(summary.skipped_fresh)} up-to-date, " <>
-                "#{length(summary.deleted)} removed"
+              "  #{map_size(result.rebuilt)} compiled, " <>
+                "#{length(result.reused)} up-to-date, " <>
+                "#{map_size(result.removed)} removed"
             )
 
             Mix.shell().info("  Output: #{output_dir}")
 
-            unless summary.errors == [] do
-              summary.errors
-              |> Enum.map(fn {target, reason} ->
-                path = source_path_for(target, cure_files)
-                {diagnostic, _registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path)
-                {diagnostic_fingerprint(diagnostic), reason, path}
-              end)
-              |> Enum.uniq_by(&elem(&1, 0))
-              |> Enum.each(fn {_fingerprint, reason, path} ->
-                Mix.shell().error(render_host_diagnostic(reason, path))
-              end)
-
-              exit({:shutdown, 1})
-            end
-
           {:error, reason} ->
-            Mix.shell().error(render_host_diagnostic(reason, stdlib_dir))
+            render_sweep_error(reason, cure_files, stdlib_dir)
             exit({:shutdown, 1})
         end
     end
@@ -119,16 +101,13 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
     end
   end
 
-  defp diagnostic_fingerprint(%Cure.Diagnostic{} = diagnostic) do
-    payload = diagnostic.payload
+  defp render_sweep_error({:artifact_sweep_failed, errors}, files, _default) do
+    Enum.each(errors, fn {target, reason} ->
+      Mix.shell().error(render_host_diagnostic(reason, source_path_for(target, files)))
+    end)
+  end
 
-    {
-      diagnostic.code,
-      diagnostic.key,
-      Cure.Diagnostic.message(diagnostic),
-      Map.get(payload, :checking),
-      Map.get(payload, :failing_branch),
-      Map.get(payload, :kind)
-    }
+  defp render_sweep_error(reason, _files, default) do
+    Mix.shell().error(render_host_diagnostic(reason, default))
   end
 end

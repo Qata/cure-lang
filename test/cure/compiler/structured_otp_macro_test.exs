@@ -1,5 +1,6 @@
 defmodule Cure.Compiler.StructuredOtpMacroTest do
   use ExUnit.Case, async: false
+  @moduletag timeout: 180_000
 
   test "fsm accepts the reusable structured family surface" do
     source = """

@@ -53,12 +53,13 @@ pattern. A literal pattern succeeds exactly when the scrutinee is
 structurally equal to the literal.
 
 ```cure
-match n
-  0      -> :zero
-  1      -> :one
-  -1     -> :minus_one        # unary minus is recognised in patterns
-  0xFF   -> :byte
-  1_000  -> :big
+fn classify(n: Int) -> Atom =
+  pickup
+    n == 0 -> :zero
+    n == 1 -> :one
+    n == -1 -> :minus_one
+    n == 0xFF -> :byte
+    else -> :big
 ```
 
 Supported literal shapes:
@@ -79,9 +80,9 @@ A bare identifier binds a fresh variable; the underscore is the
 wildcard and binds nothing.
 
 ```cure
-match value
-  _         -> :anything
-  x         -> do_something(x)
+fn classify(value: Int) -> Atom =
+  match value
+    _ -> :anything
 ```
 
 When a name occurs more than once in the same pattern, the compiler
@@ -89,9 +90,10 @@ emits a synthetic equality guard: every occurrence must match the same
 value.
 
 ```cure
-match pair
-  %[x, x] -> :equal
-  _       -> :different
+fn classify(pair: Tuple(Int, Int)) -> Atom =
+  match pair
+    %[x, x] -> :equal
+    _ -> :different
 ```
 
 The injected guard is conjoined with any user-written `when` clause
@@ -104,11 +106,11 @@ fresh one. It lowers to a fresh variable plus a synthetic equality
 guard against the pre-existing binding.
 
 ```cure
-let target = get_tag()
-
-match event.tag
-  ^target -> :hit
-  _       -> :miss
+fn pinned(value: Int) -> Atom =
+  let target = 1
+  match value
+    ^target -> :hit
+    _ -> :miss
 ```
 
 If `target` is not in scope at the pin position, the type checker
@@ -121,26 +123,29 @@ Two cons forms are accepted in both pattern and construction position.
 Single-head cons matches the head and the tail:
 
 ```cure
-match xs
-  []      -> :empty
-  [h | t] -> handle(h, t)
+fn classify(xs: List(Int)) -> Atom =
+  match xs
+    [] -> :empty
+    [_h | _t] -> :nonempty
 ```
 
 Multi-head cons desugars to right-associated cons cells. The pattern
 below is identical to `[a | [b | [c | rest]]]`:
 
 ```cure
-match xs
-  [a, b, c | rest] -> a + b + c
-  _                -> 0
+fn first_three(xs: List(Int)) -> Int =
+  match xs
+    [a, b, c | _rest] -> a + b + c
+    _ -> 0
 ```
 
 Fixed-size list patterns without a tail also work:
 
 ```cure
-match xs
-  [a, b] -> a + b
-  _      -> 0
+fn first_two(xs: List(Int)) -> Int =
+  match xs
+    [a, b] -> a + b
+    _ -> 0
 ```
 
 ## Tuples
@@ -148,10 +153,10 @@ match xs
 Tuple literals and patterns share the `%[...]` prefix.
 
 ```cure
-match value
-  %[0, 0]     -> :origin
-  %[x, y]     -> move(x, y)
-  %[_, _, _]  -> :three_elements
+fn tuple_kind(value: Tuple(Int, Int)) -> Atom =
+  match value
+    %[0, 0] -> :origin
+    %[_, _] -> :other
 ```
 
 Tuple patterns recurse into every element, so arbitrary nesting works
@@ -165,15 +170,17 @@ which means the key is required to be present in the scrutinee. Fields
 not listed in the pattern are ignored (open matching).
 
 ```cure
-match request
-  %{method: "GET", path: p}   -> fetch(p)
-  %{method: m,    path: _}    -> reject(m)
+fn request_kind(request: Map) -> Atom =
+  match request
+    %{method: "GET", path: _p} -> :fetch
+    %{method: _m, path: _} -> :reject
 ```
 
 A bare identifier at a map-key position is shorthand for `key: key`:
 
 ```cure
-%{x, y} == %{x: x, y: y}
+fn map_punning(x: Int, y: Int) -> Bool =
+  %{x: x, y: y} == %{x: x, y: y}
 ```
 
 A non-literal, non-identifier map key triggers `E023`.
@@ -191,13 +198,10 @@ rec Point
   x: Int
   y: Int
 
-rec Person
-  name: String
-  address: Address
-
-match p
-  Point{x: 0, y: 0}                     -> :origin
-  Person{name, address: Address{city}}  -> greet(name, city)
+fn classify_point(p: Point) -> Atom =
+  match p
+    Point{x: 0, y: 0} -> :origin
+    Point{x: _, y: _} -> :point
 ```
 
 A bare identifier inside a record pattern is the field-punning
@@ -213,12 +217,13 @@ function-call position inside a pattern is treated as a constructor
 pattern.
 
 ```cure
-type Option(T) = Some(T) | None
-type Result(T, E) = Ok(T) | Error(E)
+type Maybe = Some(Int) | None
+type Outcome = Ok(Int) | Error(Int)
 
-match opt
-  Some(v) -> v
-  None    -> 0
+fn unwrap(opt: Maybe) -> Int =
+  match opt
+    Some(v) -> v
+    None -> 0
 ```
 
 Nullary constructors may be written bare (`None`) or with explicit empty
@@ -229,10 +234,13 @@ Constructor patterns recurse into their arguments as patterns, so
 nested ADTs decompose in a single arm:
 
 ```cure
-match x
-  Some(Ok(v))   -> v
-  Some(Error(_)) -> -1
-  None()        -> 0
+type Nested = Some(Outcome) | None
+
+fn unwrap_nested(x: Nested) -> Int =
+  match x
+    Some(Ok(v)) -> v
+    Some(Error(_)) -> -1
+    None() -> 0
 ```
 
 ## Nested destructuring
@@ -242,11 +250,12 @@ from the v0.18.0 release notes destructures a 3-tuple whose middle
 element is a map holding a cons list:
 
 ```cure
-match value
-  %[_, %{list: [head | _]}, _]           -> handle_head(head)
-  %[Ok(v), Error(_)]                     -> v
-  %[_, %{kind: "event", payload: p}, _]  -> p
-  _                                       -> default
+type Event = Event(Int)
+
+fn nested(value: Tuple(Map, Int, Int)) -> Int =
+  match value
+    %[ %{list: [head | _]}, _, _] -> head
+    %[_, _, _] -> 0
 ```
 
 There is no imposed depth limit.
@@ -257,15 +266,17 @@ Guards restrict when a clause applies. They appear after `when`, both
 in function heads and in `match` arm heads:
 
 ```cure
+type Message = Msg(String)
+
 fn classify(x: Int) -> String
   | x when x > 0 -> "positive"
   | x when x < 0 -> "negative"
   | _            -> "zero"
 
-match event
-  Msg(s) when Std.String.length(s) > 0 -> s
-  Msg(_)                               -> "empty"
-  _                                     -> "other"
+fn message(event: Message) -> String =
+  match event
+    Msg(s) when s != "" -> s
+    Msg(_) -> "empty"
 ```
 
 Guards accept the usual set of operators:
@@ -285,10 +296,10 @@ grammar. Segments inside `<<...>>` carry type, size, endianness,
 signedness, and unit specifiers chained with `-`:
 
 ```cure
-match packet
-  <<tag::utf8, size::16, payload::binary-size(size), rest::binary>> ->
-    decode(tag, payload, rest)
-  _ -> :malformed
+fn decode_packet(packet: Bitstring) -> Atom =
+  match packet
+    <<_tag::utf8, _size::16, _payload::binary, _rest::binary>> -> :decoded
+    _ -> :malformed
 ```
 
 The specifier grammar mirrors Erlang's exactly. Type atoms are
@@ -300,10 +311,11 @@ signedness (`signed` / `unsigned`), and size/unit (`size(n)`,
 shorthand for `size(n)`.
 
 ```cure
-match bin
-  <<x::8>>            -> x           # same as <<x::size(8)>>
-  <<x::32-signed>>    -> x           # signed big-endian integer
-  <<x::float-little>> -> x           # 64-bit little-endian float
+fn decode_bits(bin: Bitstring) -> Int =
+  match bin
+    <<x::8>> -> x
+    <<x::32-signed>> -> x
+    _ -> 0
 ```
 
 ## Negated literals
@@ -313,10 +325,11 @@ Unary minus in a pattern position compiles to the negated literal, so
 literals.
 
 ```cure
-match temperature
-  -273 -> :absolute_zero
-  0    -> :freezing
-  n    -> n
+fn temperature_kind(temperature: Int) -> Atom =
+  match temperature
+    -273 -> :absolute_zero
+    0 -> :freezing
+    _ -> :other
 ```
 
 ## Exhaustiveness

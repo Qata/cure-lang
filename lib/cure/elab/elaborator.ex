@@ -1334,7 +1334,7 @@ defmodule Cure.Elab.Elaborator do
   # application elaboration initially asks for an inferred argument type. Its
   # effectful first bind gives us the payload type needed to switch to the
   # checking path; that path then constructs the complete bind chain and keeps
-  # the Effect wrapper visible until the explicit unsafe boundary.
+  # the Effect wrapper visible until the call to `run`.
   defp infer_do_block({:block, _meta, _stmts} = block, [first | _], names, ctx, env) do
     with {:assignment, _assignment_meta, [_pattern, rhs]} <- first,
          {:ok, _rhs_core, {:veffect_type, result_type}} <- elaborate_expr_typed(rhs, names, ctx, env),
@@ -1353,11 +1353,10 @@ defmodule Cure.Elab.Elaborator do
 
   defp require_unsafe_call(meta, name, resolved, env) do
     required? =
-      name == "run" or
-        case Env.get_def(env, resolved) do
-          %{unsafe: true} -> true
-          _ -> false
-        end
+      case Env.get_def(env, resolved) do
+        %{unsafe: true} -> true
+        _ -> false
+      end
 
     if required? and not Keyword.get(meta, :unsafe, false) do
       {:error,
@@ -9639,7 +9638,7 @@ defmodule Cure.Elab.Elaborator do
       reason: reason,
       span: info && info.whole,
       name_span: info && info.name,
-      grade_span: info && info.annotation,
+      grade_span: info && (Map.get(info.fields, :grade) || info.annotation),
       initializer_span: surface_expression_span(rhs),
       shadow_span: shadow_span
     }

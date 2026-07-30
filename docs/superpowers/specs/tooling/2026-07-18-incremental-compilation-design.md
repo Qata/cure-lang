@@ -357,7 +357,7 @@ builds).
   case (`cure.compile_stdlib`) is unaffected — there, every Std↔Std edge,
   including ambient `@prelude` ones, is within the single scanned universe.
   The safe, minimal mitigation, consistent with this design's existing
-  coarse-but-safe `toolchain` hash: add a `stdlib_hash` fingerprint for project
+  coarse-but-safe compiler hash: add a stdlib artifact digest for project
   builds only — the same pattern as `toolchain` (sorted, concatenated,
   SHA-256'd `Cure.Std.*.beam` content in the stdlib's own `output_dir`),
   stored once at the top of a project's manifest; a mismatch marks every

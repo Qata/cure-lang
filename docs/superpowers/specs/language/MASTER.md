@@ -383,10 +383,9 @@ order: inference → `do` → `|>` → `where` → `beam_ops` surface.
   `Effect(T) ≡ T`. Elimination is `let`-as-bind only; matching directly on an
   effect scrutinee is rejected. Only transparency: checking-mode auto-`pure`
   under an `Effect(R)` goal.
-- **`pure` in; deliberately NO safe `run` out.** The asymmetry is the point
-  (Haskell IO/Koka/Frank). `Effect` erases (shares representation with `T`);
-  the runtime is the boundary — executing compiled code performs the effects.
-  An `unsafe run` is the only escape and is a trust hole.
+- `run` is an ordinary function at the language level. `Effect` erases and
+  shares its runtime representation with `T`, so `run` adds no runtime wrapper;
+  genuinely unsafe operations remain marked on their own declarations.
 - Functional-core/effectful-shell corollary: reply *logic* stays pure
   (`handle : (r: Req) -> ReplyOf(r)` is pure/total); the effect wraps only
   `call`/`reply`/`receive`.

@@ -46,9 +46,9 @@ implies: `do` must keep the bind explicit (`x <- e`), never silently peel an eff
   *runs* them. Because `Effect` erases to nothing (`Effect(T)` and `T` share a representation — verified: calling an
   emitted `run/0` returns the bare value), "running" is not a callable op — executing the compiled code performs
   the effects and yields the `T`. From the host (Erlang/Elixir/tests) you just call the function.
-- **An `unsafe run` is the only escape and is a trust hole.** If interop genuinely needs a `T` from `Effect(T)` in
-  pure position, it goes through the `unsafe`/`believe_me` taxonomy — outside the TCB guarantees, never the normal
-  path. Do not add a safe `run`.
+- **`run` is an ordinary function.** `Effect(T)` and `T` share a runtime
+  representation, so `run` adds no wrapper and does not require a language-level
+  `unsafe` marker. Unsafe interop operations remain marked individually.
 - **Reply-handling corollary (functional core / effectful shell).** Obtaining a reply (`call`/`subject_receive`) is
   effectful, so the reply's *handling context* is in `Effect` — but the reply *logic* stays pure: apply pure
   functions to the bound reply and `pure`-lift (`r <- call(s, q); pure(summarise(r))`). Cure's OTP already embodies

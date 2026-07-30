@@ -64,7 +64,7 @@ Every Cure module starts with `mod ModuleName`. Functions are declared with `fn`
 cure compile examples/hello.cure
 ```
 
-This runs the full pipeline -- lexer, parser, bidirectional type checker, BEAM code generation -- and writes a `.beam` file to `_build/cure/ebin/`. You can specify a different output directory:
+This runs the full pipeline -- lexer, parser, bidirectional type checker, BEAM code generation -- and publishes a verified artifact generation under `_build/cure/project/ebin/`. You can specify a different output directory:
 
 ```bash
 cure compile examples/hello.cure --output-dir ./out
@@ -73,7 +73,7 @@ cure compile examples/hello.cure --output-dir ./out
 Compile an entire directory at once:
 
 ```bash
-cure compile examples/ --output-dir _build/cure/ebin
+cure compile examples/ --output-dir _build/cure/project/ebin
 ```
 
 ## Running

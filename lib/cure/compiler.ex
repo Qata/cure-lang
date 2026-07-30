@@ -34,7 +34,8 @@ defmodule Cure.Compiler do
 
   ## Options
 
-  - `:output_dir` -- directory for `.beam` output (default: `"_build/cure/ebin"`)
+  - `:output_dir` -- directory for standalone `.beam` output
+    (default: `"_build/cure/scratch/ebin"`)
   - `:emit_events` -- whether to emit pipeline events (default: `true`)
   - `:source_roots` -- directories containing sibling `.cure` modules that may
     be imported with `use` (default: the source file's directory)
@@ -68,19 +69,22 @@ defmodule Cure.Compiler do
   end
 
   @doc """
-  Load a just-emitted `<output_dir>/<module>.beam` into the VM via
-  `:code.load_binary/3` — no code-path mutation. Used by multi-file
-  builds so later files' codegen can resolve imports of earlier ones.
+  Load a module only when it is claimed by a complete verified artifact set.
+
+  The whole set is preflighted before loading; a just-emitted standalone BEAM
+  without a manifest is deliberately rejected.
   """
   @spec load_emitted(module(), Path.t()) :: :ok | {:error, term()}
   def load_emitted(module, output_dir) when is_atom(module) and is_binary(output_dir) do
-    module_name = module |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
-    path = Path.join(output_dir, "#{module_name}.beam")
-
-    with {:ok, binary} <- File.read(path),
-         {:module, ^module} <- :code.load_binary(module, String.to_charlist(path), binary) do
+    with {:ok, set} <- Cure.Compiler.Artifacts.open_verified_set(output_dir),
+         true <-
+           Enum.any?(set.modules, fn {_name, entry} ->
+             Enum.any?(Map.get(entry, :artifacts, []), &(&1.module == Atom.to_string(module)))
+           end),
+         :ok <- Cure.Compiler.Artifacts.load_verified_set(set.artifact_root) do
       :ok
     else
+      false -> {:error, :artifact_not_manifested}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -91,7 +95,8 @@ defmodule Cure.Compiler do
   ## Options
 
   - `:file` -- filename for error messages (default: `"nofile"`)
-  - `:output_dir` -- directory for `.beam` output (default: `"_build/cure/ebin"`)
+  - `:output_dir` -- directory for standalone `.beam` output
+    (default: `"_build/cure/scratch/ebin"`)
   - `:emit_events` -- whether to emit pipeline events (default: `true`)
   """
   @spec compile_string(String.t(), keyword()) ::
@@ -110,7 +115,7 @@ defmodule Cure.Compiler do
           {:ok, module(), list(), Cure.Elab.CheckedModule.t() | nil} | {:error, term()}
   def compile_string_with_artifact(source, opts \\ []) do
     file = Keyword.get(opts, :file, "nofile")
-    output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
+    output_dir = Keyword.get(opts, :output_dir, "_build/cure/scratch/ebin")
     emit? = Keyword.get(opts, :emit_events, true)
     declared_phases = Keyword.get(opts, :declared_phases)
     prelude_providers = Keyword.get(opts, :prelude_providers, [])
@@ -124,6 +129,7 @@ defmodule Cure.Compiler do
            {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
            {:ok, units, cg_warnings, artifact} <-
              codegen(ast, source, file, emit?, output_dir, declared_phases),
+           units = inject_artifact_provenance(units, source, file, artifact, opts),
            {:ok, module, warnings} <-
              write_beam_units(units, output_dir, emit?, file, cg_warnings) do
         if artifact, do: Cure.Elab.Program.publish_checked_interface(artifact)
@@ -189,7 +195,19 @@ defmodule Cure.Compiler do
              module_index: Cure.Compiler.ModuleIndex.t()
            }}
           | {:error, {Path.t(), term()} | term()}
-  def compile_files(files, opts \\ []) when is_list(files) do
+  def compile_files(files, opts \\ [])
+
+  def compile_files([], _opts) do
+    {:ok,
+     %{
+       compiled: [],
+       errors: [],
+       cycles: [],
+       module_index: %Cure.Compiler.ModuleIndex{}
+     }}
+  end
+
+  def compile_files(files, opts) when is_list(files) do
     files = files |> Enum.map(&Path.expand/1) |> Enum.uniq()
 
     with {:ok, plan} <- bulk_plan(files, Keyword.get(opts, :plan)) do
@@ -202,54 +220,93 @@ defmodule Cure.Compiler do
 
       compile_opts =
         opts
-        |> Keyword.delete(:plan)
-        |> Keyword.delete(:load_emitted)
-        |> Keyword.delete(:file_options)
-        |> Keyword.delete(:continue_on_error)
+        |> Keyword.drop([
+          :plan,
+          :load_emitted,
+          :file_options,
+          :continue_on_error,
+          :artifact_kind,
+          :verify_stdlib,
+          :stdlib_artifact_digest,
+          :package_artifact_sets,
+          :package_artifact_digests
+        ])
         |> Keyword.put(:source_roots, roots)
         |> Keyword.put(:prelude_providers, plan.providers)
         |> Keyword.put(:module_index, plan.module_index)
 
       load? = Keyword.get(opts, :load_emitted, true)
       continue? = Keyword.get(opts, :continue_on_error, false)
-      file_options = Keyword.get(opts, :file_options, fn _path -> [] end)
-      output_dir = Keyword.get(compile_opts, :output_dir, "_build/cure/ebin")
+      output_dir = Keyword.get(compile_opts, :output_dir, "_build/cure/project/ebin")
+      kind = Keyword.get(opts, :artifact_kind, :project)
 
-      Enum.reduce_while(plan.ordered, {:ok, [], []}, fn path, {:ok, compiled, errors} ->
-        path_opts = Keyword.merge(compile_opts, file_options.(path))
+      sweep_opts =
+        [
+          source_paths: plan.ordered,
+          source_roots: roots,
+          output_dir: output_dir,
+          kind: kind,
+          repair: true,
+          compile_opts: compile_opts
+        ]
+        |> maybe_put_sweep_opt(opts, :verify_stdlib)
+        |> maybe_put_sweep_opt(opts, :stdlib_artifact_digest)
+        |> maybe_put_sweep_opt(opts, :package_artifact_sets)
+        |> maybe_put_sweep_opt(opts, :package_artifact_digests)
 
-        case compile_file(path, path_opts) do
-          {:ok, module, warnings} ->
-            case if(load?, do: load_emitted(module, output_dir), else: :ok) do
-              :ok ->
-                {:cont, {:ok, [{path, module, warnings} | compiled], errors}}
+      case Cure.Compiler.Artifacts.sweep(sweep_opts) do
+        {:ok, result} ->
+          with {:ok, set} <- Cure.Compiler.Artifacts.open_verified_set(result.artifact_root),
+               :ok <-
+                 if(load?,
+                   do: Cure.Compiler.Artifacts.load_verified_set(result.artifact_root),
+                   else: :ok
+                 ) do
+            compiled =
+              plan.ordered
+              |> Enum.flat_map(fn source_path ->
+                case Enum.find(set.modules, fn {_name, entry} ->
+                       Path.expand(get_in(entry, [:source, :path])) == Path.expand(source_path)
+                     end) do
+                  {name, entry} ->
+                    if Map.has_key?(result.rebuilt, name) do
+                      module = String.to_existing_atom("Cure." <> name)
+                      [{get_in(entry, [:source, :path]), module, Map.get(result.warnings, name, [])}]
+                    else
+                      []
+                    end
 
-              {:error, reason} ->
-                bulk_compile_error(
-                  path,
-                  {:beam_load_error, module, reason},
-                  compiled,
-                  errors,
-                  continue?
-                )
-            end
+                  nil ->
+                    []
+                end
+              end)
 
-          {:error, reason} ->
-            bulk_compile_error(path, reason, compiled, errors, continue?)
-        end
-      end)
-      |> case do
-        {:ok, compiled, errors} ->
+            {:ok,
+             %{
+               compiled: compiled,
+               errors: [],
+               cycles: result.cycles,
+               module_index: plan.module_index
+             }}
+          end
+
+        {:error, {:artifact_sweep_failed, errors}} when continue? ->
           {:ok,
            %{
-             compiled: Enum.reverse(compiled),
-             errors: Enum.reverse(errors),
+             compiled: [],
+             errors:
+               Enum.map(errors, fn {target, reason} ->
+                 {bulk_error_path(target, files), reason}
+               end),
              cycles: plan.cycles,
              module_index: plan.module_index
            }}
 
-        {:error, _} = error ->
-          error
+        {:error, {:artifact_sweep_failed, [{target, reason} | _]}} ->
+          {:error, {bulk_error_path(target, files), reason}}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
@@ -273,11 +330,32 @@ defmodule Cure.Compiler do
 
   defp bulk_plan(_files, _invalid), do: {:error, :invalid_bulk_compile_plan}
 
-  defp bulk_compile_error(path, reason, compiled, errors, true),
-    do: {:cont, {:ok, compiled, [{path, reason} | errors]}}
+  defp maybe_put_sweep_opt(sweep_opts, opts, key) do
+    if Keyword.has_key?(opts, key),
+      do: Keyword.put(sweep_opts, key, Keyword.fetch!(opts, key)),
+      else: sweep_opts
+  end
 
-  defp bulk_compile_error(path, reason, _compiled, _errors, false),
-    do: {:halt, {:error, {path, reason}}}
+  defp bulk_error_path(target, files) when is_binary(target) do
+    if File.regular?(target) do
+      target
+    else
+      Enum.find(files, hd(files), fn path ->
+        case File.read(path) do
+          {:ok, source} ->
+            Regex.match?(
+              ~r/^\s*(?:mod|proof|actor|fsm|sup|app)\s+#{Regex.escape(target)}(?:\s|$)/m,
+              source
+            )
+
+          {:error, _} ->
+            false
+        end
+      end)
+    end
+  end
+
+  defp bulk_error_path(_target, files), do: hd(files)
 
   # `BeamWriter.compile_forms/2` returns `{:error, errors, warnings}` (3-tuple)
   # on lint/compile failures, but the public `compile_string/2`,
@@ -317,16 +395,70 @@ defmodule Cure.Compiler do
   defp write_beam_units([], _output_dir, _emit?, _file, _warnings),
     do: {:error, {:codegen_error, :no_compilation_units}}
 
+  defp inject_artifact_provenance(units, source, file, artifact, opts) do
+    compiler_hash = Cure.Compiler.BuildManifest.toolchain_fingerprint()
+
+    base =
+      Keyword.get_lazy(opts, :artifact_provenance, fn ->
+        source_hash = :crypto.hash(:sha256, source)
+
+        %{
+          compiler_hash: compiler_hash,
+          producer_snapshot:
+            :crypto.hash(
+              :sha256,
+              :erlang.term_to_binary(
+                %{compiler_hash: compiler_hash, source_hash: source_hash},
+                [:deterministic]
+              )
+            )
+        }
+      end)
+
+    interface_hash =
+      case artifact do
+        %Cure.Elab.CheckedModule{interface: %Cure.Compiler.ModuleInterface{interface_hash: hash}} ->
+          hash
+
+        _ ->
+          nil
+      end
+
+    Enum.map(units, fn {module, forms} ->
+      provenance =
+        base
+        |> Map.new()
+        |> Map.merge(%{
+          format: 1,
+          module: module |> Atom.to_string() |> String.replace_prefix("Cure.", ""),
+          source_path: Path.expand(file),
+          source_hash: :crypto.hash(:sha256, source),
+          interface_hash: interface_hash
+        })
+
+      {attrs, rest} = Enum.split_while(forms, &match?({:attribute, _, _, _}, &1))
+      {module, attrs ++ [{:attribute, 1, :cure_artifact, [provenance]}] ++ rest}
+    end)
+  end
+
   defp compile_and_load_units([{main_module, _main_forms} | _] = units, file) do
     Enum.reduce_while(units, {:ok, main_module}, fn {expected_module, forms}, {:ok, main} ->
-      case BeamWriter.compile_and_load(forms) do
-        {:ok, _loaded} ->
-          {:cont, {:ok, main}}
-
-        {:error, reason} ->
-          stage = if match?({:load_failed, _}, reason), do: :beam_loader, else: :beam_writer
-
-          {:halt, {:error, {:codegen_failure, %{stage: stage, module: expected_module, file: file, reason: reason}}}}
+      with {:ok, ^expected_module, binary, _warnings} <- BeamWriter.compile_forms(forms),
+           :ok <- Cure.Compiler.Artifacts.verify_binary(binary, expected_module),
+           {:module, ^expected_module} <-
+             :code.load_binary(expected_module, ~c"nofile", binary) do
+        {:cont, {:ok, main}}
+      else
+        reason ->
+          {:halt,
+           {:error,
+            {:codegen_failure,
+             %{
+               stage: :verified_beam_loader,
+               module: expected_module,
+               file: file,
+               reason: reason
+             }}}}
       end
     end)
   end
@@ -403,8 +535,9 @@ defmodule Cure.Compiler do
            {:ok, ast} <- parse(tokens, file, emit?, edition, prelude_providers),
            ast = inject_prelude_uses(ast, prelude_providers),
            {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
-           {:ok, units, _cg_warnings, _artifact} <-
-             codegen(ast, source, file, emit?, nil, declared_phases) do
+           {:ok, units, _cg_warnings, artifact} <-
+             codegen(ast, source, file, emit?, nil, declared_phases),
+           units = inject_artifact_provenance(units, source, file, artifact, opts) do
         # compile_and_load/2 intentionally does NOT persist bytecode to
         # disk -- it only loads into the current VM.
         compile_and_load_units(units, file)

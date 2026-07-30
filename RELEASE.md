@@ -55,12 +55,13 @@ condition. It replaced the legacy `if` / `elif` / `else` chain in an
 earlier release and ships now with a complete operational story:
 
 ```cure
-pickup
-  status >= 500 -> :server_error
-  status >= 400 -> :client_error
-  status >= 300 -> :redirect
-  status >= 200 -> :ok
-  else          -> :informational
+fn classify_status(status: Int) -> Atom =
+  pickup
+    status >= 500 -> :server_error
+    status >= 400 -> :client_error
+    status >= 300 -> :redirect
+    status >= 200 -> :ok
+    else -> :informational
 ```
 
 The mental model is a single sentence that returns repeatedly through

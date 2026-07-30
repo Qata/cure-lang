@@ -16,7 +16,7 @@ defmodule Cure.Elab.UnsafeEffectTest do
     assert Keyword.get(meta, :unsafe) == true
   end
 
-  test "run requires the explicit unsafe marker" do
+  test "run is an ordinary function and needs no unsafe marker" do
     source = """
     mod UnsafeRunMissing
       @extern(:erlang, :abs, 1)
@@ -25,9 +25,7 @@ defmodule Cure.Elab.UnsafeEffectTest do
     end
     """
 
-    assert {:error, {:source_context, {:unsafe_call_required, details}, _context}} = Program.elaborate(source)
-    assert details.callee == "run"
-    assert %Cure.Diagnostic.Span{} = details.span
+    assert {:ok, _env} = Program.elaborate(source)
   end
 
   test "@unsafe declarations require unsafe at every call site" do
@@ -43,12 +41,12 @@ defmodule Cure.Elab.UnsafeEffectTest do
     assert details.callee == "danger"
   end
 
-  test "unsafe run unwraps Effect without a runtime wrapper" do
+  test "run unwraps Effect without a runtime wrapper" do
     source = """
     mod UnsafeRunRuntime
       @extern(:erlang, :abs, 1)
       fn effect(n: Int) -> Effect(Int)
-      fn value(n: Int) -> Int = unsafe run(effect(n))
+      fn value(n: Int) -> Int = run(effect(n))
     end
     """
 
@@ -65,7 +63,7 @@ defmodule Cure.Elab.UnsafeEffectTest do
     mod UnsafeRunType
       @extern(:erlang, :abs, 1)
       fn effect(n: Int) -> Effect(Int)
-      fn value(n: Int) -> Bool = unsafe run(effect(n))
+      fn value(n: Int) -> Bool = run(effect(n))
     end
     """
 

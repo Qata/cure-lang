@@ -39,6 +39,11 @@
 # also add request. This is a public generated-API change, not a quote-port
 # refactor. The supervisor lifecycle-handle additions likewise update GSup's
 # generated module; application output remains byte-identical.
+#
+# Artifact manifest v3 adds compiler/source/producer-snapshot provenance to every
+# BEAM. That identity intentionally changes with the compiler fingerprint, so
+# this gate hashes the disassembled generated program with only the provenance
+# attribute removed rather than hashing the complete artifact bytes.
 defmodule Cure.Compiler.ActorQuoteGoldenTest do
   use ExUnit.Case, async: false
 
@@ -56,7 +61,7 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
            reply state
 
      fn make_request() -> ActorRequest = Read()
-     """, "6dbb6d8aaa93d6ed9e3636d544f0ef80c71919a518319b51af251da1c050bab2"},
+     """, "af82ce724002dece40f265167d51f940618bbe9b8fc84023f36b23f4df52fb39"},
     {"GSup",
      """
      mod M
@@ -64,7 +69,7 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
 
        sup Cure.Generated.GSup
          children []
-     """, "89d79a0183396494b6ee3cb9a10e7870c23a6e394627a0c916da92f3a64504a0"},
+     """, "bd1d926289582c1856e550749ae639f16ecc7ceb406154b7f93767c1e4d0dbb7"},
     {"GApp",
      """
      mod M
@@ -72,7 +77,7 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
 
        app Cure.Generated.GApp
          root Cure.Generated.GSup
-     """, "0fc99d391075931aa2c59ec052462675d4f45a754d10ebf45403601355699dfa"},
+     """, "6af20d5844d402df02186c4f899f74f012134a7409ae3c6eced73f5746684a16"},
     {"GLifecycle",
      """
      mod M
@@ -84,7 +89,7 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
            Inc -> state + 1
          terminate :shutdown
          code_change %[:ok, state + 1]
-     """, "9a13e85e59e6a53f8647b25efb2e4f2da698a83bafde0aa8a47c14fc40e8403a"}
+     """, "ab87696397ac569e01c029d10b39d50b7fe5f6f1bcf5001e71efdc79d4bcd9ef"}
   ]
 
   defp beam_sha256(name, src) do
@@ -96,8 +101,22 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
       assert {:ok, _module, _warnings} =
                Cure.Compiler.compile_string(src, output_dir: dir, emit_events: false)
 
-      bin = File.read!(Path.join(dir, "Cure.Generated.#{name}.beam"))
-      :crypto.hash(:sha256, bin) |> Base.encode16(case: :lower)
+      beam = Path.join(dir, "Cure.Generated.#{name}.beam")
+
+      {:beam_file, module, exports, attributes, _compile_info, functions} =
+        beam |> File.read!() |> :beam_disasm.file()
+
+      semantic_program = {
+        module,
+        exports,
+        Enum.reject(attributes, fn {name, _value} -> name == :cure_artifact end),
+        functions
+      }
+
+      semantic_program
+      |> :erlang.term_to_binary([:deterministic])
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
     after
       File.rm_rf!(dir)
     end

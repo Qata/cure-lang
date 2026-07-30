@@ -93,17 +93,13 @@ defmodule Cure.Compiler.FixityPropagationTest do
     # import, so M elaborates the operator meaning regardless of sibling order.
     out = Path.join(dir, "ebin")
 
-    Enum.each(ordered, fn path ->
-      assert {:ok, module, []} =
-               Cure.Compiler.compile_file(path,
-                 output_dir: out,
-                 emit_events: false,
-                 source_roots: [dir],
-                 prelude_providers: providers
-               )
-
-      assert :ok = Cure.Compiler.load_emitted(module, out)
-    end)
+    assert {:ok, %{errors: []}} =
+             Cure.Compiler.compile_files(ordered,
+               output_dir: out,
+               emit_events: false,
+               source_roots: [dir],
+               prelude_providers: providers
+             )
 
     assert apply(:"Cure.M", :go, []) == 1
   end

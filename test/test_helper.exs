@@ -2,122 +2,39 @@
 # Tests tagged `:examples` are opt-in via `mix test --include examples`.
 ExUnit.configure(exclude: [examples: true])
 
-# Ensure the Cure standard library is compiled to BEAM before the suite
-# runs.
-#
-# Several test files (notably `test/cure/stdlib/iter_test.exs`,
-# `test/cure/stdlib/pbt_test.exs`, and anything else that relies on
-# `Cure.Stdlib.Preload.preload/1`) expect
-# `_build/cure/ebin/Cure.Std.*.beam` to exist at startup. Locally we
-# usually have the beams lying around from a previous `mix cure.compile_stdlib`
-# invocation, so everything works. In CI (and on any truly fresh
-# checkout) there is no `_build/cure/ebin` yet, so the preload helper
-# silently does nothing and the tests above fail with
-# `UndefinedFunctionError: function :"Cure.Std.Iter".from_list/1 is undefined`.
-#
-# Running the compile task here pays the cost once per suite, guarantees
-# the beams are present, and keeps the dependency explicit.
-#
-# We compile UNCONDITIONALLY rather than gating on the presence of a single
-# sentinel beam. A presence check cannot notice that a stdlib source changed
-# since its beam was built, so an edited module (e.g. `lib/std/vector.cure`)
-# would leave a stale `_build/cure/ebin/*.beam` in place and produce ordering-
-# dependent test flakes. A full recompile once per suite is a few seconds and
-# is always correct.
-IO.puts("test_helper: compiling Cure stdlib")
-Mix.Task.run("cure.compile_stdlib")
-
-# --- C1: load + stick the canonical stdlib -------------------------------------
-#
-# The BEAM has one global code-table slot per module name. `cure.compile_stdlib`
-# has just written the canonical `_build/cure/ebin/Cure.*.beam`. Load every one of
-# them and mark it STICKY (`:code.stick_mod/1`): a sticky module refuses
-# `:code.load_binary`/`load_file` with `{:error, :sticky_directory}`, so no later
-# producer test can overwrite the canonical surface consumers depend on. Any
-# producer still emitting a bare canonical name now fails loudly and
-# deterministically (a worklist item) instead of silently clobbering.
+# Sweep once, load exactly the verified generation, then make that resident
+# generation sticky for the duration of the suite. The manifest is the sole
+# completeness authority; test startup does not rescan source declarations or
+# infer freshness from filenames.
 (fn ->
-   ebin = "_build/cure/ebin"
+   IO.puts("test_helper: sweeping Cure stdlib artifacts")
 
-   # Scope strictly to the stdlib namespace `Cure.Std.*`. `_build/cure/ebin` is the
-   # stdlib compile output, but tests that `Cure.Compiler.compile_and_load` an
-   # ad-hoc `mod Hello` / `mod M` also drop a `Cure.<Name>.beam` here as a side
-   # effect. Those are NOT stdlib and must not be stuck (nor counted "extra" below):
-   # every module declared in `lib/std/*.cure` is `Std.*`, so the canonical surface
-   # is exactly `Cure.Std.*`.
+   {:ok, result} =
+     Cure.Compiler.Artifacts.sweep(
+       kind: :stdlib,
+       source_roots: ["lib/std"],
+       output_dir: "_build/cure/ebin",
+       repair: true,
+       compile_opts: [emit_events: false]
+     )
+
+   :ok = Cure.Compiler.Artifacts.load_verified_set(result.artifact_root)
+   {:ok, artifact_set} = Cure.Compiler.Artifacts.open_verified_set(result.artifact_root)
+
    loaded =
-     ebin
-     |> Path.join("Cure.Std.*.beam")
-     |> Path.wildcard()
-     |> Enum.map(fn path ->
-       mod = path |> Path.basename(".beam") |> String.to_atom()
-       {:module, ^mod} = :code.ensure_loaded(mod)
-       # `:code.stick_mod/1` returns `true` (not `:ok`).
-       true = :code.stick_mod(mod)
-       mod
+     artifact_set.modules
+     |> Map.values()
+     |> Enum.flat_map(&Map.fetch!(&1, :artifacts))
+     |> Enum.map(fn artifact ->
+       module = String.to_atom(artifact.module)
+       {:file, _} = :code.is_loaded(module)
+       true = :code.stick_mod(module)
+       module
      end)
      |> MapSet.new()
 
    if MapSet.size(loaded) == 0 do
-     raise """
-     test_helper: no canonical stdlib beams found in #{ebin}.
-     Expected `mix cure.compile_stdlib` to have written Cure.*.beam there.
-     """
-   end
-
-   # Completeness: every module DECLARED in lib/std/*.cure must be resident, or a
-   # consumer could hit a not-loaded module the sticky set never covered.
-   mod_regex = ~r/^\s*(?:mod|actor|fsm|sup|app)\s+([A-Za-z_][\w\.]*)/m
-
-   declared =
-     "lib/std/*.cure"
-     |> Path.wildcard()
-     |> Enum.flat_map(fn path ->
-       case File.read(path) do
-         {:ok, src} ->
-           mod_regex
-           |> Regex.scan(src)
-           |> Enum.map(fn [_, name] -> String.to_atom("Cure." <> name) end)
-
-         {:error, _} ->
-           []
-       end
-     end)
-     |> MapSet.new()
-
-   # Spec C1 requires catching a mismatch in EITHER direction: a declared module
-   # not compiled (missing) OR a compiled module not declared (extra) — the latter
-   # signals a stale beam or a rename that left an orphan, which would be stuck
-   # under a name no source backs.
-   missing = MapSet.difference(declared, loaded)
-   extra = MapSet.difference(loaded, declared)
-
-   unless MapSet.size(missing) == 0 do
-     raise """
-     test_helper: these stdlib modules are declared in lib/std/*.cure but were not
-     compiled to #{ebin} (so they cannot be made sticky and consumers may flake):
-     #{missing |> MapSet.to_list() |> Enum.sort() |> Enum.map_join(", ", &inspect/1)}
-
-     Run `mix cure.compile_stdlib` and check its output for compile errors.
-     """
-   end
-
-   unless MapSet.size(extra) == 0 do
-     raise """
-     test_helper: these modules were compiled to #{ebin} but are NOT declared in
-     any lib/std/*.cure (a stale beam or an orphaned rename — sticking one would
-     freeze a name no current source produces):
-     #{extra |> MapSet.to_list() |> Enum.sort() |> Enum.map_join(", ", &inspect/1)}
-
-     Delete the stale beam(s) or run a clean `mix cure.compile_stdlib`.
-     """
-   end
-
-   # A hard sanity floor in case both scans somehow degrade to empty.
-   for sentinel <- [:"Cure.Std.String", :"Cure.Std.Core", :"Cure.Std.List"] do
-     unless MapSet.member?(loaded, sentinel) and :code.is_sticky(sentinel) do
-       raise "test_helper: sentinel #{inspect(sentinel)} is not loaded+sticky; stdlib compile is incomplete."
-     end
+     raise "test_helper: verified stdlib artifact manifest is empty"
    end
 
    IO.puts("test_helper: stuck #{MapSet.size(loaded)} canonical stdlib modules")

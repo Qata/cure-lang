@@ -130,9 +130,12 @@ defmodule Cure.Watch do
           emit_error(reason, path, nil)
       end
     else
-      case Cure.Compiler.compile_file(path, emit_events: false) do
-        {:ok, mod, _warnings} ->
+      case Cure.Compiler.compile_files([path], emit_events: false) do
+        {:ok, %{compiled: [{_source, mod, _warnings}]}} ->
           info("  #{path} -> #{mod}")
+
+        {:ok, %{compiled: []}} ->
+          info("  #{path} is up-to-date")
 
         {:error, reason} ->
           emit_error(reason, path, read_source(path))

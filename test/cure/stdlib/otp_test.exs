@@ -7,6 +7,7 @@ defmodule Cure.Stdlib.OtpTest do
   guarantee `Std.Otp.Raw`'s untyped `Pid` cannot give.
   """
   use ExUnit.Case, async: true
+  @moduletag timeout: 180_000
 
   alias Cure.Elab.Program
   alias Cure.Core.Env

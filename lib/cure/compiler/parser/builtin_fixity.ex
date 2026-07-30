@@ -75,7 +75,8 @@ defmodule Cure.Compiler.Parser.BuiltinFixity do
   @builtin_fixity_table Enum.reduce(@prelude_fixity_sources, FixityTable.new(), fn path, acc ->
                           with {:ok, source} <- File.read(path),
                                {:ok, tokens} <- Lexer.tokenize(source, emit_events: false) do
-                            exprs = Parser.harvest(tokens, path, FixityTable.new(), Cure.Edition.current())
+                            logical_path = Path.join(["lib", "std", Path.basename(path)])
+                            exprs = Parser.harvest(tokens, logical_path, FixityTable.new(), Cure.Edition.current())
 
                             if FixityScan.prelude?(exprs),
                               do: FixityScan.build_table(exprs, acc),

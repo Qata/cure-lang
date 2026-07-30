@@ -239,6 +239,34 @@ defmodule Cure.Compiler.DepGraph do
     ordered
   end
 
+  @doc """
+  Deterministic dependency-first strongly connected components.
+
+  Every key appears exactly once. Acyclic nodes are returned as singleton
+  components; cycles are returned as alphabetically sorted groups. This is the
+  unit used by incremental invalidation, so invalidation never depends on which
+  member of a cycle happened to be visited first.
+  """
+  @spec components(%{k => [k]}, [k], [k]) :: [[k]] when k: term()
+  def components(dep_map, keys, priority_keys \\ []) do
+    keyset = MapSet.new(keys)
+    priority = MapSet.new(priority_keys)
+
+    edges =
+      Map.new(keys, fn key ->
+        deps =
+          dep_map
+          |> Map.get(key, [])
+          |> Enum.filter(&(MapSet.member?(keyset, &1) and &1 != key))
+          |> Enum.uniq()
+          |> Enum.sort()
+
+        {key, deps}
+      end)
+
+    do_components(edges, [], priority)
+  end
+
   @doc "Per-module closure deps (in-universe filtered, sorted). Baking input for Preload."
   @spec closure_deps_map(t()) :: %{String.t() => [String.t()]}
   def closure_deps_map(%__MODULE__{nodes: nodes, module_index: module_index}) do
@@ -496,6 +524,39 @@ defmodule Cure.Compiler.DepGraph do
           |> Map.new(fn {p, deps} -> {p, List.delete(deps, next)} end)
 
         do_kahn(edges, [next | acc], sccs, priority)
+    end
+  end
+
+  defp do_components(edges, acc, _priority) when map_size(edges) == 0,
+    do: Enum.reverse(acc)
+
+  defp do_components(edges, acc, priority) do
+    ready =
+      edges
+      |> Enum.filter(fn {_key, deps} -> deps == [] end)
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.sort_by(&{not MapSet.member?(priority, &1), &1})
+
+    if ready == [] do
+      {members, _scc_edges} = source_scc(edges)
+      remaining = Map.drop(edges, members)
+
+      remaining =
+        Map.new(remaining, fn {key, deps} ->
+          {key, deps -- members}
+        end)
+
+      do_components(remaining, [members | acc], priority)
+    else
+      remaining = Map.drop(edges, ready)
+
+      remaining =
+        Map.new(remaining, fn {key, deps} ->
+          {key, deps -- ready}
+        end)
+
+      components = Enum.map(ready, &[&1])
+      do_components(remaining, Enum.reverse(components) ++ acc, priority)
     end
   end
 

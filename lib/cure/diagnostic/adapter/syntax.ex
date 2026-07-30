@@ -176,14 +176,14 @@ defmodule Cure.Diagnostic.Adapter.Syntax do
   def from_error({:unknown_grade, details}, opts) when is_map(details) do
     span = Map.get(details, :span) || Keyword.get(opts, :span)
     supported = Map.get(details, :supported, [:erased, :linear, :affine])
-    supported_text = Enum.map_join(supported, ", ", &"`:#{&1}`")
+    supported_text = Enum.map_join(supported, ", ", &"`@#{&1}`")
 
     Diagnostic.new(
       code: "E093",
       key: :unknown_grade,
       severity: :error,
       title: "Unknown relevance grade",
-      body: Doc.paragraph("`:#{details.grade}` is not a relevance grade. Cure supports #{supported_text}."),
+      body: Doc.paragraph("`@#{details.grade}` is not a relevance grade. Cure supports #{supported_text}."),
       primary: label(span, :primary, "this grade is not defined"),
       suggestions: grade_suggestions(details, span),
       payload: details
@@ -200,7 +200,7 @@ defmodule Cure.Diagnostic.Adapter.Syntax do
       title: "Graded parameter needs a type",
       body:
         Doc.paragraph(
-          "The `:#{details.grade}` grade on `#{details.name}` controls how a value may be used, but no value type follows it."
+          "The `@#{details.grade}` grade on `#{details.name}` controls how a value may be used, but no value type follows it."
         ),
       primary:
         label(
@@ -210,7 +210,7 @@ defmodule Cure.Diagnostic.Adapter.Syntax do
         ),
       suggestions: [
         %Suggestion{
-          message: "Write `#{details.name} :#{details.grade} TypeName`",
+          message: "Write `@#{details.grade} #{details.name} : TypeName`",
           applicability: :manual
         }
       ],
@@ -648,7 +648,7 @@ defmodule Cure.Diagnostic.Adapter.Syntax do
       _ ->
         [
           %Suggestion{
-            message: "Use `:erased`, `:linear`, `:affine`, or omit the grade for unrestricted use",
+            message: "Use `@erased`, `@linear`, `@affine`, or omit the grade for unrestricted use",
             applicability: :manual
           }
         ]
@@ -659,9 +659,9 @@ defmodule Cure.Diagnostic.Adapter.Syntax do
 
   defp grade_edit(candidate, span) do
     %Suggestion{
-      message: "Replace it with `:#{candidate}`",
+      message: "Replace it with `@#{candidate}`",
       applicability: :machine_applicable,
-      edits: [%TextEdit{span: span, replacement: ":#{candidate}"}]
+      edits: [%TextEdit{span: span, replacement: "@#{candidate}"}]
     }
   end
 

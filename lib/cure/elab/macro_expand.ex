@@ -427,13 +427,21 @@ defmodule Cure.Elab.MacroExpand do
   end
 
   defp current_compiled_module?(module, source) do
-    with {:module, ^module} <- Code.ensure_loaded(module),
-         beam when is_list(beam) <- :code.which(module),
-         {:ok, source_stat} <- File.stat(source),
-         {:ok, beam_stat} <- File.stat(List.to_string(beam)) do
-      beam_stat.mtime >= source_stat.mtime
+    with {:file, _} <- :code.is_loaded(module),
+         {:ok, source_bytes} <- File.read(source),
+         attributes when is_list(attributes) <- module.module_info(:attributes),
+         provenance when is_map(provenance) <- provenance_attribute(attributes) do
+      provenance.source_hash == :crypto.hash(:sha256, source_bytes)
     else
       _ -> false
+    end
+  end
+
+  defp provenance_attribute(attributes) do
+    case Keyword.get(attributes, :cure_artifact) do
+      [provenance] when is_map(provenance) -> provenance
+      provenance when is_map(provenance) -> provenance
+      _ -> nil
     end
   end
 

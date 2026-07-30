@@ -37,7 +37,8 @@ defmodule Cure.Project.DepEditionIsolationTest do
     assert :ok = Cure.Project.resolve_deps(project)
 
     dep_ebin = Path.join(root, "_build/deps/mydep")
-    beams = Path.wildcard(Path.join(dep_ebin, "*.beam"))
+    assert {:ok, artifacts} = Cure.Compiler.Artifacts.open_verified_set(dep_ebin)
+    beams = Path.wildcard(Path.join(artifacts.artifact_root, "*.beam"))
 
     assert beams != [],
            "expected the path dep to compile under the default edition and emit a .beam, " <>

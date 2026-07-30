@@ -908,10 +908,13 @@ defmodule Cure.John do
   defp try_marcli(md, opts) do
     if Code.ensure_loaded?(Marcli) do
       try do
-        Marcli.render(md,
-          escape_sequences: ansi_enabled?(opts),
-          newline: Keyword.get(opts, :newline, "\n")
-        )
+        apply(Marcli, :render, [
+          md,
+          [
+            escape_sequences: ansi_enabled?(opts),
+            newline: Keyword.get(opts, :newline, "\n")
+          ]
+        ])
       rescue
         _ -> nil
       catch

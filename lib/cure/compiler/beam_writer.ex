@@ -129,13 +129,23 @@ defmodule Cure.Compiler.BeamWriter do
   def compile_and_load(forms) do
     case compile_forms(forms) do
       {:ok, module, binary, _warnings} ->
-        case :code.load_binary(module, ~c"nofile", binary) do
-          {:module, ^module} -> {:ok, module}
-          {:error, reason} -> {:error, {:load_failed, reason}}
+        with :ok <- verify_cure_binary(module, binary) do
+          case :code.load_binary(module, ~c"nofile", binary) do
+            {:module, ^module} -> {:ok, module}
+            {:error, reason} -> {:error, {:load_failed, reason}}
+          end
         end
 
       {:error, errors, _warnings} ->
         {:error, {:compilation_failed, errors}}
+    end
+  end
+
+  defp verify_cure_binary(module, binary) do
+    if String.starts_with?(Atom.to_string(module), "Cure.") do
+      Cure.Compiler.Artifacts.verify_binary(binary, module)
+    else
+      :ok
     end
   end
 

@@ -1223,7 +1223,7 @@ defmodule Cure.Diagnostic.Adapter.Type do
             "Graded binding needs a type",
             "`#{binding_name}` is declared `#{grade}`, but its initializer has no type Cure can synthesize without an expectation. Preserving the grade requires a real local binder, and Cure cannot construct that binder until its type is written.",
             "this grade cannot be preserved without a binding type",
-            "Write the initializer's type after `:#{grade}`, before `=`"
+            "Write the initializer's type after `#{binding_name} :`, before `=`"
           }
 
         {:ungraded, _, :shadowed_before_use} ->

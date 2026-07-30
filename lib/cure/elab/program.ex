@@ -72,8 +72,9 @@ defmodule Cure.Elab.Program do
     |> Enum.find_value(:ok, fn source ->
       case import_source_path(source) do
         {:ok, module_name, _path} ->
-          if :code.ensure_loaded(String.to_atom("Cure." <> module_name)) ==
-               {:module, String.to_atom("Cure." <> module_name)} do
+          module = String.to_atom("Cure." <> module_name)
+
+          if match?({:file, _}, :code.is_loaded(module)) do
             nil
           else
             missing_stdlib_error(module_name)
@@ -2541,13 +2542,11 @@ defmodule Cure.Elab.Program do
   end
 
   defp stdlib_source_path?(path) do
-    case Paths.source_dir() do
-      nil ->
-        false
+    expanded = Path.expand(path)
 
-      dir ->
-        String.starts_with?(Path.expand(path), Path.expand(dir) <> "/")
-    end
+    Paths.source_dirs()
+    |> Enum.map(&Path.expand/1)
+    |> Enum.any?(&(expanded == &1 or String.starts_with?(expanded, &1 <> "/")))
   end
 
   defp loader_active_stack(state) do

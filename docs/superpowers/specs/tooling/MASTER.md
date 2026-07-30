@@ -22,6 +22,15 @@ Where it conflicts with the older must-import wording below, the amendment
 controls: dependency/interface availability permits canonical qualified access;
 `use` controls bare lexical exposure.
 
+**2026-07-30 artifact-integrity amendment.**
+`2026-07-30-unified-artifact-integrity-sweep.md` extends and partially
+supersedes the incremental-compilation design. Source, interface, and toolchain
+hashes remain authoritative for invalidation, but BEAM existence is no longer
+sufficient freshness evidence. Compilation, preload, tests, bundling, and
+deployment must share one content-addressed artifact-set sweep with per-BEAM
+hashes and provenance, complete-set validation, and atomic generation
+publication.
+
 ---
 
 ## 1. Import surface & name visibility (must-import) — PARTIALLY LANDED / remainder PARKED
@@ -192,23 +201,29 @@ Mismatch ⇒ all dirty.
 providers ambiently with no `use` edge; order-edges alone would silently miss that invalidation (the exact stale-beam
 failure class this design exists to prevent). Closure is a safe superset (qualified-call edges only over-invalidate).
 
-**Mechanics:** manifest `<output_dir>/.cure_manifest` (`term_to_binary`; version/toolchain/modules with source_path,
-source_hash, interface_hash, deps, beams; atomic tmp+rename write, written only when the whole build succeeded);
-driver `Cure.Compiler.Incremental.compile_dir/3` does a single interleaved toposort walk deciding dirtiness AND
-compiling per module in one pass (a dependency's new `interface_hash` must exist before dependents are visited — no
-fixpoint). Unparseable sources stay forced compile targets (a module-name-keyed map would silently drop them).
-Deletions are scoped to this run's `source_paths` roots (stdlib and project builds share the default
-`_build/cure/ebin`; without scoping a project build would delete every stdlib beam) and run even on `all_dirty`
-builds. Failed compiles never stage manifest entries; dependents see "no stored hash" = changed.
+**Mechanics:** manifest v3 separates `workspace_key`, `input_snapshot`, and
+`artifact_digest`. It records typed compile-order/interface/runtime edges,
+module interfaces, exact BEAM hashes, stat signatures, exports, and provenance.
+The artifact digest names an immutable generation published only after full
+whole-set verification by atomically replacing `<output_dir>/current`.
+`Cure.Compiler.Incremental.compile_dir/3` processes the interface graph as
+dependency-first SCCs. Cyclic members are one invalidation unit, eliminating
+visit-order prediction. Unparseable sources stay forced compile targets.
+Standard-library and project builds use distinct artifact roots:
+`_build/cure/ebin` and `_build/cure/project/ebin`. Deletions remain scoped to
+the current source roots and run even on `all_dirty` builds. Failed compiles
+never publish a candidate generation; dependents see "no stored hash" = changed.
 `:force`/`CURE_FULL_REBUILD=1` = clean rebuild.
 
 **Correctness invariants:** never serve a stale beam; beam presence is part of dirtiness; only successful compiles
 update the manifest; any manifest absence/corruption/version mismatch ⇒ full rebuild (fail-safe is rebuild, never
 skip); hash nondeterminism only over-invalidates, never collides; deletion scoped and unconditional.
 
-**Known limitation:** a project build's graph doesn't see stdlib edges — a stdlib interface change can leave a project
-module wrongly clean; deferred mitigation = a coarse `stdlib_hash` fingerprint on project manifests. **Not
-addressed:** escript rebuild cost; `cure.bundle_stdlib_beams` keeps its own weaker mtime check into `priv/ebin/`;
+Project manifests record and verify the selected stdlib and package artifact digests.
+Bundles, escripts, releases, preload, and tests consume the same verified-set
+format. Cached verification may reuse a content hash only for an unchanged
+device/inode/size/mtime/ctime signature older than a filesystem timestamp
+fence; publication and packaging always perform full hashing.
 `test_helper.exs` stickiness/completeness checks stay as backstop.
 
 Memory note: landed UNMERGED on `core-let-binder`; traps — compile inside `order_deps`, and invalidate the

@@ -665,7 +665,7 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysis do
       "Linear value is not used",
       "#{name} is linear, so every path through this function must use it exactly once. This function does not use it.",
       "this linear parameter must be used exactly once",
-      "Use #{action_name} once on every path, or declare it `:affine` if it may be dropped"
+      "Use #{action_name} once on every path, or declare it `@affine` if it may be dropped"
     }
   end
 

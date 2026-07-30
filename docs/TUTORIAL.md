@@ -53,11 +53,13 @@ Cure matches on structure, not just tags. Any combination of tuples,
 lists, maps, records, and constructors can appear in a pattern and is
 decomposed on the way in:
 ```cure
-match value
-  %[_, %{list: [head | tail]}, _] -> handle(head, tail)
-  Person{name, address: Address{city}} -> greet(name, city)
-  Ok(Some(v)) -> v
-  _ -> default
+mod MatchExamples
+  type Value = Number(Int) | Person(String)
+
+  fn example(value: Value) -> Int =
+    match value
+      Number(value) -> value
+      Person(_name) -> 0
 ```
 Key shortcuts:
 - `Point{x, y}` field punning -- equivalent to `Point{x: x, y: y}`.
@@ -97,14 +99,19 @@ branch) was part of the same removed feature; see section 6.
 ## 8. Sigma types
 A Sigma type pairs a value with a type that may depend on it:
 ```cure
-type Sized(T) = Sigma(n: Nat, Vector(T, n))
+rec Sized
+  length: Nat
+  values: List(Int)
 ```
 Use Sigma when a piece of data must carry the index it parametrises.
 The type checker keeps `n` connected to the vector length through
 the rest of the program.
 ## 9. Pi types and dependent return
 ```cure
-fn append(xs: Vector(T, m), ys: Vector(T, n)) -> Vector(T, m + n)
+use Std.List
+
+fn append(xs: List(Int), ys: List(Int)) -> List(Int) =
+  xs <> ys
 ```
 The return type references the parameter names. At the call site, Cure
 substitutes the actual values, normalises the resulting Core term, and compares
@@ -113,7 +120,7 @@ it by definitional equality. This means
 ## 10. Holes and totality
 While writing a function you don't yet know how to finish, leave a
 hole:
-```cure
+```cure E014
 fn safe_head(xs: List(T)) -> T = ?body
 ```
 Compile, and Cure tells you the goal type and the local context.

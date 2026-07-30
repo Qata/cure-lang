@@ -28,6 +28,10 @@ mod Std.Binary
   ## The BEAM binary as a primitive base type — its visible, inspectable home.
   @builtin(:binary) primitive Binary
 
+  ## Keep Binary independent of Std.Nat in the stdlib dependency graph.
+  @extern(:cure_std_nat, :of_int, 1)
+  fn nat_of_int(i: Int) -> Nat
+
   ## `Char` lives in its own module (`Std.Char`); import it for the `List(Char)`
   ## signatures below.
   use Std.Char
@@ -65,7 +69,7 @@ mod Std.Binary
   ## The eager byte view used by `for <<b <- binary>>`. It recurses over a Nat
   ## fuel value so Binary stays below the Std.List auto-prelude dependency edge.
   fn to_bytes(b: Binary) -> List(Int) =
-    to_bytes_from(b, 0, of_int(byte_size(b)))
+    to_bytes_from(b, 0, nat_of_int(byte_size(b)))
 
   fn to_bytes_from(b: Binary, index: Int, remaining: Nat) -> List(Int) =
     match remaining

@@ -177,9 +177,31 @@ defmodule Cure.Doc.Snippets do
           prefix <> "\n" <> indent(code) <> append_support(support)
 
         :expression ->
-          prefix = pad_to_line("mod #{module}\n  fn snippet() =", max(snippet.line - 2, 1))
-          prefix <> "\n" <> indent(code, 4) <> append_support(support)
+          expression_source(module, code, snippet.line, support)
       end
+    end
+  end
+
+  defp expression_source(module, code, line, support) do
+    units =
+      code
+      |> String.split("\n")
+      |> Enum.reject(&(String.trim(&1) == "" or String.starts_with?(String.trim(&1), "#")))
+
+    if length(units) > 1 and Enum.all?(units, &(not String.starts_with?(&1, " "))) do
+      prefix = pad_to_line("mod #{module}", max(line - 1, 1))
+
+      functions =
+        units
+        |> Enum.with_index(1)
+        |> Enum.map_join("\n", fn {expression, index} ->
+          "  fn snippet_#{index}() = #{expression}"
+        end)
+
+      prefix <> "\n" <> functions <> append_support(support)
+    else
+      prefix = pad_to_line("mod #{module}\n  fn snippet() =", max(line - 2, 1))
+      prefix <> "\n" <> indent(code, 4) <> append_support(support)
     end
   end
 

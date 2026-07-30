@@ -183,9 +183,9 @@ defmodule Cure.Core.Builtins do
     |> seed_run()
   end
 
-  # `run : {a : Type} -> Effect(a) -> a` is the one deliberate escape from
-  # direct-style effects. The type parameter is erased, and the operation is
-  # lowered by the emitter to its sole present argument.
+  # `run : {a : Type} -> Effect(a) -> a` executes a direct-style effect value.
+  # It is an ordinary function at the language level: the type parameter is
+  # erased, and the emitter lowers the call to its sole present argument.
   defp seed_run(env) do
     ty =
       {:pi, :erased, {:type, 0}, {:pi, Grade.unrestricted(), {:effect_type, {:var, 0}}, {:var, 1}}}
@@ -193,7 +193,6 @@ defmodule Cure.Core.Builtins do
     env
     |> Env.add_def(:run, ty, nil, [:erased, :unrestricted])
     |> Env.register_builtin_op(:run, :effect_run)
-    |> Env.put_unsafe(:run)
   end
 
   # The family id to bake into every comparison / structural-equality codomain.

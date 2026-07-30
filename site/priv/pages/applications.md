@@ -14,7 +14,7 @@
 Cure 0.26.0 takes the supervision surface landed in v0.25.0 and wraps it in a full OTP application lifecycle. A project with a single `app` container compiles to three artefacts in one pass:
 
 1. A loaded BEAM module `:"Cure.App.<Name>"` implementing the `:application` behaviour (`start/2`, `stop/1`, and, when applicable, `start_phase/3`).
-2. An OTP `<name>.app` resource file written alongside every other Cure module under `_build/cure/ebin/`.
+2. An OTP `<name>.app` resource file written alongside the project artifact set under `_build/cure/project/ebin/`.
 3. A bootable BEAM release under `_build/cure/rel/<name>/`, produced on demand by `cure release` (or `mix cure.release`).
 
 The container slots in next to `actor` and `sup` from v0.25.0 and inherits their clause grammar (`on_start`, `on_stop`, and the new `on_phase :name` blocks).

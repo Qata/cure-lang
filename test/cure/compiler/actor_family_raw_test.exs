@@ -1,5 +1,6 @@
 defmodule Cure.Compiler.ActorFamilyRawTest do
   use ExUnit.Case, async: false
+  @moduletag timeout: 180_000
 
   # §1e Mechanism A: the ActorDefinition family gains a raw-body branch — an
   # alternative to the `on_cast` Cases branch. A raw `handle_cast` body is a

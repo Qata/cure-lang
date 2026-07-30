@@ -25,12 +25,12 @@ cure <command> [options] [arguments]
 ```bash
 cure compile hello.cure
 cure compile src/               # compiles all .cure files recursively
-cure compile hello.cure --output-dir _build/cure/ebin --verbose
+cure compile hello.cure --output-dir _build/cure/project/ebin --verbose
 ```
 
 Options:
 
-- `--output-dir DIR` (`-o`) -- output directory (default: `_build/cure/ebin`)
+- `--output-dir DIR` (`-o`) -- artifact-set root (default: `_build/cure/project/ebin`)
 - `--verbose` (`-v`) -- show detailed compilation output
 
 Compilation cannot bypass the dependent checker or trusted Core validation.
@@ -563,7 +563,7 @@ and `ensure_trailing_newline`. Silently no-ops on already-clean files.
 ### Coverage
 
 **`cure test --cover`** -- Instrument every compiled module under
-`_build/cure/ebin/` via OTP's `:cover`, run the self-hosted test suite,
+`_build/cure/project/ebin/` via OTP's `:cover`, run the self-hosted test suite,
 and emit an HTML report under `_build/cure/cover/index.html` plus a
 text summary.
 

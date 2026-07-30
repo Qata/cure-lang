@@ -30,17 +30,11 @@ Defaults mirror Erlang: `integer-unsigned-big-size(8)-unit(1)`; the
 ## Examples
 
 ```cure
-## Construct a 4-byte record.
-let header = <<42, 1, 2, 3>>
-
-## Destructure the first byte; rest::binary captures the remaining
-## bytes as a Bitstring.
-match buf
-  <<b, _rest::binary>> -> b
-  <<>>                 -> 0
-
-## Fixed-width: read a 16-bit big-endian integer.
-let <<len::16, payload::binary-size(len), _::binary>> = frame
+fn first_byte(buf: Bitstring) -> Int =
+  match buf
+    <<b, _rest::binary>> -> b
+    <<>> -> 0
+    _ -> 0
 ```
 
 ## Pattern positions

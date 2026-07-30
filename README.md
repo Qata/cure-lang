@@ -90,9 +90,10 @@ mod MyApp.Math
 
   type Sign = Positive | Negative | Zero
 
-  fn factorial(n: Nat) -> Nat
-    | 0 -> 1
-    | n -> n * factorial(n - 1)
+  fn factorial(n: Nat) -> Nat =
+    match n
+      Z() -> S(Z())
+      S(k) -> S(k)
 
   fn classify(x: Int) -> Sign
     | x when x > 0 -> Positive
@@ -112,7 +113,7 @@ mod MyApp.Math
 mix cure.compile path/to/file.cure
 
 # Compile all .cure files in a directory
-mix cure.compile path/to/dir/ --output-dir _build/cure/ebin
+mix cure.compile path/to/dir/ --output-dir _build/cure/project/ebin
 ```
 
 ## Interactive REPL (v0.24.0)

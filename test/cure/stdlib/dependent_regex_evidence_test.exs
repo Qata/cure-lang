@@ -118,7 +118,18 @@ defmodule Cure.Stdlib.DependentRegexEvidenceTest do
 
   test "shape certificates are erased from emitted decoder functions" do
     module = :"Cure.Std.Regex"
-    {^module, beam, _path} = :code.get_object_code(module)
+
+    {:ok, set} =
+      Cure.Compiler.Artifacts.open_verified_set(
+        kind: :stdlib,
+        candidates: Cure.Stdlib.Paths.beam_dirs()
+      )
+
+    artifact =
+      set.modules["Std.Regex"].artifacts
+      |> Enum.find(&(&1.module == Atom.to_string(module)))
+
+    beam = File.read!(Path.join(set.artifact_root, artifact.path))
     {:beam_file, ^module, _exports, _attrs, _info, functions} = :beam_disasm.file(beam)
 
     decoder_names = [

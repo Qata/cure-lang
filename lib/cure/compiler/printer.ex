@@ -1139,7 +1139,7 @@ defmodule Cure.Compiler.Printer do
 
           case Keyword.get(dom_meta, :grade) do
             nil -> "(#{dname}: #{inner_rendered})"
-            grade -> "(#{dname} :#{grade} #{inner_rendered})"
+            grade -> "(@#{grade} #{dname} : #{inner_rendered})"
           end
 
         # A RELEVANT IMPLICIT binder `{name: Type}` — implicit (solved, omitted at

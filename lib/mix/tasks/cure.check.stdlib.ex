@@ -32,66 +32,84 @@ defmodule Mix.Tasks.Cure.Check.Stdlib do
     end
 
     Application.ensure_all_started(:cure)
-    files = Path.wildcard(Path.join(@stdlib_dir, "*.cure")) |> Enum.sort()
 
-    results =
-      case Cure.Compiler.compile_files(files,
-             output_dir: @output_dir,
-             emit_events: false,
-             source_roots: [@stdlib_dir],
-             continue_on_error: true
-           ) do
-        {:ok, result} ->
-          successes =
-            Enum.map(result.compiled, fn {path, module, warnings} ->
-              {path, {:ok, module, warnings}}
-            end)
+    case Cure.Compiler.Artifacts.sweep(
+           kind: :stdlib,
+           source_roots: [@stdlib_dir],
+           output_dir: @output_dir,
+           repair: true,
+           compile_opts: [emit_events: false]
+         ) do
+      {:ok, result} ->
+        {:ok, set} = Cure.Compiler.Artifacts.open_verified_set(result.artifact_root)
 
-          failures = Enum.map(result.errors, fn {path, reason} -> {path, {:error, reason}} end)
-          successes ++ failures
+        Enum.each(set.modules, fn {name, _entry} ->
+          IO.puts("  ok  #{pad(name)} -> Cure.#{name}")
+        end)
 
-        {:error, reason} ->
-          [{@stdlib_dir, {:error, reason}}]
-      end
-
-    results =
-      Enum.map(results, fn {path, outcome} ->
-        name = Path.basename(path, ".cure")
-
-        case outcome do
-          {:ok, module, []} ->
-            IO.puts("  ok  #{pad(name)} -> #{module}")
-            {:pass, name}
-
-          {:ok, _module, warnings} ->
+        if map_size(result.warnings) == 0 do
+          IO.puts("\nstdlib: #{map_size(set.modules)} passed, 0 failed")
+          :ok
+        else
+          Enum.each(result.warnings, fn {name, warnings} ->
+            path = get_in(set.modules, [name, :source, :path]) || @stdlib_dir
             IO.puts("  FAIL #{pad(name)} #{length(warnings)} compiler warning(s)")
 
-            Enum.each(warnings, fn warning ->
-              Mix.shell().error(render_host_diagnostic({:compiler_warning, warning}, path))
+            Enum.each(warnings, fn
+              {:persisted_warning_count, count} ->
+                Mix.shell().error(
+                  render_host_diagnostic(
+                    {:artifact_error, "The verified module was built with compiler warnings.",
+                     %{module: name, warning_count: count}},
+                    path
+                  )
+                )
+
+              warning ->
+                Mix.shell().error(render_host_diagnostic({:compiler_warning, warning}, path))
             end)
+          end)
 
-            {:fail, name}
+          IO.puts(
+            "\nstdlib: #{map_size(set.modules) - map_size(result.warnings)} passed, #{map_size(result.warnings)} failed"
+          )
 
-          {:error, reason} ->
-            IO.puts("  FAIL #{pad(name)} compilation failed")
-            Mix.shell().error(render_host_diagnostic(reason, path))
-            {:fail, name}
+          exit({:shutdown, 1})
         end
-      end)
 
-    passed = Enum.count(results, &match?({:pass, _}, &1))
-    failed = Enum.filter(results, &match?({:fail, _}, &1))
+      {:error, {:artifact_sweep_failed, errors}} ->
+        Enum.each(errors, fn {target, reason} ->
+          Mix.shell().error(render_host_diagnostic(reason, source_path_for(target, stdlib_files())))
+        end)
 
-    if failed == [] do
-      IO.puts("\nstdlib: #{passed} passed, 0 failed")
-      :ok
-    else
-      IO.puts("\nstdlib: #{passed} passed, #{length(failed)} failed")
-      exit({:shutdown, 1})
+        IO.puts("\nstdlib: 0 passed, #{length(errors)} failed")
+        exit({:shutdown, 1})
+
+      {:error, reason} ->
+        Mix.shell().error(render_host_diagnostic(reason, @stdlib_dir))
+        IO.puts("\nstdlib: 0 passed, 1 failed")
+        exit({:shutdown, 1})
     end
   end
 
   defp pad(name), do: String.pad_trailing(name, 20)
+
+  defp source_path_for(target, files) do
+    cond do
+      is_binary(target) and File.regular?(target) ->
+        target
+
+      true ->
+        Enum.find(files, @stdlib_dir, fn path ->
+          case Cure.Compiler.DepGraph.scan([path]) do
+            {:ok, %{modules: modules}} -> Map.has_key?(modules, to_string(target))
+            _ -> false
+          end
+        end)
+    end
+  end
+
+  defp stdlib_files, do: Path.wildcard(Path.join(@stdlib_dir, "**/*.cure"))
 
   defp render_host_diagnostic(reason, path) do
     {diagnostic, registry} = Host.to_diagnostic(reason, path)

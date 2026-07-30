@@ -113,7 +113,8 @@ defmodule Cure.CLITest do
         end)
 
       assert output =~ "->"
-      assert File.exists?(Path.join(output_dir, "Cure.CureCliDirectory.beam"))
+      artifact_root = Cure.Compiler.Artifacts.Writer.resolve(output_dir)
+      assert File.exists?(Path.join(artifact_root, "Cure.CureCliDirectory.beam"))
     end
 
     @tag :tmp_dir
@@ -121,7 +122,7 @@ defmodule Cure.CLITest do
     test "compiles imports from an installed path dependency", %{tmp_dir: tmp} do
       dependency = Path.join(tmp, "external_math")
       project_root = Path.join(tmp, "consumer")
-      output_dir = Path.join(project_root, "_build/cure/ebin")
+      output_dir = Path.join(project_root, "_build/cure/project/ebin")
       dependency_ebin = Path.join(project_root, "_build/deps/external_math")
 
       File.mkdir_p!(Path.join(dependency, "lib"))
@@ -176,7 +177,8 @@ defmodule Cure.CLITest do
         end)
 
       assert output =~ "Cure.UsesExternal"
-      assert File.exists?(Path.join(output_dir, "Cure.UsesExternal.beam"))
+      artifact_root = Cure.Compiler.Artifacts.Writer.resolve(output_dir)
+      assert File.exists?(Path.join(artifact_root, "Cure.UsesExternal.beam"))
     end
 
     test "no path shows a usage error and exits nonzero" do

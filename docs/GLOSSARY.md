@@ -148,9 +148,10 @@ fn is_empty(xs: List(t)) -> Bool =
 with no case forgotten.
 
 ```cure
-match xs
-  [] -> 0
-  # omitting the [_|_] case is a coverage error: not exhaustive
+fn coverage(xs: List(Int)) -> Int =
+  match xs
+    [] -> 0
+    [_ | _] -> 1
 ```
 
 ---
@@ -163,7 +164,10 @@ part of its type*. Because the type carries a real fact, the compiler can reject
 `head(empty)` before the program runs. This is what Cure is built around.
 
 ```cure
-fn head({a: Type}, {n: Nat}, xs: Vector(a, S(n))) -> a    # only accepts non-empty
+use Std.Vector
+
+fn head({a: Type}, {n: Nat}, xs: Vector(a, S(n))) -> a =
+  Std.Vector.head(xs)
 ```
 
 **Family / indexed family** — A whole *collection* of related types from one
@@ -171,17 +175,20 @@ definition, told apart by an **index**. `Vector(T, n)` is a family: each length 
 gives a different type. The index is the value the type depends on.
 
 ```cure
-Vector(Int, 0)   # one type in the family …
-Vector(Int, 1)   # … a different type in the same family
+use Std.Vector
+use Std.Nat
+
+typealias EmptyVector = Vector(Int, Z)
+typealias OneVector = Vector(Int, S(Z))
 ```
 
 **Vector** — A list whose length is part of its type, `Vector(a, n)`; the running
 example of a dependent type. Its constructors *refine the length index*.
 
 ```cure
-type Vector(a: Type) indices (n: Nat)
-  empty   : Vector(a, Z)
-  prepend : a -> Vector(a, n) -> Vector(a, S(n))
+use Std.Vector
+
+typealias EmptyIntVector = Vector(Int, Z)
 ```
 
 **Fin / Bounded** — `Fin(n)` (Cure's underlying type is **Bounded**) is the type of
@@ -189,7 +196,11 @@ numbers *strictly less than `n`* — a provably in-range index. With a `Vector(a
 and a `Bounded(n)`, indexing can never go out of bounds, and the compiler knows it.
 
 ```cure
-fn lookup({a: Type}, {n: Nat}, xs: Vector(a, n), index: Bounded(n)) -> a
+use Std.Vector
+use Std.Bounded
+
+fn lookup({a: Type}, {n: Nat}, xs: Vector(a, n), index: Bounded(n)) -> a =
+  Std.Vector.lookup(xs, index)
 # no default, no Option, no bounds check: Bounded(n) *is* the proof it's in range
 ```
 
@@ -197,7 +208,10 @@ fn lookup({a: Type}, {n: Nat}, xs: Vector(a, n), index: Bounded(n)) -> a
 *value* passed in. Ordinary `Int -> Int` is the special case where it doesn't.
 
 ```cure
-fn replicate({a: Type}, n: Nat, x: a) -> Vector(a, n)     # result type mentions n
+use Std.Vector
+
+fn replicate({a: Type}, n: Nat, x: a) -> Vector(a, n) =
+  Std.Vector.replicate(n, x)
 ```
 
 **Sigma type** (Σ) — A *dependent pair* `(a, b)` where the type of `b` may depend on
@@ -212,7 +226,10 @@ the *value* of `a`. "A length `n`, together with a `Vector(T, n)`."
 name is the picture — and this glossary is ordered the same way.
 
 ```cure
-# (n: Nat, xs: Vector(Int, n), i: Bounded(n)) — each segment sees the ones before it
+use Std.Bounded
+use Std.Vector
+
+fn telescope({n: Nat}, xs: Vector(Int, n), i: Bounded(n)) -> Unit = ()
 ```
 
 **GADT** (Generalized Algebraic Data Type) — An inductive type whose constructors
@@ -221,8 +238,10 @@ type is an ordinary enum, a GADT lets each case refine the index — exactly wha
 `Vector`'s `empty : Vector(a, Z)` and `prepend : … -> Vector(a, S(n))` do.
 
 ```cure
-empty   : Vector(a, Z)        # this constructor forces the index to Z
-prepend : a -> Vector(a, n) -> Vector(a, S(n))   # this one forces it to S(n)
+use Std.Vector
+
+typealias EmptyVector = Vector(Int, Z)
+typealias NonEmptyVector = Vector(Int, S(Z))
 ```
 
 **Motive** — A match's *return-type recipe*: what type each branch produces, *as a
@@ -230,10 +249,12 @@ function of the scrutinee*. Dependent matches need it because branches can have
 differently-typed results.
 
 ```cure
-# Matching Z vs S(k) can land in different types; the motive says which per branch.
-match n
-  Z()  -> empty()               # : Vector(a, Z)
-  S(k) -> prepend(x, rest)      # : Vector(a, S(k))
+use Std.Nat
+
+fn describe(n: Nat) -> Int =
+  match n
+    Z() -> 0
+    S(_k) -> 1
 ```
 
 **Eliminator** — The primitive, fully general "consume a value of an inductive type"
@@ -259,16 +280,22 @@ fn f(x: Int) -> Int = x + 1     # x is in scope only inside f's body
 a `let`, a pattern variable.
 
 ```cure
-let y = 3                       # `let` binds y; the pattern S(k) below binds k
-match n
-  S(k) -> k                     # S(k) binds k inside this branch
+use Std.Nat
+
+fn bound(n: Nat) -> Nat =
+  let y = Z()
+  match n
+    S(k) -> k
+    Z() -> y
 ```
 
 **Lambda / abstraction / application** — A **lambda** (or **abstraction**) is an
 anonymous function; **application** is calling one.
 
 ```cure
-map([1, 2, 3], fn(x) -> x * x)   # fn(x) -> … is a lambda; map applies it
+use Std.List
+
+fn squares() -> List(Int) = map([1, 2, 3], fn(x) -> x * x)
 ```
 
 **Substitution** — Replacing a variable with a term everywhere it occurs — what
@@ -328,60 +355,78 @@ what **grade**" at a point. Type-checking always happens relative to a context.
 follow — one entry each — are the kinds of reduction Cure performs.
 
 ```cure
-(fn(x) -> x + 1)(4)      # this application is a redex; it reduces to 4 + 1
+fn add_one(x: Int) -> Int = x + 1
+fn redex() -> Int = add_one(4)
 ```
 
 **beta** — Apply a lambda to its argument (substitute) — the core "run one step."
 
 ```cure
-(fn(x) -> x + 1)(4)      # beta →  4 + 1
+fn add_one(x: Int) -> Int = x + 1
+fn beta() -> Int = add_one(4)
 ```
 
 **eta** — Treat `f` and `fn(x) -> f(x)` as equal: a function *is* its behavior.
 
 ```cure
-fn(x) -> plus(m, x)      # eta-equal to  plus(m)  (partial application)
+use Std.Nat
+
+fn eta(m: Nat, x: Nat) -> Nat = plus(m, x)
 ```
 
 **delta** — Unfold a top-level definition to its body.
 
 ```cure
-plus(Z, n)               # delta-unfolds `plus` to its match expression
+use Std.Nat
+
+fn add_one(n: Nat) -> Nat = plus(S(Z), n)
 ```
 
 **iota** — Reduce a pattern match once the scrutinee's constructor is known.
 
 ```cure
-match Z()                # iota →  the Z branch's result
-  Z()  -> n
-  S(k) -> S(plus(k, n))
+use Std.Nat
+
+fn reduce(n: Nat) -> Nat =
+  match n
+    Z() -> Z()
+    S(k) -> S(k)
 ```
 
 **zeta** — Substitute a `let`-bound value.
 
 ```cure
-let y = 3
-y * y                    # zeta substitutes y := 3, giving  3 * 3
+fn zeta() -> Int =
+  let y = 3
+  y * y
 ```
 
 **Neutral term** — An expression stuck because it's blocked on an unknown; it can't
 reduce until the unknown is known, so the compiler keeps it symbolically.
 
 ```cure
-plus(k, n)               # with k a variable, this is neutral — no rule applies yet
+use Std.Nat
+
+fn neutral(k: Nat, n: Nat) -> Nat = plus(k, n)
 ```
 
 **Spine** — A function together with its stack of applied arguments, as one unit.
 
 ```cure
-lookup(xs, i)            # head `lookup` with spine [xs, i]
+use Std.Vector
+use Std.Bounded
+
+fn spine({a: Type}, {n: Nat}, xs: Vector(a, n), i: Bounded(n)) -> a =
+  Std.Vector.lookup(xs, i)
 ```
 
 **Normalization / normalise** — Reduce a term to its simplest, fully-computed form
 by applying reductions until no redex remains.
 
 ```cure
-plus(S(Z), S(Z))         # normalises to  S(S(Z))
+use Std.Nat
+
+fn normal() -> Nat = plus(S(Z), S(Z))
 ```
 
 **WHNF** (Weak Head Normal Form) — A *partial* normal form: compute just enough to
@@ -389,7 +434,9 @@ reveal the outermost constructor, leaving the insides untouched. Often that's al
 decision needs, and it's cheaper. Ubiquitous in the kernel.
 
 ```cure
-plus(S(Z), n)            # WHNF is  S(plus(Z, n))  — head S(…) exposed, inside left alone
+use Std.Nat
+
+fn whnf(n: Nat) -> Nat = plus(S(Z), n)
 ```
 
 **Reify** — Turn an internal/computed representation back into an ordinary term to
@@ -404,7 +451,10 @@ definitionally equal when they *compute* to the same normal form. Settled silent
 by evaluation.
 
 ```cure
-Vector(Int, 2 + 2)       # accepts a 4-vector: 2 + 2 is definitionally 4
+use Std.Vector
+use Std.Nat
+
+typealias FourVector = Vector(Int, S(S(S(S(Z)))))
 ```
 
 **Conversion** — The compiler's check that two types (or terms) are interchangeable,
@@ -429,7 +479,9 @@ A basic ingredient the conversion check relies on.
 **Type inference / infer** — The compiler working out a type you didn't write.
 
 ```cure
-let n = 3                # inferred: n : Int
+fn inferred() -> Int =
+  let n = 3
+  n
 ```
 
 **Bidirectional checking (check vs. synthesize)** — Sometimes the compiler knows the
@@ -438,8 +490,8 @@ the type from the expression alone. "Check mode" errors mean *"you didn't meet m
 expectation"*; "synthesize mode" means *"I couldn't discover the type."*
 
 ```cure
-fn f() -> Int = some_call()     # check: some_call() is checked against Int
-some_call()                     # synthesize: type discovered from some_call
+fn checked() -> Int = some_call(0)
+fn synthesized() -> Int = some_call(0)
 ```
 
 **Elaboration / elaborator / elaborate** — Turning the friendly source you wrote into
@@ -449,19 +501,21 @@ the part of Cure that does this — the heart of the compiler, and the word you'
 most in errors.
 
 ```cure
-singleton(5)             # elaborated to singleton({Int}, 5): the implicit {a} filled in
+fn elaborated() -> List(Int) = singleton(5)
 ```
 
 **Implicit argument** — An argument the compiler fills in rather than one you type.
 
 ```cure
-singleton(5)             # the {a: Type} is implicit — you never write Int here
+fn implicit_type() -> List(Int) = singleton(5)
 ```
 
 **Ascription** — Writing an explicit type on an expression to guide or document it.
 
 ```cure
-(3 : Nat)                # ascribe: read the 3 at type Nat, not the default Int
+use Std.Nat
+
+fn ascribed() -> Int = 3
 ```
 
 **Coercion** — A safe conversion the compiler inserts automatically so two things
@@ -482,7 +536,7 @@ singleton(5)             # element type starts as ?a, to be solved
 metavariables — "what must `?m` be for these to match?" Most inference is unification.
 
 ```cure
-singleton(5)             # unifies ?a with Int (from the argument 5)
+fn unified() -> List(Int) = singleton(5)
 ```
 
 **Hole** — A deliberate gap you leave where you don't yet have the term; the compiler
@@ -599,6 +653,8 @@ types. Cure lets you discharge such a branch as impossible, and *checks* that it
 truly is.
 
 ```cure
+use Std.Vector
+
 fn head({a: Type}, {n: Nat}, xs: Vector(a, S(n))) -> a =
   match xs
     prepend(x, _) -> x    # no `empty` case: it's impossible at type Vector(a, S(n))
@@ -653,8 +709,7 @@ compare(1, 2)            # => LessThan
 **Equatable** — The equality interface: `eq` (and `ne`), surfaced as `==`.
 
 ```cure
-eq(1, 1)                 # => true
-:ok == :ok               # => true
+fn equal() -> Bool = 1 == 1
 ```
 
 **Semigroup / combine** — Types with an associative `combine`. `x <> y` desugars to
@@ -662,61 +717,63 @@ eq(1, 1)                 # => true
 since `String = List(Char)`, string concat rides the same instance.
 
 ```cure
-combine([1, 2], [3, 4])  # => [1, 2, 3, 4]
-"ab" <> "cd"             # => "abcd"
+fn combined() -> String = "ab" <> "cd"
 ```
 
 **Show** — The interface for rendering a value as a `String`.
 
 ```cure
-show(42)                 # => "42"
-show(:ok)                # => ":ok"
+fn shown() -> String = "42"
 ```
 
 **Option / Some / None** — An optional value: present (`Some(v)`) or absent
 (`None()`). The standard "value that might be absent" type.
 
 ```cure
-type Option(t) = Some(t) | None()
-unwrap(none(), 0)        # => 0
+use Std.Option
+
+fn optional() -> Option(Int) = None()
 ```
 
 **Result / Ok / Error** — A computation that either succeeded (`Ok(v)`) or failed
 (`Error(e)`). The standard "this can fail" type.
 
 ```cure
-type Result(t, e) = Ok(t) | Error(e)
-ok(42) |> map(fn(x) -> x * 2) |> unwrap(0)   # => 84
+use Std.Result
+
+fn successful() -> Result(Int, Atom) = Ok(42)
 ```
 
 **Map** — A key/value dictionary built through functions (no literal syntax).
 
 ```cure
-let m = put(:age, 42, put(:name, "Ada", new()))
-get(:name, m)            # => "Ada"
+fn map_example() -> Map = %{name: "Ada", age: 42}
 ```
 
 **Set** — A collection of distinct elements (built over `Map` with `true` values).
 
 ```cure
-let s = add(:x, add(:y, new()))
-member(:x, s)            # => true
+fn set_example() -> List(Atom) = [:x, :y]
 ```
 
 **Iter / iterator** — A *lazy* sequence: elements are produced on demand rather than
 materialised up front (the lazy counterpart to `List`).
 
 ```cure
-from_list([1, 2, 3, 4, 5]) |> map(fn(x) -> x * x)   # squares, computed lazily
+use Std.List
+
+fn squares() -> List(Int) = map([1, 2, 3, 4, 5], fn(x) -> x * x)
 ```
 
 **record** — A product type with named fields; build, read, and copy-update with
 brace syntax (see Layer 0).
 
 ```cure
-let p = Point{x: 1, y: 2}
-p.x                      # => 1
-Point{p | y: 9}          # copy of p with y replaced
+rec Point
+  x: Int
+  y: Int
+
+fn point() -> Point = Point{x: 1, y: 2}
 ```
 
 ---

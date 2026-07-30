@@ -275,6 +275,49 @@ defmodule Cure.Compiler.DepGraphTest do
     end
   end
 
+  describe "components/3" do
+    test "returns deterministic dependency-first singleton components" do
+      deps = %{
+        "App" => ["Service", "Config"],
+        "Service" => ["Config"],
+        "Config" => [],
+        "Unused" => []
+      }
+
+      expected = [["Config"], ["Unused"], ["Service"], ["App"]]
+
+      assert DepGraph.components(deps, ["Unused", "Service", "App", "Config"]) == expected
+      assert DepGraph.components(deps, ["Config", "App", "Unused", "Service"]) == expected
+    end
+
+    test "keeps a cycle together before its dependents" do
+      deps = %{
+        "A" => ["B"],
+        "B" => ["A"],
+        "Consumer" => ["B"]
+      }
+
+      assert DepGraph.components(deps, ["Consumer", "B", "A"]) == [
+               ["A", "B"],
+               ["Consumer"]
+             ]
+    end
+
+    test "prefers ready priority components without violating dependencies" do
+      deps = %{
+        "Prelude" => [],
+        "Independent" => [],
+        "Consumer" => ["Prelude"]
+      }
+
+      assert DepGraph.components(deps, Map.keys(deps), ["Prelude"]) == [
+               ["Prelude"],
+               ["Independent"],
+               ["Consumer"]
+             ]
+    end
+  end
+
   describe "order_deps_map/1" do
     test "maps module names to sorted in-set dep names", %{tmp_dir: dir} do
       a = write!(dir, "a.cure", "mod MA\n  fn f() -> Int = 1\n")

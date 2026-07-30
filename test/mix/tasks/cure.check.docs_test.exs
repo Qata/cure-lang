@@ -66,6 +66,25 @@ defmodule Mix.Tasks.Cure.Check.DocsTest do
     assert output =~ "doc snippets: 1 passed, 0 failed"
   end
 
+  test "compiles independent expressions in one fence", %{root: root} do
+    write_and_track(root, "LITERALS.md", """
+    ```cure
+    1 + 1
+    true
+    :ok
+    ```
+    """)
+
+    Mix.Task.reenable("cure.check.docs")
+
+    output =
+      ExUnit.CaptureIO.capture_io(fn ->
+        Mix.Task.run("cure.check.docs", [])
+      end)
+
+    assert output =~ "doc snippets: 1 passed, 0 failed"
+  end
+
   test "fails with the Markdown path and authored fence line", %{root: root} do
     write_and_track(root, "BROKEN.md", """
     prose

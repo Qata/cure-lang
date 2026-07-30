@@ -40,7 +40,11 @@ defmodule Cure.Project.MultiFileLinkTest do
 
     assert :"Cure.LinkUser" in modules and :"Cure.LinkLib" in modules
 
-    beam = Path.join(out, "Cure.LinkUser.beam")
+    beam =
+      out
+      |> Cure.Compiler.Artifacts.Writer.resolve()
+      |> Path.join("Cure.LinkUser.beam")
+
     {:ok, {_, [{:imports, imports}]}} = :beam_lib.chunks(String.to_charlist(beam), [:imports])
 
     assert {:"Cure.LinkLib", :ping, 0} in imports,

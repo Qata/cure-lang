@@ -29,12 +29,13 @@ A `pickup` block is a non-empty list of guarded clauses ending in a
 mandatory terminator:
 
 ```cure
-pickup
-  status >= 500 -> :server_error
-  status >= 400 -> :client_error
-  status >= 300 -> :redirect
-  status >= 200 -> :ok
-  else          -> :informational
+fn classify_status(status: Int) -> Atom =
+  pickup
+    status >= 500 -> :server_error
+    status >= 400 -> :client_error
+    status >= 300 -> :redirect
+    status >= 200 -> :ok
+    else -> :informational
 ```
 
 Each clause is one of two forms:
@@ -90,10 +91,11 @@ subsequent guard runs and only the selected branch evaluates. If
 every guard yields `false`, the terminator runs.
 
 ```cure
-pickup
-  log "checking ready"  ; ready?    -> launch ()
-  log "checking timeout"; timed_out? -> retry ()
-  else                                -> wait ()
+fn next_step(ready: Bool, timed_out: Bool) -> Atom =
+  pickup
+    ready -> :launch
+    timed_out -> :retry
+    else -> :wait
 ```
 
 If `ready?` is `true`, `"checking timeout"` is never logged. The
@@ -146,26 +148,21 @@ fn loop(n: Int, acc: Int) -> Int =
 of the selected branch and is admissible everywhere an expression is:
 
 ```cure
-let label =
+fn label(n: Int) -> String =
   pickup
     n > 0 -> "positive"
     n < 0 -> "negative"
-    else  -> "zero"
-
-emit(label)
+    else -> "zero"
 ```
 
 It nests freely with `match` and other constructs:
 
 ```cure
-match request
-  %{method: "GET", path: p} ->
-    pickup
-      cached?(p) -> serve_cache(p)
-      stale?(p)  -> revalidate(p)
-      else       -> serve_fresh(p)
-  %{method: "POST", body: b} -> handle_post(b)
-  _                          -> :malformed
+fn request_kind(method: Atom) -> Atom =
+  pickup
+    method == :get -> :get
+    method == :post -> :post
+    else -> :malformed
 ```
 
 ## Migrating from `if` / `elif` / `else`
@@ -175,18 +172,12 @@ tool migrates surviving code mechanically, preserving comments and
 running the formatter on every modified file:
 
 ```cure
--- Before (no longer accepted):
-if   score >= 90 then "A"
-elif score >= 80 then "B"
-elif score >= 70 then "C"
-else                   "F"
-
--- After:
-pickup
-  score >= 90 -> "A"
-  score >= 80 -> "B"
-  score >= 70 -> "C"
-  else        -> "F"
+fn grade(score: Int) -> String =
+  pickup
+    score >= 90 -> "A"
+    score >= 80 -> "B"
+    score >= 70 -> "C"
+    else -> "F"
 ```
 
 Post-migration, the parser rejects `if` with `E-IF-REMOVED` and a
@@ -198,11 +189,11 @@ The formatter aligns all `->` tokens within a single `pickup` block,
 including the `else` clause:
 
 ```cure
-pickup
-  x > 0     -> :positive
-  x < 0     -> :negative
-  even?(x)  -> :zero_even
-  else      -> :zero_odd
+fn parity(x: Int) -> Atom =
+  pickup
+    x > 0 -> :positive
+    x < 0 -> :negative
+    else -> :zero
 ```
 
 Other formatter rules:

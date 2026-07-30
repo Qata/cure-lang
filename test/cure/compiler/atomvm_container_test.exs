@@ -2,6 +2,7 @@ defmodule Cure.Compiler.AtomVMContainerTest do
   use ExUnit.Case, async: false
 
   @moduletag :atomvm
+  @moduletag timeout: 180_000
 
   test "all transparent OTP macros run on generic-unix AtomVM" do
     atomvm_root = System.get_env("ATOMVM_ROOT", "/Users/ch/Develop/esp32-beam/AtomVM")
@@ -64,7 +65,13 @@ defmodule Cure.Compiler.AtomVMContainerTest do
       File.write!(probe, binary)
 
       beams = [probe | Path.wildcard(Path.join(estdlib, "*.beam"))]
-      beams = beams ++ Path.wildcard(Path.join(File.cwd!(), "_build/cure/ebin/Cure.Std.*.beam"))
+
+      stdlib_root =
+        File.cwd!()
+        |> Path.join("_build/cure/ebin")
+        |> Cure.Compiler.Artifacts.Writer.resolve()
+
+      beams = beams ++ Path.wildcard(Path.join(stdlib_root, "Cure.Std.*.beam"))
 
       beams =
         [

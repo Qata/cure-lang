@@ -253,10 +253,47 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   # -- Stdlib preload ---------------------------------------------------------
 
   defp ensure_stdlib_compiled do
-    ebin = "_build/cure/ebin"
+    case Cure.Compiler.Artifacts.sweep(
+           kind: :stdlib,
+           output_dir: "_build/cure/ebin",
+           repair: false,
+           verification: :cached
+         ) do
+      {:ok, _result} ->
+        :ok
 
-    unless File.exists?(Path.join(ebin, "Cure.Std.Core.beam")) do
-      Mix.Task.run("cure.compile_stdlib")
+      {:error, _validation_reason} ->
+        repair_stdlib()
+    end
+  end
+
+  defp repair_stdlib do
+    case Cure.Stdlib.Paths.source_dir() do
+      nil ->
+        emit_diagnostic(
+          Cure.Diagnostic.Operational.command_failure(
+            "compile standard library",
+            "no standard-library source directory is available"
+          )
+        )
+
+        exit({:shutdown, 1})
+
+      source_root ->
+        case Cure.Compiler.Artifacts.sweep(
+               kind: :stdlib,
+               source_roots: [source_root],
+               output_dir: "_build/cure/ebin",
+               repair: true,
+               compile_opts: [emit_events: false]
+             ) do
+          {:ok, _result} ->
+            :ok
+
+          {:error, reason} ->
+            emit_host_diagnostic(reason, source_root, "")
+            exit({:shutdown, 1})
+        end
     end
   end
 

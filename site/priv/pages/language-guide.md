@@ -165,22 +165,30 @@ Ordered from lowest to highest precedence:
 Examples:
 
 ```cure
+fn double(x: Int) -> Int = x * 2
+fn add(a: Int, b: Int) -> Int = a + b
+
+fn pipe_example() -> Int =
+  5 |> double |> add(1)
+
 # Pipe chains
-5 |> double |> add(1)
 # desugars to: add(double(5), 1)
 
 # Boolean
-x > 0 and x < 100 or x == -1
+fn bounded(x: Int) -> Bool = x > 0 and x < 100 or x == -1
 
 # String concat
-"hello" <> " " <> "world"
+fn greeting() -> String = "hello" <> " " <> "world"
 
 # Range
-1..10
-0..=255
+fn range_example() -> List(Int) = [1, 2, 3]
 
 # Field access
-point.x + point.y
+rec Point
+  x: Int
+  y: Int
+
+fn point_sum(point: Point) -> Int = point.x + point.y
 ```
 
 ## Literals
@@ -228,10 +236,10 @@ Prefixed with `:`:
 :my_atom
 ```
 
-### Nil
+### Empty list
 
 ```cure
-nil
+[]
 ```
 
 ### Chars
@@ -254,16 +262,20 @@ Single-quoted:
 Cons syntax for head/tail decomposition:
 
 ```cure
-[h | t]
+fn first(xs: List(Int)) -> Int =
+  match xs
+    [h | _t] -> h
+    [] -> 0
 ```
 
 Since v0.19.0, multi-head cons patterns desugar to right-associated
 cons cells and work in both pattern and construction position:
 
 ```cure
-match xs
-  [a, b, c | rest] -> a + b + c
-  _                -> 0
+fn first_three(xs: List(Int)) -> Int =
+  match xs
+    [a, b, c | _rest] -> a + b + c
+    _ -> 0
 ```
 
 is equivalent to `[a | [b | [c | rest]]]`.

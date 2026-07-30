@@ -170,10 +170,7 @@ defmodule Cure.REPL do
 
   defp missing_stdlib_modules(kind) do
     Enum.reject(Preload.stdlib_modules(kind), fn module ->
-      case :code.is_loaded(module) do
-        {:file, _} -> true
-        _ -> Code.ensure_loaded?(module)
-      end
+      match?({:file, _}, :code.is_loaded(module))
     end)
   end
 

@@ -21,10 +21,8 @@ defmodule Cure.Compiler.UnresolvedImportWarningTest do
 
     out = Path.join(dir, "ebin")
 
-    assert {:ok, _mod, _w} =
-             Cure.Compiler.compile_file(ghost, output_dir: out, emit_events: false)
-
-    :ok = Cure.Compiler.load_emitted(:"Cure.Ghost", out)
+    assert {:ok, %{errors: []}} =
+             Cure.Compiler.compile_files([ghost], output_dir: out, emit_events: false)
 
     # `phantom` is neither a local function of GhostUser nor an export of
     # Ghost, so dependent elaboration rejects the unresolved global before

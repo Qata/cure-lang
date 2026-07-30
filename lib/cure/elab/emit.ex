@@ -38,7 +38,13 @@ defmodule Cure.Elab.Emit do
     module = Keyword.fetch!(opts, :module)
     names = Keyword.fetch!(opts, :functions)
     origins = Keyword.get(opts, :origins, %{})
-    emit_opts = Keyword.take(opts, [:prefix, :local_owners])
+
+    emit_opts =
+      opts
+      |> Keyword.take([:prefix, :local_owners])
+      |> Keyword.put_new_lazy(:artifact_provenance, fn ->
+        ephemeral_provenance(module, env)
+      end)
 
     with :ok <- validate_emission_closure(env, names),
          :ok <- reject_holes(env, names) do
@@ -256,6 +262,10 @@ defmodule Cure.Elab.Emit do
   """
   @spec module_forms(Env.t(), module(), [atom()], map(), keyword()) :: [tuple()]
   def module_forms(%Env{} = env, module, names, origins, emit_opts) do
+    # Callers commonly select every definition owned by a module. Type formers
+    # and interface method signatures are real Core definitions, but neither has
+    # a runtime body to turn into an Erlang function.
+    names = Enum.filter(names, &runtime_definition?(env, &1))
     prefix = Keyword.get(emit_opts, :prefix, "")
 
     local_owners =
@@ -297,7 +307,7 @@ defmodule Cure.Elab.Emit do
       [
         {:attribute, @line, :module, module},
         {:attribute, @line, :export, exports}
-        | no_auto_import_attr(exports) ++ fn_forms
+        | artifact_provenance_attrs(emit_opts) ++ no_auto_import_attr(exports) ++ fn_forms
       ]
     after
       Process.delete(:cure_emit_origins)
@@ -305,6 +315,14 @@ defmodule Cure.Elab.Emit do
       Process.delete(:cure_emit_local_owners)
       Process.delete(:cure_emit_aliases)
       Process.delete(:cure_emit_fresh_counter)
+    end
+  end
+
+  defp runtime_definition?(env, name) do
+    case Env.get_def(env, name) do
+      %{body: nil} -> false
+      %{body: _body} -> not type_level_def?(env, name)
+      _ -> false
     end
   end
 
@@ -322,6 +340,38 @@ defmodule Cure.Elab.Emit do
       [] -> []
       bifs -> [{:attribute, @line, :compile, {:no_auto_import, bifs}}]
     end
+  end
+
+  defp artifact_provenance_attrs(opts) do
+    case Keyword.get(opts, :artifact_provenance) do
+      provenance when is_map(provenance) ->
+        [{:attribute, @line, :cure_artifact, [provenance]}]
+
+      _ ->
+        []
+    end
+  end
+
+  defp ephemeral_provenance(module, env) do
+    compiler_hash = Cure.Compiler.BuildManifest.toolchain_fingerprint()
+    source_hash = :crypto.hash(:sha256, :erlang.term_to_binary(env, [:deterministic]))
+
+    %{
+      format: 1,
+      module: module |> Atom.to_string() |> String.replace_prefix("Cure.", ""),
+      source_path: "nofile",
+      source_hash: source_hash,
+      interface_hash: nil,
+      compiler_hash: compiler_hash,
+      producer_snapshot:
+        :crypto.hash(
+          :sha256,
+          :erlang.term_to_binary(
+            %{compiler_hash: compiler_hash, source_hash: source_hash},
+            [:deterministic]
+          )
+        )
+    }
   end
 
   # The import-origins map for the module currently being emitted (see
@@ -857,8 +907,8 @@ defmodule Cure.Elab.Emit do
     end
   end
 
-  # `Effect(T)` is direct-style, so the unsafe `run` boundary has no runtime
-  # representation. The erased type argument is already absent here.
+  # `Effect(T)` is direct-style, so `run` has no runtime wrapper. The erased
+  # type argument is already absent here.
   defp lower_builtin_op(:effect_run, [value], env, ctx), do: lower(env, value, ctx)
   defp lower_builtin_op(:effect_run, args, env, ctx), do: curry_apply(builtin_op_wrapper(:effect_run), args, env, ctx)
 

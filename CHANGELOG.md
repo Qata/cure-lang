@@ -127,8 +127,11 @@ previously shipped only `empty`, `from_list`, `range`, `fold`, `take`,
 and `to_list` (v0.19.0). It is now a complete lazy-iterator API,
 designed so a chain like
 
-```cure path=null start=null
-foo |> lazy |> map(...) |> filter(...) |> take(5)
+```cure
+use Std.List
+
+fn pipeline() -> List(Int) =
+  map([1, 2, 3, 4, 5], fn(x) -> x * x)
 ```
 
 reads left to right and only materialises at the terminal consumer.
