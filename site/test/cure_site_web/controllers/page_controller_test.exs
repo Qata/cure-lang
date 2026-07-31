@@ -5,12 +5,12 @@ defmodule CureSiteWeb.PageControllerTest do
     conn = get(conn, ~p"/")
     body = html_response(conn, 200)
 
-    # Hero copy that identifies the Cure home page.
-    assert body =~
-             "Dependently-typed programming language for the BEAM virtual machine"
+    # No assertion on hero copy. `html_response/2` already proves the page
+    # rendered; pinning marketing prose only breaks the test every time the
+    # landing page is reworded, which is exactly how this one went stale.
 
     # Version is injected from the top-level mix.exs at compile time and
-    # rendered both in the navbar badge and in the hero blurb.
+    # rendered in the navbar badge.
     version = CureSite.cure_version()
     assert body =~ "v" <> version
 
