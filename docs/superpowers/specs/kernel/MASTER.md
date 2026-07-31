@@ -463,7 +463,7 @@ done. It is authoritative for implementation details beyond this summary.
 inclusion for commutative-regex mailbox patterns, not generic QF-LIA. Patterns
 normalize to finite unions of linear sets over Parikh vectors; an untrusted
 producer supplies affine component embeddings, checked by ordinary Cure code
-and bridged back to `Std.Otp.MailboxPattern.Accepts`. The locked positive probe
+and bridged back to `Otp.Meta.MailboxPattern.Accepts`. The locked positive probe
 is `PStar(PTimes(TA,TA)) <= PStar(TA)` and the reversed negative control has
 Parikh counterexample `[1,0,0]`. This slice lands end to end before the general
 Farkas and cut/split pipeline. Full mailbox inclusion may require semilinear
@@ -666,7 +666,7 @@ metacontext. Verified status (branch `elaborator-gaps`, six independent agents
   reduced in a dependent index position (lambda in an `Equivalent` index
   crashes normalization; named/partial applications don't reduce in
   conversion). Workaround: first-order monoid formulation
-  (`Std.Otp.EffAlgebra`). **E10a** ✅ LANDED (P+E): `fn(y) -> ...` in
+  (`Otp.Meta.EffAlgebra`). **E10a** ✅ LANDED (P+E): `fn(y) -> ...` in
   type/index position no longer mis-parses as an arrow type.
 - **E11** ✅ crash fixed + **E11-Stage-2** ✅ LANDED: index-position
   type-directed overloads via public `Elaborator.elaborate_overloaded_app/7`;

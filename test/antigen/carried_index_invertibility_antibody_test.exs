@@ -16,7 +16,7 @@ defmodule Antigen.CarriedIndexInvertibilityAntibodyTest do
   refines only the single carried index position and DROPS the branch-unify subst
   — so an invertible sibling position (`n ↦ add(n1, n2)`) never reached the goal,
   and a `rewrite` over the refined measure failed `:rewrite_no_match`. The real
-  Brzozowski derivative-soundness proof (`metatheory/otp/src/otp_mailbox_pattern.cure`) had to
+  Brzozowski derivative-soundness proof (`https://github.com/cure-lang/cure-otp/tree/main/metatheory/src/otp_mailbox_pattern.cure`) had to
   route its `PTimes`/`PStar` arms through delegation helpers to dodge it.
 
   The fix narrows `invertible_index?` to test the HEAD only: a constructor-headed

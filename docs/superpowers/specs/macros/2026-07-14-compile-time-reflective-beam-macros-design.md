@@ -373,7 +373,7 @@ must not hide an opaque container call.
 `handle_call` induces a request-reply exchange, and its reply type is part of
 the derived contract. The reply is not a bare value type; it is a one-shot
 typed channel. Following the typed-actor idiom (mailbox types,
-`docs/research/process-types/`), the caller allocates a fresh single-use
+`https://github.com/cure-lang/cure-otp/tree/main/docs/research/process-types/`), the caller allocates a fresh single-use
 process reference typed to accept exactly one reply message `Reply(T)`, and
 passes the *output* capability to the actor as a payload of the call message;
 the caller retains the *input* capability and waits on it. The derived message
@@ -402,7 +402,7 @@ v1** and belong on the roadmap, in priority order:
   open usability problem). Note too that the BEAM mailbox is ordered by arrival
   with selective receive on *every* BEAM (not just AtomVM — this is the standard
   concurrent-Core-Erlang semantics, machine-checked in Bereczky et al.,
-  `docs/research/process-types/`), whereas the mailbox-type theory above is
+  `https://github.com/cure-lang/cure-otp/tree/main/docs/research/process-types/`), whereas the mailbox-type theory above is
   stated for *unordered* interactions; the commutative-regex residual therefore
   does not transfer to BEAM without first reconciling that ordering gap.
 - *multiplicity* — bounds on how many of each message may be pending (e.g. "at
@@ -1254,7 +1254,7 @@ Repository references:
 - `docs/SUPERVISION.md` and `docs/APP.md` (migration inputs; update them to
   describe the final architecture rather than preserving legacy behavior)
 - `docs/research/metaprogramming/`
-- `docs/research/process-types/`
+- `https://github.com/cure-lang/cure-otp/tree/main/docs/research/process-types/`
 
 External research:
 
@@ -1273,4 +1273,4 @@ External research:
 - https://arxiv.org/abs/2311.10482 (Bereczky, Horpácsi & Thompson, *A
   Formalisation of Core Erlang, a Concurrent Actor Language*) — reference
   operational semantics for the sealed raw process base; see
-  `docs/research/process-types/raw-algebra-conformance-checklist.md`
+  `https://github.com/cure-lang/cure-otp/tree/main/docs/research/process-types/raw-algebra-conformance-checklist.md`

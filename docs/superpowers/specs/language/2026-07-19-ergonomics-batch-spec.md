@@ -261,7 +261,7 @@ receive within 100
 desugars to: build a `Selector` (`new_selector() |> select_map(commands, fn(c) -> …) |> …`), `selector_receive`, and
 `match` the resulting `Option`, with the `timeout` arm as the `None` case. Built programmatically like
 `derive_behavior_family` (avoids the `becomes`-template walls), spans stamped per arm, and its safety is exactly what
-`Std.Otp.SelectiveReceive` already proves. Purely additive.
+`Otp.Meta.SelectiveReceive` already proves. Purely additive.
 
 **Net surface:** `do` for "perform these effects in order," `receive`/`select` for "wait on these typed channels,"
 plain functions for everything else, a tiny reserved-word bridge for `send`/`spawn`/`self`. Fewer, more coherent

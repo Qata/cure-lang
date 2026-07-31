@@ -271,18 +271,6 @@ defmodule Cure.Elab.DefiningEquationTest do
     for equation <- Env.equations(vector.export_env, :lookup) do
       assert :ok = Kernel.check_def(vector.export_env, equation.theorem)
     end
-
-    assert {:ok, type_level} =
-             Program.module_interface("Std.Otp.CallResult", "metatheory/otp/src/otp_call_result.cure")
-
-    assert [vnat, vbool] = Env.equations(type_level.export_env, :RepVal)
-    assert Enum.map([vnat, vbool], & &1.pattern_key) == ["RepVal/VNat", "RepVal/VBool"]
-
-    for equation <- [vnat, vbool] do
-      assert %{type: type} = Env.get_def(type_level.export_env, equation.theorem)
-      assert inspect(type) =~ "TypeEquivalent"
-      assert :ok = Kernel.check_def(type_level.export_env, equation.theorem)
-    end
   end
 
   test "generated proof definitions are compile-time-only unless an ordinary source definition reaches them" do

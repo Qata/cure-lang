@@ -134,7 +134,7 @@ matching/metacontext work knocks out several of these at once.
 - **Proposed fix.** Normalise applied functions (β for lambdas, δ for names, saturation for partials)
   inside conversion when they occur in an index, and fix the lambda-closure capture on that path.
   HARD-STOP if it lands in `lib/cure/core/*`.
-- **Workaround (in use).** First-order MONOID formulation (no continuation function) — `Std.Otp.EffAlgebra`
+- **Workaround (in use).** First-order MONOID formulation (no continuation function) — `Otp.Meta.EffAlgebra`
   proves `seq` identity+associativity. The value-returning free-monad `bind` laws stay blocked.
 
 ### E11 — Stage 2: type-directed tie-breaking for a bare ambiguous applied-def head

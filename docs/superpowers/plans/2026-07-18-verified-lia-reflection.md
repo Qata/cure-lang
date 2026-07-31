@@ -38,7 +38,7 @@ and `zero_is_not_at_most_negative_one`. Its current scaling theorem is only for
 ## Task 1: Pin the proof-level integer operations
 
 **Files:** modify `lib/std/proof_int_order.cure`; add paired
-`metatheory/otp/oracle/otp/int_additive_group.{cure,idr}`.
+`https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_additive_group.{cure,idr}`.
 
 - [x] Choose and document the proof-level operations used by LIA:
   `add_int`, canonical zero/one/negative-one, `scale_nat_int`, and signed
@@ -71,7 +71,7 @@ Run the focused oracle and commit only when every theorem is kernel-accepted.
 ## Task 3: Define dimension-safe affine syntax and semantics
 
 **Files:** create `lib/std/proof_linear_arithmetic.cure`; add paired
-`metatheory/otp/oracle/otp/linear_arithmetic_compute.{cure,idr}`.
+`https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/linear_arithmetic_compute.{cure,idr}`.
 
 Define:
 
@@ -93,7 +93,7 @@ Define:
 ## Task 4: Prove affine evaluation homomorphisms
 
 **Files:** extend `lib/std/proof_linear_arithmetic.cure`; add paired
-`metatheory/otp/oracle/otp/linear_arithmetic_semantics.{cure,idr}`.
+`https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/linear_arithmetic_semantics.{cure,idr}`.
 
 Prove, under the selected shape evidence:
 
@@ -136,7 +136,7 @@ probe or add `linear_arithmetic_reflection.{cure,idr}`.
 ## Task 6: Implement proof-relevant certificate validity
 
 **Files:** extend `lib/std/proof_linear_arithmetic.cure`; add paired
-`metatheory/otp/oracle/otp/linear_arithmetic_certificate.{cure,idr}`.
+`https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/linear_arithmetic_certificate.{cure,idr}`.
 
 Define `ValidFarkasCertificate(hyps, goal, witness)` carrying at least:
 
@@ -173,7 +173,7 @@ paired oracle, not merely a closed numerical valuation.
 ## Task 8: Prove `check_lia_sound`
 
 **Files:** extend `lib/std/proof_linear_arithmetic.cure`; add paired canonical
-`metatheory/otp/oracle/otp/linear_arithmetic.{cure,idr}`.
+`https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/linear_arithmetic.{cure,idr}`.
 
 Target:
 

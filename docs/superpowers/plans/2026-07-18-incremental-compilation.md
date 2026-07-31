@@ -468,7 +468,7 @@ The core of the feature: `compile_dir/3` — a single interleaved topological wa
 - **`all_dirty?`** iff `:force`/`CURE_FULL_REBUILD`, or the stored `toolchain` ≠ current, or (`:stdlib_hash` given and stored `stdlib_hash` ≠ given).
 - **Deletions** run on every build **except** `:force` (which skips manifest load + deletions entirely), *including* an `all_dirty?` toolchain-mismatch build. A manifest entry is a deletion candidate only if its `source_path` is under one of this run's `:source_roots` **and** the file no longer exists; then remove its beams and drop its entry. A foreign entry (outside the roots — e.g. a stdlib entry seen during a project build sharing the output dir) is left untouched.
 - **Manifest write** happens only if no module errored this build. Skipped-fresh modules carry their old entry forward verbatim. Compiled modules get a fresh entry. Any kept manifest entry outside this run's walk — a foreign entry from another build sharing this `output_dir`, or a source under `source_roots` not included in this call's `source_paths` — is carried forward into the saved manifest unchanged (seed the accumulator from the post-deletion manifest, not empty).
-- **Beams of a module** are discovered by naming convention: `Cure.<module>.beam` plus `Cure.<module>.*.beam` (lifted submodules) in `output_dir`, **excluding** any `Cure.<module>.*.beam` match whose stripped name (`<module>.<suffix>`) is itself a key in `graph.modules`. Cure's dotted module-naming convention means an independently-declared *sibling* module can share a dotted prefix with `module` without being one of its lifted submodules — e.g. real stdlib modules `Std.Otp` and `Std.Otp.Call` are two separate top-level `mod` declarations in two separate files, not a `lift module` relationship, yet a bare `Cure.Std.Otp.*.beam` wildcard would match `Cure.Std.Otp.Call.beam` too. A genuine lifted submodule never appears as its own scanned entry in `graph.modules`, so this exclusion is exact, not heuristic. Cure prefixes every emitted module atom with `Cure.` (per project CLAUDE.md), so this captures the module's outputs without an mtime race, and the sibling exclusion is what keeps `delete_removed` from destroying an unrelated, still-live module's beam when a shorter dotted-prefix module's source is removed.
+- **Beams of a module** are discovered by naming convention: `Cure.<module>.beam` plus `Cure.<module>.*.beam` (lifted submodules) in `output_dir`, **excluding** any `Cure.<module>.*.beam` match whose stripped name (`<module>.<suffix>`) is itself a key in `graph.modules`. Cure's dotted module-naming convention means an independently-declared *sibling* module can share a dotted prefix with `module` without being one of its lifted submodules — e.g. real stdlib modules `Std.Otp` and `Otp.Meta.Call` are two separate top-level `mod` declarations in two separate files, not a `lift module` relationship, yet a bare `Cure.Std.Otp.*.beam` wildcard would match `Cure.Otp.Meta.Call.beam` too. A genuine lifted submodule never appears as its own scanned entry in `graph.modules`, so this exclusion is exact, not heuristic. Cure prefixes every emitted module atom with `Cure.` (per project CLAUDE.md), so this captures the module's outputs without an mtime race, and the sibling exclusion is what keeps `delete_removed` from destroying an unrelated, still-live module's beam when a shorter dotted-prefix module's source is removed.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -691,7 +691,7 @@ defmodule Cure.Compiler.IncrementalTest do
   # Proves `beams_for/3` does not over-match on Cure's dotted module-naming
   # convention. `Ns.Base` and `Ns.Base.Child` are two INDEPENDENT top-level
   # modules (two files, two `mod` declarations) that merely share a dotted
-  # prefix — mirroring real stdlib siblings like `Std.Otp` / `Std.Otp.Call`.
+  # prefix — mirroring real stdlib siblings like `Std.Otp` / `Otp.Meta.Call`.
   # A bare `Cure.Ns.Base.*.beam` wildcard would match `Cure.Ns.Base.Child.beam`
   # too; deleting `Ns.Base`'s source must not delete `Ns.Base.Child`'s beam.
   @ns_base """
@@ -947,7 +947,7 @@ Add to `lib/cure/compiler/incremental.ex` (alongside `interface_hash/1`). This i
   # module name scanned this run. A `Cure.<mod>.*.beam` wildcard match is only a
   # genuine lifted submodule of `mod` if its stripped name is NOT itself one of
   # these; Cure's dotted naming convention means an independently-declared
-  # sibling (e.g. real stdlib modules `Std.Otp` / `Std.Otp.Call`) can otherwise
+  # sibling (e.g. real stdlib modules `Std.Otp` / `Otp.Meta.Call`) can otherwise
   # false-positive-match and later get deleted alongside `mod`'s own beam.
   defp beams_for(mod, output_dir, known_modules) do
     prefix = "Cure." <> mod

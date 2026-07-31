@@ -4,7 +4,8 @@ defmodule Cure.Stdlib.OtpDepCallTest do
   whole `GenServer(q, r)`, `call_dep` over a `DepGenServer(q, rep)` returns the request's OWN reply type
   `rep(request)`, computed per-constructor by large elimination. So a SINGLE server answers heterogeneous
   requests — different reply types checked at each call site — and asking for the wrong reply type is a compile
-  error. Client half of the OTP integration spine; the reply typing's soundness is `Std.Otp.Proof` and the
+  error. Client half of the OTP integration spine; the reply typing's soundness is `Otp.Meta.Proof` in the
+  [`cure-otp`](https://github.com/cure-lang/cure-otp) formalisation and the
   oracle probe `dep_call_boundary`. `DepGenServer` lowers to the bare pid, so this is runnable, not just
   well-typed.
   """

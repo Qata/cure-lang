@@ -102,7 +102,7 @@ stdlib beam, `:code.ensure_loaded` each, and `:code.stick_mod` each.
   `source_path_for/2` computes `Path.join(["Std","NonEmpty"] |> tl()
   |> Enum.join("_") |> String.downcase())` = `"nonempty"` (no underscore),
   which does not match the actual `non_empty.cure` filename; conversely
-  `otp_call.cure` declares `mod Std.Otp.Call` — two dotted segments — whose
+  `otp_call.cure` declares `mod Otp.Meta.Call` — two dotted segments — whose
   forward transform *does* produce `otp_call`. Both source files have the
   identical `word_word.cure` shape, but one came from a single merged
   CamelCase segment and the other from two dotted segments; nothing in the

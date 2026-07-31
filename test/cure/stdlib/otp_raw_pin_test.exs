@@ -6,7 +6,7 @@ defmodule Cure.Stdlib.OtpRawPinTest do
   (§3.1) requires each to carry its most permissive HONEST type. That cannot be checked
   automatically — it would need an oracle for every BIF's return type — so this pins the
   table the executed conformance audit established by probing each BIF's real return value
-  (docs/research/process-types/raw-algebra-conformance-checklist.md, §4 F-4).
+  (https://github.com/cure-lang/cure-otp/tree/main/docs/research/process-types/raw-algebra-conformance-checklist.md, §4 F-4).
 
   A change here is not a test to update. It is a claim about what the BEAM returns, and it
   needs the evidence the audit produced: run the BIF and look.

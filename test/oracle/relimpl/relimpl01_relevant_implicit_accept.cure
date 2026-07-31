@@ -11,7 +11,7 @@ mod RelImpl01
   ## still needed as a value; Idris writes exactly this as `{k : NatT}`. Before the
   ## plicity/quantity decoupling Cure could only spell the two welded quadrants
   ## (erased+implicit, or ω+explicit), so this shape forced an explicit `(k: NatT)`
-  ## field (the `metatheory/otp/src/otp_conversation.cure` workaround).
+  ## field (the `https://github.com/cure-lang/cure-otp/tree/main/metatheory/src/otp_conversation.cure` workaround).
   type Box indices ()
     MkBox : {k: NatT} -> Vec(k) -> Box
 

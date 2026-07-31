@@ -109,7 +109,7 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
   infers each argument's type itself.
 - **Verified:** oracle `tdoidx/tdoidx01_overload_in_index` rel=same (cure=accept, idris=accept);
   antibody `test/antigen/overload_in_index_resolution_antibody_test.exs` (REACH + false-equation
-  CONTROL A + genuine-ambiguity CONTROL B, 3 green). Real-code demonstration: `Std.Otp.EffAlgebra`
+  CONTROL A + genuine-ambiguity CONTROL B, 3 green). Real-code demonstration: `Otp.Meta.EffAlgebra`
   gains a `render` measure OVERLOADED across its two carriers (`Eff` monoid / `HEff` free monad),
   proved in an `Equivalent` index (`render_eff_nil`, `render_heff_pure`) — a program that
   previously crashed the kernel and now type-checks. (No pre-existing shipping workaround existed
@@ -147,7 +147,7 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
   `rel=same` (both accept); antibody `test/antigen/carried_index_invertibility_antibody_test.exs`
   (REACH RED→GREEN, CONTROL A false-measure still rejected, CONTROL B function-app-headed carried-eq
   still fires and fails closed on a wrong-family sibling). Real workaround removed:
-  `metatheory/otp/src/otp_mailbox_pattern.cure`'s `deriv_sound` no longer delegates its `PTimes`/`PStar` arms
+  `https://github.com/cure-lang/cure-otp/tree/main/metatheory/src/otp_mailbox_pattern.cure`'s `deriv_sound` no longer delegates its `PTimes`/`PStar` arms
   through `ds_times`/`ds_star` helpers — they are inlined and elaborate directly. Full elab +
   oracle-replay + carried-index regression suites green (1274 tests).
 
@@ -176,7 +176,7 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
   third pattern-slot category (implicit-at-application / relevant-at-runtime) in
   `constructor_pattern`/`branch_scope`/`split_named_implicits`. Not a bounded edit.
 - Explicit-field + congruence-helper workaround still required (live in
-  `metatheory/otp/src/otp_conversation.cure`).
+  `https://github.com/cure-lang/cure-otp/tree/main/metatheory/src/otp_conversation.cure`).
 
 ### E1 (headline) — sibling/context refinement on evidence match — **✅ ALREADY CLOSED** (E, no change needed; locked by oracle `e1sib` + antibody)
 > Naming: the handoff spec tracks the parent gap as **E1** ("refinement does not reach sibling
@@ -258,7 +258,7 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
   §7.5-class residual.
 - **Verified.** Oracle `hoidx/hoidx01_lambda_in_index` cure=accept idris=accept **rel=same**;
   negative antibody `lambda_in_index_lowering` (REACH + false-equation + ill-typed-body controls);
-  `:lambda` added to the MetaAST conformance vocabulary. Workaround removed from `Std.Otp.EffAlgebra`
+  `:lambda` added to the MetaAST conformance vocabulary. Workaround removed from `Otp.Meta.EffAlgebra`
   (value-returning free monad `HEff`/`hbind` + left-identity law now live beside the monoid).
   Combines with K-bug 2 (guarded-lambda `hbind` totality). Full suite green (4851).
 

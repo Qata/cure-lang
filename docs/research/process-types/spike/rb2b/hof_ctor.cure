@@ -1,9 +1,0 @@
-mod HofCtor
-  type Response = Ack
-  type Msg = Inc | Dec
-  type Pid(m: Type) indices ()
-    MkPid : ((m) -> Response) -> Pid(m)
-  fn spawn_actor({m: Type}, handler: (m) -> Response) -> Pid(m) = MkPid(handler)
-  fn post({m: Type}, p: Pid(m), msg: m) -> Response = match p
-    MkPid(h) -> h(msg)
-end

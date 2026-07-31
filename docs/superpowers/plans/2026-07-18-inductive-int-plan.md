@@ -8,7 +8,7 @@
 
 **Naming note (spec cross-reference):** the spec (§3.2, §4) labels this fold `reduce_int`. This plan names it `int_to_ctor`/`int_to_ctor_if` instead — a deliberate choice, not a drift — because it mirrors the *actual* in-tree precedent function names exactly (`Eval.nat_to_ctor/1` / `nat_to_ctor_if/1`, `lib/cure/core/eval.ex:244-252`), which the spec's own §3.2 prose cites when explaining the precedent. Wherever the spec's TCB analysis (§4) says "the `reduce_int` fold," read it as this plan's `int_to_ctor`/`int_to_ctor_if`.
 
-**Tech Stack:** Elixir (the Cure compiler under `lib/cure/`), Cure stdlib (`lib/std/`), the differential oracle (`mix cure.oracle otp` against Idris2 at `~/Develop/Idris2/build/exec/idris2`), ExUnit kernel/soundness suite.
+**Tech Stack:** Elixir (the Cure compiler under `lib/cure/`), Cure stdlib (`lib/std/`), the differential oracle (``mix otp.oracle` in `cure-otp`` against Idris2 at `~/Develop/Idris2/build/exec/idris2`), ExUnit kernel/soundness suite.
 
 ## Global Constraints
 
@@ -66,7 +66,7 @@ NegativeSuccessor({:nat_lit, k})  ⇓  {:int_lit, -(k+1)}     # -1, -2, …
 - **`lib/std/int.cure`** — flip `@builtin(:int) primitive Int` → `type Int = FromNat(Nat) | NegativeSuccessor(Nat)`.
 - **Repoint cohort (Task 4, `{:int_type}`/`{:vint_type}` special-cases):** `kernel.ex`, `eval.ex`, `conv.ex`, `meta_check.ex`, `printer.ex`, `quote.ex`, `serialize.ex`, `term.ex`, `value.ex`, `declarations.ex`, `implementation.ex`, `resolve.ex`, `unify.ex`, `union.ex`, `subst.ex`, `guard_lint.ex`, `elaborator.ex` (confirmed live hits via `grep -rn "int_type\|vint_type" lib/cure/core lib/cure/elab | grep -v int_lit`: 18 files total in `lib/cure/core`+`lib/cure/elab`, including `builtins.ex` handled separately above via its own dedicated repoint-contract items — `validator.ex`, `certificate.ex`, and `totality_closure.ex` currently have ZERO hits, so they are dropped from this list; re-grep at Task-4 time regardless, since the tree will have moved). **Note:** `eval.ex:70` (`eval({:int_type},_env) -> {:vint_type}`) and `conv.ex:90,255` (`conv_struct?({:vint_type},{:vint_type},...)`, `same_value_no_delta?({:vint_type},{:vint_type},...)`) are genuine repoint targets distinct from Task 2's work in those same files — Task 2 only adds the `int_to_ctor` peel/defeq machinery, it does not retire these `{:int_type}`/`{:vint_type}` type-node clauses. Do not assume Task 2 already covered them.
 - **`lib/std/proof_int_math.cure`, `lib/std/nat.cure`** — doc-comment refresh only (Task 5, §6).
-- **Tests:** `test/cure/core/int_family_test.exs`, `test/cure/core/int_fold_test.exs`, `test/cure/elab/int_codegen_test.exs`, `metatheory/otp/oracle/otp/int_inductive.{cure,idr}`, plus Phase-2 probes.
+- **Tests:** `test/cure/core/int_family_test.exs`, `test/cure/core/int_fold_test.exs`, `test/cure/elab/int_codegen_test.exs`, `https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_inductive.{cure,idr}`, plus Phase-2 probes.
 
 ---
 
@@ -629,7 +629,7 @@ Expected: PASS. This is the hard gate. Inspect every failure:
 
 - [ ] **Step 8: Run the oracle replay explicitly**
 
-Run: `mix cure.oracle otp && mix cure.oracle.replay` (use the repo's canonical replay task name — grep `mix.exs`/`lib/mix/tasks` if unsure). Expected: `rel=same` for every existing probe. Any `rel` change on an existing probe is a Halt.
+Run: ``mix otp.oracle` in `cure-otp` && mix cure.oracle.replay` (use the repo's canonical replay task name — grep `mix.exs`/`lib/mix/tasks` if unsure). Expected: `rel=same` for every existing probe. Any `rel` change on an existing probe is a Halt.
 
 - [ ] **Step 9: Commit**
 
@@ -653,7 +653,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 ### Task 5: Induction smoke-test, oracle probe, and doc-comment refresh
 
 **Files:**
-- Create: `metatheory/otp/oracle/otp/int_inductive.cure`, `metatheory/otp/oracle/otp/int_inductive.idr`
+- Create: `https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_inductive.cure`, `https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_inductive.idr`
 - Modify: `lib/std/int.cure` (add `negate` + the smoke-test lemma)
 - Modify: `lib/std/proof_int_math.cure` (module-doc refresh — §6)
 - Modify: `lib/std/nat.cure` (`of_int` doc refresh — §6)
@@ -705,7 +705,7 @@ If any arm's `reflexive` does NOT type-check, the defeq is not firing — this i
 - [ ] **Step 3: Write the differential oracle probe**
 
 ```
-# metatheory/otp/oracle/otp/int_inductive.cure  — mirror the .idr exactly (rel=same)
+# https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_inductive.cure  — mirror the .idr exactly (rel=same)
 @group(:core)
 mod IntInductive
   use Std.Nat
@@ -718,7 +718,7 @@ mod IntInductive
 ```
 
 ```idris
--- metatheory/otp/oracle/otp/int_inductive.idr  — the Idris oracle (rel=same)
+-- https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_inductive.idr  — the Idris oracle (rel=same)
 module IntInductive
 
 data Nat' = Z | S Nat'
@@ -737,11 +737,11 @@ start : Nat'
 start = magnitude (negate' (FromNat (S (S Z))))
 ```
 
-(Match the repo's actual oracle-probe conventions — module naming, entry point, and how `.cure`/`.idr` outputs are compared. Grep `metatheory/otp/oracle/otp/` for an existing paired probe and copy its shape exactly. The Cure side may use the real `Std.Int.negate`; the Idris side reproduces the same algorithm on a local mirror — that is the standard `rel=same` setup.)
+(Match the repo's actual oracle-probe conventions — module naming, entry point, and how `.cure`/`.idr` outputs are compared. Grep `https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/` for an existing paired probe and copy its shape exactly. The Cure side may use the real `Std.Int.negate`; the Idris side reproduces the same algorithm on a local mirror — that is the standard `rel=same` setup.)
 
 - [ ] **Step 4: Run the oracle to verify the probe replays `rel=same`**
 
-Run: `mix cure.oracle otp` then the replay task. Expected: `int_inductive` present with `rel=same`.
+Run: ``mix otp.oracle` in `cure-otp`` then the replay task. Expected: `int_inductive` present with `rel=same`.
 
 - [ ] **Step 5: Refresh the two stale doc-comments (§6, doc-only, no semantic change)**
 
@@ -751,14 +751,14 @@ In `lib/std/nat.cure`, the `of_int` doc (lines 19-24) says "A primitive machine 
 
 - [ ] **Step 6: Full suite + oracle replay (Phase-1 definition of done)**
 
-Run: `mix test` then `mix cure.oracle otp` + replay.
+Run: `mix test` then ``mix otp.oracle` in `cure-otp`` + replay.
 Expected: entire suite byte-identically green; `int_inductive` `rel=same`; every pre-existing probe still `rel=same`.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add lib/std/int.cure lib/std/proof_int_math.cure lib/std/nat.cure \
-        metatheory/otp/oracle/otp/int_inductive.cure metatheory/otp/oracle/otp/int_inductive.idr
+        https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_inductive.cure https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_inductive.idr
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "feat(std): negate + negate_involutive smoke-test; refresh stale Int-is-primitive docs"
 ```
@@ -779,7 +779,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 **Files:**
 - Create: `lib/std/proof_int_order.cure` (module `Std.Proof.IntOrder`)
-- Create: `metatheory/otp/oracle/otp/int_order_refl.{cure,idr}`
+- Create: `https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_order_refl.{cure,idr}`
 
 **Interfaces:**
 - Produces: `type IsLessThanOrEqual indices (left: Int, right: Int)`; `type IsLessThan indices (left: Int, right: Int)`; `fn is_less_than_or_equal_is_reflexive(value: Int) -> IsLessThanOrEqual(value, value)`; `fn decide_is_less_than_or_equal(left: Int, right: Int) -> Decision(IsLessThanOrEqual(left, right))`.
@@ -825,12 +825,12 @@ Run the stdlib-compile check. Red = unfilled/ill-typed constructor or reflexivit
 
 - [ ] **Step 3: Oracle probe + full suite**
 
-Add `metatheory/otp/oracle/otp/int_order_refl.{cure,idr}` (reflexivity applied to closed instances, e.g. `2 ≤ 2`, `-3 ≤ -3`), `rel=same`. Run `mix test` + oracle replay.
+Add `https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_order_refl.{cure,idr}` (reflexivity applied to closed instances, e.g. `2 ≤ 2`, `-3 ≤ -3`), `rel=same`. Run `mix test` + oracle replay.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add lib/std/proof_int_order.cure metatheory/otp/oracle/otp/int_order_refl.cure metatheory/otp/oracle/otp/int_order_refl.idr
+git add lib/std/proof_int_order.cure https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_order_refl.cure https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_order_refl.idr
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "feat(std): Int order family + reflexivity + decision procedure"
 ```
@@ -839,7 +839,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 **Files:**
 - Modify: `lib/std/proof_int_order.cure`
-- Create: `metatheory/otp/oracle/otp/int_order_mono.{cure,idr}`
+- Create: `https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_order_mono.{cure,idr}`
 
 **Interfaces:**
 - Produces: `fn is_less_than_or_equal_is_transitive({left},{middle},{right}, IsLessThanOrEqual(left,middle), IsLessThanOrEqual(middle,right)) -> IsLessThanOrEqual(left,right)`; `fn adding_the_same_number_preserves_less_than_or_equal(addend: Int, {left}, {right}, IsLessThanOrEqual(left,right)) -> IsLessThanOrEqual(add_int(addend,left), add_int(addend,right))`.
@@ -856,7 +856,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 **Files:**
 - Modify: `lib/std/proof_int_order.cure`
-- Create: `metatheory/otp/oracle/otp/int_order_sign.{cure,idr}`
+- Create: `https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/int_order_sign.{cure,idr}`
 
 **Interfaces:**
 - Produces: `fn nonneg_of_from_nat(n: Nat) -> IsLessThanOrEqual(FromNat(Z()), FromNat(n))`; a nonneg-scaling monotonicity lemma (`0 ≤ a → b ≤ c → a*b ≤ a*c`, reducing to `Std.Proof.Math.multiply` facts); and `fn zero_is_not_at_most_negative_one(proof: IsLessThanOrEqual(FromNat(Z()), NegativeSuccessor(Z()))) -> Empty` (the `0 ≤ -1` refutation — LIA's contradiction extractor, discharged by empty `match` since no constructor targets that index pair).

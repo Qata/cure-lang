@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-14
 **Status:** approved (design gate); implementation pending
-**Source:** `docs/research/process-types/raw-algebra-conformance-checklist.md` (executed audit, 2026-07-14)
+**Source:** `https://github.com/cure-lang/cure-otp/tree/main/docs/research/process-types/raw-algebra-conformance-checklist.md` (executed audit, 2026-07-14)
 **Design being repaired:** `docs/superpowers/specs/beam/2026-07-09-typed-beam-process-algebra-design.md`
 **TCB delta:** zero — every change is elaborator + stdlib. The kernel is untouched.
 

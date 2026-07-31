@@ -90,7 +90,7 @@ At the start of this work the following is already present and must be reused:
   `Hypotheses`, `FarkasWitness`, `Valuation`, dimension checks, affine
   combination, goal negation, and `check_lia_candidate/3`.
 - The accepted/forged/short/dimension/boundary computation probes exist in
-  `metatheory/otp/oracle/otp/linear_arithmetic_compute.{cure,idr}` and
+  `https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/linear_arithmetic_compute.{cure,idr}` and
   `test/cure/stdlib/linear_arithmetic_compute_test.exs`.
 - The affine semantic lemmas needed by the soundness proof have begun landing in
   `Std.Proof.IntOrder` and the proof-language ergonomics now exist.
@@ -115,11 +115,11 @@ computes:
 ### 3.1 Immediate OTP consumer
 
 The critical OTP gap is B3 in
-`docs/research/process-types/2026-07-17-otp-formalisation-ledger.md`: semantic
+`https://github.com/cure-lang/cure-otp/tree/main/docs/research/process-types/2026-07-17-otp-formalisation-ledger.md`: semantic
 inclusion of commutative-regex mailbox patterns over Parikh vectors. It is not
 merely a conjunction of quantifier-free affine atoms.
 
-The existing checked `Std.Otp.MailboxPattern` substrate already provides:
+The existing checked `Otp.Meta.MailboxPattern` substrate already provides:
 
 - `Pat = PZero | POne | PAtom | PPlus | PTimes | PStar`;
 - three-coordinate natural-number multisets;
@@ -404,9 +404,9 @@ semilinear-cover or quantified-Presburger layer lands.
 The checked implementation lives in
 `lib/std/otp_mailbox_semilinear.cure` as
 `Std.Otp.MailboxSemilinear`, importing and reusing
-`Std.Otp.MailboxPattern`; do not duplicate `Tag`, `MS`, `Pat`, or `Accepts`.
+`Otp.Meta.MailboxPattern`; do not duplicate `Tag`, `MS`, `Pat`, or `Accepts`.
 The differential mirror is
-`metatheory/otp/oracle/otp/mailbox_semilinear.{cure,idr}`, and focused host tests live in
+`https://github.com/cure-lang/cure-otp/tree/main/metatheory/oracle/otp/mailbox_semilinear.{cure,idr}`, and focused host tests live in
 `test/cure/stdlib/otp_mailbox_semilinear_test.exs`. Producer/recognizer code
 lives under `Cure.Elab.Solver.Semilinear*`, separate from the checked stdlib.
 
@@ -874,7 +874,7 @@ in those type positions; no producer-specific name appears in source.
 
 ### End to end
 
-- a real `Std.Otp.MailboxPattern` semantic inclusion closes through
+- a real `Otp.Meta.MailboxPattern` semantic inclusion closes through
   normalization, producer, checked evidence, and the unchanged kernel;
 - its reverse fails with the rich Parikh-counterexample diagnostic;
 - a symbolic LIA goal outside lemma/positivity search closes;
@@ -927,7 +927,7 @@ antibodies.
 - Add `LinearEmbedding`, `SemiLinearInclusionCertificate`, exact shape checks,
   Boolean inversion, and `check_semilinear_inclusion_sound`.
 - Compose the normalization bridge into `checked_pattern_inclusion` over the
-  existing `Std.Otp.MailboxPattern.Accepts` relation.
+  existing `Otp.Meta.MailboxPattern.Accepts` relation.
 - Add forged target-index, dimension, offset, period-image, missing-component,
   truncation, and reversed-inclusion antibodies.
 - Gate: the positive OTP probe checks in the unchanged kernel and the reverse
@@ -940,7 +940,7 @@ antibodies.
   kernel-check it against the original pattern-inclusion goal.
 - Add explicit invocation, rich diagnostics, completion, hover, deterministic
   replay, and validated counterexample reporting.
-- Gate: one real `Std.Otp.MailboxPattern` inclusion closes end to end from
+- Gate: one real `Otp.Meta.MailboxPattern` inclusion closes end to end from
   source obligation through producer, checked certificate, and kernel.
 
 ### Phase D — strict external protocol for the OTP slice

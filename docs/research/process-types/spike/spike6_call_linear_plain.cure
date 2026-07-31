@@ -1,5 +1,0 @@
-mod CallLinearPlain
-  type Box = MkBox
-  fn f(@linear c : Box) -> Box = c
-  fn g(@linear c : Box) -> Box = f(c)
-end

@@ -3189,10 +3189,10 @@ defmodule Cure.Elab.Program do
 
           dir ->
             # The file convention snake_cases each module-name segment
-            # (`Std.Otp.InferenceLaws` -> `otp_inference_laws.cure`), so a compound CamelCase
+            # (`Std.Json.Decoder` -> `json_decoder.cure`), so a compound CamelCase
             # segment gets its underscores. The old all-downcase join
             # (`otp_inferencelaws`) missed them, leaving every multi-word module
-            # (`InferenceLaws`, `ReplyPreservation`, …) unresolvable on `use` (E3). Try the
+            # (`Json.Decoder`, `Http.Client`, …) unresolvable on `use` (E3). Try the
             # snake_cased path first, then the legacy join as a fallback for any file that
             # predates the convention.
             candidates =

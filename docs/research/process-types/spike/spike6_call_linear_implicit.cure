@@ -1,5 +1,0 @@
-mod CallLinearImplicit
-  type Box = MkBox
-  fn f({t: Type}, @linear c : Box) -> Box = c
-  fn g(@linear c : Box) -> Box = f(c)
-end

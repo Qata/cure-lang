@@ -1,9 +1,0 @@
-mod LinBranchDrop
-  # PROBE L4 (negative): one branch drops the linear binder -> must REJECT.
-  # "consumed on EVERY path" — a path that forgets to reply is ill-typed.
-  type Box = MkBox
-  type Sel = A | B
-  fn pick(s: Sel, @linear x : Box) -> Box = match s
-    A() -> x
-    B() -> MkBox
-end

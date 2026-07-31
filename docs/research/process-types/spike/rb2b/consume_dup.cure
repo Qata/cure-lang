@@ -1,8 +1,0 @@
-mod ConsumeDup
-  type Box = MkBox
-  type Widget = MkWidget
-  type WPair = MkWPair(Widget, Widget)
-  fn consume(@linear c : Box) -> Widget = match c
-    MkBox() -> MkWidget
-  fn g(@linear c : Box) -> WPair = let x = consume(c) in MkWPair(x, x)
-end

@@ -48,7 +48,7 @@ add an entry here. Do not silently absorb the tax.
 sibling then cannot prune impossible constructors, giving `{:reachable_impossible, C}` or
 `{:missing_branch, C}`.
 
-**Minimal repro** (from `Std.Otp.InferenceAdequacy` branching coverage). `SendSendK :
+**Minimal repro** (from `Otp.Meta.InferenceAdequacy` branching coverage). `SendSendK :
 SendsIn(k,t) -> SendsIn(BSend(y,k), t)`, so matching `s` against `SendSendK` forces
 `b = BSend(y,k)`:
 
@@ -105,7 +105,7 @@ carries).
 context's NbE values. Nested coverage observes a definitionally known constructor,
 and the matching branch adds the constructor-field equations in the convoy direction
 (outer existential → newly bound runtime field). The kernel independently performs
-the same refinement and coverage check. `Std.Otp.InferenceAdequacy.coverage` now uses
+the same refinement and coverage check. `Otp.Meta.InferenceAdequacy.coverage` now uses
 the evidence-first formulation.
 
 ---
@@ -119,7 +119,7 @@ compound index cannot reach it.
 **Repros (recurring across the metatheory).**
 - `Runs(b, before)` / `RStep : Runs(b,before) -> StepAt(...) -> Runs(b,after)` — the recursive
   adequacy call needs `before`, an index existential, not surfaced by matching `RStep`.
-- `LStep`/drain (`Std.Otp.ReplyConservation`) — the pending/answered counts are index
+- `LStep`/drain (`Otp.Meta.ReplyConservation`) — the pending/answered counts are index
   existentials; the drain proof cannot name them from a bare `LThen` match.
 - `BSeq(l,r)` left component `l` for `member_append_right(infer(l), …)`.
 
@@ -148,7 +148,7 @@ substitution transports their equations without making them computationally rele
 Authors can request stable source names with the existing unforced named-implicit
 pattern syntax; data re-matches expose relevant runtime fields naturally.
 
-**Residual (seen 2026-07-17 in `Std.Otp.Conversation` / `Std.Otp.GenStatem`).** A
+**Residual (seen 2026-07-17 in `Otp.Meta.Conversation` / `Otp.Meta.GenStatem`).** A
 *relevant* index existential still can't be named in a proof body — e.g. `CRStep`'s
 `t` (needed for the `MCons t …` congruence) or `SStep`'s split counts (needed for the
 measure). The standing workaround is to add the value as an EXPLICIT constructor FIELD
@@ -164,7 +164,7 @@ index. Full fix = surface named-implicit *binders* on constructor patterns.
 Functions with only explicit args resolve fine across modules; adding an implicit parameter
 breaks cross-module resolution.
 
-**Repro.** `use Std.Otp.InferenceLaws; handles_mono(...)` (implicit-carrying) → `:unknown_global`.
+**Repro.** `use Otp.Meta.InferenceLaws; handles_mono(...)` (implicit-carrying) → `:unknown_global`.
 Dodged in `otp_inference_laws_test` by making the test self-contained.
 
 **Root cause + layer.** E-layer name resolution (`program.ex`) — the qualified/`use` import path
@@ -181,7 +181,7 @@ shared proof lemmas (e.g. `member_append_*`) into a reusable stdlib module.
 
 **Status.** ✅ FIXED (`program.ex` `import_source_path`). Root cause was NOT implicits — it was
 the module→file mapping: `String.downcase(Enum.join(segments, "_"))` mapped
-`Std.Otp.InferenceLaws` to `otp_inferencelaws.cure`, but the file is `otp_inference_laws.cure`
+`Otp.Meta.InferenceLaws` to `otp_inferencelaws.cure`, but the file is `otp_inference_laws.cure`
 (the convention snake_cases each segment). So `use` of ANY multi-word module
 (`InferenceLaws`, `ReplyPreservation`, …) merged zero of its defs → `:unknown_global` on every
 call, implicit or explicit. Fix snake_cases each segment (`Macro.underscore`) with the legacy
@@ -224,7 +224,7 @@ only accepted before the `type` (or another top-level decl), not interleaved wit
 constructors — so per-constructor documentation cannot sit next to the constructor it
 describes; it must be collected into the block-leading comment.
 
-**Repro.** In `Std.Otp.ExitSignal`, a `## normal + trapping: …` line before each `Step`
+**Repro.** In `Otp.Meta.ExitSignal`, a `## normal + trapping: …` line before each `Step`
 constructor errored; moving all of them into the comment above `type Step` fixed it.
 
 **Root cause + layer.** P (lexer/parser) — the constructor-list grammar inside a `type` block
@@ -241,7 +241,7 @@ in the constructor-list production).
 **Status.** ✅ FIXED (`parser.ex`): `parse_gadt_ctors` skips `:doc_comment`/`:line_comment`
 between constructors, and the block entry uses `skip_newlines_and_comments` so a comment before
 the first constructor (which lands before the block `:indent`) doesn't defeat block-open
-detection. Regression tests in `parser_indexed_type_test.exs`; `Std.Otp.ExitSignal` documents
+detection. Regression tests in `parser_indexed_type_test.exs`; `Otp.Meta.ExitSignal` documents
 each constructor in place.
 
 ---
@@ -253,7 +253,7 @@ SIBLING argument's intermediate existential leaves `{:unsolved_metavariables, C}
 elaboration — Cure rejects a term Idris accepts (a `cure_stricter` reach gap, an elaborator
 incompleteness, not soundness).
 
-**Minimal repro** (`Std.Otp.RestartIntensity`'s bounded-run liveness):
+**Minimal repro** (`Otp.Meta.RestartIntensity`'s bounded-run liveness):
 
 ```
 type FailRun indices (b1: Nat, p1: Phase, b2: Nat, p2: Phase)
@@ -276,7 +276,7 @@ argument's intermediate existential index into a sibling nullary constructor. Sa
 E1/E2 (index existentials). Idris's unifier solves it.
 
 **Current workaround.** None that keeps the natural proof. Ship the sub-theory that avoids the
-routing (`Std.Otp.RestartIntensity` ships `Sup`/`Fail`/`on_fail`; the `eventually_down` run is a
+routing (`Otp.Meta.RestartIntensity` ships `Sup`/`Fail`/`on_fail`; the `eventually_down` run is a
 blocked probe). Possible reformulations: give the constructors explicit relevant index args
 (pollutes the datatype) — but note that pinning one ctor just moves the failure to the next
 (pinning `FRDone` surfaced `FRestart`).
@@ -316,7 +316,7 @@ helper `fn h() -> T(concrete indices) = <ctor>` (the checking-mode annotation pi
 same shape as `ra_start`.
 
 **Residual variant — floating OUTPUT indices of a WRAPPED step relation (seen 2026-07-18,
-`Std.Otp.Session` progress).** The same eager-finalization also bites when the enclosing
+`Otp.Meta.Session` progress).** The same eager-finalization also bites when the enclosing
 constructor's field type carries *its own* fresh index metavars that the inner ctor is supposed
 to solve. Repro: a "can-step" wrapper `PStep : SStep(l, r, l2, r2) -> Progress(l, r)` (`l2,r2`
 = the step's TARGET continuations, auto-bound implicits of `PStep`), constructed as
@@ -471,7 +471,7 @@ applied functions (β for lambdas, δ for names, saturation for partial applicat
 conversion when they occur in an index, and to fix the lambda-closure capture in that path.
 
 **Workaround.** For value-less effects, use the first-order MONOID formulation (no continuation
-function) — `Std.Otp.EffAlgebra` proves left/right identity + associativity of `seq`. The
+function) — `Otp.Meta.EffAlgebra` proves left/right identity + associativity of `seq`. The
 value-returning free-monad `bind` and its three monad laws stay blocked on this.
 
 **Status.** OPEN. Related to E4 (partial-app codegen) but distinct: E4 is codegen of a partial
@@ -488,7 +488,7 @@ REJECTS. Not about nesting or "imported functions" in general (earlier two misch
 UNIQUELY-named imported functions (`count_sends`, `seq`) reduce fine; a LOCAL `idn(idn(Z))` reduces
 fine. It is specifically an AMBIGUOUS applied def head. In TERM position the same `plus(…)`
 correctly reports `:ambiguous_name`; only in TYPE/index position did it silently degrade. Even the
-QUALIFIED spelling `Std.Otp.EffAlgebra.plus(…)` degraded the same way.
+QUALIFIED spelling `Otp.Meta.EffAlgebra.plus(…)` degraded the same way.
 
 **Root cause + layer.** E (elaborator, `declarations.ex` — NOT TCB). `idx_to_core`'s `{:variable,…}`
 clause resolves via `resolve_index_name` (which handles ambiguity), but the `{:function_call,…}` →
@@ -520,7 +520,7 @@ fix for the remaining bare case. Distinct from E10 (a function ARGUMENT not redu
 termination and mutual recursion are unaffected). Validated: full suite + full Antigen (318/318, no
 distinct normal forms equated) + a dedicated regression/termination antibody
 (`test/cure/core/reduce_unfolded_freeze_consistency_test.exs`). PAYOFF: the mailbox monoid-
-homomorphism (`Std.Otp.SessionMailbox` `recvs_hom`/`sends_hom`) now elaborates with clean combinator
+homomorphism (`Otp.Meta.SessionMailbox` `recvs_hom`/`sends_hom`) now elaborates with clean combinator
 proofs. The original diagnosis below is kept for history.
 
 
@@ -531,7 +531,7 @@ reduced, even when `f(c)` reduces to a value on its own. So `msum(recvs(LEnd), r
 the `recvs(LEnd)` in the stuck `msum`'s first slot stays a neutral `napp` and is compared
 syntactically against `MkMS(Z,Z,Z)`, which fails.
 
-**Minimal repro** (`Std.Otp.SessionMailbox`, attempting the monoid-homomorphism `recvs(seq(s,t)) =
+**Minimal repro** (`Otp.Meta.SessionMailbox`, attempting the monoid-homomorphism `recvs(seq(s,t)) =
 msum(recvs(s), recvs(t))`): the `LEnd` case goal `msum(recvs(LEnd), recvs(t))` will not convert
 with a proof of type `msum(MkMS(Z,Z,Z), recvs(t))`. In ISOLATION `recvs(LEnd)` reduces fine
 (`fn h() -> Equivalent(MS, recvs(LEnd()), MkMS(Z,Z,Z)) = reflexive(MkMS(Z,Z,Z))` is accepted); the
@@ -550,7 +550,7 @@ stuck accumulator/combiner slot — e.g. the mailbox-encoding monoid homomorphis
 only the Cure kernel's conversion is too weak. Deferred (TCB HARD-STOP — a normalizer change needs
 its own reviewed run + Antigen termination/soundness antibodies).
 
-**ROOT CAUSE PINNED (2026-07-18, minimal repro `docs/research/process-types/probes/k1-freeze-inconsistency.exs`).**
+**ROOT CAUSE PINNED (2026-07-18, minimal repro `https://github.com/cure-lang/cure-otp/tree/main/docs/research/process-types/probes/k1-freeze-inconsistency.exs`).**
 A 40-line kernel repro (`combine`/`g` mirroring `msum`/`recvs`, no stdlib) shows the defect is an
 INCONSISTENT A6 freeze in `Normalise.reduce_unfolded`, and the direction is the OPPOSITE of the
 first guess:
@@ -578,7 +578,8 @@ what guarantees NF termination here). A correct fix must track the SET of defs c
 unfolded on the path (an unfold stack) and freeze on re-entry to any of them, not just self. That is
 the dedicated kernel change, with an Antigen antibody proving NF still terminates on mutually-
 recursive stuck defs. Repro is committed and reproduces on
-demand (`mix run docs/research/process-types/probes/k1-freeze-inconsistency.exs`).
+demand (from a `cure-otp` checkout:
+`mix run docs/research/process-types/probes/k1-freeze-inconsistency.exs`).
 
 **Deeper trace (2026-07-18, do NOT blind-fix).** Reading `eval.ex`/`normalise.ex`/`conv.ex`:
 `eval` leaves globals opaque (`{:vneutral,{:nglobal,_}}`); δ fires only in `Normalise`. Tracing

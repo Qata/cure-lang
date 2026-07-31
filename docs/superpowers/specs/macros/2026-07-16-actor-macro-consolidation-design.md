@@ -100,7 +100,7 @@ If 1c landed in Stage 1, all four collapse to whole‑module single templates he
 
 An elaborator‑integrated macro that sees inferred types and datatype structure, added last. It removes the one irreducibly‑uncouth remainder of Stages 1–2: syntax **analysis**. Quasiquotation makes *synthesis* (producing output) elegant, but it does nothing for *analysis* (inspecting the user's syntax). The reply‑type derivation `derive_reply_contract` / `infer_reply_type` / `reply_expr_type` walks the user's `call` body and sniffs literal subtypes (`:integer → Int`, `:float → Float`, `:symbol → Atom`, `:boolean → Bool`) to *guess* the reply type — a hack that is irreducibly procedural at Tier 2. A typed macro asks the elaborator for the *inferred* type instead.
 
-Tier 3 is also the principled home for deriving and the OTP‑metatheory pid‑index / `ReplyOf(req)` work (see `docs/research/process-types/`). It gets its own brainstorm → spec → plan when we reach it; recorded here as direction, not detail.
+Tier 3 is also the principled home for deriving and the OTP‑metatheory pid‑index / `ReplyOf(req)` work (see `https://github.com/cure-lang/cure-otp/tree/main/docs/research/process-types/`). It gets its own brainstorm → spec → plan when we reach it; recorded here as direction, not detail.
 
 ## 7. Roadmap context: the Lean‑style three tiers
 

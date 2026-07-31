@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **TCB delta: zero.** `lib/cure/core/**` is the kernel. The ONLY file under it this plan touches is `lib/cure/core/inductive.ex`, and only to add an `erasure` field to the opaque-family *record* (a map key with a `nil` default). No typing rule, no conversion rule, no elimination rule changes. If a task finds itself editing `kernel.ex`, `normalise.ex`, `conv.ex`, or `context.ex`, **stop** — the design is wrong.
-- **Spec:** `docs/superpowers/specs/beam/2026-07-14-otp-conformance-fixes-design.md`, **including its §7 planning amendments**, which supersede §3.2 and §3.3 where they conflict. **Evidence base:** `docs/research/process-types/raw-algebra-conformance-checklist.md`.
+- **Spec:** `docs/superpowers/specs/beam/2026-07-14-otp-conformance-fixes-design.md`, **including its §7 planning amendments**, which supersede §3.2 and §3.3 where they conflict. **Evidence base:** `https://github.com/cure-lang/cure-otp/tree/main/docs/research/process-types/raw-algebra-conformance-checklist.md`.
 - **Out of scope, do not implement:** F-1 (grounding the pid index — Rung 2), the honest `start_link` return, `try_call`, retargeting `send_after` at `start_timer/3`. Spec §2 and §6.
 - **Test discipline:** strict red-green-refactor. Write the test, run it, confirm it fails *for the stated reason*, then write the minimal code to pass. A green test is immutable — never weaken or delete one to accommodate a later step. **Two pre-existing tests are the sole sanctioned exception** (Tasks 4 and 7), named there explicitly because they encode the very defects this batch closes.
 - **One build at a time.** Never launch concurrent `mix test` runs.
@@ -1509,7 +1509,7 @@ defmodule Cure.Stdlib.OtpRawPinTest do
   (§3.1) requires each to carry its most permissive HONEST type. That cannot be checked
   automatically — it would need an oracle for every BIF's return type — so this pins the
   table the executed conformance audit established by probing each BIF's real return value
-  (docs/research/process-types/raw-algebra-conformance-checklist.md, §4 F-4).
+  (https://github.com/cure-lang/cure-otp/tree/main/docs/research/process-types/raw-algebra-conformance-checklist.md, §4 F-4).
 
   A change here is not a test to update. It is a claim about what the BEAM returns, and it
   needs the evidence the audit produced: run the BIF and look.
@@ -1614,7 +1614,7 @@ In `lib/std/otp_raw.cure`, replace the delivery/ordering claim in the module hea
   ##     unspecified.
   ##
   ## (Bereczky/Horpácsi/Thompson, *A Formalisation of Core Erlang*, Thm. 2 and Ex. 3;
-  ## verified against AtomVM in docs/research/process-types/raw-algebra-conformance-checklist.md.)
+  ## verified against AtomVM in https://github.com/cure-lang/cure-otp/tree/main/docs/research/process-types/raw-algebra-conformance-checklist.md.)
 ```
 
 Add the two hazard docstrings the audit requires be visible at the op, not only in a research doc:

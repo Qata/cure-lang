@@ -21,7 +21,7 @@
 ##
 ## (Bereczky/Horpácsi/Thompson, *A Formalisation of Core Erlang*, Thm. 2 and Ex. 3;
 ## verified against AtomVM in
-## docs/research/process-types/raw-algebra-conformance-checklist.md.)
+## https://github.com/cure-lang/cure-otp/tree/main/docs/research/process-types/raw-algebra-conformance-checklist.md.)
 ##
 ## Messages and replies are POLYMORPHIC, not `Any`: the type variable is the
 ## narrow point where `Std.Otp` supplies the message-set code `m`. Payloads must
