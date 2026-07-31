@@ -71,14 +71,32 @@ defmodule Cure.Doc.SnippetsTest do
       """)
 
     assert Snippets.tags(snippet) == MapSet.new(["E091", "expr"])
-    assert Snippets.expected_error(snippet) == {:ok, "E091"}
+    assert Snippets.expected_diagnostic(snippet) == {:ok, "E091"}
     refute Snippets.tagged?(snippet, "path=broken.cure")
+  end
+
+  test "reads a warning code as an expected diagnostic" do
+    [snippet] = Snippets.extract("```cure W000\nfn answer() -> Int = 42\n```\n")
+
+    assert Snippets.expected_diagnostic(snippet) == {:ok, "W000"}
+  end
+
+  test "ignores tags that are not diagnostic codes" do
+    [snippet] = Snippets.extract("```cure expr declarations\nmissing\n```\n")
+
+    assert Snippets.expected_diagnostic(snippet) == nil
   end
 
   test "rejects multiple expected diagnostic tags" do
     [snippet] = Snippets.extract("```cure E091 E093\nmissing\n```\n")
 
-    assert Snippets.expected_error(snippet) == {:error, ["E091", "E093"]}
+    assert Snippets.expected_diagnostic(snippet) == {:error, ["E091", "E093"]}
+  end
+
+  test "rejects an error code and a warning code on the same fence" do
+    [snippet] = Snippets.extract("```cure E091 W000\nmissing\n```\n")
+
+    assert Snippets.expected_diagnostic(snippet) == {:error, ["E091", "W000"]}
   end
 
   test "wraps declarations and expressions at their authored lines" do

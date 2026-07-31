@@ -90,15 +90,13 @@ mod MyApp.Math
 
   type Sign = Positive | Negative | Zero
 
-  fn factorial(n: Nat) -> Nat =
-    match n
-      Z() -> S(Z())
-      S(k) -> S(k)
+  fn double(n: Int) -> Int = n + n
 
-  fn classify(x: Int) -> Sign
-    | x when x > 0 -> Positive
-    | x when x < 0 -> Negative
-    | _             -> Zero
+  fn classify(x: Int) -> Sign =
+    match x
+      x when x > 0 -> Positive
+      x when x < 0 -> Negative
+      _ -> Zero
 
   fn safe_divide(a: Int, b: Int) -> Result(Int, Atom) =
     pickup
@@ -315,6 +313,7 @@ cure check examples/protocols.cure
 ## Documentation
 
 - [Language Specification](docs/LANGUAGE_SPEC.md) -- syntax, keywords, operators, all constructs
+- [Macros](docs/MACROS.md) -- `macro` containers, syntax rules and holes, `becomes` / `computed by` / `syntax family`, `Std.Syntax`, and self-proving `example` / `explain` (v0.34.0)
 - [Type System](docs/TYPE_SYSTEM.md) -- dependent bidirectional checking,
   indexed families, quantitative binders, conversion, and erasure
 - [Dependent Types](docs/DEPENDENT_TYPES.md) -- indexed-family and proof

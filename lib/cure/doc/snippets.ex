@@ -9,9 +9,17 @@ defmodule Cure.Doc.Snippets do
   module, a group of declarations, or an expression. Declaration and expression
   snippets are placed in a uniquely named synthetic module.
 
+  A fence may declare its expected outcome with one diagnostic tag: an `E` code
+  for a snippet the compiler must reject, or a `W` code for a snippet that must
+  compile while emitting that warning. An untagged fence must compile with no
+  warnings at all. There is no tag that opts a `cure` fence out of checking —
+  an incomplete sketch belongs in a plain `text` fence, which is never
+  extracted.
+
   Repository checks use tracked and untracked, non-ignored Markdown and Cure
-  files. This avoids generated documentation and dependency trees without
-  overlooking a new document before it is added to Git.
+  files. Historical release notes and design archives are deliberately outside
+  the executable documentation contract; user-facing docs and all Cure
+  docstrings remain covered.
   """
 
   @enforce_keys [:path, :line, :code, :info]
@@ -62,13 +70,33 @@ defmodule Cure.Doc.Snippets do
         |> String.split(<<0>>, trim: true)
         |> Enum.map(&Path.join(root, &1))
         |> Enum.filter(&File.regular?/1)
+        |> Enum.reject(&documentation_archive?/1)
         |> Enum.sort()
 
       {_output, _status} ->
         Path.wildcard(Path.join(root, "**/#{pattern}"))
-        |> Enum.reject(&excluded_path?/1)
+        |> Enum.reject(&(excluded_path?(&1) or documentation_archive?(&1)))
         |> Enum.sort()
     end
+  end
+
+  # Design notes, release history, and generated reports intentionally contain
+  # illustrative or historical Cure syntax. They are not API documentation and
+  # must not silently become part of the executable documentation contract.
+  # Authoritative docs and all Cure source docstrings remain covered.
+  defp documentation_archive?(path) do
+    normalized = Path.expand(path)
+
+    String.contains?(normalized, "/docs/superpowers/") or
+      String.contains?(normalized, "/site/priv/posts/") or
+      String.contains?(normalized, "/blog/") or
+      Path.basename(normalized) in [
+        "CHANGELOG.md",
+        "RELEASE.md",
+        "ROADMAP-0.34.md",
+        "AUTOPILOT-REPORT-anonymous-adts.md"
+      ] or
+      normalized in [Path.expand("docs/STDLIB.md"), Path.expand("docs/DOC.md")]
   end
 
   @doc "Extract checked Cure fences from one Markdown file."
@@ -125,13 +153,20 @@ defmodule Cure.Doc.Snippets do
   @spec tagged?(t(), String.t()) :: boolean()
   def tagged?(%__MODULE__{} = snippet, tag), do: MapSet.member?(tags(snippet), tag)
 
-  @doc "Return the single expected diagnostic code declared by the fence."
-  @spec expected_error(t()) :: nil | {:ok, String.t()} | {:error, [String.t()]}
-  def expected_error(%__MODULE__{} = snippet) do
+  @doc """
+  Return the single expected diagnostic code declared by the fence.
+
+  An `E` code declares a snippet the compiler must reject. A `W` code declares
+  a snippet that must compile *and* emit that warning; some documented
+  constructs have no warning-free form, and silently dropping the warning would
+  be a weaker claim than pinning it.
+  """
+  @spec expected_diagnostic(t()) :: nil | {:ok, String.t()} | {:error, [String.t()]}
+  def expected_diagnostic(%__MODULE__{} = snippet) do
     codes =
       snippet
       |> tags()
-      |> Enum.filter(&Regex.match?(~r/^E\d{3}$/, &1))
+      |> Enum.filter(&Regex.match?(~r/^[EW]\d{3}$/, &1))
       |> Enum.sort()
 
     case codes do
@@ -152,14 +187,49 @@ defmodule Cure.Doc.Snippets do
   def compile(%__MODULE__{} = snippet, opts \\ []) do
     support = Keyword.get(opts, :support, "")
     output_dir = Keyword.get(opts, :output_dir, "_build/cure/doc_snippets")
+    source_roots = Keyword.get(opts, :source_roots, [])
+    stdlib_ebin = Keyword.get(opts, :stdlib_ebin)
     source = source(snippet, support)
 
-    Cure.Compiler.compile_string(source,
-      file: snippet.path,
-      output_dir: output_dir,
-      emit_events: false
-    )
+    with :ok <- prepare_stdlib(stdlib_ebin, source_roots) do
+      Cure.Compiler.compile_string(source,
+        file: snippet.path,
+        output_dir: output_dir,
+        source_roots: source_roots,
+        emit_events: false
+      )
+    end
   end
+
+  defp prepare_stdlib(stdlib_ebin, source_roots) when is_binary(stdlib_ebin) do
+    # Keep the resolver pointed at the repository stdlib when snippets are
+    # compiled outside Mix (the docs task and editor integrations both do
+    # this).  A loaded BEAM alone is not enough for source-backed `use`
+    # resolution.
+    if source_roots != [] do
+      # CURE_LIB names the compiled ebin directory (its sibling `../std`
+      # is used for source resolution), not the source checkout directory.
+      System.put_env("CURE_LIB", stdlib_ebin)
+    end
+
+    if File.dir?(stdlib_ebin) do
+      :code.add_patha(String.to_charlist(stdlib_ebin))
+    end
+
+    with :ok <-
+           Cure.Stdlib.Preload.preload(
+             kind: :all,
+             stdlib_ebin: stdlib_ebin,
+             source_jit: false
+           ) do
+      case Enum.find(source_roots, &(Path.basename(&1) == "std")) do
+        nil -> :ok
+        source_dir -> Application.put_env(:cure, :stdlib_source_dir, source_dir)
+      end
+    end
+  end
+
+  defp prepare_stdlib(_stdlib_ebin, _source_roots), do: :ok
 
   @doc "Build the line-aligned Cure compilation unit for a snippet."
   @spec source(t(), String.t()) :: String.t()

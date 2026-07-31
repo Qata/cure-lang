@@ -115,8 +115,10 @@ defmodule Cure.MixProject do
     [
       # Warnings during `mix test` are failures — keeps the suite output clean
       # and stops new compile warnings from slipping in. Covers lib AND test
-      # files (unlike elixirc_options, which misses test compilation).
-      test: "test --warnings-as-errors",
+      # files (unlike elixirc_options, which misses test compilation). The
+      # documentation dragnet runs after ExUnit so fenced Cure examples and
+      # source docstrings are part of the default test gate too.
+      test: ["test --warnings-as-errors", "cure.check.docs"],
       quality: ["format", "credo --strict"],
       "quality.ci": [
         "format --check-formatted",
@@ -172,6 +174,7 @@ defmodule Cure.MixProject do
         "CHANGELOG.md",
         "docs/TUTORIAL.md",
         "docs/LANGUAGE_SPEC.md",
+        "docs/MACROS.md",
         "docs/TYPE_SYSTEM.md",
         "docs/DEPENDENT_TYPES.md",
         "docs/KERNEL.md",

@@ -219,7 +219,7 @@ are merged into a single Markdown body with a paragraph break
 between blocks -- so a module-level docstring can read as natural
 prose:
 
-```cure
+```text
 mod Std.List
   ## Eager, persistent, singly-linked lists.
   ##
@@ -274,9 +274,17 @@ A fence may add `expr` or `declarations` when its shape is ambiguous.
 An intentionally rejected example names its expected diagnostic, for example
 `` ```cure E093 ``. The checker requires that exact error code and fails if a
 different error appears, the example starts compiling, or the compiler crashes.
-Multiple `EXXX` tags on one fence are invalid. An incomplete design sketch is
-not Cure source and uses a plain `text` fence. Ordinary `cure` fences always
-have to compile.
+
+An example that compiles but cannot be written warning-free names the warning
+instead, for example `` ```cure W000 ``. That fence passes only when the
+snippet compiles *and* emits the warning, so the warning stays part of the
+documented behaviour rather than being waived; if the compiler later stops
+emitting it, the fence fails and the example gets revisited. Macros that lift
+whole modules are the usual reason to need this — see `docs/MACROS.md` §7.
+
+Multiple diagnostic tags on one fence are invalid, whether `E` or `W`. An
+incomplete design sketch is not Cure source and uses a plain `text` fence.
+Ordinary `cure` fences always have to compile with no warnings at all.
 
 ## See also
 
