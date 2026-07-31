@@ -22,25 +22,20 @@
             Get started
           </a>
           <a
-            href={~p"/playground"}
+            href={~p"/tour"}
             class="rounded-lg border border-base-300 px-5 py-3 font-semibold transition hover:border-primary hover:bg-base-200"
           >
-            Try the playground
+            Take the language tour
           </a>
         </div>
       </div>
 
-      <div
-        class="overflow-hidden rounded-xl border border-base-300 bg-base-200 shadow-sm"
-        phx-no-curly-interpolation
-      >
-      <div class="flex items-center gap-2 border-b border-base-300 px-4 py-3 text-xs text-base-content/50">
-        <span class="h-2.5 w-2.5 rounded-full bg-error/70"></span>
-        <span class="h-2.5 w-2.5 rounded-full bg-warning/70"></span>
-        <span class="h-2.5 w-2.5 rounded-full bg-success/70"></span>
-        <span class="ml-2 font-mono">counter.cure</span>
-      </div>
-      <pre class="overflow-x-auto p-5 text-sm leading-7"><code class="makeup cure"><span class="k">mod</span> <span class="nc">Counter</span>
+      <div class="cure-code-window" phx-no-curly-interpolation>
+        <div class="cure-code-window-bar">
+          <span class="cure-code-window-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="cure-code-window-label">counter.cure</span>
+        </div>
+        <pre class="overflow-x-auto p-5 text-sm leading-7"><code class="makeup cure"><span class="k">mod</span> <span class="nc">Counter</span>
 
   <span class="k">type</span> <span class="nc">State</span> <span class="o">=</span> <span class="nc">State</span><span class="o">(</span><span class="kt">Nat</span><span class="o">)</span>
 
