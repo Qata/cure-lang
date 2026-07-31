@@ -45,7 +45,7 @@ defmodule Cure.Elab.SubstGradeLaunderingTest do
                  fn f(x: C) -> Int =
                    match x
                      A() ->
-                       let @erased p : = 1
+                       let @erased p = 1
                        p
                      _ -> 0
                """)
@@ -57,7 +57,7 @@ defmodule Cure.Elab.SubstGradeLaunderingTest do
                  fn f(x: C) -> Int =
                    match x
                      A() ->
-                       let @linear v : = 1
+                       let @linear v = 1
                        0
                      _ -> 0
                """)
@@ -71,7 +71,7 @@ defmodule Cure.Elab.SubstGradeLaunderingTest do
                  fn f(x: C) -> Int =
                    match x
                      A() ->
-                       let @linear v : = 1
+                       let @linear v = 1
                        sink(v)
                      _ -> 0
                """)
@@ -86,7 +86,7 @@ defmodule Cure.Elab.SubstGradeLaunderingTest do
                  fn g(x: Two) -> Int =
                    match x
                      T() ->
-                       let @erased p : = 1
+                       let @erased p = 1
                        p
                      F() -> 0
                """)
@@ -99,7 +99,7 @@ defmodule Cure.Elab.SubstGradeLaunderingTest do
                  fn g(x: Two) -> Int =
                    match x
                      T() ->
-                       let @linear v : = 1
+                       let @linear v = 1
                        0
                      F() -> 0
                """)

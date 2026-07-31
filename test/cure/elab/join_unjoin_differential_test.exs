@@ -51,44 +51,44 @@ defmodule Cure.Elab.JoinUnjoinDifferentialTest do
   # asserts per-branch == un-join == expected for each.
   @battery [
     {"linear once per branch",
-     "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\n",
+     "  fn f(x: C) -> Int =\n    let @linear v = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\n",
      :accept},
     {"linear twice in catch-all",
-     "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> use2(v, v)\n      _ -> use2(v, v)\n",
+     "  fn f(x: C) -> Int =\n    let @linear v = 1\n    match x\n      A() -> use2(v, v)\n      _ -> use2(v, v)\n",
      :reject},
     {"linear used in matched arm AND catch-all (alt not seq)",
-     "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> sink(v)\n      B() -> sink(v)\n      _ -> sink(v)\n",
+     "  fn f(x: C) -> Int =\n    let @linear v = 1\n    match x\n      A() -> sink(v)\n      B() -> sink(v)\n      _ -> sink(v)\n",
      :accept},
     {"linear in only some branches",
-     "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> 0\n      _ -> sink(v)\n", :reject},
+     "  fn f(x: C) -> Int =\n    let @linear v = 1\n    match x\n      A() -> 0\n      _ -> sink(v)\n", :reject},
     {"affine dropped on a branch",
-     "  fn f(x: C) -> Int =\n    let @affine v : = 1\n    match x\n      A() -> 0\n      _ -> asink(v)\n", :accept},
+     "  fn f(x: C) -> Int =\n    let @affine v = 1\n    match x\n      A() -> 0\n      _ -> asink(v)\n", :accept},
     {"affine twice",
-     "  fn f(x: C) -> Int =\n    let @affine v : = 1\n    match x\n      A() -> use2(v, v)\n      _ -> use2(v, v)\n",
+     "  fn f(x: C) -> Int =\n    let @affine v = 1\n    match x\n      A() -> use2(v, v)\n      _ -> use2(v, v)\n",
      :reject},
     {"linear used once, only in the catch-all, all-catch-all (single arm)",
-     "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      _ -> sink(v)\n", :accept},
+     "  fn f(x: C) -> Int =\n    let @linear v = 1\n    match x\n      _ -> sink(v)\n", :accept},
     {
       "two linear vars combined via an ω function → ω-scaled → reject (correct QTT)",
       # `add`'s params are ω, so passing `sink(v)`/`sink(w)` scales v,w by ω
       # (`mul(ω, linear) = ω`, Idris `checkRig = rigf |*| rig`). Rejected — and the
       # un-join must agree with per-branch, which is the point.
-      "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    let @linear w : = 2\n    match x\n      A() -> add(sink(v), sink(w))\n      _ -> add(sink(v), sink(w))\n",
+      "  fn f(x: C) -> Int =\n    let @linear v = 1\n    let @linear w = 2\n    match x\n      A() -> add(sink(v), sink(w))\n      _ -> add(sink(v), sink(w))\n",
       :reject
     },
     {"two linear vars, one dropped in catch-all",
-     "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    let @linear w : = 2\n    match x\n      A() -> add(sink(v), sink(w))\n      _ -> sink(v)\n",
+     "  fn f(x: C) -> Int =\n    let @linear v = 1\n    let @linear w = 2\n    match x\n      A() -> add(sink(v), sink(w))\n      _ -> sink(v)\n",
      :reject},
     {"linear used in catch-all body's own nested match",
-     "  fn f(x: C, y: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> sink(v)\n      _ -> match y\n        A() -> sink(v)\n        _ -> sink(v)\n",
+     "  fn f(x: C, y: C) -> Int =\n    let @linear v = 1\n    match x\n      A() -> sink(v)\n      _ -> match y\n        A() -> sink(v)\n        _ -> sink(v)\n",
      :accept},
     {"linear captured, catch-all uses it twice via nested match sequence",
-     "  fn f(x: C, y: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> sink(v)\n      _ -> add(sink(v), sink(v))\n",
+     "  fn f(x: C, y: C) -> Int =\n    let @linear v = 1\n    match x\n      A() -> sink(v)\n      _ -> add(sink(v), sink(v))\n",
      :reject},
     {"unrestricted var through catch-all (no obligation)",
      "  fn f(x: C, n: Int) -> Int =\n    match x\n      A() -> use2(n, n)\n      _ -> use2(n, n)\n", :accept},
     {"named catch-all: v via ω `add` → ω-scaled → reject (correct); un-join must agree",
-     "  fn rank(y: C) -> Int =\n    match y\n      A() -> 1\n      B() -> 2\n      D() -> 3\n      E() -> 4\n      G() -> 5\n      H() -> 6\n  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> sink(v)\n      z -> add(rank(z), sink(v))\n",
+     "  fn rank(y: C) -> Int =\n    match y\n      A() -> 1\n      B() -> 2\n      D() -> 3\n      E() -> 4\n      G() -> 5\n      H() -> 6\n  fn f(x: C) -> Int =\n    let @linear v = 1\n    match x\n      A() -> sink(v)\n      z -> add(rank(z), sink(v))\n",
      :reject}
   ]
 
@@ -116,22 +116,22 @@ defmodule Cure.Elab.JoinUnjoinDifferentialTest do
     {"1-field constructor swept into the catch-all",
      "mod JA\n  type C = A | B(Int) | D | E | G(Int) | H\n" <>
        "  fn sink(@linear x : Int) -> Int = x\n" <>
-       "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n",
+       "  fn f(x: C) -> Int =\n    let @linear v = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n",
      :accept},
     {"matched arm binds a field, catch-all captures linear v",
      "mod JA\n  type C = A(Int) | B | D | E | G | H\n" <>
        "  fn sink(@linear x : Int) -> Int = x\n" <>
-       "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A(n) -> sink(v)\n      _ -> sink(v)\nend\n",
+       "  fn f(x: C) -> Int =\n    let @linear v = 1\n    match x\n      A(n) -> sink(v)\n      _ -> sink(v)\nend\n",
      :accept},
     {"2-field constructor in the catch-all (drop_levels range > 1)",
      "mod JA\n  type C = A | B(Int, Int) | D | E | G | H\n" <>
        "  fn sink(@linear x : Int) -> Int = x\n" <>
-       "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n",
+       "  fn f(x: C) -> Int =\n    let @linear v = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n",
      :accept},
     {"linear v used twice under a field-constructor catch-all → reject",
      "mod JA\n  type C = A | B(Int) | D | E | G | H\n" <>
        "  fn sink(@linear x : Int) -> Int = x\n  fn use2(a: Int, b: Int) -> Int = a\n" <>
-       "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> use2(v, v)\n      _ -> use2(v, v)\nend\n",
+       "  fn f(x: C) -> Int =\n    let @linear v = 1\n    match x\n      A() -> use2(v, v)\n      _ -> use2(v, v)\nend\n",
      :reject}
   ]
 

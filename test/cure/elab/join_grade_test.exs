@@ -48,7 +48,7 @@ defmodule Cure.Elab.JoinGradeTest do
       src =
         "mod JG\n  #{@enum}" <>
           "  fn sink(@linear x : Int) -> Int = x\n" <>
-          "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n"
+          "  fn f(x: C) -> Int =\n    let @linear v = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n"
 
       assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
     end
@@ -57,7 +57,7 @@ defmodule Cure.Elab.JoinGradeTest do
       src =
         "mod JG\n  #{@enum}" <>
           "  fn sink(@linear x : Int) -> Int = x\n" <>
-          "  fn f(x: C) -> Int =\n    let @affine v : = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n"
+          "  fn f(x: C) -> Int =\n    let @affine v = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n"
 
       assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
     end
@@ -70,7 +70,7 @@ defmodule Cure.Elab.JoinGradeTest do
       src =
         "mod JG\n  #{@enum}" <>
           "  fn use2(a: Int, b: Int) -> Int = a\n" <>
-          "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> use2(v, v)\n      _ -> use2(v, v)\nend\n"
+          "  fn f(x: C) -> Int =\n    let @linear v = 1\n    match x\n      A() -> use2(v, v)\n      _ -> use2(v, v)\nend\n"
 
       assert {:error, {:usage_violation, %{declared: :linear, used: :unrestricted}}} =
                Program.semantic_result(Program.elaborate(src))
@@ -83,7 +83,7 @@ defmodule Cure.Elab.JoinGradeTest do
         "mod JG\n  #{@enum}" <>
           "  fn sink(@linear x : Int) -> Int = x\n" <>
           "  fn add(a: Int, b: Int) -> Int = a\n" <>
-          "  fn f(x: C) -> Int =\n    let @linear v : = 1\n" <>
+          "  fn f(x: C) -> Int =\n    let @linear v = 1\n" <>
           "    let r = match x\n      A() -> sink(v)\n      _ -> sink(v)\n    add(r, sink(v))\nend\n"
 
       assert {:error, {:usage_violation, %{declared: :linear}}} = Program.semantic_result(Program.elaborate(src))
@@ -95,7 +95,7 @@ defmodule Cure.Elab.JoinGradeTest do
       src =
         "mod JG\n  #{@enum}" <>
           "  fn sink(@linear x : Int) -> Int = x\n" <>
-          "  fn f(x: C) -> Int =\n    let @linear v : = 1\n    match x\n      A() -> 0\n      _ -> sink(v)\nend\n"
+          "  fn f(x: C) -> Int =\n    let @linear v = 1\n    match x\n      A() -> 0\n      _ -> sink(v)\nend\n"
 
       assert {:error, {:usage_violation, %{declared: :linear}}} = Program.semantic_result(Program.elaborate(src))
     end
@@ -104,7 +104,7 @@ defmodule Cure.Elab.JoinGradeTest do
   describe "the un-joined let binder's OWN grade is still enforced (red-team F1/F2)" do
     # `join_view` fires on ANY user `let g = λ …` over a `case`, not only the
     # compiler's join. The un-join inlines the join binder — so if it also skipped the
-    # let binder's OWN grade obligation, a `let @linear g : = λ` applied in only some
+    # let binder's OWN grade obligation, a `let @linear g = λ` applied in only some
     # branches would drop g's linear resource and be accepted. The un-join must only
     # fire when the let grade is unrestricted; a restricted let-grade falls back to the
     # generic `:let`, which enforces it. (Found by the un-join red-team; the
@@ -158,7 +158,7 @@ defmodule Cure.Elab.JoinGradeTest do
       src =
         "mod JG\n  #{@two_a}" <>
           "  fn add(a: Int, b: Int) -> Int = a\n" <>
-          "  fn f(x: Two) -> Int =\n    let @linear v : = 1\n" <>
+          "  fn f(x: Two) -> Int =\n    let @linear v = 1\n" <>
           "    let j : (Int) -> Int = fn(z) -> add(z, z)\n" <>
           "    match x\n      T() -> j(v)\n      F() -> j(v)\nend\n"
 
@@ -185,7 +185,7 @@ defmodule Cure.Elab.JoinGradeTest do
       # combine to `:linear` (add(:linear,:erased)) instead of `:unrestricted`.
       src =
         "mod JG\n  #{@two_a}" <>
-          "  fn f(x: Two) -> Int =\n    let @linear v : = 1\n    let x2 = v\n" <>
+          "  fn f(x: Two) -> Int =\n    let @linear v = 1\n    let x2 = v\n" <>
           "    let j : (Int) -> Int = fn(z) -> 0\n" <>
           "    match x\n      T() -> j(v)\n      F() -> x2\nend\n"
 
@@ -210,7 +210,7 @@ defmodule Cure.Elab.JoinGradeTest do
         "mod JG\n  #{@two}" <>
           "  fn sink(@linear x : Int) -> Int = x\n" <>
           "  fn add(a: Int, b: Int) -> Int = a\n" <>
-          "  fn f(x: Two) -> Int =\n    let @linear v : = 1\n" <>
+          "  fn f(x: Two) -> Int =\n    let @linear v = 1\n" <>
           "    let g : (Int) -> Int = fn(k) -> sink(v)\n" <>
           "    match x\n      T() -> add(g(1), g(2))\n      F() -> add(g(1), g(2))\nend\n"
 
@@ -227,7 +227,7 @@ defmodule Cure.Elab.JoinGradeTest do
         "mod JG\n  #{@two}" <>
           "  fn asink(@affine x : Int) -> Int = x\n" <>
           "  fn add(a: Int, b: Int) -> Int = a\n" <>
-          "  fn f(x: Two) -> Int =\n    let @affine v : = 1\n" <>
+          "  fn f(x: Two) -> Int =\n    let @affine v = 1\n" <>
           "    let g : (Int) -> Int = fn(k) -> asink(v)\n" <>
           "    match x\n      T() -> add(g(1), g(2))\n      F() -> add(g(1), g(2))\nend\n"
 

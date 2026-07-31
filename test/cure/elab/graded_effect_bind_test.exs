@@ -1,6 +1,6 @@
 defmodule Cure.Elab.GradedEffectBindTest do
   @moduledoc """
-  Graded effect binders — the linear-channel enabler. `let @linear r : = eff()`
+  Graded effect binders — the linear-channel enabler. `let @linear r = eff()`
   binds the effect's RESULT `r` at a grade via the `effect_bind` continuation lam
   (`{:effect_bind, e, {:lam, :linear, T, body}}`). The kernel's `bind` rule accepts
   the continuation's own grade (no longer hardcodes ω), and `Relevance` walks
@@ -20,7 +20,7 @@ defmodule Cure.Elab.GradedEffectBindTest do
     assert {:ok, _} =
              elab("""
                fn ok() -> Effect(Int) =
-                 let @linear r : = open_res()
+                 let @linear r = open_res()
                  r
              """)
   end
@@ -29,7 +29,7 @@ defmodule Cure.Elab.GradedEffectBindTest do
     assert {:error, _} =
              elab("""
                fn bad() -> Effect(Int) =
-                 let @linear r : = open_res()
+                 let @linear r = open_res()
                  open_res()
              """)
   end
@@ -38,7 +38,7 @@ defmodule Cure.Elab.GradedEffectBindTest do
     assert {:ok, _} =
              elab("""
                fn ok_aff() -> Effect(Int) =
-                 let @affine r : = open_res()
+                 let @affine r = open_res()
                  open_res()
              """)
   end
@@ -47,7 +47,7 @@ defmodule Cure.Elab.GradedEffectBindTest do
     assert {:ok, _} =
              elab("""
                fn ok_aff1() -> Effect(Int) =
-                 let @affine r : = open_res()
+                 let @affine r = open_res()
                  r
              """)
   end

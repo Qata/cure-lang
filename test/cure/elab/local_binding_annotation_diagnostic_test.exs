@@ -7,7 +7,7 @@ defmodule Cure.Elab.LocalBindingAnnotationDiagnosticTest do
 
   test "a graded non-inferable initializer labels the grade and initializer" do
     source =
-      "mod L\n  fn ap(@linear g : (Int) -> Int, n: Int) -> Int = g(n)\n  fn f(n: Int) -> Int =\n    let @linear h : = fn(x) -> x + 1\n    ap(h, n)\nend\n"
+      "mod L\n  fn ap(@linear g : (Int) -> Int, n: Int) -> Int = g(n)\n  fn f(n: Int) -> Int =\n    let @linear h = fn(x) -> x + 1\n    ap(h, n)\nend\n"
 
     {diagnostic, registry, error} = diagnostic(source, "graded_let.cure")
 
@@ -23,14 +23,14 @@ defmodule Cure.Elab.LocalBindingAnnotationDiagnosticTest do
              without an expectation. Preserving the grade requires a real local binder, and
              Cure cannot construct that binder until its type is written.
 
-             at graded_let.cure:4:11
-             4 |     let @linear h : = fn(x) -> x + 1
-               |           ^^^^^^^   -------------- this grade cannot be preserved without a binding type; this initializer needs an expected type
+             at graded_let.cure:4:9
+             4 |     let @linear h = fn(x) -> x + 1
+               |         ^^^^^^^     -------------- this grade cannot be preserved without a binding type; this initializer needs an expected type
 
-             Hint: Write the initializer's type after the binder annotation, before `=`
+             Hint: Write the initializer's type after `h :`, before `=`
              """)
 
-    assert_ranges(diagnostic, registry, range(3, 10, 17), [range(3, 20, 34)])
+    assert_ranges(diagnostic, registry, range(3, 8, 15), [range(3, 20, 34)])
 
     assert Renderer.lsp(diagnostic, registry)["data"]["payload"] == %{
              "grade" => "linear",
@@ -40,7 +40,7 @@ defmodule Cure.Elab.LocalBindingAnnotationDiagnosticTest do
              "use_count" => 1
            }
 
-    fixed = String.replace(source, "let @linear h : =", "let @linear h : (Int) -> Int =")
+    fixed = String.replace(source, "let @linear h =", "let @linear h : (Int) -> Int =")
     assert {:ok, _environment} = Program.elaborate(fixed, file: "graded_fixed.cure")
   end
 

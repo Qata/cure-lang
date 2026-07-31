@@ -6454,7 +6454,7 @@ defmodule Cure.Compiler.Parser do
           %{
             grade: grade,
             pattern_span: first_node_source_span(pattern),
-            grade_span: annotation_span,
+            grade_span: grade_prefix_span(grade_prefix),
             line: token.line,
             column: token.col
           }
@@ -6473,7 +6473,16 @@ defmodule Cure.Compiler.Parser do
     meta = if kind == :have, do: Keyword.put(meta, :have, true), else: meta
     meta = if type_ann, do: Keyword.put(meta, :type_annotation, type_ann), else: meta
     meta = if grade, do: Keyword.put(meta, :grade, grade), else: meta
-    meta = put_let_source_info(meta, token, pattern, value, annotation_span, assign_token)
+    meta =
+      put_let_source_info(
+        meta,
+        token,
+        pattern,
+        value,
+        annotation_span,
+        assign_token,
+        grade_prefix_span(grade_prefix)
+      )
 
     assignment = {:assignment, meta, [pattern, value]}
 
@@ -8425,7 +8434,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp put_let_source_info(meta, %Token{} = token, pattern, body, annotation, assign_token) do
+  defp put_let_source_info(meta, %Token{} = token, pattern, body, annotation, assign_token, grade_span) do
     body_span = ast_source_span(body)
 
     Metadata.put_source_info(meta, %SourceInfo{
@@ -8435,11 +8444,14 @@ defmodule Cure.Compiler.Parser do
       pattern: ast_source_span(pattern),
       operator: assign_token && assign_token.span,
       annotation: annotation,
+      # The grade is a prefix decorator, so it is no longer part of the annotation.
+      # Diagnostics that point at the grade read it from here.
+      fields: if(grade_span, do: %{grade: grade_span}, else: %{}),
       body: body_span
     })
   end
 
-  defp put_let_source_info(meta, _token, _pattern, _body, _annotation, _assign_token), do: meta
+  defp put_let_source_info(meta, _token, _pattern, _body, _annotation, _assign_token, _grade_span), do: meta
 
   # -- Typed Parameters  name: Type [= default] ------------------------------
 
@@ -8578,6 +8590,14 @@ defmodule Cure.Compiler.Parser do
         {nil, state}
     end
   end
+
+  # The span of a `@linear`/`@affine`/`@erased` decorator, `@` through the grade name.
+  # A grade no longer sits in the annotation slot, so a diagnostic that points at the
+  # grade has to reach for the prefix rather than the annotation span.
+  defp grade_prefix_span({:grade_prefix, _grade, %Token{span: at_span}, %Token{span: name_span}}),
+    do: through_spans(at_span, name_span) || at_span
+
+  defp grade_prefix_span(_prefix), do: nil
 
   # A binder's annotation: `: Type`. `name` labels the binder
   # for diagnostics.
