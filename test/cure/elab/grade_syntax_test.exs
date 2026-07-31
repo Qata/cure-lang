@@ -97,12 +97,12 @@ defmodule Cure.Elab.GradeSyntaxTest do
   end
 
   describe "there is exactly ONE spelling of each grade" do
-    test ":unrestricted is NOT a spelling — omega is written by omission" do
-      assert {:error, _} = Compiler.parse_source("mod G\n  fn f(x :unrestricted Int) -> Int = x\nend\n")
+    test "@unrestricted is NOT a spelling — omega is written by omission" do
+      assert {:error, _} = Compiler.parse_source("mod G\n  fn f(@unrestricted x : Int) -> Int = x\nend\n")
     end
 
-    test "an unknown grade atom is a parse error, never a silently ignored annotation" do
-      assert {:error, _} = Compiler.parse_source("mod G\n  fn f(x :bogus Int) -> Int = x\nend\n")
+    test "an unknown grade decorator is a parse error, never a silently ignored annotation" do
+      assert {:error, _} = Compiler.parse_source("mod G\n  fn f(@bogus x : Int) -> Int = x\nend\n")
     end
 
     test "a graded parameter must still have a type" do
@@ -212,23 +212,25 @@ defmodule Cure.Elab.GradeSyntaxTest do
              "expected a {:grade_requires_type, …}, got #{inspect(errs)}"
     end
 
-    test "an unknown grade atom names the offending atom" do
-      errs = errors("mod G\n  fn f(x :bogus Int) -> Int = 0\nend\n")
+    test "an unknown grade decorator names the offending spelling" do
+      errs = errors("mod G\n  fn f(@bogus x : Int) -> Int = 0\nend\n")
 
-      assert Enum.any?(errs, &match?({:unknown_grade, %{grade: :bogus}}, &1)),
-             "expected a {:unknown_grade, :bogus, …}, got #{inspect(errs)}"
+      assert Enum.any?(errs, &match?({:unknown_grade, %{grade: "bogus"}}, &1)),
+             "expected a {:unknown_grade, \"bogus\", …}, got #{inspect(errs)}"
     end
 
     test "an unknown grade owns its token, suggests a unique typo repair, and does not cascade" do
-      src = "mod G\n  fn f(x :liner Int) -> Int = x\nend\n"
+      src = "mod G\n  fn f(@liner x : Int) -> Int = x\nend\n"
 
       assert {:error, {:parse_error, [{:unknown_grade, details}]}} =
                Compiler.parse_source(src, file: "grade.cure")
 
+      # The span covers the whole decorator, `@` included, so the repair edit can
+      # replace it outright.
       assert details.span.start_line == 2
-      assert details.span.start_column == 10
+      assert details.span.start_column == 8
       assert details.span.end_line == 2
-      assert details.span.end_column == 16
+      assert details.span.end_column == 14
 
       {diagnostic, registry} = diagnostic(src)
       rendered = Renderer.plain(diagnostic, registry, width: 80)
@@ -240,30 +242,30 @@ defmodule Cure.Elab.GradeSyntaxTest do
                String.trim_trailing("""
                -- UNKNOWN RELEVANCE GRADE [E093] ----------------------------------- grade.cure
 
-               `:liner` is not a relevance grade. Cure supports `:erased`, `:linear`,
-               `:affine`.
+               `@liner` is not a relevance grade. Cure supports `@erased`, `@linear`,
+               `@affine`.
 
-               at grade.cure:2:10
-               2 |   fn f(x :liner Int) -> Int = x
-                 |          ^^^^^^ this grade is not defined
+               at grade.cure:2:8
+               2 |   fn f(@liner x : Int) -> Int = x
+                 |        ^^^^^^ this grade is not defined
 
-               Hint: Replace it with `:linear`
+               Hint: Replace it with `@linear`
                """)
 
       assert [suggestion] = diagnostic.suggestions
       assert suggestion.applicability == :machine_applicable
       expected_span = details.span
-      assert [%{replacement: ":linear", span: ^expected_span}] = suggestion.edits
+      assert [%{replacement: "@linear", span: ^expected_span}] = suggestion.edits
 
       lsp = Renderer.lsp(diagnostic, registry)
 
       assert lsp["range"] == %{
-               "start" => %{"line" => 1, "character" => 9},
-               "end" => %{"line" => 1, "character" => 15}
+               "start" => %{"line" => 1, "character" => 7},
+               "end" => %{"line" => 1, "character" => 13}
              }
 
       assert [edit] = lsp["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
-      assert edit["newText"] == ":linear"
+      assert edit["newText"] == "@linear"
       assert edit["range"] == lsp["range"]
     end
 
@@ -274,34 +276,34 @@ defmodule Cure.Elab.GradeSyntaxTest do
 
       assert diagnostic.key == :grade_requires_type
       assert diagnostic.primary.span.start_line == 2
-      assert diagnostic.primary.span.start_column == 10
-      assert diagnostic.primary.span.end_column == 17
+      assert diagnostic.primary.span.start_column == 8
+      assert diagnostic.primary.span.end_column == 15
 
       assert rendered ==
                String.trim_trailing("""
                -- GRADED PARAMETER NEEDS A TYPE [E093] --------------------------- missing.cure
 
-               The `:linear` grade on `c` controls how a value may be used, but no value type
+               The `@linear` grade on `c` controls how a value may be used, but no value type
                follows it.
 
-               at missing.cure:2:10
+               at missing.cure:2:8
                2 |   fn f(@linear c :) -> Int = 0
-                 |          ^^^^^^^ add the parameter type after this grade
+                 |        ^^^^^^^ add the parameter type after this grade
 
                Hint: Write `@linear c : TypeName`
                """)
 
       assert Renderer.lsp(diagnostic, registry)["range"] == %{
-               "start" => %{"line" => 1, "character" => 9},
-               "end" => %{"line" => 1, "character" => 16}
+               "start" => %{"line" => 1, "character" => 7},
+               "end" => %{"line" => 1, "character" => 14}
              }
     end
 
-    test ":unrestricted is reported as an unknown grade (it has no spelling)" do
-      errs = errors("mod G\n  fn f(x :unrestricted Int) -> Int = 0\nend\n")
+    test "@unrestricted is reported as an unknown grade (it has no spelling)" do
+      errs = errors("mod G\n  fn f(@unrestricted x : Int) -> Int = 0\nend\n")
 
-      assert Enum.any?(errs, &match?({:unknown_grade, %{grade: :unrestricted}}, &1)),
-             "expected a {:unknown_grade, :unrestricted, …}, got #{inspect(errs)}"
+      assert Enum.any?(errs, &match?({:unknown_grade, %{grade: "unrestricted"}}, &1)),
+             "expected a {:unknown_grade, \"unrestricted\", …}, got #{inspect(errs)}"
     end
 
     test "a well-formed grade still parses (no false positive)" do

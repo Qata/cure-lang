@@ -6440,7 +6440,11 @@ defmodule Cure.Compiler.Parser do
         _ -> "let binding"
       end
 
-    {_ignored_grade, type_ann, state, annotation_span} = parse_binder_annotation(state, let_name, [:assign])
+    # Only a graded binder may stop at `=` with the type left out; an ungraded
+    # `let x : = e` states an annotation and then fails to give one.
+    stop_on = if grade_prefix, do: [:assign], else: []
+
+    {_ignored_grade, type_ann, state, annotation_span} = parse_binder_annotation(state, let_name, stop_on)
     grade = grade_prefix && elem(grade_prefix, 1)
 
     # A grade attaches to a SIMPLE VARIABLE binder only. A destructuring `let` lowers
@@ -8530,6 +8534,10 @@ defmodule Cure.Compiler.Parser do
   # `@unrestricted` is deliberately NOT a spelling: `ω` is written by omission.
   @grade_atoms [:erased, :linear, :affine]
 
+  # Tokens that cannot begin a type, so finding one where a graded binder's type
+  # belongs means the type is simply absent.
+  @non_type_tokens [:rparen, :rbrace, :rbracket, :comma, :assign, :newline, :indent, :dedent, :eof]
+
   # Parse the grade decorator used on parameters and local bindings. This is
   # intentionally separate from parse_at/1: a binder decorator is part of the
   # binder grammar, not a declaration-level decorator attached to an AST node.
@@ -8555,40 +8563,34 @@ defmodule Cure.Compiler.Parser do
             if grade in @grade_atoms do
               {{:grade_prefix, grade, at_token, name_token}, advance(state)}
             else
-              state =
-                add_error(state, {
-                  :unknown_binder_decorator,
-                  %{
-                    decorator: value,
-                    span: name_token.span,
-                    supported: @grade_atoms,
-                    line: name_token.line,
-                    column: name_token.col
-                  }
-                })
-
-              {nil, state}
+              {nil, unknown_grade_error(state, at_token, name_token, value)}
             end
 
           %Token{} = bad_token ->
-            state =
-              add_error(state, {
-                :unknown_binder_decorator,
-                %{
-                  decorator: bad_token.value || bad_token.type,
-                  span: bad_token.span,
-                  supported: @grade_atoms,
-                  line: bad_token.line,
-                  column: bad_token.col
-                }
-              })
-
-            {nil, state}
+            {nil, unknown_grade_error(state, at_token, bad_token, bad_token.value || bad_token.type)}
         end
 
       _ ->
         {nil, state}
     end
+  end
+
+  # Only a grade may decorate a binder, so an unrecognised one is reported as an
+  # unknown grade: the diagnostic names the supported grades and offers a typo
+  # repair over the whole decorator, `@` included, so the edit is applicable.
+  defp unknown_grade_error(state, %Token{} = at_token, %Token{} = offending, spelling) do
+    span = through_spans(at_token.span, offending.span) || at_token.span
+
+    add_error(state, {
+      :unknown_grade,
+      %{
+        grade: spelling,
+        span: span,
+        supported: @grade_atoms,
+        line: at_token.line,
+        column: at_token.col
+      }
+    })
   end
 
   # The span of a `@linear`/`@affine`/`@erased` decorator, `@` through the grade name.
@@ -8599,16 +8601,69 @@ defmodule Cure.Compiler.Parser do
 
   defp grade_prefix_span(_prefix), do: nil
 
+  # A graded binder must state a type -- the grade restricts how a value of that type
+  # may be used, so `@linear c` and `@linear c :` are both errors. The empty annotation
+  # is caught BEFORE `parse_type_expr` runs: handing it a `)` makes it read past the
+  # end of the binder and report whatever follows, burying the grade under a generic
+  # "expected )". Ungraded binders keep the plain annotation path, where an omitted
+  # type is legal and inferred.
+  defp parse_graded_binder_annotation(state, name, nil), do: parse_binder_annotation(state, name)
+
+  defp parse_graded_binder_annotation(state, name, grade_prefix) do
+    case {peek(state), peek_at(state, 1)} do
+      {%Token{type: :colon}, %Token{type: type}} when type in @non_type_tokens ->
+        {nil, nil, missing_grade_type(advance(state), name, grade_prefix), grade_prefix_span(grade_prefix)}
+
+      {%Token{type: type}, _next} when type in @non_type_tokens ->
+        {nil, nil, missing_grade_type(state, name, grade_prefix), grade_prefix_span(grade_prefix)}
+
+      _ ->
+        {_ignored_grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
+
+        if type_ast do
+          {nil, type_ast, state, annotation_span}
+        else
+          {nil, nil, missing_grade_type(state, name, grade_prefix), grade_prefix_span(grade_prefix)}
+        end
+    end
+  end
+
+  defp missing_grade_type(state, name, grade_prefix) do
+    span = grade_prefix_span(grade_prefix)
+    observed = peek(state)
+
+    add_error(state, {
+      :grade_requires_type,
+      %{
+        name: name,
+        grade: elem(grade_prefix, 1),
+        span: span,
+        observed_span: observed && observed.span,
+        line: span && span.start_line,
+        column: span && span.start_column
+      }
+    })
+  end
+
   # A binder's annotation: `: Type`. `name` labels the binder
   # for diagnostics.
-  # `stop_on` allows an inferred local binding to omit its type before `=`.
-  defp parse_binder_annotation(state, _name, _stop_on \\ []) do
+  # `stop_on` lists the tokens that may legally stand where the type would go, for
+  # binders whose type may be omitted and inferred. Consuming the `:` and stopping
+  # there keeps the binder intact; handing `=` to parse_type_expr instead makes it
+  # read past the binding and report whatever follows it.
+  defp parse_binder_annotation(state, _name, stop_on \\ []) do
     annotation_start = peek(state)
 
     case peek(state) do
       %Token{type: :colon} ->
-        {type_ast, state} = parse_type_expr(advance(state))
-        {nil, type_ast, state, annotation_span(annotation_start, type_ast, state)}
+        next = peek_at(state, 1)
+
+        if next && next.type in stop_on do
+          {nil, nil, advance(state), nil}
+        else
+          {type_ast, state} = parse_type_expr(advance(state))
+          {nil, type_ast, state, annotation_span(annotation_start, type_ast, state)}
+        end
 
       _ ->
         {nil, nil, state, nil}
@@ -8661,15 +8716,10 @@ defmodule Cure.Compiler.Parser do
           {"_invalid_implicit_parameter", state}
       end
 
-    {_ignored_grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
-    grade = grade_prefix && elem(grade_prefix, 1)
+    {_ignored_grade, type_ast, state, annotation_span} =
+      parse_graded_binder_annotation(state, name, grade_prefix)
 
-    state =
-      if grade && is_nil(type_ast) do
-        add_error(state, {:grade_requires_type, %{name: name, grade: grade, span: elem(grade_prefix, 3).span}})
-      else
-        state
-      end
+    grade = grade_prefix && elem(grade_prefix, 1)
 
     {state, close_token} =
       expect_container_close(state, :rbrace, :implicit_parameter, start_token, [type_ast], false, %{
@@ -8761,16 +8811,11 @@ defmodule Cure.Compiler.Parser do
           {nil, nil, name, name_token, state}
       end
 
-    # Optional type annotation `: Type`, or a graded one `:g Type`.
-    {_ignored_grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
-    grade = grade_prefix && elem(grade_prefix, 1)
+    # Optional type annotation `: Type`. A graded binder must have one.
+    {_ignored_grade, type_ast, state, annotation_span} =
+      parse_graded_binder_annotation(state, name, grade_prefix)
 
-    state =
-      if grade && is_nil(type_ast) do
-        add_error(state, {:grade_requires_type, %{name: name, grade: grade, span: elem(grade_prefix, 3).span}})
-      else
-        state
-      end
+    grade = grade_prefix && elem(grade_prefix, 1)
 
     # Optional default value: = expr
     {default, assign_token, state} =

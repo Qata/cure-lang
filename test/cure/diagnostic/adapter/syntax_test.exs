@@ -7,7 +7,9 @@ defmodule Cure.Diagnostic.Adapter.SyntaxTest do
   alias Cure.Diagnostic.SourceRegistry
 
   test "grade syntax producers are owned directly and retain token repairs" do
-    source = "[h | t] :linear :@affine liner c :\n"
+    # A bag of decorator-spelled tokens, present only to give the spans below
+    # something to point at.
+    source = "[h | t] @linear @liner @affine c :\n"
 
     registry =
       SourceRegistry.new()
@@ -16,13 +18,13 @@ defmodule Cure.Diagnostic.Adapter.SyntaxTest do
     {:ok, pattern} = SourceRegistry.span(registry, :grades, 0, 7)
     {:ok, binding_grade} = SourceRegistry.span(registry, :grades, 8, 15)
     {:ok, typo} = SourceRegistry.span(registry, :grades, 16, 22)
-    {:ok, missing_type} = SourceRegistry.span(registry, :grades, 25, 32)
+    {:ok, missing_type} = SourceRegistry.span(registry, :grades, 23, 30)
 
     errors = [
       {:graded_let_requires_variable, %{grade: :linear, pattern_span: pattern, grade_span: binding_grade}},
       {:unknown_grade,
        %{
-         grade: :liner,
+         grade: "liner",
          supported: [:erased, :linear, :affine],
          span: typo
        }},
@@ -42,14 +44,14 @@ defmodule Cure.Diagnostic.Adapter.SyntaxTest do
     assert [
              %{
                applicability: :machine_applicable,
-               edits: [%{span: ^typo, replacement: ":linear"}]
+               edits: [%{span: ^typo, replacement: "@linear"}]
              }
            ] = typo_diagnostic.suggestions
 
     rendered = Renderer.plain(typo_diagnostic, registry, width: 80)
     assert rendered =~ "UNKNOWN RELEVANCE GRADE [E093]"
     assert rendered =~ "^^^^^^ this grade is not defined"
-    assert rendered =~ "Hint: Replace it with `:linear`"
+    assert rendered =~ "Hint: Replace it with `@linear`"
   end
 
   test "unowned errors are rejected by the family boundary" do

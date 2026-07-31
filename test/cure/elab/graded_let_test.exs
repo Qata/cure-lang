@@ -76,6 +76,19 @@ defmodule Cure.Elab.GradedLetTest do
       refute Keyword.has_key?(meta, :type_annotation)
     end
 
+    test "a graded let may write the `:` and still leave the type to inference" do
+      # `let @linear c : = mk()` states an annotation and then omits it. The binder
+      # is still well formed, so the parser consumes the `:` and stops at the `=`
+      # rather than handing `=` to the type parser, which would read past the
+      # binding and report whatever followed it instead.
+      meta =
+        assignment_metas(@preamble <> "  fn f() -> Int =\n    let @linear c : = mk()\n    c\nend\n")
+        |> List.first()
+
+      assert Keyword.get(meta, :grade) == :linear
+      refute Keyword.has_key?(meta, :type_annotation)
+    end
+
     test "a graded let may carry a type as well" do
       meta =
         assignment_metas(@preamble <> "  fn f() -> Int =\n    let @linear c : Int = mk()\n    c\nend\n") |> List.first()
@@ -95,14 +108,14 @@ defmodule Cure.Elab.GradedLetTest do
   end
 
   describe "there is exactly ONE spelling, and it binds a variable" do
-    test ":unrestricted is not a spelling on a let either" do
+    test "@unrestricted is not a spelling on a let either" do
       assert {:error, _} =
-               Compiler.parse_source(@preamble <> "  fn f() -> Int =\n    let c :unrestricted = mk()\n    c\nend\n")
+               Compiler.parse_source(@preamble <> "  fn f() -> Int =\n    let @unrestricted c = mk()\n    c\nend\n")
     end
 
-    test "an unknown grade atom is a parse error" do
+    test "an unknown grade decorator is a parse error" do
       assert {:error, _} =
-               Compiler.parse_source(@preamble <> "  fn f() -> Int =\n    let c :bogus = mk()\n    c\nend\n")
+               Compiler.parse_source(@preamble <> "  fn f() -> Int =\n    let @bogus c = mk()\n    c\nend\n")
     end
 
     test "a graded DESTRUCTURING let is a parse error, not a dropped annotation" do
