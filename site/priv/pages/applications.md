@@ -156,7 +156,7 @@ The new codes are catalogued in `Cure.Compiler.Errors`. Run `cure explain <code>
 
 ## Full example
 
-[`examples/cure_forge/`](https://github.com/am-kantox/cure-lang/blob/main/examples/cure_forge) is the canonical end-to-end example. It ships as a small Mix project with three Cure source files wiring an application on top of four cooperating actors:
+[`examples/cure_forge/`](https://github.com/cure-lang/cure-lang/blob/main/examples/cure_forge) is the canonical end-to-end example. It ships as a small Mix project with three Cure source files wiring an application on top of four cooperating actors:
 
 ```cure
 app CureForge
@@ -185,4 +185,4 @@ sup Forge.Root
 
 Each actor owns a narrow responsibility (counting events, buffering log lines, enqueuing work, or running a small worker pool) and exchanges messages with its peers through the Melquiades Operator `<-|`. The accompanying `CureForge` Elixir facade exposes the running tree to `iex -S mix` and to the ExUnit suite, so you can observe the application booting, exercise every actor, watch the supervisor restart a killed worker, and confirm that the `:warm_cache` start phase executed before the first request.
 
-Read the project's [README](https://github.com/am-kantox/cure-lang/blob/main/examples/cure_forge/README.md) for the walk-through and [`docs/APP.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/APP.md) for the on-disk reference that mirrors this page.
+Read the project's [README](https://github.com/cure-lang/cure-lang/blob/main/examples/cure_forge/README.md) for the walk-through and [`docs/APP.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/APP.md) for the on-disk reference that mirrors this page.

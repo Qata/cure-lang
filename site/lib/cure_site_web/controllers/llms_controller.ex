@@ -22,8 +22,8 @@ defmodule CureSiteWeb.LlmsController do
   alias CureSite.{Blog, Pages, Stdlib}
   alias CureSiteWeb.Endpoint
 
-  @repo_url "https://github.com/am-kantox/cure-lang"
-  @license_url "https://github.com/am-kantox/cure-lang/blob/main/LICENSE"
+  @repo_url "https://github.com/cure-lang/cure-lang"
+  @license_url "https://github.com/cure-lang/cure-lang/blob/main/LICENSE"
 
   @doc """
   Render the `llms.txt` document.

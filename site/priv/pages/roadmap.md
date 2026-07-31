@@ -42,7 +42,7 @@ emitter.
   skips or failures.
 
 Optimization over validated dependent Core is future work. See
-[`ROADMAP-0.34.md`](https://github.com/am-kantox/cure-lang/blob/main/ROADMAP-0.34.md)
+[`ROADMAP-0.34.md`](https://github.com/cure-lang/cure-lang/blob/main/ROADMAP-0.34.md)
 and the Unreleased changelog for the full engineering inventory.
 
 ## Implemented: v0.33.0 -- Formalisation
@@ -587,7 +587,7 @@ as ANSI-styled Markdown.
 ### Documentation
 - New [`/repl`](/repl) user-facing reference page on the Cure
   website alongside the existing
-  [docs/REPL.md](https://github.com/am-kantox/cure-lang/blob/main/docs/REPL.md)
+  [docs/REPL.md](https://github.com/cure-lang/cure-lang/blob/main/docs/REPL.md)
   on-disk contract.
 ## Implemented: v0.23.0 -- Packaging, Proof, and Polish
 v0.23.0 ships the remote package-registry story that was

@@ -116,7 +116,7 @@ The `[doc]` table in `Cure.toml` drives the rest of the layout
 rendering.
 
 The full reference lives at
-[`docs/DOC.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/DOC.md).
+[`docs/DOC.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/DOC.md).
 
 ### `/stdlib` on the Cure website (v0.29.0)
 
@@ -199,7 +199,7 @@ cure bless lib/my_module.cure
 cure bless lib/my_module.cure --batch   # print suggestions; no prompts
 ```
 
-See [`docs/BLESS.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/BLESS.md)
+See [`docs/BLESS.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/BLESS.md)
 for the full reference.
 
 **`cure replay <path.journal>`** (v0.28.0) -- Replay a recorded FSM
@@ -212,7 +212,7 @@ cure replay .cure-trace/abc123.journal --module MyFsm  # live replay
 cure replay .cure-trace/abc123.journal --module MyFsm --step  # step mode
 ```
 
-See [`docs/REPLAY.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/REPLAY.md)
+See [`docs/REPLAY.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/REPLAY.md)
 for `@record` annotation details and the full API.
 
 **`cure explain <code>`** -- Look up a structured error explanation.
@@ -300,14 +300,14 @@ normative-requirement index, reference implementation sketch, worked
 examples, style guide, anti-patterns, reserved future syntax,
 soundness proof sketch, bibliography, open questions, colophon).
 
-- [`docs/MATCH.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/MATCH.md)
+- [`docs/MATCH.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/MATCH.md)
   -- *The `match` Construct, Language Specification, Version 1.0.0*.
   Implementer-facing sections cover the EBNF grammar, the full
   pattern sub-grammar, T-Match typing, Maranget-style exhaustiveness,
   reachability, refinement narrowing, big-step / small-step
   operational semantics, the soundness proof sketch, and the
   diagnostic catalogue (`E004`, `E021`-`E025`, `E031`-`E034`).
-- [`docs/PICKUP.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/PICKUP.md)
+- [`docs/PICKUP.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/PICKUP.md)
   -- *The `pickup` Construct, Language Specification, Version 1.0.0*.
   Mirrors `MATCH.md` for predicate dispatch: T-Pickup-Else /
   T-Pickup-Cons, totality enforced by the mandatory terminator,
@@ -354,7 +354,7 @@ models, totality SCCs) unless `[publish] include_proofs = false` is
 set in `Cure.toml`. Three new error codes: **E065 Proof File
 Missing**, **E066 Proof Verification Failed**, **E067 Proof Schema
 Incompatible**. Full reference:
-[`docs/PROOF_CARRYING.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/PROOF_CARRYING.md).
+[`docs/PROOF_CARRYING.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/PROOF_CARRYING.md).
 
 ### `cure export-types` -- cross-language ADT export
 
@@ -375,7 +375,7 @@ Field names are converted `camelCase->snake_case`; field numbers by
 declaration order. Refinements and dependent types emit `bytes` with
 a comment and raise **E068 Export Type Unmappable** (warning, not
 hard error). Full reference:
-[`docs/EXPORT_TYPES.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/EXPORT_TYPES.md).
+[`docs/EXPORT_TYPES.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/EXPORT_TYPES.md).
 
 ### `cure snap` -- REPL session snapshots
 
@@ -400,7 +400,7 @@ open typed holes, stdlib mode, theme, and editing mode. Loading
 *merges* rather than replaces: last-writer-wins for defs, union for
 uses, prepend for history. Two new error codes: **E069 Snap Schema
 Incompatible**, **E070 Snap Module Missing**. Full reference:
-[`docs/SNAP.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/SNAP.md).
+[`docs/SNAP.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/SNAP.md).
 
 ### `cure story` -- narrative architecture generator
 
@@ -426,7 +426,7 @@ mix cure.story --out /tmp/STORY.md && diff STORY.md /tmp/STORY.md
 ```
 
 Full reference:
-[`docs/STORY.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/STORY.md).
+[`docs/STORY.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/STORY.md).
 
 ---
 
@@ -463,7 +463,7 @@ Renders through `Marcli.render/2` when its MDEx NIF can load, and
 falls back to `Cure.REPL.Markdown.render/2` inside the escript.
 
 Named in tribute to **John Carbajal**. See
-[`docs/JOHN.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/JOHN.md)
+[`docs/JOHN.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/JOHN.md)
 for the full reference.
 
 ---

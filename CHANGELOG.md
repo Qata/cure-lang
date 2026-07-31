@@ -618,7 +618,7 @@ a `prefers-color-scheme` theme toggle and a keyboard-focusable
 - **Anchored entries.** Every public function, type, and protocol
   inside a module page gets a stable `#fn-<name>`, `#type-<name>`,
   `#proto-<name>` anchor. Sources URLs link back to
-  `github.com/am-kantox/cure-lang/blob/main/lib/std/<module>.cure`
+  `github.com/cure-lang/cure-lang/blob/main/lib/std/<module>.cure`
   at the right symbol.
 
 ### Added -- Stdlib Examples blocks

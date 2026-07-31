@@ -6,7 +6,7 @@
 ---
 > **Normative source (v0.33.0).** The `match` construct is specified at
 > version 1.0.0 in
-> [`docs/MATCH.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/MATCH.md).
+> [`docs/MATCH.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/MATCH.md).
 > That document covers grammar, the full pattern sub-grammar, static /
 > dynamic / operational semantics, formatter conformance, the
 > Maranget-style exhaustiveness algorithm, refinement narrowing, the
@@ -23,7 +23,7 @@ matching behavior.
 
 This page is the authoritative user-facing reference for the language
 feature. The on-disk companion document
-[docs/PATTERNS.md](https://github.com/am-kantox/cure-lang/blob/main/docs/PATTERNS.md)
+[docs/PATTERNS.md](https://github.com/cure-lang/cure-lang/blob/main/docs/PATTERNS.md)
 describes the AST-to-Erlang lowering in full.
 
 ## Where patterns can appear
@@ -440,11 +440,11 @@ every shape on this page.
 
 - The `pickup` construct -- the predicate-dispatch counterpart -- is
   documented at [`/pickup`](/pickup) and specified normatively at
-  [`docs/PICKUP.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/PICKUP.md).
+  [`docs/PICKUP.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/PICKUP.md).
 - The full normative specification of `match` is at
-  [`docs/MATCH.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/MATCH.md).
+  [`docs/MATCH.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/MATCH.md).
   Both specifications were published into HexDocs in v0.33.0.
 - The pattern-shape lowering tutorial lives in
-  [`docs/PATTERNS.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/PATTERNS.md).
+  [`docs/PATTERNS.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/PATTERNS.md).
 - The binary-segment grammar lives in
-  [`docs/BINARIES.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/BINARIES.md).
+  [`docs/BINARIES.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/BINARIES.md).

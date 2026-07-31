@@ -452,7 +452,7 @@ reported as `E004`; nested gaps in tuple scrutinees (e.g. `%[Ok(_)]`
 but no `%[Error(_)]`) are reported as `E025` with a concrete missing
 witness.
 
-See the dedicated [Patterns reference](https://github.com/am-kantox/cure-lang/blob/main/docs/PATTERNS.md)
+See the dedicated [Patterns reference](https://github.com/cure-lang/cure-lang/blob/main/docs/PATTERNS.md)
 for the full AST-to-Erlang mapping.
 
 ## Pipe operator

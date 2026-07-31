@@ -25,7 +25,7 @@ defmodule CureSite.Stdlib do
 
   alias Cure.Doc.Extractor
 
-  @source_base "https://github.com/am-kantox/cure-lang/blob/main/lib/std/"
+  @source_base "https://github.com/cure-lang/cure-lang/blob/main/lib/std/"
 
   # Curated grouping used by the `/stdlib` pages. The order here is the
   # order the sidebar renders. Stdlib modules added in future releases

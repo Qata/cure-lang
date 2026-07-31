@@ -93,7 +93,7 @@ defmodule CureSiteWeb.LlmsControllerTest do
       assert body =~ "[REPL](#{base_url()}/repl)"
       assert body =~ "[Sitemap](#{base_url()}/sitemap.xml)"
       assert body =~ "[Robots](#{base_url()}/robots.txt)"
-      assert body =~ "[Source repository](https://github.com/am-kantox/cure-lang)"
+      assert body =~ "[Source repository](https://github.com/cure-lang/cure-lang)"
     end
 
     test "the .well-known variant is byte-identical with the root variant", %{conn: conn} do

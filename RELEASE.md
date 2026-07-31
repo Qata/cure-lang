@@ -188,7 +188,7 @@ support (Helix, Zed, an upgraded VS Code extension) remain on the
 roadmap.
 
 The repository lives at
-[github.com/am-kantox/cure-lang](https://github.com/am-kantox/cure-lang).
+[github.com/cure-lang/cure-lang](https://github.com/cure-lang/cure-lang).
 The full
 [CHANGELOG](CHANGELOG.md)
 records every touch point.

@@ -6,7 +6,7 @@
 ---
 > **Normative source (v0.33.0).** The `pickup` construct is specified
 > at version 1.0.0 in
-> [`docs/PICKUP.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/PICKUP.md).
+> [`docs/PICKUP.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/PICKUP.md).
 > That document covers the grammar, the static / dynamic / operational
 > semantics, the formatter rules, the algebraic laws, the legacy `if`
 > migration story, the diagnostic catalogue, and a soundness proof
@@ -288,10 +288,10 @@ real condition is being tested; `else` reads as the default arm.
 ## See also
 
 - The full normative specification is at
-  [`docs/PICKUP.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/PICKUP.md).
+  [`docs/PICKUP.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/PICKUP.md).
 - The `match` construct -- the structural-dispatch counterpart -- is
   documented at [`/match`](/match) and specified normatively at
-  [`docs/MATCH.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/MATCH.md).
+  [`docs/MATCH.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/MATCH.md).
   Both specifications were published into HexDocs in v0.33.0.
 - For the broader language reference, see
-  [`docs/LANGUAGE_SPEC.md`](https://github.com/am-kantox/cure-lang/blob/main/docs/LANGUAGE_SPEC.md).
+  [`docs/LANGUAGE_SPEC.md`](https://github.com/cure-lang/cure-lang/blob/main/docs/LANGUAGE_SPEC.md).

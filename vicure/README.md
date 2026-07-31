@@ -1,11 +1,11 @@
 # Vicure -- Cure Language Plugin for Neovim/Vim
 
-[![Language](https://img.shields.io/badge/language-Cure-blue.svg)](https://github.com/am-kantox/cure-lang)
+[![Language](https://img.shields.io/badge/language-Cure-blue.svg)](https://github.com/cure-lang/cure-lang)
 [![Editor](https://img.shields.io/badge/editor-Neovim%20%7C%20Vim-green.svg)](https://neovim.io/)
 [![License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
 
 Comprehensive syntax highlighting, indentation, filetype detection, and
-LSP hook-up for the [Cure programming language](https://github.com/am-kantox/cure-lang)
+LSP hook-up for the [Cure programming language](https://github.com/cure-lang/cure-lang)
 in Neovim and Vim.
 
 Target Cure version: **0.28.2** (Talk Back).
