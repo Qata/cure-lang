@@ -78,6 +78,7 @@ defmodule Cure.Stdlib.Paths do
        cure_lib_source_dirs() ++
        [bundled_source_dir()] ++
        cure_home_source_dirs() ++
+       launcher_home_source_dirs() ++
        [@checkout_source, @legacy_cwd_source])
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
@@ -107,6 +108,7 @@ defmodule Cure.Stdlib.Paths do
        cure_lib_beam_dirs() ++
        [bundled_beam_dir()] ++
        cure_home_beam_dirs() ++
+       launcher_home_beam_dirs() ++
        [@legacy_cwd_beam])
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
@@ -301,6 +303,34 @@ defmodule Cure.Stdlib.Paths do
           Path.join([home, "priv", "std"]),
           Path.join([home, "lib", "std"])
         ]
+    end
+  end
+
+  @doc false
+  @spec launcher_home_beam_dirs(charlist() | String.t()) :: [String.t()]
+  def launcher_home_beam_dirs(script_name \\ :escript.script_name()) do
+    case launcher_home(script_name) do
+      nil -> []
+      home -> [Path.join([home, "priv", "ebin"]), Path.join([home, "_build", "cure", "ebin"])]
+    end
+  end
+
+  @doc false
+  @spec launcher_home_source_dirs(charlist() | String.t()) :: [String.t()]
+  def launcher_home_source_dirs(script_name \\ :escript.script_name()) do
+    case launcher_home(script_name) do
+      nil -> []
+      home -> [Path.join([home, "priv", "std"]), Path.join([home, "lib", "std"])]
+    end
+  end
+
+  defp launcher_home(script_name) do
+    script_name = to_string(script_name)
+
+    if script_name == "" or String.starts_with?(script_name, "-") do
+      nil
+    else
+      script_name |> Path.expand() |> Path.dirname()
     end
   end
 end

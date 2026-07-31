@@ -397,6 +397,25 @@ defmodule Cure.Stdlib.PathsTest do
     end
   end
 
+  describe "standalone launcher home" do
+    test "derives stdlib candidates from the escript's own directory" do
+      assert Paths.launcher_home_beam_dirs("/opt/cure/cure") == [
+               "/opt/cure/priv/ebin",
+               "/opt/cure/_build/cure/ebin"
+             ]
+
+      assert Paths.launcher_home_source_dirs("/opt/cure/cure") == [
+               "/opt/cure/priv/std",
+               "/opt/cure/lib/std"
+             ]
+    end
+
+    test "ignores evaluator-style launcher names" do
+      assert Paths.launcher_home_beam_dirs("-e") == []
+      assert Paths.launcher_home_source_dirs("") == []
+    end
+  end
+
   # ---------------------------------------------------------------------------
 
   defp make_tmp! do

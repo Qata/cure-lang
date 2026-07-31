@@ -146,4 +146,42 @@ defmodule Cure.Project.CompileProjectTest do
                Cure.Compiler.compile_and_load(source, emit_events: false, check_types: false)
     end
   end
+
+  describe "dependency artifact preflight" do
+    @tag :tmp_dir
+    test "reports an unbuilt path dependency before scanning consumer modules", %{tmp_dir: tmp} do
+      dependency = Path.join(tmp, "dependency")
+      consumer = Path.join(tmp, "consumer")
+      File.mkdir_p!(dependency)
+      File.mkdir_p!(consumer)
+
+      File.write!(Path.join(consumer, "Cure.toml"), """
+      [project]
+      name = "consumer"
+      version = "0.1.0"
+
+      [dependencies]
+      sample = { path = "../dependency" }
+      """)
+
+      assert {:ok, project} = Cure.Project.load(consumer)
+
+      assert {:error, {:dependency_artifact_set_missing, {:package, "sample"}}} =
+               Cure.Project.dependency_artifact_sets(project)
+    end
+
+    test "missing dependency artifacts render an actionable non-ICE diagnostic" do
+      {diagnostic, _registry} =
+        Cure.Diagnostic.Host.to_diagnostic(
+          {:dependency_artifact_set_missing, {:package, "sample"}},
+          "Cure.toml",
+          ""
+        )
+
+      assert diagnostic.code == "E100"
+      assert diagnostic.key == :artifact_error
+      assert Cure.Diagnostic.message(diagnostic) =~ "cure deps"
+      refute diagnostic.code == "E101"
+    end
+  end
 end

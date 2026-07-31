@@ -184,8 +184,9 @@ invalidation is explicitly out of scope (complete use-sets are hard to capture d
 
 **Fingerprints:** `source_hash` = SHA-256 of source bytes (content, not mtime); `interface_hash` = SHA-256 of
 `term_to_binary(export_env, [:deterministic])` (serializability must be verified; fallback = hash a structural
-projection); `toolchain` = content hash of the whole `:cure` app's beams — deliberately coarse-but-safe over a curated
-subset (an allow-list could miss a transitive dep and ship a stale beam). Mismatch ⇒ all dirty.
+projection); `toolchain` = an embedded content hash of all Cure compiler sources plus `mix.exs` and `mix.lock` —
+deliberately coarse-but-safe over a curated subset, and available both under Mix and inside the standalone escript.
+Mismatch ⇒ all dirty.
 
 **Dirty-propagation graph MUST use `closure_deps_map/1`, not `order_deps_map/1`** — modules consume `@prelude`
 providers ambiently with no `use` edge; order-edges alone would silently miss that invalidation (the exact stale-beam

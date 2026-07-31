@@ -9426,28 +9426,74 @@ defmodule Cure.Elab.Elaborator do
           end
 
         _ ->
-          effect_type = {:effect_type, ty_core}
-
-          case check_local_binding_rhs(rhs, effect_type, name, meta, names, ctx, env) do
-            {:ok, rhs_core} ->
-              effectful_let_bind(
-                name,
-                rhs_core,
-                ty_value,
-                grade,
-                rest,
-                expected_core,
-                names,
-                ctx,
-                env
-              )
-
-            {:error, _} ->
-              with {:ok, rhs_core} <- check_local_binding_rhs(rhs, ty_core, name, meta, names, ctx, env) do
-                bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env)
-              end
-          end
+          elaborate_non_effect_ascribed_let(
+            name,
+            rhs,
+            meta,
+            grade,
+            rest,
+            ty_core,
+            ty_value,
+            expected_core,
+            names,
+            ctx,
+            env
+          )
       end
+    end
+  end
+
+  defp elaborate_non_effect_ascribed_let(
+         name,
+         rhs,
+         meta,
+         grade,
+         rest,
+         ty_core,
+         ty_value,
+         expected_core,
+         names,
+         ctx,
+         env
+       ) do
+    effect_type = {:effect_type, ty_core}
+
+    # Prefer the annotation exactly as written. An actually effectful RHS cannot
+    # check at T and falls through to Effect(T); a pure or check-only RHS succeeds
+    # once without first constructing and discarding a lifted effect program.
+    case check_local_binding_rhs(rhs, ty_core, name, meta, names, ctx, env) do
+      {:ok, rhs_core} ->
+        bind_once_let(
+          name,
+          rhs_core,
+          ty_core,
+          ty_value,
+          grade,
+          rest,
+          expected_core,
+          names,
+          ctx,
+          env
+        )
+
+      {:error, pure_error} ->
+        case check_local_binding_rhs(rhs, effect_type, name, meta, names, ctx, env) do
+          {:ok, rhs_core} ->
+            effectful_let_bind(
+              name,
+              rhs_core,
+              ty_value,
+              grade,
+              rest,
+              expected_core,
+              names,
+              ctx,
+              env
+            )
+
+          {:error, _effect_error} ->
+            {:error, pure_error}
+        end
     end
   end
 

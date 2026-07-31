@@ -18,6 +18,8 @@ defmodule Cure.Core.Env do
   # rebuild.
   @alias_index_key {__MODULE__, :alias_index}
   @alias_index_slots 8
+  @visible_alias_index_key {__MODULE__, :visible_alias_index}
+  @visible_alias_index_slots 16
 
   defstruct families: %{},
             ctors: %{},
@@ -270,7 +272,7 @@ defmodule Cure.Core.Env do
         # rediscovering it by walking every key made this O(table) on every
         # unresolved lookup.
         candidates =
-          name_indexes(table).aliases
+          resolution_name_indexes(env, table).aliases
           |> Map.get(Atom.to_string(name), [])
           |> Enum.filter(&bare_key_available?(env, &1))
 
@@ -280,6 +282,67 @@ defmodule Cure.Core.Env do
         end
     end
   end
+
+  # Real source modules carry an exact lexical `bare_bindings` set. Unlike the
+  # definition tables, that set is stable while function bodies replace pending
+  # definitions with checked bodies. Index it directly so every new `defs` map
+  # does not force another walk over hundreds of unchanged imported names.
+  defp resolution_name_indexes(%__MODULE__{bare_bindings: %MapSet{} = bindings} = env, table) do
+    namespace = table_namespace(env, table)
+    owner = env.module_owner
+    cache = Process.get(@visible_alias_index_key, [])
+
+    case cached_visible_index(cache, bindings, namespace, owner) do
+      nil ->
+        visible =
+          table
+          |> Map.keys()
+          |> Enum.filter(fn key ->
+            MapSet.member?(bindings, key) or
+              (is_binary(owner) and Cure.Elab.Name.owner(key) == owner)
+          end)
+          |> build_name_indexes_from_keys()
+
+        Process.put(
+          @visible_alias_index_key,
+          Enum.take([{bindings, namespace, owner, visible} | cache], @visible_alias_index_slots)
+        )
+
+        visible
+
+      index ->
+        index
+    end
+  end
+
+  defp resolution_name_indexes(_env, table), do: name_indexes(table)
+
+  defp table_namespace(env, table) do
+    cond do
+      :erts_debug.same(table, env.defs) -> :defs
+      :erts_debug.same(table, env.families) -> :families
+      :erts_debug.same(table, env.ctors) -> :ctors
+      :erts_debug.same(table, env.ctor_to_family) -> :ctor_to_family
+      :erts_debug.same(table, env.constrained) -> :constrained
+      true -> :other
+    end
+  end
+
+  defp cached_visible_index([], _bindings, _namespace, _owner), do: nil
+
+  defp cached_visible_index(
+         [{cached, namespace, owner, index} | rest],
+         bindings,
+         namespace,
+         owner
+       ) do
+    if :erts_debug.same(cached, bindings),
+      do: index,
+      else: cached_visible_index(rest, bindings, namespace, owner)
+  end
+
+  defp cached_visible_index([_other | rest], bindings, namespace, owner),
+    do: cached_visible_index(rest, bindings, namespace, owner)
 
   # base => [owner-qualified keys with that base], for `resolve_key/3`'s fallback.
   #
@@ -318,7 +381,11 @@ defmodule Cure.Core.Env do
     do: if(:erts_debug.same(cached, table), do: index, else: cached_index(rest, table))
 
   defp build_name_indexes(table) do
-    Enum.reduce(Map.keys(table), %{aliases: %{}, providers: %{}}, fn key, indexes ->
+    table |> Map.keys() |> build_name_indexes_from_keys()
+  end
+
+  defp build_name_indexes_from_keys(keys) do
+    Enum.reduce(keys, %{aliases: %{}, providers: %{}}, fn key, indexes ->
       case owned_base(key) do
         nil ->
           put_provider(indexes, key)

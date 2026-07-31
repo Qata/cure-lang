@@ -14,7 +14,7 @@ defmodule Cure.CLI do
 
   ## Options
 
-      --output-dir DIR    Output directory for .beam files (default: _build/cure/ebin)
+      --output-dir DIR    Output directory (default: _build/cure/project/ebin)
       --verbose           Show detailed compilation output
   """
 
@@ -416,7 +416,7 @@ defmodule Cure.CLI do
   defp cmd_compile([], _opts), do: usage_error("Usage: cure compile <file|directory>")
 
   defp cmd_compile(paths, opts) do
-    output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
+    output_dir = Keyword.get(opts, :output_dir, "_build/cure/project/ebin")
     verbose? = Keyword.get(opts, :verbose, false)
 
     # Preload the stdlib so sources that `use Std.Iter`, `use Std.Gen`,
@@ -432,8 +432,15 @@ defmodule Cure.CLI do
         _ -> nil
       end
 
-    preload_stdlib(project)
-    preload_project_dependencies(project)
+    package_sets =
+      case dependency_artifact_sets(project) do
+        {:ok, sets} ->
+          sets
+
+        {:error, reason} ->
+          emit_host_diagnostic(reason, hd(paths))
+          exit({:shutdown, 1})
+      end
 
     dependency_roots = dependency_source_roots(project)
 
@@ -467,6 +474,8 @@ defmodule Cure.CLI do
           exit({:shutdown, 1})
       end
 
+    preload_runtime_dependencies!(project, stdlib_modules_for_files(files))
+
     # A user `@prelude` module reached by the scan contributes its operators to
     # every file compiled in this run — even siblings that do not `use` it.
     compile_opts =
@@ -474,23 +483,47 @@ defmodule Cure.CLI do
       |> Keyword.put(:prelude_providers, providers)
       |> Keyword.put(:module_index, module_index)
 
-    Enum.each(ordered, &compile_one(&1, compile_opts, verbose?))
-  end
+    if verbose?, do: Enum.each(ordered, &info("Compiling #{&1}"))
 
-  defp compile_one(path, opts, verbose?) do
-    if verbose?, do: info("Compiling #{path}")
+    case Cure.Compiler.Artifacts.sweep(
+           source_paths: ordered,
+           source_roots: Keyword.fetch!(compile_opts, :source_roots),
+           output_dir: output_dir,
+           kind: :project,
+           repair: true,
+           verify_stdlib: true,
+           stdlib_artifact_digest: Cure.Compiler.Incremental.stdlib_fingerprint(),
+           package_artifact_sets: package_sets,
+           package_artifact_digests: Map.new(package_sets, fn {name, set} -> {name, set.artifact_digest} end),
+           compile_opts:
+             Keyword.take(compile_opts, [
+               :emit_events,
+               :prelude_providers,
+               :module_index,
+               :source_roots
+             ])
+         ) do
+      {:ok, result} ->
+        result.rebuilt
+        |> Enum.sort_by(&elem(&1, 0))
+        |> Enum.each(fn {module, reasons} ->
+          suffix =
+            if verbose?,
+              do: " [" <> Enum.map_join(reasons, ", ", &to_string/1) <> "]",
+              else: ""
 
-    case Cure.Compiler.compile_file(path, opts) do
-      {:ok, module, warnings} ->
-        Enum.each(warnings, fn w ->
-          emit_host_diagnostic({:compiler_warning, w}, w.file)
+          info("  -> Cure.#{module}#{suffix}")
         end)
 
-        _ = Cure.Compiler.load_emitted(module, Keyword.fetch!(opts, :output_dir))
-        info("  -> #{module}")
+      {:error, {:artifact_sweep_failed, errors}} ->
+        Enum.each(errors, fn {target, reason} ->
+          emit_host_diagnostic(reason, source_path_for_target(target, ordered))
+        end)
+
+        exit({:shutdown, 1})
 
       {:error, reason} ->
-        emit_host_diagnostic(reason, path)
+        emit_host_diagnostic(reason, hd(paths))
         exit({:shutdown, 1})
     end
   end
@@ -505,8 +538,7 @@ defmodule Cure.CLI do
         _ -> nil
       end
 
-    preload_stdlib(project)
-    preload_project_dependencies(project)
+    preload_runtime_dependencies!(project, stdlib_modules_for_files([path]))
     source_roots = [Path.dirname(Path.expand(path)) | dependency_source_roots(project)]
 
     source =
@@ -587,12 +619,16 @@ defmodule Cure.CLI do
   # When a `Cure.Project.t()` is given, its `[compiler] stdlib_path`
   # takes the highest priority; falling back to `$CURE_LIB`, then the
   # standard candidate chain in `Cure.Stdlib.Paths`.
-  defp preload_stdlib(project) do
+  defp preload_stdlib(project, modules \\ nil) do
     # CLI entry points (`cure run`, `cure compile`) want every stdlib
     # module available so user sources can `use Std.X` without thinking
     # about groups. The REPL is the only caller with a narrower default
     # (`:none`); see `Cure.REPL.start/1`.
-    opts = [examples: true, kind: :all]
+    opts =
+      case modules do
+        nil -> [examples: false, kind: :all]
+        modules -> [examples: false, kind: :none, modules: modules]
+      end
 
     opts =
       case project do
@@ -612,25 +648,76 @@ defmodule Cure.CLI do
   defp preload_project_dependencies(%Cure.Project{} = project) do
     project
     |> Cure.Project.dependency_ebin_paths()
-    |> Enum.each(fn ebin ->
-      ebin
-      |> Path.join("Cure.*.beam")
-      |> Path.wildcard()
-      |> Enum.each(fn beam ->
-        module = beam |> Path.basename(".beam") |> String.to_atom()
-
-        case File.read(beam) do
-          {:ok, binary} ->
-            _ = :code.load_binary(module, String.to_charlist(beam), binary)
-
-          {:error, _} ->
-            :ok
-        end
-      end)
+    |> Enum.reduce_while(:ok, fn ebin, :ok ->
+      case Cure.Compiler.Artifacts.load_verified_set(ebin) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
     end)
   end
 
   defp preload_project_dependencies(_project), do: :ok
+
+  defp dependency_artifact_sets(%Cure.Project{} = project) do
+    Cure.Project.dependency_artifact_sets(project)
+  end
+
+  defp dependency_artifact_sets(_project), do: {:ok, %{}}
+
+  defp source_path_for_target(target, paths) do
+    if is_binary(target) and File.regular?(target) do
+      target
+    else
+      module = to_string(target)
+
+      Enum.find(paths, hd(paths), fn path ->
+        case Cure.Compiler.DepGraph.scan([path]) do
+          {:ok, %{modules: modules}} -> Map.has_key?(modules, module)
+          _ -> false
+        end
+      end)
+    end
+  end
+
+  defp preload_runtime_dependencies!(project, modules \\ nil) do
+    with :ok <- preload_stdlib(project, modules),
+         :ok <- preload_project_dependencies(project) do
+      :ok
+    else
+      {:error, reason} ->
+        error_diagnostic(
+          Cure.Diagnostic.Operational.artifact_error(
+            "A runtime dependency artifact set failed verification.",
+            %{reason: inspect(reason)}
+          )
+        )
+
+        exit({:shutdown, 1})
+    end
+  end
+
+  defp stdlib_modules_for_files(files) do
+    known =
+      Cure.Stdlib.Preload.module_groups()
+      |> Map.keys()
+      |> Enum.map(fn module ->
+        module |> Atom.to_string() |> String.replace_prefix("Cure.", "")
+      end)
+
+    case Cure.Compiler.DepGraph.scan(files, known_modules: known) do
+      {:ok, graph} ->
+        graph
+        |> Cure.Compiler.DepGraph.closure_deps_map()
+        |> Map.values()
+        |> List.flatten()
+        |> Enum.filter(&String.starts_with?(&1, "Std."))
+        |> Enum.map(&String.to_atom("Cure." <> &1))
+        |> Enum.uniq()
+
+      {:error, _reason} ->
+        nil
+    end
+  end
 
   defp dependency_source_roots(%Cure.Project{} = project),
     do: Cure.Project.dependency_source_paths(project)
@@ -710,6 +797,7 @@ defmodule Cure.CLI do
 
       case Cure.Compiler.compile_files(cure_files,
              output_dir: output_dir,
+             artifact_kind: :stdlib,
              emit_events: false,
              source_roots: [stdlib_dir],
              continue_on_error: true
@@ -845,10 +933,6 @@ defmodule Cure.CLI do
     doctests? = Keyword.get(opts, :doctests, false)
     cover? = Keyword.get(opts, :cover, false)
 
-    if cover? do
-      Cure.Cover.start("_build/cure/ebin")
-    end
-
     # Tests typically reference both stdlib helpers (`Std.Test.assert_eq`)
     # and modules defined in the project's own `lib/`. The escript starts
     # with neither loaded, so without this step every test that calls
@@ -862,10 +946,13 @@ defmodule Cure.CLI do
         _ -> nil
       end
 
-    preload_stdlib(project)
-    preload_project_dependencies(project)
+    preload_runtime_dependencies!(project)
     dependency_roots = dependency_source_roots(project)
     load_project_lib(project)
+
+    if cover? do
+      Cure.Cover.start("_build/cure/project/ebin")
+    end
 
     test_files =
       Path.wildcard("test/**/*.cure")
@@ -966,15 +1053,36 @@ defmodule Cure.CLI do
   defp load_project_lib(project) do
     files = Path.wildcard("lib/**/*.cure")
 
-    case Cure.Compiler.compile_files(files,
-           emit_events: false,
-           source_roots: ["lib" | dependency_source_roots(project)],
-           continue_on_error: true
-         ) do
+    result =
+      case project do
+        %Cure.Project{} ->
+          Cure.Project.compile_project(project,
+            output_dir: "_build/cure/project/ebin",
+            emit_events: false
+          )
+
+        _ ->
+          Cure.Compiler.compile_files(files,
+            output_dir: "_build/cure/project/ebin",
+            emit_events: false,
+            source_roots: ["lib"],
+            continue_on_error: true,
+            verify_stdlib: true,
+            stdlib_artifact_digest: Cure.Compiler.Incremental.stdlib_fingerprint()
+          )
+      end
+
+    case result do
       {:ok, result} ->
-        Enum.each(result.errors, fn {file, reason} ->
+        Enum.each(Map.get(result, :errors, []), fn {file, reason} ->
           emit_host_diagnostic(reason, file)
         end)
+
+        case Cure.Compiler.Artifacts.open_verified_set("_build/cure/project/ebin") do
+          {:ok, set} -> Cure.Compiler.Artifacts.load_verified_set(set.artifact_root)
+          {:error, _reason} when files == [] -> :ok
+          {:error, reason} -> emit_host_diagnostic(reason, "lib")
+        end
 
       {:error, reason} ->
         emit_host_diagnostic(reason, "lib")
@@ -2329,7 +2437,7 @@ defmodule Cure.CLI do
       help                 Show this help
 
     Options:
-      -o, --output-dir DIR   Output directory (default: _build/cure/ebin)
+      -o, --output-dir DIR   Output directory (default: _build/cure/project/ebin)
       --action ACTION        Watch action: compile (default) | check | test
       --poll-ms N            Watch poll interval (default 500)
       --debounce N           Watch coalesce window (default 200)

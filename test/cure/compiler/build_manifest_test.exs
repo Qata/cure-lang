@@ -66,7 +66,7 @@ defmodule Cure.Compiler.BuildManifestTest do
   test "toolchain_fingerprint/0 is a stable 32-byte digest" do
     a = M.toolchain_fingerprint()
     b = M.toolchain_fingerprint()
-    assert is_binary(a) and byte_size(a) == 32
+    assert byte_size(a) == 32
     assert a == b
   end
 

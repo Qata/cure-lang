@@ -1227,14 +1227,20 @@ defmodule Cure.Core.Kernel do
   end
 
   defp record_branch_detail(cname, body, ctx, expected, status) do
-    actual =
-      case infer(ctx, body) do
-        {:ok, value} -> value
-        _ -> nil
-      end
-
     case Process.get({__MODULE__, :branch_details}) do
       {:active, details} ->
+        actual =
+          case status do
+            :ok ->
+              expected
+
+            {:error, _error} ->
+              case infer(ctx, body) do
+                {:ok, value} -> value
+                _ -> nil
+              end
+          end
+
         Process.put(
           {__MODULE__, :branch_details},
           {:active, [%{constructor: cname, actual: actual, expected: expected, status: status} | details]}

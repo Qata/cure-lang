@@ -101,7 +101,18 @@ defmodule Cure.Elab.Unify do
   defp unify_d(t1, t2, ctx, sig, depth) do
     f1 = force_d(t1, ctx, depth)
     f2 = force_d(t2, ctx, depth)
-    do_unify(whnf_pre(f1, ctx, sig, depth), whnf_pre(f2, ctx, sig, depth), ctx, sig, depth)
+
+    # The overwhelmingly common call-argument case has already-identical Core
+    # types. Do not normalise and recursively rediscover that fact: whnf may
+    # unfold a large closed datatype and structural unification then repeats the
+    # same work for every child. Metavariable solutions have already been forced,
+    # so exact equality here is a complete successful unification with no context
+    # refinement left to perform.
+    if f1 == f2 do
+      {:ok, ctx}
+    else
+      do_unify(whnf_pre(f1, ctx, sig, depth), whnf_pre(f2, ctx, sig, depth), ctx, sig, depth)
+    end
   end
 
   # Weak-head-normalise a forced term BEFORE structural comparison (Idris `nf`,

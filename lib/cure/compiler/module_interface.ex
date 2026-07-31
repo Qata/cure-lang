@@ -3,19 +3,21 @@ defmodule Cure.Compiler.ModuleInterface do
   Immutable semantic interface for one checked Cure module.
 
   Interface identity includes the compiler schema, canonical module identity,
-  dependency-interface identities, exported declarations, and extension
-  payloads. Source content has its own hash for cache invalidation, but does not
-  perturb semantic identity when an edit changes only comments or formatting.
-  Transitional callers may still retain an `export_env`, but it is deliberately
-  excluded from semantic identity.
+  exported declarations, and extension payloads. Dependency-interface
+  identities are validation metadata rather than part of this module's public
+  identity. Keeping those hashes separate is essential for cyclic interface
+  graphs: recursively embedding dependency hashes cannot reach a cryptographic
+  fixed point. Source content likewise has its own hash for cache invalidation,
+  but does not perturb semantic identity when an edit changes only comments or
+  formatting. Transitional callers may still retain an `export_env`, but it is
+  deliberately excluded from semantic identity.
   """
 
-  # Version 2 introduces the checked-module handoff: `owned_env` is the exact
+  # Version 2 introduced the checked-module handoff: `owned_env` is the exact
   # certified environment and `export_env` is its canonical consumer
-  # projection.  Old version-1 artifacts may have been produced by a second,
-  # context-dependent elaboration and must never be reused as version-2
-  # interfaces.
-  @schema_version 2
+  # projection. Version 3 separates dependency-validation hashes from a
+  # module's own public identity so cyclic interface graphs converge.
+  @schema_version 3
 
   @enforce_keys [
     :module_name,
@@ -66,7 +68,6 @@ defmodule Cure.Compiler.ModuleInterface do
     identity = %{
       schema_version: @schema_version,
       module_name: module_name,
-      dependency_interface_hashes: dependency_hashes,
       # Locations belong to the diagnostic projection, not semantic identity:
       # inserting a comment before an unchanged dependency must not force every
       # dependent module to rebuild.

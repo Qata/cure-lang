@@ -60,4 +60,38 @@ defmodule Cure.Core.CaseTypingTest do
 
     assert {:error, :coverage} = Kernel.infer(ctx, cas)
   end
+
+  test "successful nested cases are not re-inferred for branch diagnostics" do
+    ctx = ctx_with(Eval.eval(@dec, []))
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, @dec}
+
+    nested = fn
+      _nested, 0 ->
+        {:ctor, :Dcoupled, []}
+
+      nested, depth ->
+        {:case, {:var, 0}, motive,
+         [
+           {:Dcoupled, 0, nested.(nested, depth - 1)},
+           {:Causal, 0, {:ctor, :Dcoupled, []}}
+         ]}
+    end
+
+    {before_reductions, _} = :erlang.statistics(:reductions)
+
+    assert :ok ==
+             Kernel.check_with_branch_details(
+               ctx,
+               nested.(nested, 16),
+               {:vdata, :Dec, []}
+             )
+
+    {after_reductions, _} = :erlang.statistics(:reductions)
+
+    # Recording a successful branch's already-proven expected type is linear in
+    # the nesting depth. Re-inferring every successful body here makes this
+    # linear-size term exponential (and made Std.Regex.Syntax.Parser take
+    # minutes and tens of billions of reductions).
+    assert after_reductions - before_reductions < 250_000
+  end
 end

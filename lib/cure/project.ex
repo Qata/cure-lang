@@ -311,9 +311,9 @@ defmodule Cure.Project do
     dep_ebin = Path.join(root, "_build/deps/#{name}")
     File.mkdir_p!(dep_ebin)
 
-    with :ok <- compile_dep_files(cure_files, name, dep_ebin, abs_path) do
-      :code.add_patha(String.to_charlist(Path.expand(dep_ebin)))
-      :ok
+    with :ok <- compile_dep_files(cure_files, name, dep_ebin, abs_path),
+         {:ok, set} <- Cure.Compiler.Artifacts.open_verified_set(dep_ebin) do
+      Cure.Compiler.Artifacts.load_verified_set(set.artifact_root)
     end
   end
 
@@ -362,6 +362,7 @@ defmodule Cure.Project do
     end)
     |> Enum.map(&Path.expand/1)
     |> Enum.filter(&File.dir?/1)
+    |> Enum.map(&Cure.Compiler.Artifacts.Writer.resolve/1)
     |> Enum.uniq()
     |> Enum.sort()
   end
@@ -374,19 +375,23 @@ defmodule Cure.Project do
   # dep edition must brick the build, not silently emit no beams and surface later
   # as opaque missing-module errors.
   defp compile_dep_files(cure_files, name, dep_ebin, base) do
-    case Cure.Compiler.compile_files(cure_files,
-           output_dir: dep_ebin,
-           emit_events: false,
+    case Cure.Compiler.Artifacts.sweep(
+           source_paths: cure_files,
            source_roots: [Path.join(base, "lib")],
-           continue_on_error: true,
-           file_options: fn file -> [project_dir: dep_project_dir(file, base)] end
+           output_dir: dep_ebin,
+           kind: :dependency,
+           repair: true,
+           compile_opts: [emit_events: false, project_dir: base]
          ) do
-      {:ok, %{errors: errors}} ->
+      {:ok, _result} ->
+        :ok
+
+      {:error, {:artifact_sweep_failed, errors}} ->
         case Enum.find_value(errors, fn
                {_file, {:edition_error, reason}} -> reason
                _ -> nil
              end) do
-          nil -> :ok
+          nil -> {:error, {:dependency_compile_failed, name, errors}}
           reason -> {:error, {:dependency_edition_error, name, reason}}
         end
 
@@ -457,8 +462,9 @@ defmodule Cure.Project do
     # the common nested layout (target/<pkg>-<vsn>/Cure.toml, which the `**/lib/**`
     # glob anticipates), bounded at `target`; an unknown dep edition fails loudly.
     with :ok <- compile_dep_files(cure_files, name, dep_ebin, target) do
-      :code.add_patha(String.to_charlist(Path.expand(dep_ebin)))
-      :ok
+      with {:ok, set} <- Cure.Compiler.Artifacts.open_verified_set(dep_ebin) do
+        Cure.Compiler.Artifacts.load_verified_set(set.artifact_root)
+      end
     end
   end
 
@@ -701,9 +707,9 @@ defmodule Cure.Project do
         # rather than relying solely on find_root stopping at the clone's `.git`,
         # and so an unknown dep edition fails loudly (A3-F1) — consistent with
         # path/tarball.
-        with :ok <- compile_dep_files(cure_files, name, dep_ebin, target) do
-          :code.add_patha(String.to_charlist(Path.expand(dep_ebin)))
-          :ok
+        with :ok <- compile_dep_files(cure_files, name, dep_ebin, target),
+             {:ok, set} <- Cure.Compiler.Artifacts.open_verified_set(dep_ebin) do
+          Cure.Compiler.Artifacts.load_verified_set(set.artifact_root)
         end
       end
     else
@@ -786,7 +792,8 @@ defmodule Cure.Project do
   @spec compile_project(t(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def compile_project(%__MODULE__{} = project, opts \\ []) do
-    output_dir = Keyword.get(opts, :output_dir, Path.join(project.root, "_build/cure/ebin"))
+    output_dir =
+      Keyword.get(opts, :output_dir, Path.join(project.root, "_build/cure/project/ebin"))
 
     extra_paths =
       Keyword.get_lazy(opts, :paths, fn -> default_source_paths(project) end)
@@ -808,8 +815,6 @@ defmodule Cure.Project do
           preload_opts
       end
 
-    Cure.Stdlib.Preload.preload(preload_opts)
-
     discovered =
       extra_paths
       |> Enum.flat_map(fn dir ->
@@ -829,7 +834,10 @@ defmodule Cure.Project do
           {err, nil}
       end
 
-    with {:ok, cure_files} <- cure_files_result,
+    with {:ok, dependency_sets} <- dependency_artifact_sets(project),
+         :ok <- Cure.Stdlib.Preload.preload(preload_opts),
+         :ok <- load_dependency_sets(dependency_sets),
+         {:ok, cure_files} <- cure_files_result,
          {:ok, app_info} <- detect_app(cure_files, project),
          :ok <- verify_app_name(app_info, project),
          {:ok, modules} <-
@@ -840,7 +848,8 @@ defmodule Cure.Project do
              check?,
              declared_phases(project),
              extra_paths,
-             compile_plan
+             compile_plan,
+             dependency_sets
            ),
          :ok <- maybe_write_app_resource(app_info, modules, project, output_dir) do
       {:ok, %{modules: modules, app_module: app_module(app_info)}}
@@ -1005,13 +1014,10 @@ defmodule Cure.Project do
          check?,
          declared_phases,
          source_roots,
-         compile_plan
+         compile_plan,
+         dependency_sets
        ) do
-    base_opts = [
-      output_dir: output_dir,
-      emit_events: emit?,
-      check_types: check?
-    ]
+    base_opts = [emit_events: emit?, check_types: check?]
 
     opts =
       if is_list(declared_phases),
@@ -1020,19 +1026,95 @@ defmodule Cure.Project do
 
     opts =
       opts
-      |> Keyword.put(:source_roots, source_roots)
-      |> Keyword.put(:plan, compile_plan)
+      |> Keyword.put(:prelude_providers, compile_plan.providers)
+      |> Keyword.put(:module_index, compile_plan.module_index)
 
-    case Cure.Compiler.compile_files(files, opts) do
-      {:ok, %{compiled: compiled}} ->
-        {:ok, Enum.map(compiled, fn {_path, module, _warnings} -> module end)}
+    case Cure.Compiler.Artifacts.sweep(
+           source_roots: source_roots,
+           source_paths: files,
+           output_dir: output_dir,
+           kind: :project,
+           repair: true,
+           stdlib_artifact_digest: Cure.Compiler.Incremental.stdlib_fingerprint(),
+           verify_stdlib: true,
+           package_artifact_sets: dependency_sets,
+           package_artifact_digests: Map.new(dependency_sets, fn {name, set} -> {name, set.artifact_digest} end),
+           compile_opts: opts
+         ) do
+      {:ok, _result} ->
+        with {:ok, set} <- Cure.Compiler.Artifacts.open_verified_set(output_dir) do
+          modules =
+            set.modules
+            |> Map.keys()
+            |> Enum.sort()
+            |> Enum.map(&String.to_atom("Cure." <> &1))
 
-      {:error, {_path, reason}} ->
+          {:ok, modules}
+        end
+
+      {:error, {:artifact_sweep_failed, [{_target, reason} | _]}} ->
         {:error, {:compile_failed, reason}}
 
       {:error, reason} ->
         {:error, {:compile_failed, reason}}
     end
+  end
+
+  @doc "Open every installed Cure dependency as one complete verified artifact set."
+  @spec dependency_artifact_sets(t()) :: {:ok, map()} | {:error, term()}
+  def dependency_artifact_sets(project) do
+    project.dependencies
+    |> Enum.reduce_while({:ok, %{}}, fn dependency, {:ok, sets} ->
+      name = Map.get(dependency, :name, "")
+      roots = dependency_ebin_roots(dependency, project.root)
+
+      if roots == [] do
+        {:halt, {:error, {:dependency_artifact_set_missing, {:package, name}}}}
+      else
+        Enum.reduce_while(roots, {:ok, sets}, fn root, {:ok, accumulated} ->
+          case Cure.Compiler.Artifacts.open_verified_set(root) do
+            {:ok, set} ->
+              key = if Map.has_key?(accumulated, name), do: "#{name}@#{root}", else: name
+              dependency_set = %{root: root, artifact_digest: set.artifact_digest}
+              {:cont, {:ok, Map.put(accumulated, key, dependency_set)}}
+
+            {:error, reason} ->
+              {:halt, {:error, {:dependency_artifact_set_invalid, {:package, name}, reason}}}
+          end
+        end)
+        |> case do
+          {:ok, accumulated} -> {:cont, {:ok, accumulated}}
+          {:error, _reason} = error -> {:halt, error}
+        end
+      end
+    end)
+  end
+
+  defp load_dependency_sets(sets) do
+    Enum.reduce_while(sets, :ok, fn {name, %{root: root}}, :ok ->
+      case Cure.Compiler.Artifacts.load_verified_set(root) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {:dependency_artifact_set_invalid, {:package, name}, reason}}}
+      end
+    end)
+  end
+
+  defp dependency_ebin_roots(dependency, root) do
+    name = Map.get(dependency, :name, "")
+
+    roots =
+      if is_binary(Map.get(dependency, :path)) or is_binary(Map.get(dependency, :git)) do
+        [Path.join([root, "_build", "deps", name])]
+      else
+        Path.wildcard(Path.join([root, "_build", "deps", "#{name}-*", "ebin"]))
+      end
+
+    roots
+    |> Enum.map(&Path.expand/1)
+    |> Enum.filter(&File.dir?/1)
+    |> Enum.map(&Cure.Compiler.Artifacts.Writer.resolve/1)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   defp app_module(nil), do: nil

@@ -35,6 +35,7 @@ defmodule Cure.Compiler.IncrementalTest do
   mod Leaf
     fn pubval() -> Int = 7
     fn helper() -> Int = 1
+    fn newly_exported() -> Int = 3
   """
 
   @amb_v1 """
@@ -127,12 +128,16 @@ defmodule Cure.Compiler.IncrementalTest do
     assert "Mid" in s.skipped_fresh and "Top" in s.skipped_fresh
   end
 
-  test "editing a leaf's PUBLIC surface cascades to its use-dependents",
+  test "editing a public surface rebuilds direct consumers without a transitive false cascade",
        %{src: src, out: out, write: write} do
     assert {:ok, _} = compile(src, out)
     write.("leaf.cure", @leaf_v3_public)
     assert {:ok, s} = compile(src, out)
-    assert "Leaf" in s.compiled and "Mid" in s.compiled and "Top" in s.compiled
+    assert "Leaf" in s.compiled
+    assert "Mid" in s.compiled
+
+    assert "Top" in s.skipped_fresh,
+           "Mid was rechecked against Leaf's new interface, but Mid's own public interface stayed stable"
   end
 
   test "editing a directly-depended module recompiles its caller",
@@ -348,7 +353,7 @@ defmodule Cure.Compiler.IncrementalTest do
     fn qval() -> Int = 42
   """
 
-  test "a closure-only ambient-prelude dependency observes a provider's cascaded interface change" do
+  test "an ambient consumer is not rebuilt when a provider's own interface is unchanged" do
     root = Path.join(System.tmp_dir!(), "cure_ambient_#{:erlang.unique_integer([:positive])}")
     src = Path.join(root, "src")
     out = Path.join(root, "ebin")
@@ -376,9 +381,9 @@ defmodule Cure.Compiler.IncrementalTest do
     assert "R" in s.compiled
     assert "P" in s.compiled, "P has a real use-dep on R, which changed -- P must recompile"
 
-    assert "Q" in s.compiled,
-           "Q ambiently depends on P (prelude closure edge) and P's interface changed " <>
-             "this build -- Q must not be served a stale beam"
+    assert "Q" in s.skipped_fresh,
+           "P's dependency-validation hashes changed, but its own declarations did not; " <>
+             "an ambient consumer with no reference to P remains valid"
   end
 
   # Regression: `interface_hash_for/3` recomputes a module's fresh interface via

@@ -33,6 +33,52 @@ defmodule Cure.CLITest do
   end
 
   describe "cure compile" do
+    @tag :tmp_dir
+    # A genuinely cold standalone VM may need to populate the dependent
+    # interface/macro cache before it can compile the first project. Keep this
+    # above the observed cold-start bound; the second invocation is the
+    # incremental assertion and must remain fast/no-op.
+    @tag timeout: 1_200_000
+    test "standalone escript compiles and incrementally reuses a regular project", %{tmp_dir: tmp} do
+      project_root = Path.join(tmp, "escript_project")
+      source_root = Path.join(project_root, "lib")
+      output_root = Path.join(project_root, "_build/cure/project/ebin")
+      File.mkdir_p!(source_root)
+
+      File.write!(Path.join(project_root, "Cure.toml"), """
+      [project]
+      name = "escript_project"
+      version = "0.1.0"
+      edition = "2026"
+      source_paths = ["lib"]
+      """)
+
+      File.write!(Path.join(source_root, "provider.cure"), """
+      mod Escript.Provider
+        fn answer() -> Int = 42
+      """)
+
+      File.write!(Path.join(source_root, "consumer.cure"), """
+      mod Escript.Consumer
+        use Escript.Provider
+        fn run() -> Int = answer()
+      """)
+
+      executable = Path.expand("cure")
+      args = ["compile", "lib", "-o", output_root]
+
+      assert {first_output, 0} = System.cmd(executable, args, cd: project_root, stderr_to_stdout: true)
+      assert first_output =~ "Cure.Escript.Provider"
+      assert first_output =~ "Cure.Escript.Consumer"
+
+      first_pointer = File.read!(Path.join(output_root, "current"))
+
+      assert {second_output, 0} = System.cmd(executable, args, cd: project_root, stderr_to_stdout: true)
+      refute second_output =~ "Cure.Escript.Provider"
+      refute second_output =~ "Cure.Escript.Consumer"
+      assert File.read!(Path.join(output_root, "current")) == first_pointer
+    end
+
     @tag :examples
     test "compiles a .cure file" do
       output =

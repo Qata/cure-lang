@@ -3,6 +3,35 @@ defmodule Cure.Diagnostic.Adapter.Operational do
 
   alias Cure.Diagnostic
 
+  @artifact_failure_tags [
+    :artifact_set_invalid,
+    :no_verified_artifact_set,
+    :artifact_kind_mismatch,
+    :artifact_manifest_empty,
+    :artifact_lock_failed,
+    :artifact_sweep_failed,
+    :artifact_load_failed,
+    :artifact_verification_failed,
+    :artifact_modules_missing,
+    :duplicate_artifact_modules,
+    :artifact_copy_failed,
+    :copied_artifact_root_mismatch,
+    :resident_artifact_mismatch,
+    :dependency_artifact_set_missing,
+    :dependency_artifact_set_invalid,
+    :dependency_generation_mismatch,
+    :stdlib_load_failed,
+    :stdlib_repair_failed,
+    :stdlib_sources_unavailable
+  ]
+  @artifact_failure_atoms [
+    :manifest_missing,
+    :manifest_unreadable,
+    :manifest_invalid,
+    :manifest_version_unsupported,
+    :manifest_root_mismatch
+  ]
+
   @doc "Convert an operational failure tuple at a host boundary."
   @spec from_error(term(), keyword()) :: Diagnostic.t()
   def from_error(error, _opts \\ [])
@@ -93,6 +122,34 @@ defmodule Cure.Diagnostic.Adapter.Operational do
   def from_error({:vm_args_read_failed, path, reason}, _opts), do: file_read(path, reason)
 
   def from_error({:undocumented_public_function, file, line}, _opts), do: undocumented_public_function(file, line)
+
+  def from_error({:dependency_artifact_set_missing, {:package, name}}, _opts) do
+    Diagnostic.new(
+      code: "E100",
+      key: :artifact_error,
+      severity: :error,
+      title: "Dependency is not built",
+      message:
+        "The compiled artifact set for dependency `#{name}` is missing. Run `cure deps` from this project before compiling it.",
+      payload: %{kind: :dependency_artifact_set_missing, package: name},
+      notes: ["Cure only loads dependencies from complete, verified artifact generations."]
+    )
+  end
+
+  def from_error(error, _opts)
+      when is_tuple(error) and tuple_size(error) > 0 and
+             elem(error, 0) in @artifact_failure_tags do
+    artifact_error("A Cure artifact set failed integrity verification.", %{
+      kind: elem(error, 0),
+      reason: inspect(error)
+    })
+  end
+
+  def from_error(error, _opts) when error in @artifact_failure_atoms do
+    artifact_error("A Cure artifact manifest failed integrity verification.", %{
+      kind: error
+    })
+  end
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 

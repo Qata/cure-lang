@@ -165,11 +165,13 @@ design does not attempt it; the interface hash is per-module, not per-symbol.
   fallback is to hash a structural projection of the env (its def/family/ctor
   tables) rather than the whole struct — same soundness argument, narrower term.
 
-- **`toolchain`** = a content hash of the compiler's own compiled bytecode — the
-  `.beam` files of the `:cure` application in `Mix.Project.compile_path()`,
-  concatenated in sorted path order and SHA-256'd. Computed once per build and
-  memoized. Any real change to compiler behavior changes this hash; a no-op
-  touch does not.
+- **`toolchain`** = an embedded content hash of the compiler's Elixir sources
+  plus `mix.exs` and `mix.lock`, with paths and bytes encoded deterministically.
+  Every input is an external resource of the fingerprint-owning module, so Mix
+  recompiles it when an input changes. This representation is also available
+  inside the standalone escript, where `Mix.Project` and filesystem paths to
+  embedded BEAMs do not exist. Any real source or build-definition change
+  changes the hash; a no-op touch does not.
 
 The `toolchain` hash is stored once at the top of the manifest. A mismatch
 against the current toolchain marks **every** module dirty (case 4 above),

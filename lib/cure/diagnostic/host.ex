@@ -4,6 +4,35 @@ defmodule Cure.Diagnostic.Host do
   alias Cure.Diagnostic.Sink
   alias Cure.Diagnostic.Adapter.Operational
 
+  @artifact_failure_tags [
+    :artifact_set_invalid,
+    :no_verified_artifact_set,
+    :artifact_kind_mismatch,
+    :artifact_manifest_empty,
+    :artifact_lock_failed,
+    :artifact_sweep_failed,
+    :artifact_load_failed,
+    :artifact_verification_failed,
+    :artifact_modules_missing,
+    :duplicate_artifact_modules,
+    :artifact_copy_failed,
+    :copied_artifact_root_mismatch,
+    :resident_artifact_mismatch,
+    :dependency_artifact_set_missing,
+    :dependency_artifact_set_invalid,
+    :dependency_generation_mismatch,
+    :stdlib_load_failed,
+    :stdlib_repair_failed,
+    :stdlib_sources_unavailable
+  ]
+  @artifact_failure_atoms [
+    :manifest_missing,
+    :manifest_unreadable,
+    :manifest_invalid,
+    :manifest_version_unsupported,
+    :manifest_root_mismatch
+  ]
+
   @doc "Render a compiler or host failure with its authored source context."
   @spec render(term(), String.t(), String.t() | nil) :: String.t()
   def render(reason, file, source \\ nil) when is_binary(file) do
@@ -136,6 +165,7 @@ defmodule Cure.Diagnostic.Host do
   defp operational_reason?({:configuration_warning, _}), do: true
   defp operational_reason?({:usage_error, _}), do: true
   defp operational_reason?({:artifact_error, _}), do: true
+  defp operational_reason?({:artifact_error, _, details}) when is_map(details), do: true
   defp operational_reason?({:proof_file_missing, _}), do: true
   defp operational_reason?({:proof_verification_failed, _}), do: true
   defp operational_reason?({:proof_schema_incompatible, _}), do: true
@@ -172,5 +202,12 @@ defmodule Cure.Diagnostic.Host do
   defp operational_reason?({:sys_config_read_failed, _, _}), do: true
   defp operational_reason?({:vm_args_read_failed, _, _}), do: true
   defp operational_reason?({:undocumented_public_function, _, _}), do: true
+  defp operational_reason?(reason) when reason in @artifact_failure_atoms, do: true
+
+  defp operational_reason?(reason)
+       when is_tuple(reason) and tuple_size(reason) > 0 and
+              elem(reason, 0) in @artifact_failure_tags,
+       do: true
+
   defp operational_reason?(_), do: false
 end
