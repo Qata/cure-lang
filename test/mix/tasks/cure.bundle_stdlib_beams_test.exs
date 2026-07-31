@@ -11,105 +11,6 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
     end
   end
 
-  describe "module_name_from_source/1" do
-    test "extracts the declared `mod` name" do
-      src = make_tmp!()
-      path = write_cure!(src, "list.cure", "mod Std.List\n  fn foo() -> Int = 1\n")
-
-      assert {:ok, "Std.List"} = BundleStdlibBeams.module_name_from_source(path)
-    after
-      cleanup_tmps()
-    end
-
-    test "returns :unknown for a sourceless file" do
-      assert :unknown = BundleStdlibBeams.module_name_from_source("/nonexistent/src.cure")
-    end
-
-    test "returns :unknown when no mod declaration is present" do
-      src = make_tmp!()
-      path = write_cure!(src, "bare.cure", "fn foo() -> Int = 1\n")
-
-      assert :unknown = BundleStdlibBeams.module_name_from_source(path)
-    after
-      cleanup_tmps()
-    end
-  end
-
-  describe "expected_beam_path/2" do
-    test "prefixes with `Cure.` to match the codegen atom shape" do
-      src = make_tmp!()
-      path = write_cure!(src, "list.cure", "mod Std.List\n")
-
-      assert {:ok, beam} = BundleStdlibBeams.expected_beam_path(path, "/tmp/out")
-      assert beam == Path.join("/tmp/out", "Cure.Std.List.beam")
-    after
-      cleanup_tmps()
-    end
-  end
-
-  describe "should_compile?/2" do
-    test "returns true when the BEAM does not exist" do
-      src = make_tmp!()
-      path = write_cure!(src, "list.cure", "mod Std.List\n")
-
-      assert BundleStdlibBeams.should_compile?(path, Path.join(src, "Cure.Std.List.beam"))
-    after
-      cleanup_tmps()
-    end
-
-    test "returns true for an unfingerprinted BEAM even when it is newer" do
-      src = make_tmp!()
-      dst = make_tmp!()
-      source_path = write_cure!(src, "list.cure", "mod Std.List\n")
-      beam_path = Path.join(dst, "Cure.Std.List.beam")
-      File.write!(beam_path, "fake beam bytes")
-
-      # Bump the beam mtime well past the source mtime so the gate says "skip".
-      bump_mtime!(beam_path, 5)
-
-      assert BundleStdlibBeams.should_compile?(source_path, beam_path)
-    after
-      cleanup_tmps()
-    end
-
-    test "returns false when the source fingerprint matches" do
-      src = make_tmp!()
-      dst = make_tmp!()
-      source_path = write_cure!(src, "list.cure", "mod Std.List\n")
-      beam_path = Path.join(dst, "Cure.Std.List.beam")
-      File.write!(beam_path, "fake beam bytes")
-      File.write!(BundleStdlibBeams.fingerprint_path(beam_path), BundleStdlibBeams.fingerprint(source_path))
-
-      bump_mtime!(beam_path, 5)
-
-      refute BundleStdlibBeams.should_compile?(source_path, beam_path)
-    after
-      cleanup_tmps()
-    end
-
-    test "returns true when the source has been updated" do
-      src = make_tmp!()
-      dst = make_tmp!()
-      source_path = write_cure!(src, "list.cure", "mod Std.List\n")
-      beam_path = Path.join(dst, "Cure.Std.List.beam")
-      File.write!(beam_path, "fake beam bytes")
-
-      # Source newer than beam.
-      bump_mtime!(source_path, 5)
-
-      assert BundleStdlibBeams.should_compile?(source_path, beam_path)
-    after
-      cleanup_tmps()
-    end
-
-    test "returns false when neither file exists" do
-      refute BundleStdlibBeams.should_compile?(
-               "/nonexistent/src.cure",
-               "/nonexistent/dst.beam"
-             )
-    end
-  end
-
   describe "bundle/2" do
     test "no-op when the source directory does not exist" do
       src = Path.join(System.tmp_dir!(), "cure_bundle_beams_missing_#{unique()}")
@@ -153,7 +54,8 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
       """)
 
       assert {:ok, %{errors: 0}} = BundleStdlibBeams.bundle(src, dst)
-      assert File.exists?(Path.join(dst, "Cure.Std.TcaUser.beam"))
+      assert {:ok, set} = Cure.Compiler.Artifacts.open_verified_set(dst)
+      assert File.exists?(Path.join(set.artifact_root, "Cure.Std.TcaUser.beam"))
     after
       :code.purge(:"Cure.Std.TcaHelper")
       :code.delete(:"Cure.Std.TcaHelper")
@@ -170,24 +72,28 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
         fn ext_helper(x: Int) -> Int
       """)
 
-      consumer =
-        write_cure!(src, "a_user.cure", """
-        mod Std.TcaSkippedUser
-          use Std.TcaSkippedHelper
-          fn use_it(x: Int) -> Int = ext_helper(x)
-        """)
+      write_cure!(src, "a_user.cure", """
+      mod Std.TcaSkippedUser
+        use Std.TcaSkippedHelper
+        fn use_it(x: Int) -> Int = ext_helper(x)
+      """)
 
       assert {:ok, %{errors: 0}} = BundleStdlibBeams.bundle(src, dst)
 
       :code.purge(:"Cure.Std.TcaSkippedHelper")
       :code.delete(:"Cure.Std.TcaSkippedHelper")
-      File.write!(consumer, File.read!(consumer) <> "\n# changed\n")
+
+      write_cure!(src, "a_user.cure", """
+      mod Std.TcaSkippedUser
+        use Std.TcaSkippedHelper
+        fn use_it(x: Int) -> Int = ext_helper(x) + 0
+      """)
 
       assert {:ok, %{compiled: 1, skipped: 1, errors: 0}} =
                BundleStdlibBeams.bundle(src, dst)
 
-      assert {:module, :"Cure.Std.TcaSkippedHelper"} =
-               :code.ensure_loaded(:"Cure.Std.TcaSkippedHelper")
+      assert {:ok, set} = Cure.Compiler.Artifacts.open_verified_set(dst)
+      assert File.exists?(Path.join(set.artifact_root, "Cure.Std.TcaSkippedHelper.beam"))
     after
       :code.purge(:"Cure.Std.TcaSkippedHelper")
       :code.delete(:"Cure.Std.TcaSkippedHelper")
@@ -206,7 +112,8 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
 
       output =
         capture_io(:stderr, fn ->
-          assert {:ok, %{errors: 1}} = BundleStdlibBeams.bundle(src, dst)
+          assert {:error, {:artifact_sweep_failed, [_]}} =
+                   BundleStdlibBeams.bundle(src, dst)
         end)
 
       assert output =~ "UNKNOWN VALUE [E091]"
@@ -237,11 +144,6 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
     path = Path.join(dir, name)
     File.write!(path, contents)
     path
-  end
-
-  defp bump_mtime!(path, offset_seconds) do
-    {:ok, %File.Stat{mtime: mtime}} = File.stat(path, time: :posix)
-    File.touch!(path, mtime + offset_seconds)
   end
 
   defp unique, do: System.unique_integer([:positive])

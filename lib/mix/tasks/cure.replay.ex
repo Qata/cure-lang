@@ -66,7 +66,7 @@ defmodule Mix.Tasks.Cure.Replay do
           mod_str ->
             mod = Module.concat([mod_str])
 
-            if Code.ensure_loaded?(mod) do
+            if verified_project_module?(mod) do
               step? = Keyword.get(opts, :step, false)
               Mix.Shell.IO.info("\nReplaying against #{mod_str}#{if step?, do: " (step mode)", else: ""}...")
 
@@ -96,6 +96,16 @@ defmodule Mix.Tasks.Cure.Replay do
               exit({:shutdown, 1})
             end
         end
+    end
+  end
+
+  defp verified_project_module?(module) do
+    case Cure.Compiler.Artifacts.load_verified_modules(
+           "_build/cure/project/ebin",
+           [module]
+         ) do
+      :ok -> true
+      {:error, _reason} -> false
     end
   end
 

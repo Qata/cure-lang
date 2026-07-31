@@ -336,7 +336,7 @@ defmodule Cure.CLI do
         if mod_str do
           mod = Module.concat([mod_str])
 
-          if Code.ensure_loaded?(mod) do
+          if verified_replay_module?(mod) do
             case Cure.Observe.Replay.replay(mod, entries, step: step?) do
               {:ok, :quit} ->
                 info("Replay quit early.")
@@ -360,6 +360,16 @@ defmodule Cure.CLI do
             exit({:shutdown, 1})
           end
         end
+    end
+  end
+
+  defp verified_replay_module?(module) do
+    case Cure.Compiler.Artifacts.load_verified_modules(
+           "_build/cure/project/ebin",
+           [module]
+         ) do
+      :ok -> true
+      {:error, _reason} -> false
     end
   end
 

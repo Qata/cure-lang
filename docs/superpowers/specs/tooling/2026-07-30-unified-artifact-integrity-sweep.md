@@ -1,6 +1,6 @@
 # Unified Artifact Integrity Sweep
 
-**Status:** proposed  
+**Status:** implemented  
 **Date:** 2026-07-30  
 **Scope:** all Cure-generated BEAM artifacts: standard library, projects,
 dependencies, bundled `priv/ebin`, `$CURE_HOME`, tests, documentation examples,

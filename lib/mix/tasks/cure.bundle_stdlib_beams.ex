@@ -18,16 +18,12 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
     * `mix release` bundles `priv/` into the release tarball.
     * `:code.priv_dir(:cure)` resolves to the staged location at runtime.
 
-  ## Idempotency
+  ## Integrity
 
-  Per-module source fingerprints: a `.cure` source triggers a recompile when
-  the expected `.beam` is missing or its adjacent SHA-256 sidecar does not
-  match the source. This remains correct across branch switches and merges,
-  where filesystem mtimes are not reliable provenance. The module name baked
-  into the BEAM filename is parsed from the source's `mod ...` declaration (the same regex
-  `Cure.Stdlib.Preload` uses at Elixir compile time). Sources we
-  cannot classify are compiled unconditionally, since `Cure.Compiler`
-  itself produces the canonical filename.
+  Bundling uses the same content-addressed artifact sweep as development
+  compilation. The destination includes its manifest and is accepted only as a
+  complete verified generation; mtimes and filename presence are never
+  freshness evidence.
 
   ## No-op paths
 
@@ -48,7 +44,6 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
   @shortdoc "Compile Cure stdlib sources into priv/ebin/"
 
   @source_dir Path.join(["lib", "std"])
-  @fingerprint_suffix ".cure-source-sha256"
 
   @impl Mix.Task
   def run(_args) do
@@ -60,8 +55,21 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
     # when `compiler_available?/0` is false below; Mix handles the
     # "app not loaded yet" case gracefully.
     _ = ensure_cure_application_started()
-    _ = bundle(@source_dir, default_destination())
-    :ok
+
+    result =
+      case Cure.Compiler.Artifacts.copy_verified_set(
+             "_build/cure/ebin",
+             default_destination()
+           ) do
+        {:ok, _generation_root} -> {:ok, %{compiled: 0, skipped: 0, errors: 0}}
+        {:error, _reason} -> bundle(@source_dir, default_destination())
+      end
+
+    case result do
+      {:ok, %{errors: 0}} -> :ok
+      {:ok, %{errors: count}} -> Mix.raise("stdlib bundle failed with #{count} artifact errors")
+      {:error, reason} -> Mix.raise("stdlib bundle failed: #{inspect(reason)}")
+    end
   end
 
   defp ensure_cure_application_started do
@@ -99,29 +107,38 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
         {:ok, %{compiled: 0, skipped: 0, errors: 0}}
 
       true ->
-        Process.delete(:cure_bundle_compiler_fingerprint)
         File.mkdir_p!(dest_dir)
 
-        files = source_dir |> Path.join("*.cure") |> Path.wildcard()
+        case Cure.Compiler.Artifacts.sweep(
+               source_roots: [source_dir],
+               output_dir: dest_dir,
+               kind: :stdlib,
+               repair: true,
+               compile_opts: [emit_events: false]
+             ) do
+          {:ok, result} ->
+            {:ok,
+             %{
+               compiled: map_size(result.rebuilt),
+               skipped: length(result.reused),
+               errors: length(result.errors)
+             }}
 
-        case Cure.Compiler.prepare_files(files) do
-          {:ok, plan} ->
-            compile_opts = [
-              source_roots: [source_dir],
-              prelude_providers: plan.providers,
-              module_index: plan.module_index
-            ]
-
-            Enum.reduce(plan.ordered, {:ok, %{compiled: 0, skipped: 0, errors: 0}}, fn src, {:ok, counts} ->
-              compile_one(src, dest_dir, counts, compile_opts)
+          {:error, {:artifact_sweep_failed, errors}} ->
+            Enum.each(errors, fn {target, reason} ->
+              if Code.ensure_loaded?(Mix) and function_exported?(Mix, :shell, 0) do
+                Mix.shell().error(render_host_diagnostic(reason, source_path_for(target, source_dir)))
+              end
             end)
+
+            {:error, {:artifact_sweep_failed, errors}}
 
           {:error, reason} ->
             if Code.ensure_loaded?(Mix) and function_exported?(Mix, :shell, 0) do
               Mix.shell().error(render_host_diagnostic(reason, source_dir))
             end
 
-            {:ok, %{compiled: 0, skipped: 0, errors: 1}}
+            {:error, reason}
         end
     end
   end
@@ -139,70 +156,6 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
       function_exported?(Cure.Compiler, :compile_file, 2)
   end
 
-  @doc false
-  @spec compile_one(String.t(), String.t(), map()) :: {:ok, map()}
-  def compile_one(src, dest_dir, counts), do: compile_one(src, dest_dir, counts, [])
-
-  defp compile_one(src, dest_dir, counts, compile_opts) do
-    case expected_beam_path(src, dest_dir) do
-      {:ok, beam_path} ->
-        if should_compile?(src, beam_path) do
-          do_compile(src, dest_dir, counts, compile_opts)
-        else
-          # A fresh BEAM is also an input to later modules in this same bundle:
-          # compiled macros and final module-resolution validation may need it
-          # loaded even though its source does not need recompilation. Skipping
-          # without loading made clean VMs report a transient E101 for providers
-          # such as Std.Syntax, then succeed on a later stdlib pass.
-          beam_path
-          |> Path.basename(".beam")
-          |> String.to_atom()
-          |> refresh_loaded_beam(dest_dir)
-
-          {:ok, %{counts | skipped: counts.skipped + 1}}
-        end
-
-      :unknown ->
-        # Could not classify the module name from the source. Compile
-        # unconditionally and let `Cure.Compiler` place the BEAM under
-        # the canonical name.
-        do_compile(src, dest_dir, counts, compile_opts)
-    end
-  end
-
-  defp do_compile(src, dest_dir, counts, compile_opts) do
-    opts =
-      Keyword.merge(
-        [
-          output_dir: dest_dir,
-          emit_events: false,
-          source_roots: [Path.dirname(src)]
-        ],
-        compile_opts
-      )
-
-    case Cure.Compiler.compile_file(src, opts) do
-      {:ok, module, _warnings} ->
-        # Keep the freshly compiled runtime module available to later
-        # definition-site macro execution. Ordinary name and type resolution
-        # uses canonical source-hash-keyed module interfaces and does not
-        # inspect loaded BEAM exports.
-        refresh_loaded_beam(module, dest_dir)
-        write_source_fingerprint(src, Path.join(dest_dir, "#{module}.beam"))
-        {:ok, %{counts | compiled: counts.compiled + 1}}
-
-      {:error, reason} ->
-        # Surface the failure to the shell but keep processing the
-        # remaining stdlib files so a single bad source does not
-        # prevent the rest from being staged.
-        if Code.ensure_loaded?(Mix) and function_exported?(Mix, :shell, 0) do
-          Mix.shell().error(render_host_diagnostic(reason, src))
-        end
-
-        {:ok, %{counts | errors: counts.errors + 1}}
-    end
-  end
-
   defp render_host_diagnostic(reason, path) do
     {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path)
 
@@ -210,111 +163,22 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
     |> Cure.Diagnostic.Sink.render(diagnostic)
   end
 
-  # Purge any previously-loaded copy of `module` and load the beam just
-  # written to `dest_dir`, so later modules in the same bundle run probe its
-  # fresh export table. Best-effort: a beam we cannot load (e.g. a codegen
-  # that wrote an unexpected filename) leaves the VM's current copy in place
-  # rather than aborting the bundle.
-  defp refresh_loaded_beam(module, dest_dir) do
-    base = Path.join(dest_dir, Atom.to_string(module)) |> String.to_charlist()
-
-    if File.exists?(to_string(base) <> ".beam") do
-      :code.purge(module)
-      :code.load_abs(base)
-    end
-
-    :ok
-  end
-
-  @doc false
-  @spec expected_beam_path(String.t(), String.t()) :: {:ok, String.t()} | :unknown
-  def expected_beam_path(src, dest_dir) do
-    case module_name_from_source(src) do
-      {:ok, declared} ->
-        {:ok, Path.join(dest_dir, "Cure.#{declared}.beam")}
-
-      :unknown ->
-        :unknown
-    end
-  end
-
-  @doc false
-  @spec module_name_from_source(String.t()) :: {:ok, String.t()} | :unknown
-  def module_name_from_source(path) do
-    mod_regex = ~r/^\s*(?:mod|proof|actor|fsm|sup|app)\s+([A-Za-z_][\w\.]*)/m
-
-    with {:ok, contents} <- File.read(path),
-         [_, declared] <- Regex.run(mod_regex, contents) do
-      {:ok, declared}
+  defp source_path_for(target, source_dir) do
+    if is_binary(target) and File.regular?(target) do
+      target
     else
-      _ -> :unknown
-    end
-  end
+      stem =
+        target
+        |> to_string()
+        |> String.split(".")
+        |> List.last()
+        |> Macro.underscore()
 
-  @doc false
-  @spec should_compile?(String.t(), String.t()) :: boolean()
-  # A source fingerprint is authoritative. Git checkouts and merges can leave
-  # a source's mtime older than a beam produced by a different revision, so an
-  # mtime-only check can silently retain incompatible generated code. Beams
-  # without a fingerprint are conservatively stale and are rebuilt once.
-  def should_compile?(src, beam_path) do
-    cond do
-      not File.regular?(src) ->
-        false
-
-      not File.regular?(beam_path) ->
-        true
-
-      true ->
-        case File.read(fingerprint_path(beam_path)) do
-          {:ok, stored_fingerprint} ->
-            String.trim(stored_fingerprint) != fingerprint(src)
-
-          {:error, _} ->
-            true
-        end
-    end
-  end
-
-  @doc "Return the sidecar path storing a bundled BEAM's source fingerprint."
-  @spec fingerprint_path(String.t()) :: String.t()
-  def fingerprint_path(beam_path), do: beam_path <> @fingerprint_suffix
-
-  @doc "Return the SHA-256 fingerprint of a Cure source file."
-  @spec source_fingerprint(String.t()) :: String.t()
-  def source_fingerprint(source_path) do
-    :crypto.hash(:sha256, File.read!(source_path))
-    |> Base.encode16(case: :lower)
-  end
-
-  @doc "Return the source and compiler fingerprint stored beside a BEAM."
-  @spec fingerprint(String.t()) :: String.t()
-  def fingerprint(source_path) do
-    source_fingerprint(source_path) <> ":" <> compiler_fingerprint()
-  end
-
-  defp write_source_fingerprint(source_path, beam_path) do
-    if File.regular?(beam_path) do
-      File.write!(fingerprint_path(beam_path), fingerprint(source_path) <> "\n")
-    end
-  end
-
-  defp compiler_fingerprint do
-    case Process.get(:cure_bundle_compiler_fingerprint) do
-      nil ->
-        files = ["mix.exs" | Path.wildcard("lib/cure/**/*.ex")] |> Enum.sort()
-
-        payload =
-          Enum.map_join(files, <<0>>, fn path ->
-            path <> <<0>> <> File.read!(path)
-          end)
-
-        value = :crypto.hash(:sha256, payload) |> Base.encode16(case: :lower)
-        Process.put(:cure_bundle_compiler_fingerprint, value)
-        value
-
-      value ->
-        value
+      Enum.find(
+        Path.wildcard(Path.join(source_dir, "*.cure")),
+        source_dir,
+        &(Path.basename(&1, ".cure") == stem)
+      )
     end
   end
 end
