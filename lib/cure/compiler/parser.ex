@@ -8741,7 +8741,11 @@ defmodule Cure.Compiler.Parser do
     {{:param, meta, name}, state}
   end
 
-  defp parse_explicit_param(state) do
+  # `lambda?` marks the anonymous-fn parameter list. `parse_single_typed_param/1`
+  # screens the named-function path before calling here, but a lambda's list is
+  # parsed straight from the source, so this has to cope with whatever was
+  # written -- and a lambda has no caller-facing labels to parse.
+  defp parse_explicit_param(state, lambda? \\ false) do
     {grade_prefix, state} = parse_binder_grade_prefix(state)
     start_token = (grade_prefix && elem(grade_prefix, 2)) || peek(state)
 
@@ -8796,15 +8800,47 @@ defmodule Cure.Compiler.Parser do
               else: advance(state)
 
           {"_missing_variadic_parameter", state}
+
+        %Token{} ->
+          # Nothing that can name a parameter. Reaching the end of this case
+          # without a clause used to raise a CaseClauseError out of the whole
+          # compile, so a lambda like `fn(42) -> 1` crashed instead of being
+          # reported.
+          name_details = %{
+            observed: name_token.value || name_token.type,
+            token_type: name_token.type,
+            span: name_token.span,
+            line: name_token.line,
+            column: name_token.col
+          }
+
+          error =
+            {:invalid_parameter_name,
+             if(lambda?, do: Map.put(name_details, :lambda, true), else: name_details)}
+
+          state = add_error(state, error)
+
+          # A closing or separating token belongs to the enclosing list, which
+          # reports it in its own terms; consuming it here would hide that.
+          state =
+            if name_token.type in [:rparen, :rbracket, :rbrace, :comma, :newline, :eof],
+              do: state,
+              else: advance(state)
+
+          {"_invalid_parameter", state}
       end
 
     # Two-name label form `label internal: T` (Swift). A second identifier before
     # the annotation means the first name was the EXTERNAL caller-facing label and
     # this second one is the INTERNAL body binder. Single-name params carry no
     # label (the one name serves as both, and any call label is optional).
+    # A lambda is applied positionally and has no caller-facing labels, so a
+    # second name there is not the label form -- it is a parameter that lost its
+    # comma. Leaving it unconsumed lets the parameter list report the missing
+    # separator, instead of silently reading `fn(x y)` as one labelled binder.
     {label, label_span, name, name_token, state} =
       case peek(state) do
-        %Token{type: :identifier} = internal_token ->
+        %Token{type: :identifier} = internal_token when not lambda? ->
           {name, name_token.span, to_string(internal_token.value), internal_token, advance(state)}
 
         _ ->
@@ -9218,7 +9254,7 @@ defmodule Cure.Compiler.Parser do
         {[], state}
 
       _ ->
-        {param, state} = parse_explicit_param(state)
+        {param, state} = parse_explicit_param(state, true)
 
         case peek(state) do
           %Token{type: :comma} ->
