@@ -697,7 +697,7 @@ defmodule Cure.CLI do
       {:error, reason} ->
         error_diagnostic(
           Cure.Diagnostic.Operational.artifact_error(
-            "A runtime dependency artifact set failed verification.",
+            "A runtime dependency artifact set failed verification: #{inspect(reason)}",
             %{reason: inspect(reason)}
           )
         )

@@ -1,6 +1,17 @@
 defmodule Mix.Tasks.Cure.Check.DocsTest do
   use ExUnit.Case, async: false
 
+  # Every test here runs a Mix task that repoints `CURE_LIB` and the `:cure`
+  # stdlib config at its own temporary project, and each `setup` is responsible
+  # for handing them back. Leaking even one of them makes the *rest* of the
+  # suite fail, far from here and for a reason that reads as unrelated, so this
+  # guard fails the module that caused it instead.
+  setup_all do
+    before = env_snapshot()
+    on_exit(fn -> assert env_snapshot() == before end)
+    :ok
+  end
+
   setup do
     previous_shell = Mix.shell()
     previous_cwd = File.cwd!()
@@ -16,6 +27,24 @@ defmodule Mix.Tasks.Cure.Check.DocsTest do
     File.mkdir_p!(Path.join(root, "_build/cure"))
     File.ln_s!(Path.join(previous_cwd, "_build/cure/ebin"), Path.join(root, "_build/cure/ebin"))
 
+    # The task points `CURE_LIB`, the `:cure` stdlib config, and the code path at
+    # the project it is run in, and keeps them there -- correct for a real `mix`
+    # invocation, which owns the OS process. Here the process outlives the task,
+    # so all of it has to be handed back.
+    #
+    # Left in place, `CURE_LIB` names a temporary root that this setup then
+    # deletes, and every later test resolves the standard library from a
+    # directory that no longer exists; the source-JIT fallback recreates it,
+    # recompiles the standard library into it, and the result collides with the
+    # resident sticky set the suite loaded once at startup.
+    #
+    # The code path entry is worse, because it survives the deletion: the
+    # snippet compiler adds `<root>/_build/cure/ebin`, and the parent of that
+    # directory is literally named `cure`, so ERTS reads it as the `:cure`
+    # application's lib dir. `:code.priv_dir(:cure)` then answers with the
+    # temporary root, and every stdlib candidate derived from it is gone.
+    previous_env = env_snapshot()
+
     System.cmd("git", ["init", "--quiet"], cd: root)
     File.cd!(root)
 
@@ -23,6 +52,7 @@ defmodule Mix.Tasks.Cure.Check.DocsTest do
       File.cd!(previous_cwd)
       Mix.shell(previous_shell)
       Mix.Task.reenable("cure.check.docs")
+      restore_env(previous_env)
       File.rm_rf!(root)
     end)
 
@@ -297,6 +327,29 @@ defmodule Mix.Tasks.Cure.Check.DocsTest do
     """
     |> String.trim_trailing()
   end
+
+  defp env_snapshot do
+    %{
+      cure_lib: System.get_env("CURE_LIB"),
+      source_dir: Application.fetch_env(:cure, :stdlib_source_dir),
+      beam_dir: Application.fetch_env(:cure, :stdlib_beam_dir),
+      code_path: :code.get_path()
+    }
+  end
+
+  defp restore_env(previous) do
+    case previous.cure_lib do
+      nil -> System.delete_env("CURE_LIB")
+      value -> System.put_env("CURE_LIB", value)
+    end
+
+    restore_app_env(:stdlib_source_dir, previous.source_dir)
+    restore_app_env(:stdlib_beam_dir, previous.beam_dir)
+    :code.set_path(previous.code_path)
+  end
+
+  defp restore_app_env(key, :error), do: Application.delete_env(:cure, key)
+  defp restore_app_env(key, {:ok, value}), do: Application.put_env(:cure, key, value)
 
   defp write_and_track(root, relative, contents) do
     path = Path.join(root, relative)
