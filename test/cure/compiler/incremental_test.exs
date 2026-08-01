@@ -83,6 +83,38 @@ defmodule Cure.Compiler.IncrementalTest do
     fn viaamb() -> Int = Amb.thing()
   """
 
+  # Two-hop fixture. The test above pins the cascade STOPPING at `Mid` when
+  # `Mid`'s own interface survives a `Leaf` change; these pin it CONTINUING when
+  # it does not. `Top` here `use`s only `Mid` and never mentions `Leaf`, so the
+  # only route from a `Leaf` edit to `Top` is through `Mid`'s interface.
+  #
+  # `Mid` omits its return annotation so that `Leaf`'s return type becomes part
+  # of `Mid`'s own inferred surface. That specific edit is required: adding a
+  # constructor to a `Leaf` type that `Mid` merely returns changes `Leaf`'s
+  # interface but NOT `Mid`'s, and the cascade correctly stops -- the same trap
+  # recorded for `@leaf_v2_comment` above, verified the same way.
+  @chain_leaf_int """
+  mod Leaf
+    fn pubval() -> Int = 1
+  """
+
+  @chain_leaf_nat """
+  mod Leaf
+    fn pubval() -> Nat = 1
+  """
+
+  @chain_mid """
+  mod Mid
+    use Leaf
+    fn midval() = pubval()
+  """
+
+  @chain_top """
+  mod Top
+    use Mid
+    fn topval() = midval()
+  """
+
   setup do
     root = Path.join(System.tmp_dir!(), "cure_incr_#{:erlang.unique_integer([:positive])}")
     src = Path.join(root, "src")
@@ -294,6 +326,36 @@ defmodule Cure.Compiler.IncrementalTest do
     assert "Top" in s.compiled
     # Mid does not depend on Amb, so it stays fresh.
     assert "Mid" in s.skipped_fresh
+  end
+
+  test "a change propagates the second hop when the middle module's own interface moves",
+       %{src: src, out: out, write: write} do
+    write.("leaf.cure", @chain_leaf_int)
+    write.("mid.cure", @chain_mid)
+    write.("top.cure", @chain_top)
+
+    assert {:ok, first} = compile(src, out)
+    assert first.errors == []
+    assert "Top" in first.compiled
+
+    write.("leaf.cure", @chain_leaf_nat)
+
+    assert {:ok, s} = compile(src, out)
+    assert s.errors == []
+
+    assert s.rebuild_reasons["Leaf"] == [:source_hash_mismatch]
+    assert s.rebuild_reasons["Mid"] == [:dependency_interface_changed]
+
+    # The point of the test: `Top` never mentions `Leaf`, so it can only be
+    # reached through `Mid`. Under-rebuilding here would publish a `Top` beam
+    # compiled against an interface that no longer exists.
+    assert "Top" in s.compiled,
+           "Mid's own interface moved, so Top -- which use's only Mid -- must rebuild against it"
+
+    assert s.rebuild_reasons["Top"] == [:dependency_interface_changed]
+
+    # Untouched and unrelated: this is a targeted cascade, not a full rebuild.
+    assert "Amb" in s.skipped_fresh
   end
 
   test "closure_deps_map (the driver's dirty graph) is a strict superset of use-only edges" do
