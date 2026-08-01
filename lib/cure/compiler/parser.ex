@@ -9086,6 +9086,17 @@ defmodule Cure.Compiler.Parser do
   defp zero_width_start(%Cure.Diagnostic.Span{} = span),
     do: %{span | end_byte: span.start_byte, end_line: span.start_line, end_column: span.start_column}
 
+  # The observed token can be the EOF token `peek/1` synthesizes once `pos`
+  # runs past the last token; the lexer never authored a span for it. Running
+  # out of input is an ordinary syntax error, so narrowing a missing span has
+  # to yield a missing span rather than raise — `Cure.Diagnostic.Adapter`
+  # already falls back to the caller-supplied span when `:span` is nil, and
+  # the diagnostic still carries the token's line/column. Raising here instead
+  # escapes even the tolerant passes: `Cure.Compiler.Parser.harvest/4` promises
+  # never to raise, and `Cure.Compiler.SourceResolver` harvests every `.cure`
+  # file under the source roots to resolve a module by name.
+  defp zero_width_start(nil), do: nil
+
   # Route the lambda body to one of four shapes: indented block, brace
   # block, end-terminated block, or single expression. The brace and end
   # forms emit a `{:block, [block_shape: :brace | :end, ...], exprs}`
