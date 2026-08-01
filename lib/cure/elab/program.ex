@@ -2310,33 +2310,51 @@ defmodule Cure.Elab.Program do
         source_hash: source_hash
       })
       when is_binary(path) and is_binary(source_hash) do
-    :persistent_term.erase({__MODULE__, :macro_home_env, path})
-    File.rm(macro_home_cache_path(path))
+    # Only a module whose content IS the file at `path` may speak for that path.
+    # Carrying a real path is not evidence of being the module there: a file is
+    # also the documentation home of every fence in its `##` comments, and
+    # `mix cure.check.docs` compiles those fences with `file:` set to the
+    # document they were written in, so a diagnostic anchors to the right line
+    # of the right file. Such a snippet is a different module at a real
+    # module's path.
+    #
+    # Published as canonical it erased that path's macro-home environment,
+    # replaced its interface memo with an entry keyed by the SNIPPET's hash --
+    # which no lookup for the real module can ever match -- and wrote the
+    # snippet's interface into the real module's on-disk artifact. Nothing
+    # served wrong data (every read re-checks the hash), but every stdlib
+    # docstring destroyed the cache this function exists to maintain, and each
+    # one also erased the global interface fingerprint, forcing a rescan of
+    # every compiler BEAM and every stdlib source.
+    if source_hash == current_source_hash(path) do
+      :persistent_term.erase({__MODULE__, :macro_home_env, path})
+      File.rm(macro_home_cache_path(path))
 
-    if stdlib_source_path?(path) do
-      cache_key = {__MODULE__, :module_interface, path}
+      if stdlib_source_path?(path) do
+        cache_key = {__MODULE__, :module_interface, path}
 
-      case :persistent_term.get(cache_key, :missing) do
-        {:cached, previous_hash, _result} when previous_hash != source_hash ->
-          :persistent_term.erase(macro_home_cache_fingerprint_key())
+        case :persistent_term.get(cache_key, :missing) do
+          {:cached, previous_hash, _result} when previous_hash != source_hash ->
+            :persistent_term.erase(macro_home_cache_fingerprint_key())
 
-        _unchanged_or_missing ->
-          :ok
-      end
-
-      result =
-        case read_module_interface_cache(path, interface.module_name, source_hash) do
-          {:ok, %ModuleInterface{interface_hash: hash}} = canonical
-          when hash == interface.interface_hash ->
-            canonical
-
-          _missing_or_semantically_changed ->
-            fresh = {:ok, interface}
-            write_module_interface_cache(path, interface.module_name, source_hash, fresh)
-            fresh
+          _unchanged_or_missing ->
+            :ok
         end
 
-      :persistent_term.put(cache_key, {:cached, source_hash, result})
+        result =
+          case read_module_interface_cache(path, interface.module_name, source_hash) do
+            {:ok, %ModuleInterface{interface_hash: hash}} = canonical
+            when hash == interface.interface_hash ->
+              canonical
+
+            _missing_or_semantically_changed ->
+              fresh = {:ok, interface}
+              write_module_interface_cache(path, interface.module_name, source_hash, fresh)
+              fresh
+          end
+
+        :persistent_term.put(cache_key, {:cached, source_hash, result})
+      end
     end
 
     :ok

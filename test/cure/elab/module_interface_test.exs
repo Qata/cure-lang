@@ -66,7 +66,20 @@ defmodule Cure.Elab.ModuleInterfaceTest do
     path = Path.expand("lib/std/core.cure")
     cache_key = {Program, :module_interface, path}
 
+    # Arrange the artifact this test is about, rather than inheriting one. The
+    # fingerprint covers every stdlib source, so it conservatively -- and
+    # legitimately -- moves during any run that recompiles one, and an artifact
+    # written before such a move no longer validates. A priming call cannot
+    # repair that on its own: served from the in-memory memo, it never touches
+    # disk at all, and the assertion below then measures whatever an earlier
+    # test happened to leave in the OS temporary directory.
+    #
+    # Erasing the memo FIRST forces priming down the artifact path, which either
+    # validates the file already there or recompiles and rewrites it under the
+    # current fingerprint.
+    :persistent_term.erase(cache_key)
     assert {:ok, primed} = Program.module_interface("Std.Core", path)
+
     :persistent_term.erase(cache_key)
     Process.put(:cure_module_loader_observer, self())
 
