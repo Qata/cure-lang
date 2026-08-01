@@ -510,38 +510,64 @@ the macro expands to a lifted module whose behavior declaration and
 callbacks are written in Cure using the checked BEAM algebra. The
 compiler does not recognize an FSM as a special object class.
 
-The current callback floor declares state and an event handler directly:
+`Std.Fsm` declares two `fsm` macros over one callback floor. Both require
+`use Std.Fsm`, and both name the emitted module exactly, so the name must
+carry its `Cure.` prefix.
+
+The structured surface declares the callback state type with `state` and
+maps event constructors to `FsmAction` values under `events`:
 
 ```cure
-fsm TrafficLight state Atom handle_event
-  let pid: Pid(Atom) = beam_ops self
-  :keep_state_and_data
+use Std.Fsm
+
+fsm Cure.Ticker
+  state Int
+  events
+    Tick -> :keep_state_and_data
 ```
+
+`states`, `initial` and `event_type` name the state and event types
+instead of deriving them. `states` requires `initial`:
+
+```cure
+use Std.Fsm
+
+type CounterState = Idle | Counting
+type CounterEvent = Start | Bump
+
+fsm Cure.Counter
+  state Int
+  states CounterState
+  initial Idle
+  event_type CounterEvent
+  events
+    Start -> Next(Counting(), data)
+    Bump  -> Keep(data + 1)
+```
+
+The transition-table surface, `fsm <Name> with <Data>`, is an ordinary
+macro over the same floor. It catalogs the rows into nominal `State` and
+`Event` types and compiles the graph to a total `decide/3`:
+
+```cure
+use Std.Fsm
+
+fsm Cure.TrafficLight with Int
+  Red    --Timer-->     Green
+  Green  --Timer-->     Yellow
+  Yellow --Timer-->     Red
+  *      --Emergency--> Red
+```
+
+Reachability, deadlock freedom, terminal-state validity, duplicate rows,
+and payload consistency are checked during expansion; a violation is a
+compile error. See [`FSM_GUIDE.md`](FSM_GUIDE.md) for the full surface.
 
 The generated module implements the standard `gen_statem` behavior. The
-`state T` clause supplies the callback state type, `init` supplies the
-initial callback result, and `handle_event` supplies the event result.
-Callback bodies may use `with` and `beam_ops` for effectful operations:
-
-```cure
-fsm Counter state Int init
-  %[:ok, :idle, 0]
-
-fsm Counter state Int handle_event
-  with pid: Pid(Atom) <- beam_ops self
-  :keep_state_and_data
-```
-
-The `actor`, `sup`, and `app` macros use the same transparent callback
-and algebra vocabulary. `Std.Fsm` provides the runtime-facing helpers,
-including process startup and event delivery; it is a library API rather
-than compiler-owned FSM knowledge.
-
-Transition tables, payload derivation, lifecycle hooks, and verification
-policies are to be defined as ordinary Cure macros over this callback
-floor. They must expand recursively from the inside out into the same
-checked algebra and BEAM behavior declarations. They are not an alternate
-compiler parser or a hidden FSM lowering path.
+`actor`, `sup`, and `app` macros use the same transparent callback and
+algebra vocabulary. None of this is an alternate compiler parser or a
+hidden FSM lowering path: expansion runs from the inside out into the
+same checked algebra and BEAM behavior declarations as any user macro.
 
 ## Actors and Supervisors (v0.25.0)
 

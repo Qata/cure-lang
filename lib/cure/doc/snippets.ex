@@ -258,7 +258,8 @@ defmodule Cure.Doc.Snippets do
       |> String.split("\n")
       |> Enum.reject(&(String.trim(&1) == "" or String.starts_with?(String.trim(&1), "#")))
 
-    if length(units) > 1 and Enum.all?(units, &(not String.starts_with?(&1, " "))) do
+    if length(units) > 1 and Enum.all?(units, &(not String.starts_with?(&1, " "))) and
+         not Enum.any?(units, &binding?/1) do
       prefix = pad_to_line("mod #{module}", max(line - 1, 1))
 
       functions =
@@ -270,10 +271,17 @@ defmodule Cure.Doc.Snippets do
 
       prefix <> "\n" <> functions <> append_support(support)
     else
+      # One `fn` per line, the branch above, is for a fence listing several
+      # independent example expressions. A `let` rules that reading out: it has
+      # no value without the body that follows it, so a fence containing one is
+      # a single block that happens to be written flush left, and splitting it
+      # strands every binding in a function with no body.
       prefix = pad_to_line("mod #{module}\n  fn snippet() =", max(line - 2, 1))
       prefix <> "\n" <> indent(code, 4) <> append_support(support)
     end
   end
+
+  defp binding?(line), do: Regex.match?(~r/^let\s/, line)
 
   defp extract_lines([], _path, nil, acc), do: acc
   defp extract_lines([], path, open, _acc), do: raise("unclosed Markdown fence in #{path}:#{open.line - 1}")
@@ -327,7 +335,20 @@ defmodule Cure.Doc.Snippets do
 
   defp cure_info?(info), do: Regex.match?(~r/^cure(?:\s|,|$)/, info)
 
-  defp complete_module?(code), do: Regex.match?(~r/^\s*(?:@\w+(?:\([^)]*\))?\s+)*mod\s+/, code)
+  defp complete_module?(code) do
+    Regex.match?(~r/^\s*(?:@\w+(?:\([^)]*\))?\s+)*mod\s+/, code) or whole_unit?(code)
+  end
+
+  # A fence that opens with `use` and then declares something at the top level —
+  # a `mod`, or one of the concurrency containers, which are top-level forms in
+  # their own right — is already a complete compilation unit. Wrapping it in the
+  # synthetic `mod DocSnippet_…` would nest those declarations one level down,
+  # and a nested module cannot be named by its siblings: every qualified call
+  # between them fails with `unknown_global`, which is exactly the shape a doc
+  # page uses to show client code driving an `fsm`.
+  defp whole_unit?(code) do
+    Regex.match?(~r/\A\s*use\s+\S/, code) and Regex.match?(~r/^(?:mod|fsm|actor|sup|app)\s+\S/m, code)
+  end
 
   defp snippet_kind(info, code) do
     cond do

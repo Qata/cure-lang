@@ -131,6 +131,40 @@ defmodule Cure.Doc.SnippetsTest do
     refute source =~ "fn snippet()"
   end
 
+  # A fence of unindented lines is ambiguous: it is either several independent
+  # example expressions, or one block that happens to start flush left. The
+  # `let` tells them apart -- a `let` has no value without the body that follows
+  # it, so a fence containing one cannot be a list of independent expressions.
+  test "several independent expressions each become their own function" do
+    snippet = %Snippets{
+      path: "guide.md",
+      line: 3,
+      info: "cure expr",
+      code: "1 + 1\n2 + 2"
+    }
+
+    source = Snippets.source(snippet)
+
+    assert source =~ "fn snippet_1() = 1 + 1"
+    assert source =~ "fn snippet_2() = 2 + 2"
+  end
+
+  test "a let sequence is one expression body rather than one function per line" do
+    snippet = %Snippets{
+      path: "guide.md",
+      line: 3,
+      info: "cure expr",
+      code: "let x = 40\nlet y = 2\nx + y"
+    }
+
+    source = Snippets.source(snippet)
+
+    refute source =~ "fn snippet_1() = let",
+           "a `let` is not a whole function body; splitting the block strands it without one"
+
+    assert {:ok, _module, []} = Snippets.compile(snippet)
+  end
+
   test "compiles complete modules, declarations, and expressions" do
     snippets = [
       %Snippets{path: "one.md", line: 1, info: "cure", code: "mod Complete\n  fn value() = 1"},
@@ -157,5 +191,27 @@ defmodule Cure.Doc.SnippetsTest do
              "    documented_helper(42)"
 
     assert {:ok, _module, []} = Snippets.compile(snippet, support: support)
+  end
+
+  # A fence opening with `use` and then declaring top-level forms is a whole
+  # compilation unit already. Wrapping it would nest those declarations inside
+  # the synthetic module, where siblings can no longer name each other — which
+  # is exactly how a doc page shows client code driving an `fsm`.
+  test "a fence that opens with use and declares top-level forms is left unwrapped" do
+    snippet = %Snippets{
+      path: "unit.md",
+      line: 1,
+      info: "cure",
+      code: "use Std.List\n\nmod Doc.Lib\n  fn f() -> Int = 1\n\nmod Doc.Driver\n  fn run() -> Int = Doc.Lib.f()"
+    }
+
+    refute Snippets.source(snippet, "") =~ "DocSnippet_"
+    assert {:ok, _module, []} = Snippets.compile(snippet)
+  end
+
+  test "a fence that opens with use but only continues with expressions is still wrapped" do
+    snippet = %Snippets{path: "expr.md", line: 1, info: "cure", code: "use Std.List\n\nfn f() -> Int = 1"}
+
+    assert Snippets.source(snippet, "") =~ "DocSnippet_"
   end
 end

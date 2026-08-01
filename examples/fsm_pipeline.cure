@@ -1,4 +1,20 @@
-# Transparent FSM example. Transition algebra is ordinary Cure code.
+# Transparent FSM example: the structured surface.
+#
+# Where the transition table describes a graph, this surface describes what each
+# event *does*. Event constructors map to checked `FsmAction` values — `Keep`,
+# `Next`, `Stop` — and the transition algebra is ordinary Cure code.
 
-fsm Cure.Pipeline with 0
-  fn initial_state() -> Atom = :idle
+use Std.Fsm
+
+type PipelineState = Idle | Running | Finished
+type PipelineEvent = Start | Step | Finish
+
+fsm Cure.Pipeline
+  state Int
+  states PipelineState
+  initial Idle
+  event_type PipelineEvent
+  events
+    Start  -> Next(Running(), 0)
+    Step   -> Keep(data + 1)
+    Finish -> Next(Finished(), data)

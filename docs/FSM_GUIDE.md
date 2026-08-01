@@ -9,6 +9,8 @@ not contain a separate FSM parser or object class.
 The preferred surface is the transition graph itself:
 
 ```cure
+use Std.Fsm
+
 fsm Cure.Turnstile with Int
   Locked --Coin--> Unlocked
     update data + 1
@@ -31,6 +33,8 @@ Record data uses Cure's ordinary typed record-update syntax. Fields not named
 after the bar are preserved:
 
 ```cure
+use Std.Fsm
+
 rec TurnstileData
   coins: Int
   pushes: Int
@@ -59,6 +63,8 @@ Transition rows are parsed by a grammar production declared in `Std.Fsm`, not
 by a compiler-owned FSM parser:
 
 ```cure
+use Std.Fsm
+
 fsm Cure.Light with Int
   Red --Timer--> Green
   Green --Timer--> Yellow
@@ -72,25 +78,32 @@ at runtime.
 
 ## Runtime
 
-The generated module is an ordinary BEAM module and can be started through its
-checked helper:
+The generated module is an ordinary BEAM module. It exports both entry points a
+`gen_statem` needs: `start_link/1` for a supervisor, and `start/1` for a typed
+handle. Events go through `send/2`, and the event constructors are the ones
+derived from the table.
 
 ```cure
-mod Cure.Driver
-  use Std.Fsm
+use Std.Fsm
 
-  fn start() -> Effect(Tuple) =
-    beam_ops start_statem :"Cure.TrafficLight" [0]
+fsm Cure.TrafficLight with Int
+  Red    --Timer--> Green
+  Green  --Timer--> Yellow
+  Yellow --Timer--> Red
+
+mod TrafficLight.Driver
+  fn boot() -> Effect(Tuple) = Cure.TrafficLight.start_link(0)
+
+  fn run() -> Unit =
+    match Cure.TrafficLight.start(0)
+      Started(machine) -> Cure.TrafficLight.send(machine, Timer())
+      _                -> unit()
 ```
 
-For runtime registry and inspection helpers, use `Std.Fsm`:
-
-```cure
-let pid = Std.Fsm.spawn(:"Cure.TrafficLight")
-Std.Fsm.send(pid, :tick)
-let alive = Std.Fsm.is_alive(pid)
-Std.Fsm.stop(pid)
-```
+`start/1` returns a `Std.Otp.StartResult(Handle)`, so the failure cases are in
+the type rather than in a tuple you have to remember to check. There is no FSM
+registry or process-inspection layer: a running machine is reached through its
+handle, like any other OTP process.
 
 ## Transparency
 

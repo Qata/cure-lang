@@ -1,4 +1,19 @@
-# Transparent FSM example. State and event vocabularies are user-defined.
+# Transparent FSM example: the transition-table surface.
+#
+# The macro derives the `State` and `Event` types from the rows themselves and
+# verifies the graph while expanding — every state reachable, no non-terminal
+# dead end, no duplicate row. `with Int` is the machine's data type.
 
-fsm Cure.TrafficLight
-  fn initial_state() -> Atom = :red
+use Std.Fsm
+
+fsm Cure.TrafficLight with Int
+  Red    --Timer-->     Green
+  Green  --Timer-->     Yellow
+  Yellow --Timer-->     Red
+  *      --Emergency--> Red
+
+mod TrafficLightDemo
+  fn run() -> Unit =
+    match Cure.TrafficLight.start(0)
+      Started(machine) -> Cure.TrafficLight.send(machine, Timer())
+      _                -> unit()

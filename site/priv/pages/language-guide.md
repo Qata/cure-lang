@@ -760,14 +760,19 @@ decorator placement, and renamed modules to the current surface.
 
 ## FSMs (Finite State Machines)
 
-FSMs are first-class language constructs:
+`fsm` is an auto-preluded macro from `Std.Fsm`. A transition table derives its
+state and event types from the rows themselves; states and events are
+capitalised constructors, and the machine's name is written with its full
+`Cure.` prefix.
 
 ```cure
-fsm TrafficLight
-  Red    --timer-->     Green
-  Green  --timer-->     Yellow
-  Yellow --timer-->     Red
-  *      --emergency--> Red
+use Std.Fsm
+
+fsm Cure.TrafficLight with Int
+  Red    --Timer-->     Green
+  Green  --Timer-->     Yellow
+  Yellow --Timer-->     Red
+  *      --Emergency--> Red
 ```
 
 See the [Finite State Machines](/pages/finite-state-machines) page for the full guide.
