@@ -3,6 +3,38 @@ defmodule Cure.CLITest do
 
   import ExUnit.CaptureIO
 
+  # Most of what the CLI does it does to the working directory, and the working
+  # directory belongs to the OS process, not to a test. A test that leaves it
+  # somewhere it should not be breaks whatever runs next, so fail the module
+  # that did it rather than the bystander.
+  setup_all do
+    before = File.cwd!()
+    on_exit(fn -> assert File.cwd() == {:ok, before} end)
+    :ok
+  end
+
+  # Run `fun` with `dir` as the working directory, restoring it afterwards.
+  #
+  # `File.cd!/2` restores in an `after`, which does not run when ExUnit kills a
+  # timed-out test process. The directory these tests cd into is a temporary one
+  # their own `on_exit` then deletes, so a single timeout leaves the whole VM
+  # with no working directory at all and every later test fails on
+  # `File.cwd!/0` -- far from the timeout that caused it, and looking nothing
+  # like it. `on_exit` runs after the test process is gone, so registering the
+  # restore there survives the kill; the `after` still restores promptly for the
+  # rest of a test that completes normally.
+  defp in_dir(dir, fun) do
+    previous_cwd = File.cwd!()
+    on_exit(fn -> File.cd!(previous_cwd) end)
+    File.cd!(dir)
+
+    try do
+      fun.()
+    after
+      File.cd!(previous_cwd)
+    end
+  end
+
   describe "cure version" do
     test "prints version" do
       output = capture_io(fn -> Cure.CLI.main(["version"]) end)
@@ -170,7 +202,7 @@ defmodule Cure.CLITest do
       end)
 
       output =
-        File.cd!(project_root, fn ->
+        in_dir(project_root, fn ->
           capture_io(fn ->
             Cure.CLI.main(["compile", "lib/main.cure", "--output-dir", output_dir])
           end)
@@ -670,7 +702,7 @@ defmodule Cure.CLITest do
 
       output =
         capture_io(fn ->
-          File.cd!(root, fn -> Cure.CLI.main(["test"]) end)
+          in_dir(root, fn -> Cure.CLI.main(["test"]) end)
         end)
 
       assert output =~ "No runnable test files found"
@@ -695,7 +727,7 @@ defmodule Cure.CLITest do
 
       stderr =
         capture_io(:stderr, fn ->
-          File.cd!(root, fn ->
+          in_dir(root, fn ->
             assert catch_exit(Cure.CLI.main(["test"])) == {:shutdown, 1}
           end)
         end)
@@ -726,7 +758,7 @@ defmodule Cure.CLITest do
 
       stderr =
         capture_io(:stderr, fn ->
-          File.cd!(root, fn ->
+          in_dir(root, fn ->
             assert catch_exit(Cure.CLI.main(["test", "--doctests"])) == {:shutdown, 1}
           end)
         end)
