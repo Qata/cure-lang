@@ -9,11 +9,15 @@ defmodule Cure.Elab.RefinementSugarTest do
   # through unchanged. This is level 1 of the §3a sugar.
 
   # Extract the single-parameter function's domain (the refinement's Core form).
-  defp param_type(env, needle) do
+  # Match the qualified key's final segment exactly: `env.defs` also carries the
+  # ambient prelude slice, and a substring match on "ident" would just as happily
+  # find `Std.Core#identity` (whose domain is a plain type variable, not the
+  # Sigma under test) depending on map ordering.
+  defp param_type(env, name) do
     key =
       env.defs
       |> Map.keys()
-      |> Enum.find(fn k -> k |> to_string() |> String.contains?(needle) end)
+      |> Enum.find(fn k -> k |> to_string() |> String.ends_with?("#" <> name) end)
 
     {:pi, _grade, domain, _codomain} = Map.get(env.defs, key).type
     domain

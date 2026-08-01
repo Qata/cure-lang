@@ -2864,25 +2864,7 @@ defmodule Cure.Compiler.Parser do
         # definition.
         {doc_text, state} = collect_all_doc_comments(state)
         state = skip_newlines(state)
-
-        case peek(state) do
-          %Token{type: type} when type in [:eof, :dedent] ->
-            {Enum.reverse(acc), state}
-
-          _ ->
-            state = mark_seen_if_stmt(state)
-            prev_errors = length(state.errors)
-            {expr, state} = parse_expr(state, 0)
-            expr = attach_doc(expr, doc_text)
-
-            state =
-              if length(state.errors) > prev_errors,
-                do: synchronize_to_statement(state),
-                else: state
-
-            state = skip_newlines(state)
-            parse_program(state, [expr | acc])
-        end
+        parse_documented(state, acc, doc_text)
 
       _ ->
         state = mark_seen_if_stmt(state)
@@ -2908,6 +2890,44 @@ defmodule Cure.Compiler.Parser do
         end
 
         parse_program(state, [expr | acc])
+    end
+  end
+
+  # Parse the statement that a leading `##` block documents.
+  #
+  # A standalone decorator node — `{:decorator, …}` when it carries arguments,
+  # `{:property, …}` when it is argless like `@prelude` — is not a documentable
+  # declaration, so the doc passes OVER it and lands on the declaration that
+  # follows. Only decorators
+  # that attach to what comes next fold into that node (`@extern fn`, `@prelude
+  # typealias`, `@group(:g) mod`); the rest — notably `@prelude` above `mod`, and
+  # `@group` when another decorator stands between it and `mod` — stay siblings of
+  # the container, which is how whole-module prelude membership is discovered
+  # (`Cure.Elab.Program.module_prelude_decorated?/1` reads the sibling form).
+  # Attaching the doc to that sibling would silently strip the module's
+  # documentation, which is exactly `lib/std/core.cure`'s shape: its `##` block
+  # sits above `@group(:core)` / `@prelude`.
+  defp parse_documented(state, acc, doc_text) do
+    case peek(state) do
+      %Token{type: type} when type in [:eof, :dedent] ->
+        {Enum.reverse(acc), state}
+
+      _ ->
+        state = mark_seen_if_stmt(state)
+        prev_errors = length(state.errors)
+        {expr, state} = parse_expr(state, 0)
+        errored? = length(state.errors) > prev_errors
+
+        state = if errored?, do: synchronize_to_statement(state), else: state
+        state = skip_newlines(state)
+
+        case expr do
+          {tag, _meta, _payload} when tag in [:decorator, :property] and not errored? ->
+            parse_documented(state, [expr | acc], doc_text)
+
+          _ ->
+            parse_program(state, [attach_doc(expr, doc_text) | acc])
+        end
     end
   end
 

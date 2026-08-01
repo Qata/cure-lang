@@ -1,17 +1,16 @@
 defmodule Cure.Std.OperatorBootstrapTest do
   @moduledoc """
-  Phase-3 bootstrap gate: the operator-defining stdlib modules must parse
-  WITHOUT relying, in a body, on an infix/prefix operator they themselves define.
+  Phase-3 bootstrap gate: `operators.cure` must parse WITHOUT relying, in a body,
+  on an infix/prefix operator — it is the source the built-in operator table is
+  bootstrapped from, so it is parsed before that table exists.
 
-  These five modules are what *populates* the compiler's built-in operator table:
-  `operators.cure` declares every precedence group + operator fixity, and the
-  interface modules (`equatable`/`comparable`/`arithmetic`/`bool`) supply the
-  backing methods. If any of them used, in a body, an infix operator it itself
-  defines, the parser could not bootstrap — it would need the very table these
-  modules produce before they finish parsing. The discipline that keeps this
-  acyclic is that they call their operators only in **backtick prefix-call form**
-  (`` `==`(a, b) ``), via `Std.Builtin.<op>` / `Std.Bool.<op>`, or via
-  `match`/`pickup` — never as an infix or prefix operator expression.
+  Fixity comes from `operators.cure` alone: it declares every precedence group
+  and operator fixity. The interface modules (`equatable`/`comparable`/
+  `arithmetic`/`bool`) supply the backing *methods*, and parsing needs methods
+  from no one — by the time they are parsed the table is already baked. So they
+  are under no bootstrap obligation and may use the operators they define as
+  ordinary infix expressions, exactly as a Swift module may use an operator it
+  declares. `Std.Comparable.min` is written `x <= y`, not `` `<=`(x, y) ``.
 
   ## What "against an empty fixity table" means here, honestly
 
@@ -37,20 +36,19 @@ defmodule Cure.Std.OperatorBootstrapTest do
   against the FULL built-in table. (The bake seeds the empty base directly rather
   than through the `:cure_building_fixity_table` flag, but the obligation is the
   same, and this test injects that empty base via the flag.) So the only module
-  with a hard empty-table obligation is `operators.cure`, and it is exercised
-  genuinely below. The property that
-  matters for the other four — "no body uses an operator it itself defines" — is
-  verified structurally: parse them through the real default pipeline and assert
-  their AST contains ZERO infix/prefix operator nodes (`:binary_op`/`:unary_op`).
-  Every operator use survives as a `:function_call` (backtick form) or a
-  `Std.Builtin.*` call, never as an operator node, which is exactly the acyclic
-  discipline the bootstrap requires.
+  with a hard empty-table obligation is `operators.cure`, and both tests below
+  scope to it: it must parse with no table, and its AST must contain ZERO
+  infix/prefix operator nodes (`:binary_op`/`:unary_op`), since an operator
+  expression there would need the very table it is being read to produce.
   """
   use ExUnit.Case, async: false
 
   alias Cure.Compiler.{Lexer, Parser}
 
-  @operator_defining_modules ~w(operators.cure equatable.cure comparable.cure arithmetic.cure bool.cure)
+  # Only `operators.cure` is parsed before the fixity table exists, so it is the
+  # only module that cannot use an operator expression. The interface modules
+  # that supply the backing methods are parsed against the full table.
+  @operator_defining_modules ~w(operators.cure)
 
   defp std_source(file), do: File.read!(Path.join([File.cwd!(), "lib", "std", file]))
 
@@ -93,7 +91,7 @@ defmodule Cure.Std.OperatorBootstrapTest do
     end
   end
 
-  test "operator-defining stdlib modules use no infix/prefix operator in any body" do
+  test "operators.cure uses no infix/prefix operator in any body" do
     for f <- @operator_defining_modules do
       assert {:ok, ast} = parse_default(std_source(f), f), "#{f} must parse"
 
@@ -101,10 +99,20 @@ defmodule Cure.Std.OperatorBootstrapTest do
 
       assert nodes == [],
              "#{f} uses an infix/prefix operator in a body (found #{length(nodes)} operator " <>
-               "node(s): #{inspect(nodes, limit: 5)}). An operator-defining bootstrap module " <>
-               "must call its operators only in backtick prefix-call form (`` `==`(a, b) ``), " <>
+               "node(s): #{inspect(nodes, limit: 5)}). It is parsed to BUILD the fixity table, " <>
+               "so it must call operators only in backtick prefix-call form (`` `==`(a, b) ``), " <>
                "via `Std.Builtin.<op>`/`Std.Bool.<op>`, or via `match`/`pickup` — never as an " <>
-               "operator expression that would need the very fixity table it helps define."
+               "operator expression that would need the very fixity table it defines."
     end
+  end
+
+  # The converse of the gate above: modules that merely supply an operator's
+  # backing methods are parsed against the full table, so an infix use in one of
+  # their bodies is legal. `Std.Comparable` defines `<=` and `min` uses it.
+  test "a module may use infix an operator whose method it defines" do
+    assert {:ok, ast} = parse_default(std_source("comparable.cure"), "comparable.cure")
+
+    assert operator_nodes(ast) != [],
+           "comparable.cure should parse its infix operator uses as operator nodes"
   end
 end

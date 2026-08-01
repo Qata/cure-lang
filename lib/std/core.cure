@@ -32,8 +32,8 @@
 # Group tag consumed by `Cure.Stdlib.Preload`.
 
 @group(:core)
+@prelude
 mod Std.Core
-  use Std.Comparable
   use Std.Result
   use Std.Option
 
@@ -48,6 +48,8 @@ mod Std.Core
   ## ## Examples
   ##
   ## ```cure
+  ## use Std.Core
+  ##
   ## let add1 = fn(x: Int) -> Int = x + 1
   ## let neg  = fn(x: Int) -> Int = 0 - x
   ## compose(neg, add1)(3)             # => -4
@@ -93,33 +95,6 @@ mod Std.Core
       x    -> bool_not(y)
       else -> y
 
-  # -- Comparison operations --------------------------------------------------
-  #
-  # There are no `eq`/`ne`/`lt`/`le`/`gt`/`ge` named helpers: the operators
-  # `==`/`!=`/`<`/`<=`/`>`/`>=` are the surface. Equality/inequality are
-  # polymorphic (structural), and the ordering operators resolve through the
-  # `Std.Comparable` interface, so `min`/`max`/`clamp` carry a
-  # `requires Comparable(t)` constraint that threads the ordering dictionary.
-
-  ## Pointwise minimum under the `Comparable` ordering.
-  fn min(x: t, y: t) -> t requires Comparable(t) =
-    pickup
-      x <= y -> x
-      else   -> y
-
-  ## Pointwise maximum under the `Comparable` ordering.
-  fn max(x: t, y: t) -> t requires Comparable(t) =
-    pickup
-      x >= y -> x
-      else   -> y
-
-  ## Clamp `value` into the inclusive range `[lo, hi]`.
-  fn clamp(value: t, lo: t, hi: t) -> t requires Comparable(t) =
-    pickup
-      value < lo -> lo
-      value > hi -> hi
-      else       -> value
-
   # -- Result type operations -------------------------------------------------
   # Result is represented as Ok(value) -> {:ok, value}
   #                          Error(reason) -> {:error, reason}
@@ -159,6 +134,8 @@ mod Std.Core
   ## ## Examples
   ##
   ## ```cure
+  ## use Std.Core
+  ##
   ## map_ok(ok(3),     fn(x) -> x * x) # => Ok(9)
   ## map_ok(error(:x), fn(x) -> x * x) # => Error(:x)
   ## ```
@@ -179,6 +156,8 @@ mod Std.Core
   ## ## Examples
   ##
   ## ```cure
+  ## use Std.Core
+  ##
   ## let parse_int = fn(s: String) -> Result(Int, Atom) = ok(Std.String.to_int(s))
   ## and_then(ok("42"), parse_int)     # => Ok(42)
   ## and_then(error(:x), parse_int)    # => Error(:x)
@@ -228,6 +207,8 @@ mod Std.Core
   ## ## Examples
   ##
   ## ```cure
+  ## use Std.Core
+  ##
   ## map_option(some(3), fn(x) -> x * 2)  # => Some(6)
   ## map_option(none(),  fn(x) -> x * 2)  # => None()
   ## ```

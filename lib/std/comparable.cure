@@ -109,3 +109,28 @@ mod Std.Comparable
       `<`(a, b) -> LessThan
       `<`(b, a) -> GreaterThan
       else      -> EqualTo
+
+  # `min`/`max`/`clamp` live here rather than in `Std.Core` because they are
+  # ordering operations: each carries a `requires Comparable(t)` constraint that
+  # threads this interface's dictionary. Keeping them here also keeps `Std.Core`
+  # free of a `use Std.Comparable`, which would otherwise close a cycle now that
+  # both modules are whole-module `@prelude` providers.
+
+  ## Pointwise minimum under the `Comparable` ordering.
+  fn min(x: t, y: t) -> t requires Comparable(t) =
+    pickup
+      x <= y -> x
+      else   -> y
+
+  ## Pointwise maximum under the `Comparable` ordering.
+  fn max(x: t, y: t) -> t requires Comparable(t) =
+    pickup
+      x >= y -> x
+      else   -> y
+
+  ## Clamp `value` into the inclusive range `[lo, hi]`.
+  fn clamp(value: t, lo: t, hi: t) -> t requires Comparable(t) =
+    pickup
+      value < lo -> lo
+      value > hi -> hi
+      else       -> value

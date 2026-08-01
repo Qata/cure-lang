@@ -418,7 +418,16 @@ defmodule Cure.Elab.Elaborator do
       # A call to a `where`-constrained global resolves and appends the dictionary
       # the callee expects before the ordinary application machinery runs, so the
       # dictionary parameter is supplied at every concrete call site.
-      Cure.Elab.Resolve.constrained?(env, atom) ->
+      #
+      # The `constrained` index is keyed by BARE spelling, so this fast path must
+      # also confirm the bare name still names one definition. When two modules
+      # provide it — an ambient `Std.Comparable#max` and an explicitly imported
+      # `Std.Math#max` — `resolve_key` reports the spelling unresolved and
+      # `Env.get_def` is nil; taking the fast path anyway would hand that
+      # unresolvable bare atom to the applicator, which assumes a def. Falling
+      # through instead reaches the overload path, where local-then-direct
+      # precedence lets the explicit `use` win.
+      Cure.Elab.Resolve.constrained?(env, atom) and Env.get_def(env, atom) != nil ->
         Cure.Elab.Resolve.constrained_call(env, atom, args, names, ctx)
 
       name == "reflexive" and length(args) == 1 ->

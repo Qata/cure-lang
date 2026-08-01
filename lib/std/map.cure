@@ -18,6 +18,8 @@ mod Std.Map
   ## ```
   ##
   ## ```cure
+  ## use Std.Map
+  ##
   ## # Right-biased merge: values in the second map win.
   ## let a = from_list([%[:x, 1], %[:y, 2]])
   ## let b = from_list([%[:y, 20], %[:z, 30]])
