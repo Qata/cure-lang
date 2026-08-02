@@ -47,7 +47,8 @@ defmodule CureSite.Stdlib do
     {"Text & Regex", ["Std.String", "Std.Regex"]},
     {"Numeric", ["Std.Math"]},
     {"I/O & System", ["Std.Io", "Std.System", "Std.Time"]},
-    {"Concurrency", ["Std.Actor", "Std.Process", "Std.Supervisor", "Std.Fsm", "Std.App", "Std.CRDT"]},
+    {"Concurrency",
+     ["Std.Actor", "Std.Process", "Std.Supervisor", "Std.Fsm", "Std.App", "Std.CRDT"]},
     {"Error & Option", ["Std.Option", "Std.Result"]},
     {"Testing & Proofs", ["Std.Test", "Std.Gen", "Std.Proof"]},
     {"Network", ["Std.Http", "Std.Json"]}

@@ -20,7 +20,8 @@ defmodule CureSiteWeb.StdlibHTML do
 
     ret =
       if f.return_type,
-        do: ~s| -&gt; <span class="text-emerald-600 dark:text-emerald-400">#{escape(f.return_type)}</span>|,
+        do:
+          ~s| -&gt; <span class="text-emerald-600 dark:text-emerald-400">#{escape(f.return_type)}</span>|,
         else: ""
 
     effects =

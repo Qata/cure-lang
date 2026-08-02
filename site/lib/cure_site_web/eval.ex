@@ -114,54 +114,16 @@ defmodule CureSiteWeb.Eval do
   end
 
   defp compile_and_run(source) do
-    with {:ok, tokens} <-
-           Cure.Compiler.Lexer.tokenize(source, emit_events: false),
-         {:ok, ast} <-
-           Cure.Compiler.Parser.parse(tokens, emit_events: false),
-         {:ok, forms} <-
-           Cure.Compiler.Codegen.compile_module(ast, emit_events: false),
-         {:ok, module} <-
-           load_module(forms) do
+    with {:ok, module} <-
+           Cure.Compiler.compile_and_load(source,
+             file: "playground.cure",
+             emit_events: false
+           ) do
       run_main(module)
     else
       {:error, reason} ->
         {:error, format_compile_error(reason)}
     end
-  end
-
-  # Plain `mod` / `proof` containers come back as a list of Erlang abstract
-  # forms -- we need to run them through `:compile.forms/2` and load the
-  # resulting BEAM binary.
-  defp load_module(forms) when is_list(forms) do
-    # `:compile.forms/2` can return either `{:ok, Mod, Bin}` (no warnings) or
-    # `{:ok, Mod, Bin, Warnings}` (with `:return_warnings`). We handle both.
-    case :compile.forms(forms, [:return_errors, :return_warnings]) do
-      {:ok, mod_atom, bytecode, _warnings} ->
-        load_bytecode(mod_atom, bytecode)
-
-      {:ok, mod_atom, bytecode} ->
-        load_bytecode(mod_atom, bytecode)
-
-      {:error, errors, _warnings} ->
-        {:error, render_operational("BEAM compiler", errors)}
-
-      :error ->
-        {:error, render_operational("BEAM compiler", :unknown_error)}
-    end
-  end
-
-  # Eager-loaded containers (callback-mode FSMs, typed actors, supervisors,
-  # OTP applications) are already compiled and loaded by `Cure.Compiler.Codegen`
-  # -- we just need to unwrap the module atom.
-  defp load_module({:callback_mode, mod_atom}), do: {:ok, mod_atom}
-  defp load_module({:actor, mod_atom}), do: {:ok, mod_atom}
-  defp load_module({:supervisor, mod_atom}), do: {:ok, mod_atom}
-  defp load_module({:app, mod_atom}), do: {:ok, mod_atom}
-
-  defp load_bytecode(mod_atom, bytecode) do
-    :code.purge(mod_atom)
-    {:module, ^mod_atom} = :code.load_binary(mod_atom, ~c"playground", bytecode)
-    {:ok, mod_atom}
   end
 
   defp run_main(module) do
@@ -179,8 +141,12 @@ defmodule CureSiteWeb.Eval do
   defp format_compile_error(reason), do: Cure.Diagnostic.Host.render(reason, "playground.cure")
 
   defp format_exit_reason(:normal), do: {:ok, "", ":ok"}
-  defp format_exit_reason(:killed), do: {:error, render_operational("playground evaluation", :killed)}
-  defp format_exit_reason(reason), do: {:error, render_operational("playground evaluation", reason)}
+
+  defp format_exit_reason(:killed),
+    do: {:error, render_operational("playground evaluation", :killed)}
+
+  defp format_exit_reason(reason),
+    do: {:error, render_operational("playground evaluation", reason)}
 
   defp render_exception(exception, stacktrace) do
     exception
