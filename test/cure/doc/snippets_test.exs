@@ -214,4 +214,22 @@ defmodule Cure.Doc.SnippetsTest do
 
     assert Snippets.source(snippet, "") =~ "DocSnippet_"
   end
+
+  # The classifier reads the fence's first meaningful line to choose between a
+  # module body and a `fn snippet() =` expression body. A declaration head it
+  # does not recognise silently picks the expression body, where a declaration
+  # cannot appear — the fence then fails on the shape of the wrapper rather than
+  # on anything the page wrote.
+  for {head, code} <- [
+        {"rec", "rec Point\n  x: Int\n  y: Int\n\nfn origin() -> Point = Point{x: 0, y: 0}"},
+        {"opaque", "opaque type Handle\n\nfn describe(_h: Handle) -> Atom = :handle"},
+        {"local", "local fn helper() -> Int = 1\n\nfn call() -> Int = helper()"}
+      ] do
+    test "a fence headed by `#{head}` is compiled as declarations" do
+      snippet = %Snippets{path: "decl.md", line: 1, info: "cure", code: unquote(code)}
+
+      refute Snippets.source(snippet, "") =~ "fn snippet()"
+      assert {:ok, _module, []} = Snippets.compile(snippet)
+    end
+  end
 end

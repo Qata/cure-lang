@@ -1,59 +1,58 @@
 # Applications And Releases
 
-`app` is an auto-preluded standard-library macro that creates a transparent
-lifted `Application` module. Project metadata remains in `Cure.toml`; startup,
-shutdown, and phase callbacks are ordinary checked Cure declarations.
+`app` is a standard-library macro that creates a transparent lifted
+`Application` module. It comes from `Std.App`, which a unit declaring an
+application must `use` — nothing here is ambient. Project metadata stays in
+`Cure.toml`; the macro's only job is to wire the OTP application callbacks to a
+root supervisor. The same module also carries the typed run-time surface for
+reaching a running application.
 
-## Basic Application
+## Declaring An Application
 
-A phase-only application can be declared directly:
-
-```cure
-app Cure.Demo
-```
-
-The generated module has checked `start/2` and `stop/1` callbacks. Callback
-results use erased `Effect(...)` types, so pure results and effectful bodies
-share one elaboration path.
-
-## Root Supervisor
-
-Use the root form to start a supervisor through the checked BEAM algebra:
+An application is its name and the supervisor it starts. `root` is not
+optional — an application that starts nothing is an application the macro has
+no reason to generate:
 
 ```cure
-app Cure.Demo root :"Cure.Root"
+use Std.App
+
+app Demo
+  root Root
 ```
 
-An initial payload can be supplied:
+The root is named the way any module is named, and the supervisor it refers to
+is an ordinary `sup` declared alongside it:
 
 ```cure
-app Cure.Demo root :"Cure.Root" with 0
+use Std.App
+use Std.Supervisor
+
+sup Root
+  strategy OneForOne
+  children []
+
+app Demo
+  root Root
 ```
 
-The generated `start/2` calls `beam_ops start_supervisor` and preserves the
-ordinary OTP startup tuple after effect erasure. Root values are code, so a
-qualified module atom or another transparent expression can be supplied.
+## What The Macro Generates
 
-## One Or More Phases
+The expansion is a lifted module carrying the three callbacks OTP asks an
+application for:
 
-A single delayed phase body can sequence operations:
+- `start/2` — calls `Std.Otp.start_supervisor` on the declared root and
+  returns `Effect(Tuple)`, the ordinary OTP startup tuple after effect erasure.
+- `stop/1` — returns `:ok`.
+- `start_phase/3` — returns `:ok` for every phase.
 
-```cure
-app Cure.Phased phase :warm_cache
-  let pid: Pid(Atom) = beam_ops self
-  :ok
-```
+Callback results use erased `Effect(...)` types, so pure results and effectful
+bodies share one elaboration path.
 
-Multiple pure phase results use the transparent `phases` form. Entries are a
-flat list of alternating phase and result atoms:
-
-```cure
-app Cure.MultiPhase phases [:warm_cache, :warmed, :ready, :started]
-```
-
-Unknown phases return `:ok`, matching the ordinary application callback
-convention. Richer effectful phase bodies use the single `phase` form and can
-be composed by a user-defined macro over the same checked primitives.
+Start phases are therefore a manifest-level feature, not a macro-level one:
+`[application].start_phases` in `Cure.toml` is what puts them in the generated
+`.app` resource, and the generated `start_phase/3` accepts each of them. An
+application that needs real work in a phase overrides that callback in its own
+module rather than declaring it on the `app` line.
 
 ## Project Metadata
 
@@ -84,17 +83,67 @@ enforces the single-application invariant, checks its name against
 `[application].name`, and emits the `<name>.app` resource. Release generation
 uses the same compiled modules and manifest data.
 
-## Runtime API
+## Reaching The Application At Run Time
 
-Use `Std.App` for application management and environment access:
+`Std.App` is not only the macro. The same module wraps OTP's application
+controller in typed functions, so starting an application and reading its
+environment are ordinary Cure calls. Each one touches VM-global state, so each
+returns `Effect(...)`.
+
+Starting answers a closed type rather than an OTP tuple:
 
 ```cure
-mod Cure.Control
-  use Std.App
+use Std.App
 
-  fn boot() -> Atom = Std.App.ensure_all_started(:demo)
-  fn port() -> Int = Std.App.get_env_or(:demo, :port, 4000)
+fn boot() -> Effect(AppStart) = ensure_all_started(:demo)
+
+fn running() -> Effect(Bool) =
+  let outcome = boot()
+  match outcome
+    AppStarted()     -> true
+    AlreadyStarted() -> true
+    AppStartFailed() -> false
 ```
+
+`AlreadyStarted` is not a failure — OTP reports it as success with an empty list
+of newly started applications, and a caller that only asks "is it up" can treat
+it exactly like `AppStarted`. The failure case carries no reason, because the
+reason OTP supplies is an arbitrary term and typing it as an atom would be a lie
+at the boundary. `stop/1` mirrors this: `false` means the application was not
+running to begin with.
+
+Environment values arrive as `Option`, since a key that was never set is a real
+answer and not an error:
+
+```cure
+use Std.App
+use Std.Beam
+use Std.Option
+
+fn maybe_port() -> Effect(Option(BeamTerm)) = env(:demo, :port)
+```
+
+`env/2` hands back an undecoded `BeamTerm` because `[application.env]` may hold
+any term at all. When the expected shape is a primitive, the typed readers do
+the narrowing and fall back when the key is missing *or* holds something else:
+
+```cure
+use Std.App
+
+fn port() -> Effect(Int) = env_int(:demo, :port, 4000)
+fn mode() -> Effect(Atom) = env_atom(:demo, :mode, :production)
+fn tracing() -> Effect(Bool) = env_bool(:demo, :tracing, false)
+fn banner() -> Effect(String) = env_string(:demo, :banner, "demo")
+```
+
+The fallback is what makes these total. `env_int(:demo, :port, 4000)` is `4000`
+whether `:port` is absent or holds a string — a program reading its own
+configuration should not crash over a manifest typo, and the manifest's
+`[application.env]` is what decides which answer you actually get.
+
+Anything past these primitives — a list, a nested tuple, a map — comes back from
+`env/2` as a `BeamTerm` and is narrowed with `Std.Beam`. Reaching for `@extern`
+is only necessary for parts of `:application` this surface does not cover.
 
 ## Transparency
 

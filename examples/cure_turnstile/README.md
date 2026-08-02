@@ -4,7 +4,7 @@ A small Cure process example using the transparent FSM macro.
 
 The source in `cure_src/turnstile.cure` is intentionally small:
 
-```cure
+```text
 fsm Cure.Turnstile with 0
   fn initial_state() -> Atom = :locked
 ```
@@ -16,7 +16,7 @@ is no FSM-specific compiler object or source-string callback parser.
 Transition tables can be defined in Cure data and dispatched by ordinary
 standard-library code:
 
-```cure
+```text
 fsm Cure.Light state Int transitions [
   transition :locked :coin :unlocked,
   transition :unlocked :push :locked

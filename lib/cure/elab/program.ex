@@ -141,7 +141,8 @@ defmodule Cure.Elab.Program do
              check_ast_elixir_core_in_session(
                ast,
                source_context_opts(source, file),
-               Keyword.get(opts, :prelude_mode, :ordinary)
+               Keyword.get(opts, :prelude_mode, :ordinary),
+               Keyword.get(opts, :qualified_envs, [])
              ),
            local_defs = checked_local_defs(ast, env),
            {:ok, interface} <- checked_module_interface(ast, env, module_name, file, source) do
@@ -738,7 +739,7 @@ defmodule Cure.Elab.Program do
   def check_ast_elixir_core(ast),
     do: with_loader_session(fn -> check_ast_elixir_core_in_session(ast, [], :ordinary) end)
 
-  defp check_ast_elixir_core_in_session(ast, source_opts, prelude_mode) do
+  defp check_ast_elixir_core_in_session(ast, source_opts, prelude_mode, qualified_envs \\ []) do
     with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
          {:ok, qualified} <- qualified_resolved_imports(ast),
          {:ok, prelude} <- checked_prelude_env(ast, prelude_mode),
@@ -750,6 +751,7 @@ defmodule Cure.Elab.Program do
          {:ok, base} <- merge_env(seeded, prelude),
          {:ok, opened} <- merge_env(base, imported),
          {:ok, merged} <- merge_env(opened, qualified),
+         {:ok, merged} <- merge_lifted_surfaces(merged, qualified_envs, owner),
          env0 = install_module_visibility(merged, ast),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          :ok <- MacroValidate.check_program(ast, env),
@@ -760,6 +762,33 @@ defmodule Cure.Elab.Program do
       # is a no-op here (its hinted imports were marked slice-side).
       {:ok, mark_inline_hints(certified, find_module_name(ast))}
     end
+  end
+
+  # A `fsm`/`actor`/`sup`/nested `mod` inside this unit is compiled to its own
+  # BEAM module, so the members lifting synthesises (`Event`, `init/1`, ...) are
+  # owned by `Demo.Machine`, not `Demo`. Qualified resolution normally reaches
+  # another module by loading its interface from the module index -- keyed by
+  # source path -- and a lifted module has no source file, so `Machine.Event`
+  # was unreachable from the very module that declares it.
+  #
+  # `Cure.Compiler.codegen_modules_with_main/5` therefore checks the lifted
+  # modules first and hands their certified environments in here. The edge is
+  # acyclic: `LiftModule.inherit_scope/2` has already inlined whatever the
+  # lifted module needs from the enclosing unit, so it never refers back by name.
+  #
+  # Owner-stripping matters. A lifted env carries an inlined copy of this
+  # module's own declarations; merging those back would let a stale copy win the
+  # right-biased `Map.merge`. Everything that survives is either the lifted
+  # module's own surface or shared prelude/stdlib, identical in both envs.
+  defp merge_lifted_surfaces(env, [], _owner), do: {:ok, env}
+
+  defp merge_lifted_surfaces(env, qualified_envs, owner) do
+    Enum.reduce_while(qualified_envs, {:ok, env}, fn {_module_name, lifted}, {:ok, acc} ->
+      case merge_env(acc, without_incoming_owner(lifted, owner)) do
+        {:ok, merged} -> {:cont, {:ok, merged}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
   end
 
   # A module cannot import its own prior interface through a transitive prelude

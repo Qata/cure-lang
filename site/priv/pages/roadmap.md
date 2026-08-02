@@ -696,7 +696,7 @@ first-class FSM overhaul also graduates into a shipped release.
   and single-expression bodies keep their v0.19.0 semantics; two
   new shapes land for argument positions where the lexer
   suppresses newlines:
-```cure
+```text
 map(xs, fn(x) -> { let y = x + 1; y + 2 })
 map(xs, fn(x) -> let y = x + 1; y + 2; end)
 ```
@@ -714,7 +714,7 @@ map(xs, fn(x) -> let y = x + 1; y + 2; end)
 - `Cure.Compiler.Codegen.compile_comprehension/3` lowers the new
   `:binary_generator` qualifier to Erlang's `b_generate` form
   inside the existing `:lc` comprehension:
-```cure
+```text
 [byte for <<byte <- "abc">>]       # [97, 98, 99]
 [word for <<word::16 <- buf>>]     # 16-bit words
 [ch   for <<ch::utf8 <- text>>]    # UTF-8 code points

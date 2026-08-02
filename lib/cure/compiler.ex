@@ -726,7 +726,7 @@ defmodule Cure.Compiler do
   defp codegen_modules(original_ast, main_ast, lifted_requests, source, file) do
     if match?({:lift_module, _, _}, main_ast) do
       case emit_lifted_modules(lifted_requests) do
-        {:ok, lifted_units} -> {:ok, lifted_units, [], nil}
+        {:ok, lifted_units} -> {:ok, module_forms(lifted_units), [], nil}
         {:error, _} = error -> error
       end
     else
@@ -735,11 +735,28 @@ defmodule Cure.Compiler do
   end
 
   defp codegen_modules_with_main(original_ast, main_ast, lifted_requests, source, file) do
+    # Lifted modules are checked FIRST so the enclosing unit can name their
+    # members. A lifted module never depends on the enclosing module by name --
+    # `LiftModule.inherit_scope/2` has already inlined the declarations it needs
+    # -- so this direction is the acyclic one. Without it a `fsm Machine`
+    # declared in `mod Demo` is invisible to `Demo` itself: `Machine.Event`
+    # failed with `{:bad_projection, "Event"}` because qualified resolution
+    # loads interfaces from source files, and a lifted module has none.
+    lifted = emit_lifted_modules(lifted_requests)
+
+    # A failed lift contributes no surface; the main module is then checked
+    # exactly as it was before lifting was reordered.
+    lifted_surfaces =
+      case lifted do
+        {:ok, lifted_units} -> qualified_envs(lifted_units)
+        {:error, _} -> []
+      end
+
     # Single pipeline: every module is elaborated, checked, erased, and emitted
     # through the dependent Core.
     result =
       with :ok <- Cure.Elab.Program.validate_stdlib_imports(main_ast) do
-        case dependent_codegen(main_ast, source, file) do
+        case dependent_codegen(main_ast, source, file, lifted_surfaces) do
           {:ok, forms, artifact} -> {:ok, forms, [], artifact}
           {:error, {:codegen_error, {:expansion_ill_typed, _} = reason}} -> {:error, reason}
           {:error, _} = err -> err
@@ -748,24 +765,48 @@ defmodule Cure.Compiler do
         {:error, reason} -> {:error, {:codegen_error, reason}}
       end
 
-    # Inject the module's `@group(:g)` decorator as a BEAM `-group([:g]).`
-    # attribute after the ordinary dependent pipeline has produced forms.
-    case result do
-      {:ok, forms, warnings, artifact} when is_list(forms) ->
-        with {:ok, lifted_units} <- emit_lifted_modules(lifted_requests) do
-          main_forms = inject_group_attribute(forms, original_ast)
-          {:ok, [{forms_module(main_forms), main_forms} | lifted_units], warnings, artifact}
-        end
+    # The main module's own error always wins. A lifted module carries an
+    # inlined copy of the enclosing declarations, so a mistake in one of them
+    # shows up in BOTH -- and the copy's version names a synthesised module the
+    # author never wrote. Reporting the lift first would replace
+    # `unknown_global :Tick` in `Unqualified` with a conversion failure inside
+    # `Cure.Unqualified.Machine`.
+    case {result, lifted} do
+      {{:ok, forms, warnings, artifact}, {:ok, lifted_units}} when is_list(forms) ->
+        # Inject the module's `@group(:g)` decorator as a BEAM `-group([:g]).`
+        # attribute after the ordinary dependent pipeline has produced forms.
+        main_forms = inject_group_attribute(forms, original_ast)
 
-      other ->
+        {:ok, [{forms_module(main_forms), main_forms} | module_forms(lifted_units)], warnings,
+         artifact}
+
+      {{:error, _} = error, _} ->
+        error
+
+      {_other, {:error, _} = error} ->
+        error
+
+      {other, _} ->
         other
     end
+  end
+
+  # The owner-keyed checked environments of this unit's lifted modules, in
+  # declaration order.
+  defp qualified_envs(lifted_units) do
+    Enum.map(lifted_units, &{&1.module_name, &1.env})
+  end
+
+  # `emit_lifted_modules/1` yields whole units so their environments stay
+  # reachable; every codegen result is the `{module, forms}` pairs.
+  defp module_forms(lifted_units) do
+    Enum.map(lifted_units, &{&1.module, &1.forms})
   end
 
   defp emit_lifted_modules(requests) do
     Enum.reduce_while(requests, {:ok, []}, fn request, {:ok, acc} ->
       case Cure.Compiler.LiftModule.emit(request) do
-        {:ok, unit} -> {:cont, {:ok, acc ++ [{unit.module, unit.forms}]}}
+        {:ok, unit} -> {:cont, {:ok, acc ++ [unit]}}
         {:error, _} = error -> {:halt, error}
       end
     end)
@@ -826,12 +867,13 @@ defmodule Cure.Compiler do
 
   # A dependent module is lowered by the kernel: elaborate to `Cure.Core`, erase
   # its {0,ω} index arguments, and emit the erased residue as real BEAM forms.
-  defp dependent_codegen(ast, source, file) do
+  defp dependent_codegen(ast, source, file, qualified_envs) do
     with {:ok, artifact} <-
            Cure.Elab.Program.check_ast_artifact(ast,
              source: source,
              file: file,
-             prelude_mode: :bootstrap_safe
+             prelude_mode: :bootstrap_safe,
+             qualified_envs: qualified_envs
            ),
          {:ok, forms} <-
            Cure.Elab.Emit.compile_forms(

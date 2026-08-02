@@ -19,38 +19,69 @@ defmodule Cure.Elab.Resolution do
   """
   @spec resolve_qualified(Env.t(), String.t(), :type | :value) :: {:ok, atom()} | :error
   def resolve_qualified(%Env{} = env, dotted, :value) do
-    segs = String.split(dotted, ".")
-    {mod_segs, [last]} = Enum.split(segs, length(segs) - 1)
-    owner = Enum.join(mod_segs, ".")
-    key = Cure.Elab.Name.qualify(owner, String.to_atom(last))
-
-    if Env.qualified_module_available?(env, owner),
-      do: try_keys(env, [key], :value),
-      else: :error
+    env
+    |> spellings(dotted)
+    |> Enum.map(fn spelling ->
+      segs = String.split(spelling, ".")
+      {mod_segs, [last]} = Enum.split(segs, length(segs) - 1)
+      {Cure.Elab.Name.qualify(Enum.join(mod_segs, "."), String.to_atom(last)),
+       Enum.join(mod_segs, ".")}
+    end)
+    |> available_keys(env)
+    |> try_keys(env, :value)
   end
 
   def resolve_qualified(%Env{} = env, dotted, :type) do
+    env
+    |> spellings(dotted)
+    |> Enum.flat_map(fn spelling ->
+      segs = String.split(spelling, ".")
+      last = List.last(segs)
+      {mod_segs, [explicit_last]} = Enum.split(segs, length(segs) - 1)
+      mod = Enum.join(mod_segs, ".")
+
+      [
+        # Module==typename collapse: `Std.Nat` means `Std.Nat#Nat`.
+        {Cure.Elab.Name.qualify(spelling, String.to_atom(last)), spelling},
+        # Explicit `Mod.Type` spelling.
+        {Cure.Elab.Name.qualify(mod, String.to_atom(explicit_last)), mod}
+      ]
+    end)
+    |> available_keys(env)
+    |> try_keys(env, :type)
+  end
+
+  # The spellings a dotted path may denote, most specific first. The absolute
+  # reading always wins; the owner-relative ones exist for a module nested
+  # inside the current one, which its members have no other way to name. A
+  # `fsm Machine` inside `mod Demo` lifts to the separate module `Demo.Machine`,
+  # so `Demo` naming its own machine's `Event` writes `Machine.Event`.
+  #
+  # The path may already repeat part of the owner, because `LiftModule` inlines
+  # the enclosing unit's declarations into the lifted module: the very same
+  # `Machine.Event` is re-checked with owner `Demo.Machine`, where it means the
+  # current module. So splice at every overlap -- the longest proper prefix of
+  # the path that is also a suffix of the owner -- longest overlap first, with
+  # the zero overlap (plain prepend) last.
+  defp spellings(%Env{module_owner: owner}, dotted) when is_binary(owner) do
+    owner_segs = String.split(owner, ".")
     segs = String.split(dotted, ".")
-    last = List.last(segs)
-    {mod_segs, [explicit_last]} = Enum.split(segs, length(segs) - 1)
 
-    candidates = [
-      # Module==typename collapse: `Std.Nat` means `Std.Nat#Nat`.
-      Cure.Elab.Name.qualify(dotted, String.to_atom(last)),
-      # Explicit `Mod.Type` spelling.
-      Cure.Elab.Name.qualify(Enum.join(mod_segs, "."), String.to_atom(explicit_last))
-    ]
+    relative =
+      for k <- (length(segs) - 1)..0//-1,
+          Enum.take(segs, k) == Enum.take(owner_segs, -k),
+          do: Enum.join(owner_segs ++ Enum.drop(segs, k), ".")
 
-    owners = [dotted, Enum.join(mod_segs, ".")]
+    Enum.uniq([dotted | relative])
+  end
 
-    candidates =
-      candidates
-      |> Enum.zip(owners)
-      |> Enum.filter(fn {_key, owner} -> Env.qualified_module_available?(env, owner) end)
-      |> Enum.map(&elem(&1, 0))
-      |> Enum.uniq()
+  defp spellings(%Env{}, dotted), do: [dotted]
 
-    try_keys(env, candidates, :type)
+  defp available_keys(candidates, env) do
+    candidates
+    |> Enum.filter(fn {_key, owner} -> Env.qualified_module_available?(env, owner) end)
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.uniq()
   end
 
   @doc """
@@ -186,7 +217,7 @@ defmodule Cure.Elab.Resolution do
     end
   end
 
-  defp try_keys(env, keys, slot) do
+  defp try_keys(keys, env, slot) do
     present? =
       case slot do
         :type -> fn key -> Inductive.family?(env, key) or type_definition?(env, key) end

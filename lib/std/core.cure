@@ -20,12 +20,14 @@
 ## ```cure
 ## use Std.Core
 ##
+## let positive = fn(x: Int) -> Result(Int, Atom) =
+##   pickup
+##     x > 0 -> ok(x)
+##     else  -> error(:neg)
+##
 ## ok(42)
 ##   |> map_ok(fn(x) -> x * 2)
-##   |> and_then(fn(x) ->
-##        pickup
-##          x > 0 -> ok(x)
-##          else  -> error(:neg))
+##   |> and_then(positive)
 ##   |> unwrap_ok(0)                 # => 84
 ## ```
 

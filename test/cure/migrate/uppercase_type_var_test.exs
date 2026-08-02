@@ -418,33 +418,6 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     assert Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
   end
 
-  test "an fsm computed-use's derived FsmEvent type is not lowercased at the use site" do
-    # `fsm … derive` is a `:computed_use` macro invocation. Its expander emits an
-    # ambient `enum_type("FsmEvent", …)` into the *caller's* module during
-    # `expand_declaration_uses` — after the migration lint runs. A handwritten
-    # sibling `fn make_start() -> FsmEvent = Start` references that derived type,
-    # but `build_ctx/1` walks the pre-expansion surface AST where `FsmEvent` does
-    # not yet exist, so it was misread as a free type variable and lowercased to
-    # `fsmevent`. The use-site analog of the declaration-site macro-family gap.
-    src = """
-    mod M
-      use Std.Fsm
-
-      fsm Cure.Generated.Derived
-        state Int
-        events
-          Start -> :keep_state_and_data
-          Stop -> :keep_state_and_data
-
-    fn make_start() -> FsmEvent = Start
-    """
-
-    {out, warns} = migrate(src, "fsm_use.cure")
-    assert out =~ "-> FsmEvent"
-    refute out =~ "fsmevent"
-    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
-  end
-
   test "an actor computed-use's derived ActorMessage/ActorRequest types are not lowercased" do
     src = """
     mod M
@@ -471,19 +444,19 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     # still be flagged when the module also contains an fsm/actor computed-use.
     src = """
     mod M
-      use Std.Fsm
+      use Std.Actor
 
-      fsm Cure.Generated.Derived
+      actor Cure.Generated.Structured
         state Int
-        events
-          Start -> :keep_state_and_data
+        on_cast
+          Inc -> state + 1
 
-    fn make_start() -> FsmEvent = Start
+    fn make_message() -> ActorMessage = Inc
       fn id(x: T) -> T = x
     """
 
-    {out, warns} = migrate(src, "fsm_use_free.cure")
-    assert out =~ "-> FsmEvent"
+    {out, warns} = migrate(src, "actor_use_free.cure")
+    assert out =~ "-> ActorMessage"
     assert out =~ "x: t"
     assert Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
   end

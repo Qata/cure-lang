@@ -80,8 +80,13 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
     assert Enum.any?(attrs, &match?({:KV, :return_type, {:SSyntax, _}}, &1))
     assert {:Leaf, :variable, _, {:SStr, ~c"from"}} = body
 
-    assert {:Node, :type_annotation, [{:KV, :name, {:SStr, ~c"State"}}], [_]} =
-             apply(module, :build_alias, [])
+    # `typealias` is load-bearing, not decoration: the elaborator's header
+    # pre-pass only gives a flagged alias a forward-referenceable header, and
+    # module lifting inlines the enclosing unit's declarations *ahead* of the
+    # generated ones -- so an unflagged alias is invisible to them.
+    assert {:Node, :type_annotation, alias_attrs, [_]} = apply(module, :build_alias, [])
+    assert {:KV, :name, {:SStr, ~c"State"}} in alias_attrs
+    assert {:KV, :typealias, {:SBool, true}} in alias_attrs
 
     assert {:Node, :lift_module, attrs, []} = apply(module, :build_module, [])
     assert {:KV, :module, {:SStr, ~c"Cure.Generated.Worker"}} in attrs

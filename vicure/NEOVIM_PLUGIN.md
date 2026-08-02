@@ -121,7 +121,7 @@ continuation outdents accordingly.
 non-block: the next line inherits the indent of the real header
 below the attribute, so
 
-```cure
+```text
 @record
 fsm TrafficLight
   Red --timer--> Green

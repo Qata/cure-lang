@@ -67,6 +67,11 @@ defmodule Cure.Compiler.Parser do
     fresh_counter: 0,
     literal_macros: %{},
     expansion_context: nil,
+    # Dotted name of the `mod` whose body is being parsed, innermost last, or
+    # `nil` at the top level. Lifted-module macros (`fsm`, `actor`, `sup`, `app`)
+    # qualify their bare names against this so two modules can each declare a
+    # `Worker` without colliding. See `qualify_lifted_module_name/2`.
+    enclosing_module: nil,
     # Declaration-driven binding-power table the Pratt loop consults instead of
     # the static `Precedence` module. Seeded from the memoized built-in table
     # (`Std.Operators`) and extended with the current module's own
@@ -996,7 +1001,8 @@ defmodule Cure.Compiler.Parser do
         {module_name, module_end, state} = parse_dotted_name_owned(state)
         module_span = through_spans(module_start.span, module_end.span) || module_start.span
         module_meta = Metadata.put_source_info([subtype: :symbol], %SourceInfo{whole: module_span})
-        module = {:literal, module_meta, String.to_atom(module_name)}
+        qualified = qualify_lifted_module_name(module_name, state.enclosing_module)
+        module = {:literal, module_meta, String.to_atom(qualified)}
         match_segments(state, rest, put_macro_binding(bindings, name, module), progress + 1)
 
       _ ->
@@ -1517,7 +1523,8 @@ defmodule Cure.Compiler.Parser do
   defp parse_family_field_value(state, %{shape: "ModuleName"}) do
     state = skip_newlines(state)
     {name, state} = parse_dotted_name(state)
-    {{:literal, [subtype: :symbol], String.to_atom(name)}, state}
+    qualified = qualify_lifted_module_name(name, state.enclosing_module)
+    {{:literal, [subtype: :symbol], String.to_atom(qualified)}, state}
   end
 
   defp parse_family_field_value(state, %{shape: shape}) when shape in ["Int", "Float", "Atom", "Bool"] do
@@ -2832,6 +2839,39 @@ defmodule Cure.Compiler.Parser do
 
   defp module_name_from_ast(other), do: other
 
+  # `mod Demo` compiles to `Cure.Demo` without the author writing the prefix. The
+  # lifted-module macros (`fsm`, `actor`, `sup`, `app`, `behavior`) capture every
+  # module they name or reference through a `ModuleName` hole, so they qualify by
+  # the same rule instead of making the emitter's prefix part of the surface
+  # syntax.
+  #
+  # Two spellings, so a lifted module can be both scoped and reachable:
+  #
+  #   * a **bare** name is relative to the enclosing module -- `actor Act`
+  #     inside `mod Demo` is `Cure.Demo.Act`, so a sibling module may declare
+  #     its own `Act` without colliding. The top level belongs to the implicit
+  #     `Main` module, so top-level `actor Act` is `Cure.Main.Act`; lifting never
+  #     escapes its lexical owner merely because that owner was implicit.
+  #   * a **dotted** name is absolute -- `worker Demo.Act` names `Cure.Demo.Act`
+  #     from anywhere, which is how one module reaches another's children.
+  #
+  # A name that already says `Cure.` passes through unchanged; an `Elixir.`-prefixed
+  # or lowercase name is a foreign module and keeps its own name.
+  defp qualify_lifted_module_name(name, enclosing) when is_binary(name) do
+    cond do
+      String.starts_with?(name, "Cure.") -> name
+      String.starts_with?(name, "Elixir.") -> name
+      name in ["Cure", "Elixir"] -> name
+      not Regex.match?(~r/^[A-Z]/, name) -> name
+      String.contains?(name, ".") -> "Cure." <> name
+      is_nil(enclosing) -> "Cure.Main." <> name
+      true -> "Cure." <> enclosing <> "." <> name
+    end
+  end
+
+  defp join_module_name(nil, name), do: name
+  defp join_module_name(outer, name), do: outer <> "." <> name
+
   defp qualify_module_name(prefix, captured_name) do
     if String.starts_with?(captured_name, "Cure."),
       do: captured_name,
@@ -2849,6 +2889,20 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :eof} ->
         {Enum.reverse(acc), state}
+
+      # Residue from a nested construct, not a terminator. A macro family body
+      # captures its tokens up to -- but not including -- the `dedent` that
+      # closes it, because a structural delimiter belongs to the enclosing
+      # parser (see the `:raw_hole` clause of `match_segments/4`).
+      # `parse_block_body/3` discharges that debt by skipping any dedent deeper
+      # than its own indent; the top level is indent 0, so every dedent that
+      # reaches here is deeper. Returning instead silently discarded every
+      # declaration after the first `fsm`/`actor`/`sup` in a file.
+      %Token{type: :dedent, value: value} when is_integer(value) and value > 0 ->
+        state
+        |> advance()
+        |> skip_newlines()
+        |> parse_program(acc)
 
       %Token{type: :dedent} ->
         {Enum.reverse(acc), state}
@@ -6497,6 +6551,7 @@ defmodule Cure.Compiler.Parser do
     meta = if kind == :have, do: Keyword.put(meta, :have, true), else: meta
     meta = if type_ann, do: Keyword.put(meta, :type_annotation, type_ann), else: meta
     meta = if grade, do: Keyword.put(meta, :grade, grade), else: meta
+
     meta =
       put_let_source_info(
         meta,
@@ -8835,8 +8890,7 @@ defmodule Cure.Compiler.Parser do
           }
 
           error =
-            {:invalid_parameter_name,
-             if(lambda?, do: Map.put(name_details, :lambda, true), else: name_details)}
+            {:invalid_parameter_name, if(lambda?, do: Map.put(name_details, :lambda, true), else: name_details)}
 
           state = add_error(state, error)
 
@@ -9314,7 +9368,10 @@ defmodule Cure.Compiler.Parser do
     # Parse indented body. Leading `##` docs immediately after `mod Name`
     # describe the *module* itself, not the first definition inside the
     # body, so pull them back onto the container's `:doc` meta.
+    outer_module = state.enclosing_module
+    state = %{state | enclosing_module: join_module_name(outer_module, name)}
     {body_stmts, leading_doc, state} = parse_definition_block_with_lead_doc(state)
+    state = %{state | enclosing_module: outer_module}
 
     meta = [container_type: :module, name: name, language: :cure, line: token.line, col: token.col]
     meta = put_body_declaration_source_info(meta, token, name_start, name_end, body_stmts)

@@ -20,9 +20,9 @@
 ## ```cure
 ## use Std.Process
 ##
-## # Monitor a child and wait for its down message.
-## let child = Std.Otp.spawn(fn() -> unit())
-## let ref   = monitor(child)
+## # Monitor a spawned process and wait for its down message.
+## let kid = Std.Otp.spawn(fn() -> unit())
+## let ref = monitor(kid)
 ## trap_exit(true)
 ## ```
 

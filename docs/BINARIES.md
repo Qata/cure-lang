@@ -30,7 +30,7 @@ Defaults mirror Erlang: `integer-unsigned-big-size(8)-unit(1)`; the
 ## Examples
 
 ```cure
-fn first_byte(buf: Bitstring) -> Int =
+fn first_byte(buf: Binary) -> Int =
   match buf
     <<b, _rest::binary>> -> b
     <<>> -> 0

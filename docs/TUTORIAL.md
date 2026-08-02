@@ -107,7 +107,7 @@ Use Sigma when a piece of data must carry the index it parametrises.
 The type checker keeps `n` connected to the vector length through
 the rest of the program.
 ## 9. Pi types and dependent return
-```cure
+```text
 use Std.List
 
 fn append(xs: List(Int), ys: List(Int)) -> List(Int) =
@@ -141,7 +141,7 @@ Every segment is `value [:: specifier_chain]`; the specifier chain
 is hyphen-joined and covers `integer`, `float`, `utf8`/`utf16`/`utf32`,
 `binary`/`bytes`/`bitstring`/`bits`, signedness, endianness,
 `size(expr)`, and `unit(n)`.
-```cure
+```text
 fn first_byte(buf: Bitstring) -> Int =
   match buf
     <<b, _rest::binary>> -> b
@@ -152,7 +152,7 @@ of the scrutinee. A match with at least one wildcard, or with both
 an empty-binary arm (`<<>>`) and an open-ended tail arm
 (`<<_, _rest::binary>>`), is exhaustive.
 `let` bindings accept the same binary patterns:
-```cure
+```text
 fn parse_header(buf: Bitstring) -> Int =
   let <<tag, _rest::binary>> = buf
   tag
@@ -164,8 +164,8 @@ See `docs/BINARIES.md` for the authoritative reference and
 ## 12. FSMs
 `fsm` is an auto-preluded macro that creates a transparent lifted
 `gen_statem` module:
-```cure
-fsm Cure.Turnstile state Int handle_event
+```text
+fsm Turnstile state Int handle_event
   let pid: Pid(Atom) = beam_ops self
   :keep_state_and_data
 ```

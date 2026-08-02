@@ -45,7 +45,7 @@ transitive bare names.
 `Type`, `Type 1`, and higher universes are cumulative and predicative. A
 function result may mention its arguments:
 
-```cure
+```text
 fn append(
   {a: Type},
   {m: Nat},
@@ -78,7 +78,7 @@ make those proofs explicit.
 `Sigma(name: A, B(name))` pairs a value with a second component whose type may
 depend on it. Ordinary tuples use matching value/type syntax:
 
-```cure
+```text
 let pair : %[Int, Bool] = %[42, true]
 ```
 
@@ -169,7 +169,7 @@ variables, and pattern-only erasure evidence.
 Pattern-valued `let` uses the same grammar and introduces all narrowed bindings
 sequentially:
 
-```cure
+```text
 let Ok(%[head, tail]) = parse(input)
 ```
 

@@ -25,7 +25,7 @@ Together they let you declare a production-grade supervision tree without ever d
 
 `pid <-| message` sends `message` to `pid` and evaluates to the message, matching Erlang's `!` semantics. The ASCII spelling and its unicode alias are interchangeable:
 
-```cure
+```text
 pid <-| :hello
 pid ✉  :hello
 ```
@@ -34,7 +34,7 @@ Both forms lower to Erlang's bang operator (`{:op, Line, :!, PidForm, MsgForm}` 
 
 The operator is **non-associative** and binds one notch below `|>` so pipelines feed into it naturally:
 
-```cure
+```text
 request
 |> encode()
 |> worker_pid <-| _
@@ -54,7 +54,7 @@ Named after the ghost-mailman of *One Hundred Years of Solitude*, who keeps deli
 
 An `actor` container declares a typed process. The minimal grammar:
 
-```cure
+```text
 actor Counter with 0
   on_start
     (state) -> state
@@ -86,7 +86,7 @@ iex> :"Cure.Actor.Counter".get_state(pid)
 
 For user code, prefer `Std.Actor.spawn/1` together with the `<-|` operator:
 
-```cure
+```text
 let pid = Std.Actor.spawn(:"Cure.Actor.Counter")
 pid <-| :inc
 pid <-| :inc
@@ -102,7 +102,7 @@ The type system already reserves `Pid(Inbox)` and `Ref` primitives. `Pid` alone 
 
 A `sup` container declares a supervisor module:
 
-```cure
+```text
 sup App.Root
   strategy  = :one_for_one
   intensity = 3
@@ -149,7 +149,7 @@ Cure.Sup.Runtime.which_children(:"Cure.Sup.App.Root")
 
 From Cure, the equivalent is `Std.Supervisor`:
 
-```cure
+```text
 let tree = :"Cure.Sup.App.Root"
 let _pid = Std.Supervisor.start(tree)
 let kids = Std.Supervisor.which_children(tree)
@@ -162,7 +162,7 @@ Actor instances live in `Cure.Actor.Runtime`, a GenServer supervised by `Cure.Su
 
 `Std.Process` exposes the raw BEAM process primitives directly:
 
-```cure
+```text
 mod MyApp.Pool
   use Std.Process
 
@@ -197,7 +197,7 @@ The new codes are catalogued in `Cure.Compiler.Errors`. Run `cure explain <code>
 
 `examples/cure_colony/cure_src/colony.cure` ships with the release and exercises the whole surface: a worker actor, an echo actor, and a supervisor tree managing them under a `:one_for_one` strategy.
 
-```cure
+```text
 actor Worker with 0
   on_start
     (state) -> state

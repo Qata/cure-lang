@@ -60,7 +60,7 @@ examples read themselves.
 - `[1, 2, 3]`, `[head | tail]`, `[]` — list literal, cons, empty.
 - `%[a, b]` — a tuple literal.
 - `Point{x: 1, y: 2}`, `p.x`, `Point{p | x: 3}` — build / read / copy-update a record.
-- `:ok`, `:"Cure.Turnstile"` — **atoms** (interned symbolic constants).
+- `:ok`, `:locked` — **atoms** (interned symbolic constants).
 - `## text` is a doc comment; `# text` is an inline comment (used for `# => result`).
 - `@extern(...)`, `@group(:g)`, `@builtin(:nat)`, `@derive(JSON)` — **attributes**
   attached to the declaration below them.
@@ -128,8 +128,12 @@ fn plus(m: Nat, n: Nat) -> Nat =
 element in front of a list (`Cons`, written `[h | t]`).
 
 ```cure
-type List(a) = Nil | Cons(a, List(a))
-[1, 2, 3]                             # sugar for Cons(1, Cons(2, Cons(3, Nil)))
+# The same shape, spelled out. `List` itself is built in, and `Nil`/`Cons` are
+# its constructors, so an illustration has to pick its own names.
+type Sequence(a) = Empty | Prepend(a, Sequence(a))
+
+# `[1, 2, 3]` is sugar for exactly this nesting on the built-in List
+fn digits() -> List(Int) = [1, 2, 3]
 ```
 
 **Pattern / match / scrutinee** — A **match** inspects a value (the **scrutinee**)
@@ -555,8 +559,11 @@ Cure uses **size-change termination**: something must get strictly smaller on ev
 recursive call.
 
 ```cure
+use Std.Nat
+
 fn plus(m: Nat, n: Nat) -> Nat =
   match m
+    Z() -> n
     S(k) -> S(plus(k, n))       # recurses on k, strictly smaller than S(k): terminates
 ```
 
@@ -600,7 +607,10 @@ value of that type.
 "**Witness**" stresses it's a concrete example making the claim true.
 
 ```cure
-reflexive(Z)             # a proof (witness) that Z equals Z
+use Std.Nat
+
+# a proof (witness) that Z equals Z
+fn zero_is_zero() -> Equivalent(Nat, Z(), Z()) = reflexive(Z())
 ```
 
 **Propositional equality / identity type** — The type of *proofs that two values are
@@ -608,7 +618,19 @@ equal* (in Cure, `Equivalent(T, a, b)`). Unlike definitional equality (settled b
 computation), this is a fact you hold as a *value* and pass around.
 
 ```cure
-fn plus_zero_right(n: Nat) -> Equivalent(Nat, plus(n, Z), n)     # a provable equality
+use Std.Nat
+
+fn plus(m: Nat, n: Nat) -> Nat =
+  match m
+    Z() -> n
+    S(k) -> S(plus(k, n))
+
+# `Equivalent(Nat, plus(n, Z()), n)` is a provable equality: a value of this
+# type *is* the proof, built by recursion on n.
+fn plus_zero_right(n: Nat) -> Equivalent(Nat, plus(n, Z()), n) =
+  match n
+    Z() -> reflexive(Z())
+    S(k) -> rewrite plus_zero_right(k) in reflexive(S(k))
 ```
 
 **reflexive** — The sole constructor of `Equivalent(a, x, x)`, proving that
@@ -616,7 +638,10 @@ any value is identical to itself. The old primitive spelling `refl` is retired.
 The seed all equality proofs grow from.
 
 ```cure
-reflexive(S(k))          # proof that S(k) = S(k)
+use Std.Nat
+
+# proof that S(k) = S(k), for any k
+fn successor_is_itself(k: Nat) -> Equivalent(Nat, S(k), S(k)) = reflexive(S(k))
 ```
 
 **transport** — Move a value from one type to an equal type using an equality proof:
@@ -629,8 +654,21 @@ given `a = b` and a `P(a)`, get the corresponding `P(b)`.
 **rewrite** — Use an equality proof to *replace* one side with the other inside a
 goal. In Cure it's `rewrite proof in expr`; it's sugar over transport.
 
+The `S(k)` arm of `plus_zero_right` above is the whole idiom: `rewrite` swaps
+`plus(k, Z())` for `k` inside the goal, and `reflexive` closes what is left.
+
 ```cure
-S(k) -> rewrite plus_zero_right(k) in reflexive(S(k))   # swap plus(k,Z) for k, then close
+use Std.Nat
+
+fn plus(m: Nat, n: Nat) -> Nat =
+  match m
+    Z() -> n
+    S(k) -> S(plus(k, n))
+
+fn zero_right(n: Nat) -> Equivalent(Nat, plus(n, Z()), n) =
+  match n
+    Z() -> reflexive(Z())
+    S(k) -> rewrite zero_right(k) in reflexive(S(k))
 ```
 
 **UIP / axiom K** — Uniqueness of Identity Proofs: any two proofs of `a = b` are
@@ -670,11 +708,13 @@ it `interface`) is a set of operations a type can support; an **instance**
 instance for you.
 
 ```cure
+use Std.String
+
 interface Show(t)
   fn show(x: t) -> String
 
 implementation Show for Int
-  fn show(x: Int) -> String = int_to_string(x)
+  fn show(x: Int) -> String = Std.String.from_int(x)
 ```
 
 **Coherence** — The guarantee that a type has *one* agreed-upon instance, so meaning
@@ -717,6 +757,8 @@ fn equal() -> Bool = 1 == 1
 since `String = List(Char)`, string concat rides the same instance.
 
 ```cure
+use Std.Semigroup
+
 fn combined() -> String = "ab" <> "cd"
 ```
 
@@ -747,7 +789,10 @@ fn successful() -> Result(Int, Atom) = Ok(42)
 **Map** — A key/value dictionary built through functions (no literal syntax).
 
 ```cure
-fn map_example() -> Map = %{name: "Ada", age: 42}
+use Std.Map
+
+fn map_example() -> Map(Atom, String) =
+  put(:name, "Ada", new())
 ```
 
 **Set** — A collection of distinct elements (built over `Map` with `true` values).
@@ -835,76 +880,107 @@ typed. The checked `Std.Otp` algebra is the source-level process boundary.
 communicating only by messages. The BEAM runs many cheaply.
 
 ```cure
-fn start() -> Effect(Tuple) = beam_ops start_link :worker []
+use Std.Otp
+
+fn start() -> Effect(Tuple) =
+  let args: List(Int) = []
+  beam_ops start_link :worker args
 ```
 
 **Pid** — A **process identifier**: a handle to a running process, used to message
 or stop it.
 
 ```cure
+use Std.Otp
+
 fn me() -> Effect(Pid(Atom)) = beam_ops self
 ```
 
 **Atom** — An interned symbolic constant, written `:name`. Cheap to compare; used for
-tags, states, and module names.
+tags and states. There is no quoted-atom literal, so a module is named by writing
+its name — `worker Counter` — rather than by spelling out an atom for it.
 
 ```cure
-:ok
-:"Cure.Turnstile"                        # a module name as an atom
+fn tag() -> Atom = :ok
 ```
 
 **Any** — The opaque "some BEAM value of unchecked shape" type, permitted only at an
 explicit raw BEAM or FFI boundary.
 
 ```cure
-fn raw_boundary(value: Any) -> Any
+@extern(:erlang, :self, 0)
+fn raw_boundary() -> Any
 ```
 
 **Message / send** — Processes communicate by sending values to a typed `Pid(m)`;
 the checker requires the message to have type `m`.
 
 ```cure
-beam_ops tell pid :coin                  # checked before emission
+use Std.Otp
+
+# checked before emission: the message must have the pid's message type
+fn ping(pid: Pid(Atom)) -> Effect(Unit) = beam_ops tell pid :coin
 ```
 
-**beam_ops** — An auto-preluded standard-library syntax macro that expands to
+**beam_ops** — A standard-library syntax macro (from `Std.Otp`) that expands to
 ordinary checked `Std.Otp` calls. It has no compiler-owned operation table.
 
 ```cure
-fn start() -> Effect(Tuple) = beam_ops start_statem :"Cure.Turnstile" [0]
+use Std.Otp
+
+fn start() -> Effect(Tuple) = beam_ops start_statem :turnstile [0]
 ```
 
 **Effect (`Effect(T)`)** — The inert type former for an effectful result. A BEAM
 operation returns `Effect(T)` and an effectful `let` sequences it.
 
 ```cure
+use Std.Otp
+
 fn current() -> Effect(Pid(Atom)) = beam_ops self
 ```
 
-**fsm (finite state machine)** — An auto-preluded standard-library macro that
+**fsm (finite state machine)** — A standard-library macro (from `Std.Fsm`) that
 expands to a generic lifted module with `gen_statem` callbacks. Transition rows
 are checked Cure values, not a compiler parser.
 
 ```cure
-fsm Cure.Turnstile state Int transitions [
-  transition :locked :coin :unlocked,
-  transition :unlocked :push :locked
-]
+use Std.Fsm
+
+fsm Turnstile with Int
+  initial locked
+  transitions
+    locked --coin--> unlocked
+    unlocked --push--> locked
 ```
 
-**actor** — A standard-library macro that expands to a generic lifted module
-with checked `gen_server` callbacks and a typed message surface.
+**actor** — A standard-library macro (from `Std.Actor`) that expands to a generic
+lifted module with checked `gen_server` callbacks and a typed message surface.
 
-```cure
-actor Cure.Store state Atom messages Atom handle_info
-  %[:noreply, state]
+```
+actor Store
+  state Int
+  initial 0
+  on_call value() returns Int
+    reply state
 ```
 
-**supervisor** — A standard-library macro that expands to a generic lifted module
-whose checked `init/1` returns ordinary BEAM child specifications.
+> The actor fence above is shown unchecked: the emitter does not currently emit
+> `handle_call/3` outside the `on_message`/`on_cast` paths, so every such module
+> draws `undefined callback function handle_call/3`. See
+> [`SUPERVISION.md`](SUPERVISION.md) for the full note.
+
+**supervisor** — A standard-library macro (from `Std.Supervisor`) that expands to a
+generic lifted module whose checked `init/1` returns ordinary BEAM child
+specifications. Both macros name a lifted module, so the name must be
+`Cure.`-prefixed.
 
 ```cure
-sup Cure.Root children [child_spec Cure.Worker :worker]
+use Std.Supervisor
+
+sup Root
+  children
+    worker Worker as worker
 ```
 
 ---

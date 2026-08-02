@@ -18,7 +18,7 @@ mix test
 
 The source files use standard-library syntax directly:
 
-```cure
+```text
 fsm Cure.Envelope state Int initial :silent events Atom transition
   else -> %[:next_state, state, data]
 

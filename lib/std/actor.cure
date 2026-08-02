@@ -110,7 +110,31 @@ mod Std.Actor
     let message_type = match definition.messages
       None() -> variable("m")
       Some(value) -> value
-    emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, [], cast_body, info_body, terminate_body, code_change_body, [], extra_declarations, message_aliased, true)
+    match definition.queries
+      [] -> emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, [], cast_body, info_body, terminate_body, code_change_body, [], extra_declarations, message_aliased, true)
+      queries -> derive_actor_family_raw_queries(module_name, module_expr, definition, init_spec, cast_body, info_body, terminate_body, code_change_body, extra_declarations, queries)
+
+  ## The raw branch's query dispatch, mirroring the Cases branch's own
+  ## `match definition.queries`. Without this an actor whose only synchronous
+  ## surface is `on_call` -- no `on_message`, no `on_cast`, so it lands here --
+  ## had its queries dropped in silence: no `handle_call/3`, no `Handle`, no
+  ## adapters, and a module that still compiled clean.
+  ##
+  ## `Message` is `Unit` rather than the raw branch's free `m` because the
+  ## dependent emitter aliases the message type at module scope, where a free
+  ## type variable elaborates to :unknown_global. An actor that declares no cast
+  ## surface accepts no casts, which is exactly what `Unit` says; a raw
+  ## `handle_cast` alongside queries should name its inbox with `messages`.
+  fn derive_actor_family_raw_queries(module_name: SynLit, module_expr: Syntax, definition: ActorDefinitionSyntax, init_spec: ActorInitSpec, cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, extra_declarations: List(Syntax), queries: List(ActorQueryDefinitionSyntax)) -> Syntax =
+    let message_type = match definition.messages
+      None() -> variable("Unit")
+      Some(value) -> value
+    let call_body = actor_query_body(queries)
+    let request_heads = actor_query_variants(queries)
+    let reply_family = actor_reply_family(queries)
+    let query_handle = call("Std.Otp.DepActorServer", [variable("Message"), variable("Request"), variable("ReplyOf")])
+    let query_adapters = actor_query_adapters(queries, query_handle)
+    emit_actor_dep_call_parts(module_name, module_expr, definition.state, init_spec, message_type, [], cast_body, call_body, info_body, terminate_body, code_change_body, request_heads, variable("ReplyOf"), append([reply_family], append(query_adapters, extra_declarations)))
 
   ## State-polymorphic sibling of `derive_actor_family_raw` for STATELESS actor
   ## forms. Structurally identical, but the state stays polymorphic: it uses

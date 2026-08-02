@@ -10,7 +10,7 @@ Cure is an indentation-structured, expression-oriented language that compiles to
 
 Every Cure source file contains one module. The module name follows Elixir/Erlang dot-separated conventions:
 
-```cure
+```text
 mod MyApp.Math
   fn add(a: Int, b: Int) -> Int = a + b
   fn sub(a: Int, b: Int) -> Int = a - b
@@ -31,7 +31,7 @@ mod MyApp.Internal
 
 When the body is a single expression, write it after `=` on the same line:
 
-```cure
+```text
 fn add(a: Int, b: Int) -> Int = a + b
 fn greet(name: String) -> String = "Hello, " <> name <> "!"
 fn identity(x: T) -> T = x
@@ -89,7 +89,7 @@ Guards can use comparison operators (`>`, `<`, `>=`, `<=`, `==`, `!=`), boolean 
 
 Functions can declare their side effects after the return type using `!`:
 
-```cure
+```text
 fn read_file(path: String) -> String ! Io
 fn risky(x: Int) -> Int ! Exception
 fn complex(x: Int) -> Int ! Io, Exception
@@ -101,7 +101,7 @@ Effect kinds: `Io`, `State`, `Exception`, `Spawn`, `Extern`. When no `!` annotat
 
 Every parameter must have a type annotation. Return types are declared after `->`:
 
-```cure
+```text
 fn process(name: String, count: Int) -> String = name <> "!"
 ```
 
@@ -164,7 +164,7 @@ Ordered from lowest to highest precedence:
 
 Examples:
 
-```cure
+```text
 fn double(x: Int) -> Int = x * 2
 fn add(a: Int, b: Int) -> Int = a + b
 
@@ -213,7 +213,7 @@ fn point_sum(point: Point) -> Int = point.x + point.y
 
 Double-quoted, with interpolation via `#{}`:
 
-```cure
+```text
 "hello"
 "hello #{name}"
 "result: #{compute(42)}"
@@ -238,7 +238,7 @@ Prefixed with `:`:
 
 ### Empty list
 
-```cure
+```text
 []
 ```
 
@@ -253,7 +253,7 @@ Single-quoted:
 
 ### Lists
 
-```cure
+```text
 [1, 2, 3]
 ["a", "b", "c"]
 []
@@ -284,7 +284,7 @@ is equivalent to `[a | [b | [c | rest]]]`.
 
 Prefixed with `%`:
 
-```cure
+```text
 %[1, "hello"]
 %[x, y, z]
 ```
@@ -293,7 +293,7 @@ Prefixed with `%`:
 
 Prefixed with `%`:
 
-```cure
+```text
 %{name: "Alice", age: 30}
 %{key: value}
 ```
@@ -304,7 +304,7 @@ Since v0.20.0, binary literals use the full Elixir-style segment
 grammar. Each element inside `<<...>>` may carry type, size,
 endianness, signedness, and unit specifiers, chained with `-`:
 
-```cure
+```text
 <<tag::utf8, size::16, payload::binary-size(size), rest::binary>>
 ```
 
@@ -314,7 +314,7 @@ endianness, signedness, and unit specifiers, chained with `-`:
 `signed` / `unsigned` the signedness; `size(n)` and `unit(u)` the
 width. A bare integer is shorthand for `size(n)`:
 
-```cure
+```text
 <<x::8>>             # same as <<x::size(8)>>
 <<x::32-signed>>     # 32-bit signed big-endian integer
 <<x::float-little>>  # 64-bit little-endian float
@@ -365,7 +365,7 @@ maps, records, and ADT constructors.
 
 ### ADT constructors and cons
 
-```cure
+```text
 fn unwrap(opt: Option(Int)) -> Int =
   match opt
     Some(v) -> v
@@ -388,7 +388,7 @@ lowercase bare names remain variable bindings.
 
 ### Records and field punning
 
-```cure
+```text
 match person
   Person{name, age}                    -> salute(name, age)
   Person{name, address: Address{city}} -> greet(name, city)
@@ -401,7 +401,7 @@ with the same record type.
 
 ### Maps
 
-```cure
+```text
 match request
   %{method: "GET", path: p} -> fetch(p)
   %{method: m, path: _}     -> reject(m)
@@ -414,7 +414,7 @@ are ignored.
 
 Any combination of the above nests:
 
-```cure
+```text
 match value
   %[_, %{list: [head | tail]}, _] -> handle(head, tail)
   %[Ok(v), Error(_)]              -> v
@@ -426,7 +426,7 @@ match value
 `^x` compares against an already-bound variable rather than binding
 fresh. The compiler lowers it to a synthetic equality guard.
 
-```cure
+```text
 let target = get_tag()
 
 match event.tag
@@ -439,7 +439,7 @@ match event.tag
 A name that occurs more than once in the same pattern must match the
 same value at every position:
 
-```cure
+```text
 match pair
   %[x, x] -> :equal
   _       -> :different
@@ -483,7 +483,7 @@ type Shape = Circle(Float) | Rectangle(Float, Float) | Point
 
 Use constructors as regular functions:
 
-```cure
+```text
 fn wrap(x: Int) -> Option(Int) = Some(x)
 fn nothing() -> Option(Int) = None()
 fn make_color() -> Color = Red()
@@ -543,7 +543,7 @@ Type parameters are erased at runtime but used by the type checker.
 
 Use `TypeName{field: expr, ...}` to build a record value:
 
-```cure
+```text
 fn make_point(x: Int, y: Int) -> Point = Point{x: x, y: y}
 fn origin() -> Point = Point{x: 0, y: 0}
 fn make_person(name: String, age: Int) -> Person =
@@ -558,7 +558,7 @@ against the declared field type.
 
 Dot notation `record.field` looks up a field at runtime via `maps:get/2`:
 
-```cure
+```text
 fn x_coord(p: Point) -> Int = p.x
 fn y_coord(p: Point) -> Int = p.y
 fn person_name(p: Person) -> String = p.name
@@ -567,7 +567,7 @@ fn area(r: Rectangle) -> Int = r.width * r.height
 
 Nested access chains multiple `.` operations:
 
-```cure
+```text
 fn rect_origin_x(r: Rectangle) -> Int = r.origin.x
 ```
 
@@ -576,7 +576,7 @@ fn rect_origin_x(r: Rectangle) -> Int = r.origin.x
 Produce a modified copy using `TypeName{base | field: val, ...}`.
 Only the listed fields change; all others are preserved unchanged:
 
-```cure
+```text
 # Single-field update
 fn set_x(p: Point, new_x: Int) -> Point = Point{p | x: new_x}
 fn birthday(p: Person) -> Person = Person{p | age: p.age + 1}
@@ -598,7 +598,7 @@ field is preserved automatically.
 
 ### Records in computations
 
-```cure
+```text
 fn distance_squared(a: Point, b: Point) -> Int =
   let dx = b.x - a.x
   let dy = b.y - a.y
@@ -696,7 +696,7 @@ fn make_adder(n: Int) -> Int -> Int = fn(x) -> x + n
 
 Lambdas with multiple arguments:
 
-```cure
+```text
 Std.List.foldl(xs, 0, fn(x) -> fn(acc) -> acc + x)
 ```
 
@@ -728,14 +728,14 @@ quantitative binders, and kernel-checked equality.
 Macros declare surface grammar with `syntax ... becomes`. Holes are typed,
 repeatable, and hygienic:
 
-```cure
+```text
 syntax beam_ops tell <dest: Code> <message: Code>
   becomes Std.Otp.tell(dest, message)
 ```
 
 `quote` builds syntax and `$(...)` splices values into it:
 
-```cure
+```text
 let ast = quote %[:ok, $(payload)]
 ```
 
@@ -768,7 +768,7 @@ capitalised constructors, and the machine's name is written with its full
 ```cure
 use Std.Fsm
 
-fsm Cure.TrafficLight with Int
+fsm TrafficLight with Int
   Red    --Timer-->     Green
   Green  --Timer-->     Yellow
   Yellow --Timer-->     Red
@@ -788,7 +788,7 @@ fn add(a: Int, b: Int) -> Int = a + b  # inline comment
 
 ## Complete example
 
-```cure
+```text
 mod MyApp.Math
   use Std.{Result, Option}
 

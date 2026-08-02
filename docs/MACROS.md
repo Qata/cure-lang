@@ -293,7 +293,7 @@ mod Tables
       function("key_name", [], variable("Atom"), atom_literal(:isbn))
     ])
 
-  table Cure.Books
+  table Books
     key isbn
 end
 ```
@@ -587,15 +587,27 @@ Each of these was reproduced against the current tree.
   separator that is not also an operator (`to`, `into`, `as`).
 - **`becomes` takes one expression, not a block.** An indented template body is
   `E094`. Wrap the work in a function or move to `computed by`.
-- **`lift_module` names must be `Cure.`-prefixed.** The validator is
-  `^Cure\.[A-Z][A-Za-z0-9_]*(\.[A-Z][A-Za-z0-9_]*)*$`. `table Books` and
-  `table Demo.Books` both fail — and they fail as
+- **A `ModuleName` capture is qualified for you.** `table Books` and
+  `table Demo.Books` both work: the parser qualifies a `ModuleName` hole the same
+  way it qualifies a `mod` name, so the emitter's prefix never has to appear in
+  source. A name that is already qualified is left alone, and an `Elixir.`-prefixed
+  or lowercase name is treated as a foreign module and kept verbatim. Building a
+  name yourself inside `derive_*` bypasses this — hand `lift_module` a
+  fully-qualified string, or it fails as
   `CODE GENERATION FAILED [E101] … invalid_module_name`, an *internal* failure at
-  `cure compile`, after `cure check` has already reported OK. Prefix the name and
-  it compiles.
-- **A lifted module is not in the enclosing module's namespace.** After
-  `table Cure.Books`, neither `Books.key_name()` nor `Cure.Books.key_name()`
-  resolves from the defining module; the generated unit is separate.
+  `cure compile`, after `cure check` has already reported OK.
+- **A bare `ModuleName` is scoped to the enclosing `mod`, but its members are
+  still out of reach.** `table Books` inside `mod Demo` generates `Demo.Books`,
+  so two modules can each declare a `Books`. What it does *not* give you is
+  access: `Books.key_name()` and `Books.Key` do not resolve from the defining
+  module, because the generated unit is elaborated separately. Anything the
+  enclosing module needs to name must be declared there and passed in — that is
+  what `fsm`'s `event_type` is for.
+- **Types a `derive_*` synthesises belong inside the generated module.** Declare
+  them in the `lift_module` declaration list, as `fsm` does with `Event`/`State`,
+  not beside it in the caller's scope. A type emitted into the caller binds a
+  name nobody wrote, and two sibling modules invoking the same family collide on
+  it with `sibling_module_collision`.
 - **`lift_module` always attaches a `-behaviour` attribute.** There is no "plain
   module" behaviour, so a generated data module emits
   `COMPILER WARNING [W000] behaviour none undefined` unless it names a real OTP

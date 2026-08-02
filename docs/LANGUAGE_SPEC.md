@@ -20,7 +20,7 @@ and `do`.
 `requires` is contextual in function and implementation signatures. It lists
 interface obligations without reserving the word as an ordinary identifier:
 
-```cure
+```text
 fn show_both(a: t, b: t) -> String requires Show(t) =
   show(a) <> show(b)
 ```
@@ -43,7 +43,7 @@ container; every other use of `app` remains a plain identifier.
 Identifiers may carry a trailing `?` to signal a predicate (Elixir
 convention):
 
-```cure
+```text
 fn even?(n: Int) -> Bool = n % 2 == 0
 fn is_empty?(xs: List(T)) -> Bool = ...
 ```
@@ -242,7 +242,7 @@ kernel, not evidence for a dependent type.
 
 ### Sigma types (dependent pairs)
 
-```cure
+```text
 type Sized(T) = Sigma(n: Nat, Vector(T, n))
 ```
 
@@ -252,7 +252,7 @@ The surface forms `Sigma(T1, T2)`, `Sigma(name: T1, T2)`, and
 
 ### Pi types (dependent function types)
 
-```cure
+```text
 fn append(xs: Vector(T, m), ys: Vector(T, n)) -> Vector(T, m + n)
 ```
 
@@ -262,7 +262,7 @@ normalization and definitional equality.
 
 ### Equality types
 
-```cure
+```text
 reflexive : Equivalent(T, x, x)
 ```
 
@@ -300,7 +300,7 @@ explicit-argument types at each call site. They cost nothing at runtime.
 
 ### Holes
 
-```cure
+```text
 fn safe_head(xs: List(T)) -> T = ?body
 ```
 
@@ -361,14 +361,14 @@ reject an out-of-range source literal during compilation.
 Surface macros declare grammar with `syntax ... becomes`. Holes carry a syntax
 kind, may repeat, and may request hygienic fresh names:
 
-```cure
+```text
 syntax beam_ops tell <dest: Code> <message: Code>
   becomes Std.Otp.tell(dest, message)
 ```
 
 `quote` constructs syntax and `$(...)` splices:
 
-```cure
+```text
 let ast = quote %[:ok, $(payload)]
 ```
 
@@ -429,7 +429,7 @@ Type parameters are erased at runtime but are tracked by the type checker.
 
 Use `TypeName{field: expr, ...}` to build a record value:
 
-```cure
+```text
 fn make_point(x: Int, y: Int) -> Point = Point{x: x, y: y}
 fn origin() -> Point = Point{x: 0, y: 0}
 fn make_person(name: String, age: Int) -> Person =
@@ -440,7 +440,7 @@ fn make_person(name: String, age: Int) -> Person =
 
 Use dot notation `record.field`, which compiles to `maps:get(field, map)`:
 
-```cure
+```text
 fn x_coord(p: Point) -> Int = p.x
 fn area(r: Rectangle) -> Int = r.width * r.height
 fn rect_origin_x(r: Rectangle) -> Int = r.origin.x  # nested access
@@ -451,7 +451,7 @@ fn rect_origin_x(r: Rectangle) -> Int = r.origin.x  # nested access
 Produce a modified copy of a record with `TypeName{base | field: val, ...}`.
 Only the listed fields change; all others are copied from `base`:
 
-```cure
+```text
 fn set_x(p: Point, new_x: Int) -> Point = Point{p | x: new_x}
 fn birthday(p: Person) -> Person = Person{p | age: p.age + 1}
 fn translate(p: Point, dx: Int, dy: Int) -> Point =
@@ -462,7 +462,7 @@ fn rename(p: Person, new_name: String) -> Person =
 
 Multiple fields can be overridden in one expression:
 
-```cure
+```text
 fn move(p: Point, nx: Int, ny: Int) -> Point = Point{p | x: nx, y: ny}
 ```
 
@@ -494,7 +494,7 @@ implementation Show for Int
 
 Generic callers state dictionary requirements explicitly:
 
-```cure
+```text
 fn display(x: t) -> String requires Show(t) = show(x)
 ```
 
@@ -520,14 +520,20 @@ maps event constructors to `FsmAction` values under `events`:
 ```cure
 use Std.Fsm
 
-fsm Cure.Ticker
+fsm Ticker
   state Int
   events
     Tick -> :keep_state_and_data
 ```
 
+Undeclared event constructors are collected into an `Event` enum owned by
+the generated machine (`Ticker.Event`), alongside its `State`. Companion
+types live inside the machine, not beside it, so the surrounding module
+neither sees nor collides with them.
+
 `states`, `initial` and `event_type` name the state and event types
-instead of deriving them. `states` requires `initial`:
+instead of deriving them — that is how the enclosing module gets a name it
+can use. `states` requires `initial`:
 
 ```cure
 use Std.Fsm
@@ -535,7 +541,7 @@ use Std.Fsm
 type CounterState = Idle | Counting
 type CounterEvent = Start | Bump
 
-fsm Cure.Counter
+fsm Counter
   state Int
   states CounterState
   initial Idle
@@ -552,7 +558,7 @@ macro over the same floor. It catalogs the rows into nominal `State` and
 ```cure
 use Std.Fsm
 
-fsm Cure.TrafficLight with Int
+fsm TrafficLight with Int
   Red    --Timer-->     Green
   Green  --Timer-->     Yellow
   Yellow --Timer-->     Red
@@ -585,7 +591,7 @@ The keyword form `send target, msg` is preserved and desugars to the
 same `{:send, ...}` MetaAST node. Binding power is one notch below `|>`,
 non-associative.
 
-```cure
+```text
 pid <-| :ping
 pid ✉  :ping
 request
@@ -595,8 +601,8 @@ request
 
 ### `actor`
 
-```cure
-actor Cure.Counter state Int handle_info
+```text
+actor Counter state Int handle_info
   let pid: Pid(Atom) = beam_ops self
   %[:noreply, state + 1]
 ```
@@ -608,7 +614,14 @@ effectful bodies follow one checked path.
 ### `sup`
 
 ```cure
-sup Cure.Root children [Std.Supervisor.child(:"Cure.Counter", :counter)]
+use Std.Supervisor
+
+sup Root
+  strategy OneForOne()
+  children
+    worker Counter as counter
+      restart Permanent()
+      shutdown Timeout(5000)
 ```
 
 Child policies use closed `Restart`, `Shutdown`, and `ChildType` values from
@@ -633,15 +646,17 @@ over the same typed operations.
 
 ## Applications (v0.26.0)
 
-The auto-preluded `app` macro creates a transparent lifted OTP application.
-See `docs/APP.md` for the authoritative reference.
+The `app` macro creates a transparent lifted OTP application. It lives in
+`Std.App`, so a unit that declares one must `use` it. `root` names the
+supervisor the application starts, and is the container's only clause -- start
+phases and the dependency list come from `cure.toml`. See `docs/APP.md` for the
+authoritative reference.
 
 ```cure
-app Cure.MyApp root :"Cure.Root"
-app Cure.Phased phase :warm_cache
-  let pid: Pid(Atom) = beam_ops self
-  :ok
-app Cure.MultiPhase phases [:warm_cache, :warmed, :ready, :started]
+use Std.App
+
+app MyApp
+  root Root
 ```
 
 The `phase` form accepts one delayed body and the `phases` form dispatches a
@@ -670,7 +685,7 @@ is the authority.
 `match` (and `let`) support deep destructuring across every structural
 form in the language. As of v0.18.0 the supported pattern shapes are:
 ### Literals and variables
-```cure
+```text
 match x
   0      -> "zero"
   n      -> "nonzero"
@@ -679,7 +694,7 @@ match x
 `_` is the wildcard. A name starting with `_` (for example `_unused`)
 is a binding that silences the unused-variable warning.
 ### Tuples and lists
-```cure
+```text
 match pair
   %[a, b]        -> a + b
   %[a, b, _rest] -> a + b
@@ -693,7 +708,7 @@ Cons is single-head only: `[h | t]` binds `h` to the head and `t` to
 the tail. Matching against a literal-length list (`[a, b, c]`) requires
 the list to have that exact length.
 ### Maps
-```cure
+```text
 match request
   %{method: "GET", path: p}    -> fetch(p)
   %{method: m, path: _}        -> reject(m)
@@ -702,7 +717,7 @@ Map keys in pattern position must be literal values. A map pattern
 matches if every listed key is present in the subject; keys not
 mentioned are ignored (open matching, like Elixir's `%{...}`).
 ### Records and field punning
-```cure
+```text
 match person
   Person{name, age}                    -> salute(name, age)
   Person{name, address: Address{city}} -> greet(name, city)
@@ -712,7 +727,7 @@ A bare identifier inside a record pattern is shorthand for
 with a `__struct__ := :tag` guard, so they only match values built
 with the same record type.
 ### ADT constructors
-```cure
+```text
 match result
   Ok(v)         -> v
   Error(reason) -> default
@@ -725,7 +740,7 @@ Nullary constructors may be written bare (`None`) or with explicit empty
 parentheses (`None()`). A bare PascalCase name is resolved against the
 scrutinee type's constructors; lowercase bare names remain variable bindings.
 ### The pin operator `^x`
-```cure
+```text
 let target = get_tag()
 
 match event.tag
@@ -735,7 +750,7 @@ match event.tag
 `^x` compares against a previously-bound value rather than binding
 fresh. Lowered by the compiler to a guard `V_fresh =:= V_x`.
 ### Repeated variables
-```cure
+```text
 match pair
   %[x, x] -> :equal
   _       -> :different
@@ -746,7 +761,7 @@ position (so the pattern only matches when all occurrences hold the
 same value).
 ### Nested destructuring
 Any combination of the above can be nested:
-```cure
+```text
 match value
   %[_, %{list: [head | tail]}, _] -> handle(head, tail)
   Person{name: n, address: Address{city: c, zip: _}} when c == "Madrid" ->
@@ -771,7 +786,7 @@ the construct total by construction. Guards must type to `Bool`
 first `true`. The legacy `if`/`elif` shape is removed; the
 `cure rewrite if-to-pickup` tool migrates surviving sources.
 
-```cure
+```text
 pickup
   status >= 500 -> :server_error
   status >= 400 -> :client_error
@@ -793,7 +808,7 @@ Legacy `if`/`else` is removed; see
 shape historically rendered as `if x > 0 then "positive" else
 "non-positive"` is now written:
 
-```cure
+```text
 pickup
   x > 0 -> "positive"
   else  -> "non-positive"
@@ -801,7 +816,7 @@ pickup
 
 ### Let bindings
 
-```cure
+```text
 let x = 42
 let y = x * 2
 ```
@@ -811,7 +826,7 @@ pattern grammar as `match` arms: ADT constructors, tuples, cons
 cells, record field punning, maps, and binary segments. Each bound
 variable carries the narrowed scrutinee type.
 
-```cure
+```text
 let Ok(x)         = parse(input)       # ADT constructor
 let %[a, b]       = pair                # tuple destructure
 let [h | _rest]   = xs                  # cons destructure
@@ -834,7 +849,7 @@ chain is hyphen-joined and covers type (`integer`, `float`, `utf8`,
 signedness, endianness, `size(expr)`, and `unit(n)`. See
 `docs/BINARIES.md` for the authoritative reference.
 
-```cure
+```text
 let header       = <<42, 1, 2, 3>>
 let <<tag, _::binary>> = buffer
 
@@ -857,7 +872,7 @@ segments degrade the refinement to plain `Bitstring` and emit the
 
 ### Binary comprehension generators
 
-```cure
+```text
 [byte for <<byte <- "abc">>]       # [97, 98, 99]
 [word for <<word::16 <- buf>>]     # 16-bit words, big-endian
 [ch   for <<ch::utf8 <- text>>]    # UTF-8 code points
@@ -906,7 +921,7 @@ Unterminated`.
 
 ### Pipe operator
 
-```cure
+```text
 5 |> double |> add(1)
 # desugars to: add(double(5), 1)
 ```

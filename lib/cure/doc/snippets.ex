@@ -32,6 +32,11 @@ defmodule Cure.Doc.Snippets do
           info: String.t()
         }
 
+  # Every word that can head a top-level declaration. A head missing from this
+  # list is read as the start of an expression, so the fence is wrapped in
+  # `fn snippet() =` and then fails on the wrapper's shape rather than on
+  # anything the page wrote. `proto`/`impl` are deliberately absent: they are
+  # retired spellings that emit a migration warning and do not reach codegen.
   @declaration_starts ~w[
     @
     data
@@ -39,9 +44,12 @@ defmodule Cure.Doc.Snippets do
     fn
     implementation
     interface
+    local
     macro
-    primitive
+    opaque
     precedencegroup
+    primitive
+    rec
     type
     typealias
     use
@@ -93,7 +101,11 @@ defmodule Cure.Doc.Snippets do
       Path.basename(normalized) in [
         "CHANGELOG.md",
         "RELEASE.md",
+        "RELEASE-0.18.0.md",
         "ROADMAP-0.34.md",
+        "DEPENDENT_KERNEL_PEERNESS_ROADMAP.md",
+        "DEPENDENT_TYPE_SLICES.md",
+        "STDLIB_DEPENDENT_CLAIMS_AUDIT.md",
         "AUTOPILOT-REPORT-anonymous-adts.md"
       ] or
       normalized in [Path.expand("docs/STDLIB.md"), Path.expand("docs/DOC.md")]

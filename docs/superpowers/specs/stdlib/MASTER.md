@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-21
 
-Scope: condensed authority for standard-library-driven language/library designs under this folder. Current designs include **`Std.Optic`** and the clean replacement of `Std.Regex` with a dependently typed TyRE parser.
+Scope: condensed authority for standard-library-driven language/library designs under this folder. Current designs include **`Std.Optic`**, the clean replacement of `Std.Regex` with a dependently typed TyRE parser, and **`Std.Versioned`** for gapless, support-windowed evolution.
 
 ## Motivation and replacement mandate
 
@@ -87,5 +87,6 @@ Layer E + `lib/std/optic.cure`; escalates to K only if the large-elimination pro
 
 ## Source specs
 
+- `2026-08-02-stdlib-versioned-lineage-design.md` — opaque Nat-indexed release lineages, optional labels, exhaustive historical decisions, and a non-shrinking support window whose minimum requires simultaneous support for the current and previous versions.
 - `2026-07-11-std-optic-design.md` — full `Std.Optic` design: motivation, prior art, kernel constraints, 2A kind-indexed representation, dot-path surface, `Std.Dynamic`, migration table, test/oracle plan.
 - `2026-07-21-dependently-typed-regex-design.md` — breaking replacement of the current unindexed recursive matcher with shape-indexed TyRE, compile-time literals, Thompson NFA, evidence VM, proofs, typed extraction, properties, and ordered implementation phases.

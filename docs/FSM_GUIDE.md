@@ -11,7 +11,7 @@ The preferred surface is the transition graph itself:
 ```cure
 use Std.Fsm
 
-fsm Cure.Turnstile with Int
+fsm Turnstile with Int
   Locked --Coin--> Unlocked
     update data + 1
   Unlocked --Push--> Locked
@@ -40,7 +40,7 @@ rec TurnstileData
   pushes: Int
   enabled: Bool
 
-fsm Cure.Turnstile with TurnstileData
+fsm Turnstile with TurnstileData
   Locked --Coin--> Unlocked
     update TurnstileData{
       data
@@ -65,7 +65,7 @@ by a compiler-owned FSM parser:
 ```cure
 use Std.Fsm
 
-fsm Cure.Light with Int
+fsm Light with Int
   Red --Timer--> Green
   Green --Timer--> Yellow
   Yellow --Timer--> Red
@@ -84,20 +84,18 @@ handle. Events go through `send/2`, and the event constructors are the ones
 derived from the table.
 
 ```cure
-use Std.Fsm
+mod TrafficLight
+  use Std.Fsm
+  use Std.Otp
 
-fsm Cure.TrafficLight with Int
-  Red    --Timer--> Green
-  Green  --Timer--> Yellow
-  Yellow --Timer--> Red
+  fsm Machine with Int
+    Red    --Timer--> Green
+    Green  --Timer--> Yellow
+    Yellow --Timer--> Red
 
-mod TrafficLight.Driver
-  fn boot() -> Effect(Tuple) = Cure.TrafficLight.start_link(0)
+  fn boot() -> Effect(Tuple) = Machine.start_link(0)
 
-  fn run() -> Unit =
-    match Cure.TrafficLight.start(0)
-      Started(machine) -> Cure.TrafficLight.send(machine, Timer())
-      _                -> unit()
+  fn start() -> Effect(StartResult(Machine.Handle)) = Machine.start(0)
 ```
 
 `start/1` returns a `Std.Otp.StartResult(Handle)`, so the failure cases are in

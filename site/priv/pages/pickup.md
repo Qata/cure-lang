@@ -264,7 +264,7 @@ side effect *is* the test (e.g. `lock_acquired?(lock)`).
 
 ### Bind once, dispatch many
 
-```cure
+```text
 # Less clear: each `next_token()` call advances state
 pickup
   next_token() == :open  -> parse_block()

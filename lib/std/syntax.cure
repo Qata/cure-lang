@@ -354,8 +354,14 @@ mod Std.Syntax
   fn integer(value: Int) -> Syntax =
     Leaf(:literal, [KV(:subtype, SAtom(:integer))], SInt(value))
 
+  ## `typealias` is what the authored surface tags this node with, and the
+  ## elaborator's header pre-pass keys off it: only a flagged alias gets a
+  ## forward-referenceable header. Emitting the flag is therefore not cosmetic
+  ## -- without it a generated alias (`Handle`, `Data` in an `fsm`) is invisible
+  ## to any declaration lowered before it, including the enclosing unit's own
+  ## declarations, which module lifting inlines ahead of the generated ones.
   fn alias_node(name: String, rhs: Syntax) -> Syntax =
-    Node(:type_annotation, [KV(:name, SStr(name))], [rhs])
+    Node(:type_annotation, [KV(:name, SStr(name)), KV(:typealias, SBool(true))], [rhs])
 
   fn enum_type(name: String, variants: List(Syntax)) -> Syntax =
     Node(:container, [

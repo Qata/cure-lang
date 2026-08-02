@@ -12,6 +12,8 @@ defmodule Cure.Compiler.LiftModule do
 
   @type unit :: %{
           module: module(),
+          module_name: String.t(),
+          env: term(),
           forms: [tuple()],
           behaviour: atom(),
           dependencies: [String.t()],
@@ -52,7 +54,7 @@ defmodule Cure.Compiler.LiftModule do
     inherited =
       Enum.reject(inherited, fn node ->
         name = declared_name(node)
-        name != nil and name in taken
+        (name != nil and name in taken) or depends_on_lifted_module?(node, request.module)
       end)
 
     # Inherited declarations come FIRST: they lexically precede the lifted module
@@ -70,6 +72,54 @@ defmodule Cure.Compiler.LiftModule do
 
     %{request | declarations: declarations, imports: imports, dependencies: imports}
   end
+
+  # The enclosing unit may contain consumers of the module being lifted:
+  #
+  #     fsm Machine ...
+  #     fn run() = Machine.start(...)
+  #
+  # Such a function depends on the finished lifted surface and must not be
+  # copied back into `Machine` while that surface is being constructed. Doing
+  # so creates a false cycle; one bad consumer then prevents the lift from
+  # contributing any surface to the enclosing module, which is reported as the
+  # misleading `Machine.start is not available`. Other enclosing helpers remain
+  # inherited so generated callback bodies can call them as before.
+  defp depends_on_lifted_module?({:function_def, _meta, _children} = node, module)
+       when is_binary(module) do
+    spellings =
+      module
+      |> String.trim_leading("Cure.")
+      |> then(fn name -> [name, name |> String.split(".") |> List.last()] end)
+      |> Enum.uniq()
+
+    references_module?(node, spellings)
+  end
+
+  defp depends_on_lifted_module?(_node, _module), do: false
+
+  defp references_module?({tag, meta, children}, spellings) do
+    referenced_in_meta?(meta, spellings) or
+      references_module?(children, spellings) or
+      references_module?(tag, spellings)
+  end
+
+  defp references_module?(items, spellings) when is_list(items),
+    do: Enum.any?(items, &references_module?(&1, spellings))
+
+  defp references_module?(_other, _spellings), do: false
+
+  defp referenced_in_meta?(meta, spellings) when is_list(meta) do
+    Enum.any?(meta, fn {_key, value} ->
+      if is_atom(value) or is_binary(value) do
+        name = to_string(value)
+        Enum.any?(spellings, &String.starts_with?(name, &1 <> "."))
+      else
+        false
+      end
+    end)
+  end
+
+  defp referenced_in_meta?(_meta, _spellings), do: false
 
   defp taken_names(request) do
     callback_names = Enum.map(request.callbacks, &to_string(Map.get(&1, :name)))
@@ -225,11 +275,18 @@ defmodule Cure.Compiler.LiftModule do
   @spec emit(map()) :: {:ok, unit()} | {:error, term()}
   def emit(%{module: module, behaviour: behaviour} = request) do
     with {:ok, module_ast} <- ordinary_module_ast(request),
+         {:ok, module_name} <- ordinary_module_name(module),
          {:ok, env, local_defs} <- Program.check_ast_with_locals(module_ast),
          {:ok, forms} <- Emit.compile_forms(env, Program.module_atom(module_ast), local_defs) do
       {:ok,
        %{
          module: Program.module_atom(module_ast),
+         # The checked environment and the owner spelling it is keyed under
+         # (`Demo.Machine`, not `Cure.Demo.Machine`) are what lets the enclosing
+         # unit name this module's members -- see
+         # `Cure.Elab.Program.check_ast_artifact/2`'s `:qualified_envs` option.
+         module_name: module_name,
+         env: env,
          forms: add_behaviour_attribute(forms, behaviour),
          behaviour: behaviour,
          dependencies: Map.get(request, :dependencies, []),

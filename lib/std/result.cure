@@ -11,12 +11,14 @@ mod Std.Result
   ## ```cure
   ## use Std.Result
   ##
+  ## let positive = fn(x: Int) -> Result(Int, Atom) =
+  ##   pickup
+  ##     x > 0 -> ok(x)
+  ##     else  -> error(:neg)
+  ##
   ## ok(42)
   ##   |> map(fn(x) -> x * 2)
-  ##   |> and_then(fn(x) ->
-  ##        pickup
-  ##          x > 0 -> ok(x)
-  ##          else  -> error(:neg))
+  ##   |> and_then(positive)
   ##   |> unwrap(0)                          # => 84
   ## ```
   ##

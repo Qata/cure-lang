@@ -152,7 +152,7 @@ fn first_two(xs: List(Int)) -> Int =
 
 Tuple literals and patterns share the `%[...]` prefix.
 
-```cure
+```text
 fn tuple_kind(value: Tuple(Int, Int)) -> Atom =
   match value
     %[0, 0] -> :origin
@@ -169,7 +169,7 @@ the compiler lowers each field to an Erlang `map_field_exact` entry,
 which means the key is required to be present in the scrutinee. Fields
 not listed in the pattern are ignored (open matching).
 
-```cure
+```text
 fn request_kind(request: Map) -> Atom =
   match request
     %{method: "GET", path: _p} -> :fetch
@@ -178,7 +178,7 @@ fn request_kind(request: Map) -> Atom =
 
 A bare identifier at a map-key position is shorthand for `key: key`:
 
-```cure
+```text
 fn map_punning(x: Int, y: Int) -> Bool =
   %{x: x, y: y} == %{x: x, y: y}
 ```
@@ -216,7 +216,7 @@ form `{:tuple, L, [tag_atom | child_forms]}`. Any PascalCase name in
 function-call position inside a pattern is treated as a constructor
 pattern.
 
-```cure
+```text
 type Maybe = Some(Int) | None
 type Outcome = Ok(Int) | Error(Int)
 
@@ -233,7 +233,7 @@ type's constructors; lowercase bare names remain variable bindings.
 Constructor patterns recurse into their arguments as patterns, so
 nested ADTs decompose in a single arm:
 
-```cure
+```text
 type Nested = Some(Outcome) | None
 
 fn unwrap_nested(x: Nested) -> Int =
@@ -249,7 +249,7 @@ Every shape above composes with every other. The classic stress test
 from the v0.18.0 release notes destructures a 3-tuple whose middle
 element is a map holding a cons list:
 
-```cure
+```text
 type Event = Event(Int)
 
 fn nested(value: Tuple(Map, Int, Int)) -> Int =
@@ -265,7 +265,7 @@ There is no imposed depth limit.
 Guards restrict when a clause applies. They appear after `when`, both
 in function heads and in `match` arm heads:
 
-```cure
+```text
 type Message = Msg(String)
 
 fn classify(x: Int) -> String
@@ -295,7 +295,7 @@ Since v0.20.0, bitstring patterns accept the full Elixir-style segment
 grammar. Segments inside `<<...>>` carry type, size, endianness,
 signedness, and unit specifiers chained with `-`:
 
-```cure
+```text
 fn decode_packet(packet: Bitstring) -> Atom =
   match packet
     <<_tag::utf8, _size::16, _payload::binary, _rest::binary>> -> :decoded
@@ -310,7 +310,7 @@ signedness (`signed` / `unsigned`), and size/unit (`size(n)`,
 `integer-unsigned-big-size(8)-unit(1)`. A bare integer after `::` is
 shorthand for `size(n)`.
 
-```cure
+```text
 fn decode_bits(bin: Bitstring) -> Int =
   match bin
     <<x::8>> -> x
@@ -324,7 +324,7 @@ Unary minus in a pattern position compiles to the negated literal, so
 `-5` matches the integer `-5`. This works for both integer and float
 literals.
 
-```cure
+```text
 fn temperature_kind(temperature: Int) -> Atom =
   match temperature
     -273 -> :absolute_zero
@@ -391,7 +391,7 @@ The example below uses only pattern matching -- no recursion helper,
 no conditional expression -- to classify a JSON-shaped value across
 five constructor variants, each with a different secondary shape:
 
-```cure
+```text
 type Json =
   | JNull
   | JBool(Bool)

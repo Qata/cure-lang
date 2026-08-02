@@ -31,7 +31,7 @@ are idempotent, and imports do not leak transitive bare names.
 Universes are cumulative and predicative. A function's result may mention its
 arguments:
 
-```cure
+```text
 fn append(
   {a: Type},
   {m: Nat},
@@ -100,7 +100,7 @@ fn parse_flag(x: Bool) -> Result(Int, Atom) =
 `Sigma(name: a, b(name))` pairs a value with a second component whose type may
 depend on it. Ordinary tuple values and types use the same `%[...]` shape:
 
-```cure
+```text
 let pair : %[Int, Bool] = %[42, true]
 ```
 
@@ -173,7 +173,7 @@ constraints, and every nested pattern retains its authored source span.
 Pattern-valued `let` uses the same grammar and introduces bindings
 sequentially:
 
-```cure
+```text
 let Ok(%[head, tail]) = parse(input)
 ```
 

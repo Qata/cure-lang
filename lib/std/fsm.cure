@@ -363,23 +363,27 @@ mod Std.Fsm
     None() -> variable("data")
     Some(value) -> value
 
+  ## Expand the structured `fsm` family into a `gen_statem` module.
+  ##
+  ## The event type is a companion of the machine, so it is declared INSIDE the
+  ## generated module as `Event` -- the same place the transition-table emitter
+  ## puts its `State`/`Event`/`Data`. Declaring it beside the machine instead
+  ## would bind a name nobody wrote into the enclosing scope, and two sibling
+  ## modules each holding an `fsm` would collide on it.
   fn derive_fsm_family(name: ModuleNameSyntax, definition: FsmDefinitionSyntax) -> Syntax =
     let body = Node(:pattern_match, [], [variable("event") | children(definition.events)])
     let name_syntax: Syntax = name
     match derive_pattern_heads(body)
       InvalidHeads(reason) -> Failure(reason, [])
       Heads(heads) ->
-        let event_type = match definition.event_type
-          None() -> variable("FsmEvent")
-          Some(value) -> value
         let event_declarations = match definition.event_type
-          None() -> [enum_type("FsmEvent", heads)]
-          Some(_) -> []
+          None() -> [enum_type("Event", heads)]
+          Some(value) -> [alias_node("Event", value)]
         match definition.states
-          None() -> emit_fsm_parts(name_syntax, definition.state, event_type, event_declarations, fsm_handler(body))
+          None() -> emit_fsm_parts(name_syntax, definition.state, event_declarations, fsm_handler(body))
           Some(state_names) -> match definition.initial
             None() -> Failure(:typed_fsm_requires_initial_state, [])
-            Some(initial_state) -> emit_typed_fsm_parts(name_syntax, definition.state, state_names, initial_state, event_type, event_declarations, body)
+            Some(initial_state) -> emit_typed_fsm_parts(name_syntax, definition.state, state_names, initial_state, event_declarations, body)
 
   ## Supporting transition syntax remains independent of the structured family.
   macro FsmSyntax
@@ -408,7 +412,7 @@ mod Std.Fsm
     Next(state, data) -> Std.Beam.forget(%[:next_state, state, data])
     Stop(reason, data) -> Std.Beam.forget(%[:stop, exit_reason_atom(reason), data])
 
-  fn emit_fsm_parts(name_syntax: Syntax, state_type: Syntax, event_type: Syntax, event_declarations: List(Syntax), event_body: Syntax) -> Syntax =
+  fn emit_fsm_parts(name_syntax: Syntax, state_type: Syntax, event_declarations: List(Syntax), event_body: Syntax) -> Syntax =
     let module_name = match name_syntax
       Leaf(_, _, SAtom(name)) -> SAtom(name)
       _ -> SStr("Cure.Generated.Fsm")
@@ -421,18 +425,14 @@ mod Std.Fsm
         let result_type = call("Effect", [variable("Atom")])
         let init_type = call("Effect", [tuple_type([variable("Atom"), variable("Atom"), variable("State")])])
         let start_type = call("Effect", [variable("Tuple")])
-        block(append(event_declarations, [
-          Std.ActorBehavior.state_machine_module(module_name, [
-            alias_node("State", state_type),
-            alias_node("Event", event_type),
-            function("callback_mode", [], variable("Atom"), quote :handle_event_function),
-            function("init", [parameter("initial", variable("State"))], init_type, quote %[:ok, :initial, initial]),
-            function("handle_event", [parameter("event_type", variable("Atom")), parameter("event", variable("Event")), parameter("state", variable("Atom")), parameter("data", variable("State"))], result_type, event_body),
-            function("start_link", [parameter("initial", variable("State"))], start_type, call("Std.Otp.start_statem", [module_expr, variable("initial")]))
-          ])
-        ]))
+        Std.ActorBehavior.state_machine_module(module_name, append([alias_node("State", state_type)], append(event_declarations, [
+          function("callback_mode", [], variable("Atom"), quote :handle_event_function),
+          function("init", [parameter("initial", variable("State"))], init_type, quote %[:ok, :initial, initial]),
+          function("handle_event", [parameter("event_type", variable("Atom")), parameter("event", variable("Event")), parameter("state", variable("Atom")), parameter("data", variable("State"))], result_type, event_body),
+          function("start_link", [parameter("initial", variable("State"))], start_type, call("Std.Otp.start_statem", [module_expr, variable("initial")]))
+        ])))
 
-  fn emit_typed_fsm_parts(name_syntax: Syntax, data_type: Syntax, state_name_type: Syntax, initial_state: Syntax, event_type: Syntax, event_declarations: List(Syntax), event_body: Syntax) -> Syntax =
+  fn emit_typed_fsm_parts(name_syntax: Syntax, data_type: Syntax, state_name_type: Syntax, initial_state: Syntax, event_declarations: List(Syntax), event_body: Syntax) -> Syntax =
     let module_name = match name_syntax
       Leaf(_, _, SAtom(name)) -> SAtom(name)
       _ -> SStr("Cure.Generated.TypedFsm")
@@ -445,18 +445,16 @@ mod Std.Fsm
     let start_type = call("Effect", [variable("Tuple")])
     let decided = call("decide", [variable("event"), variable("state"), variable("data")])
     let encoded_body = call("Std.Fsm.action_to_beam", [decided])
-    block(append(event_declarations, [
-      Std.ActorBehavior.state_machine_module(module_name, [
-        alias_node("Data", data_type),
-        alias_node("StateName", state_name_type),
-        alias_node("Event", event_type),
-        function("callback_mode", [], variable("Atom"), quote :handle_event_function),
-        function("init", [parameter("initial", variable("Data"))], init_type, tuple([atom_literal(:ok), initial_state, variable("initial")])),
-        function("decide", [parameter("event", variable("Event")), parameter("state", variable("StateName")), parameter("data", variable("Data"))], action_type, event_body),
-        function("handle_event", [parameter("event_type", variable("Atom")), parameter("event", variable("Event")), parameter("state", variable("StateName")), parameter("data", variable("Data"))], result_type, encoded_body),
-        function("start_link", [parameter("initial", variable("Data"))], start_type, call("Std.Otp.start_statem", [module_expr, variable("initial")]))
-      ])
-    ]))
+    Std.ActorBehavior.state_machine_module(module_name, append([
+      alias_node("Data", data_type),
+      alias_node("StateName", state_name_type)
+    ], append(event_declarations, [
+      function("callback_mode", [], variable("Atom"), quote :handle_event_function),
+      function("init", [parameter("initial", variable("Data"))], init_type, tuple([atom_literal(:ok), initial_state, variable("initial")])),
+      function("decide", [parameter("event", variable("Event")), parameter("state", variable("StateName")), parameter("data", variable("Data"))], action_type, event_body),
+      function("handle_event", [parameter("event_type", variable("Atom")), parameter("event", variable("Event")), parameter("state", variable("StateName")), parameter("data", variable("Data"))], result_type, encoded_body),
+      function("start_link", [parameter("initial", variable("Data"))], start_type, call("Std.Otp.start_statem", [module_expr, variable("initial")]))
+    ])))
 
   ## checked block, so normalize each arm here in ordinary source-level syntax.
   fn fsm_handler(body: Syntax) -> Syntax = match tag(body) == :pattern_match

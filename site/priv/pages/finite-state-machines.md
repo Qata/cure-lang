@@ -18,10 +18,10 @@ There are two surfaces, and they are different macros:
 - **Structured FSMs** — `fsm <Name>`, with `state`, `events` and friends, when the
   handler logic matters more than the graph.
 
-Both require `use Std.Fsm`, and both require the FSM's name to be
-`Cure.`-qualified: the macro emits a module under exactly the name you write, so
-`fsm Turnstile` fails codegen with `invalid_module_name`. Write
-`fsm Cure.Turnstile`.
+Both require `use Std.Fsm`. A lifted name belongs to its enclosing module, just
+like every other declaration. At top level that owner is the implicit `Main`,
+while `fsm Turnstile` inside `mod Gate` emits `Cure.Gate.Turnstile`. In either
+case code in the same owner writes the local name, `Turnstile`.
 
 For long-lived processes whose behaviour is a flat message handler rather than a
 state-transition graph, reach for [typed actors and supervision
@@ -37,7 +37,7 @@ nominal enum types, `State` and `Event`, in the generated module.
 ```cure
 use Std.Fsm
 
-fsm Cure.TrafficLight with Int
+fsm TrafficLight with Int
   Red    --Timer--> Green
   Green  --Timer--> Yellow
   Yellow --Timer--> Red
@@ -54,7 +54,7 @@ type, threaded through transitions; it is what `init/1` is given and what
 ```cure
 use Std.Fsm
 
-fsm Cure.TrafficLightWithOverride with Int
+fsm TrafficLightWithOverride with Int
   Red    --Timer-->     Green
   Green  --Timer-->     Yellow
   Yellow --Timer-->     Red
@@ -73,7 +73,7 @@ allowed to have no outgoing transitions with `terminal` — which may be repeate
 ```cure
 use Std.Fsm
 
-fsm Cure.DoorLock with Int
+fsm DoorLock with Int
   initial Locked
   terminal Blocked
   Locked   --Unlock--> Unlocked
@@ -90,7 +90,7 @@ the FSM's data is bound as `data`.
 ```cure
 use Std.Fsm
 
-fsm Cure.Counter with Int
+fsm Counter with Int
   initial Counting
   terminal Done
   Counting --Tick--> Counting
@@ -111,7 +111,7 @@ An event may carry parameters. The parameter names are bound in that row's
 ```cure
 use Std.Fsm
 
-fsm Cure.Meter with Int
+fsm Meter with Int
   terminal Unlocked
   Locked --Insert(amount: Int)--> Unlocked
     when amount > 0
@@ -139,7 +139,7 @@ error, not a warning:
 So this is rejected — `C` and `D` are unreachable from `A`:
 
 ```text
-fsm Cure.Broken with Int
+fsm Broken with Int
   terminal B
   terminal D
   A --Go--> B
@@ -149,7 +149,7 @@ fsm Cure.Broken with Int
 and so is this, because `B` has no way out and was not declared terminal:
 
 ```text
-fsm Cure.Deadlocked with Int
+fsm Deadlocked with Int
   A --Go--> B
 ```
 
@@ -159,7 +159,7 @@ fire:
 ```cure
 use Std.Fsm
 
-fsm Cure.Router with Int
+fsm Router with Int
   terminal Fast
   terminal Slow
   Start --Dispatch--> Fast
@@ -170,8 +170,8 @@ fsm Cure.Router with Int
 
 ## The generated module
 
-`fsm Cure.Turnstile with Int` emits a module named exactly `Cure.Turnstile`
-containing:
+`fsm Turnstile with Int` emits a child module of its lexical owner which local
+code refers to as `Turnstile`, containing:
 
 - `type State` — an enum of every state constructor in the table.
 - `type Event` — an enum of every event constructor, carrying its payload types.
@@ -190,34 +190,32 @@ containing:
 ## Driving an FSM
 
 `start/1` returns a `Std.Otp.StartResult`, so the handle arrives already
-narrowed. Event constructors are in scope wherever the generated module is:
+narrowed. Event constructors belong to the generated module:
 
 ```cure
-use Std.Fsm
+mod Turnstile
+  use Std.Fsm
+  use Std.Otp
 
-fsm Cure.Turnstile with Int
-  Locked   --Coin--> Unlocked
-  Unlocked --Push--> Locked
-    update data + 1
+  fsm Machine with Int
+    Locked   --Coin--> Unlocked
+    Unlocked --Push--> Locked
+      update data + 1
 
-mod Turnstile.Driver
-  fn run() -> Unit =
-    match Cure.Turnstile.start(0)
-      Started(machine) -> Cure.Turnstile.send(machine, Coin())
-      _                -> unit()
+  fn start() -> Effect(StartResult(Machine.Handle)) = Machine.start(0)
 ```
 
 Under a supervisor, use `start_link/1` instead:
 
 ```cure
-use Std.Fsm
+mod Gate
+  use Std.Fsm
 
-fsm Cure.Gate with Int
-  terminal Closed
-  Open --Shut--> Closed
+  fsm Machine with Int
+    terminal Closed
+    Open --Shut--> Closed
 
-mod Gate.Driver
-  fn boot() -> Effect(Tuple) = Cure.Gate.start_link(0)
+  fn boot() -> Effect(Tuple) = Machine.start_link(0)
 ```
 
 ## Structured FSMs
@@ -229,14 +227,18 @@ constructors to actions under `events`.
 ```cure
 use Std.Fsm
 
-fsm Cure.Ticker
+fsm Ticker
   state Int
   events
     Tick -> :keep_state_and_data
 ```
 
-Event constructors that are not declared elsewhere are collected into a
-generated `FsmEvent` enum.
+Event constructors that are not declared elsewhere are collected into an `Event`
+enum belonging to the generated machine — `Ticker.Event` here. It is a companion
+of the machine, not a name bound beside it, so two modules can each declare a
+`Ticker` without colliding, and the constructors are not in scope for the code
+around the `fsm`. Use `event_type` (below) when the surrounding module needs to
+name the events itself.
 
 An action is a `FsmAction(state, data)`:
 
@@ -256,7 +258,7 @@ use Std.Fsm
 type DoorState = Locked | Unlocked
 type DoorEvent = Coin | Push
 
-fsm Cure.Door
+fsm Door
   state Int
   states DoorState
   initial Locked
@@ -275,7 +277,7 @@ use Std.Fsm
 type JobState = Working | Paused
 type JobEvent = Pause | Resume | Finish
 
-fsm Cure.Job
+fsm Job
   state Int
   states JobState
   initial Working

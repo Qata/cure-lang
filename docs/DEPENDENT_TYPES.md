@@ -30,7 +30,7 @@ type Wrapper = Wrap(Int)
 
 A result type may mention explicit arguments:
 
-```cure
+```text
 fn append(
   {a: Type},
   {m: Nat},
@@ -50,7 +50,7 @@ the emitted BEAM arity.
 `Sigma(x: a, b)` pairs a witness `x` with a second component whose type may
 mention that witness:
 
-```cure
+```text
 fn pack(d: Dec) -> Sigma(x: Dec, Dec) = %[d, d]
 fn recover(p: Sigma(x: Dec, Dec)) -> Dec = p.2
 ```

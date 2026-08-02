@@ -32,7 +32,7 @@ interface Comparable(t) requires Equatable(t)
 
 ## Implementing an interface
 
-```cure
+```text
 implementation Show for Int
   fn show(x: Int) -> String = Std.String.from_int(x)
 
@@ -56,7 +56,7 @@ type arguments, namespace, and source origin.
 
 A generic function states the dictionaries it needs with `requires`:
 
-```cure
+```text
 fn display(x: t) -> String requires Show(t) =
   "[" <> show(x) <> "]"
 ```

@@ -704,7 +704,7 @@ Evaluates constant expressions at compile time. Covers arithmetic (`+`, `-`,
 (`<>`), and comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`).
 
 Before:
-```cure
+```text
 fn answer() -> Int = 6 * 7
 fn greeting() -> String = "hello" <> " " <> "world"
 ```
@@ -788,7 +788,7 @@ fn main() -> Int = add(1)
 **E004: Non-Exhaustive Match** -- A match expression does not cover all
 possible patterns.
 
-```cure
+```text
 match x
   true -> "yes"
 # warning E004: missing pattern for 'false'

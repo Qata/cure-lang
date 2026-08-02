@@ -123,7 +123,7 @@ cp vicure/indent/cure.vim   ~/.vim/indent/
 
 ## Syntax showcase
 
-```cure
+```text
 ### Multi-line fenced doc comment.
 Demonstrates the surface area of modern Cure v0.28.x.
 ###

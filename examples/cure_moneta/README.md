@@ -15,7 +15,7 @@ mix test
 
 ## Domain model
 
-```cure
+```text
 type Currency = EUR | USD | GBP | JPY | CHF | OMR
 
 rec Money
@@ -34,7 +34,7 @@ functional record updates, and the float FFI are all ordinary Cure declarations.
 
 `cure_src/transaction.cure` declares a transparent FSM module:
 
-```cure
+```text
 fsm Cure.Transaction with 0
   fn initial_state() -> Atom = :idle
 ```
@@ -42,7 +42,7 @@ fsm Cure.Transaction with 0
 The `fsm` macro expands to a lifted module and uses `Std.Otp.start_statem` for
 startup. A transition-aware version can be expressed entirely in Cure:
 
-```cure
+```text
 fsm Cure.TransactionFlow state Int transitions [
   transition :idle :create :pending,
   transition :pending :submit :settled

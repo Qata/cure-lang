@@ -148,6 +148,36 @@ defmodule Cure.Compiler.TypedActorApiTest do
     assert :unit = apply(actor, :stop, [pid])
   end
 
+  test "a query-only actor gets the same call surface as one that also casts" do
+    # No `on_message` and no `on_cast`, so this goes down the raw branch of
+    # `derive_actor_family`. That branch used to ignore `definition.queries`
+    # outright: the module compiled clean, exported neither `handle_call/3` nor
+    # any adapter, and the `on_call` clauses vanished without a diagnostic.
+    source = """
+    use Std.Actor
+
+    actor QueryOnlyCounter
+      state Int
+      initial 7
+      on_call Value() returns Int
+        reply state
+      on_call Bump(step: Int) returns Int
+        reply state + step
+        update state + step
+    """
+
+    assert {:ok, _definition} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    actor = :"Cure.Main.QueryOnlyCounter"
+    assert {:handle_call, 3} in actor.module_info(:exports)
+
+    assert {:Started, pid} = apply(actor, :start, [])
+    assert 7 = apply(actor, :value, [pid])
+    assert 12 = apply(actor, :bump, [pid, 5])
+    assert 12 = apply(actor, :value, [pid])
+    assert :unit = apply(actor, :stop, [pid])
+    refute Process.alive?(pid)
+  end
+
   test "typed lifecycle hooks transform startup state and receive ExitReason on stop" do
     source = """
     mod LifecycleActorDefinition

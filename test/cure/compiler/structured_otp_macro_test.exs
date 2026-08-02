@@ -11,14 +11,16 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
         state Int
         events
           Tick -> :keep_state_and_data
-
-    fn make_event() -> FsmEvent = Tick
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert module == :"Cure.M"
-    assert apply(module, :make_event, []) == :Tick
     assert apply(:"Cure.Generated.StructuredFsm", :init, [0]) == {:ok, :initial, 0}
+
+    # The derived event type is a companion of the machine, so it is owned by
+    # the generated module rather than bound beside it in `M`.
+    assert {:"__impl_Equatable_Generated.StructuredFsm#Event_==", 2} in
+             :"Cure.Generated.StructuredFsm".module_info(:exports)
 
     assert apply(:"Cure.Generated.StructuredFsm", :handle_event, [
              :cast,
