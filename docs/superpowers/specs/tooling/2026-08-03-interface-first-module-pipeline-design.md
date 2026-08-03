@@ -1,8 +1,21 @@
 # Interface-first module and import pipeline — Design
 
-**Date:** 2026-08-03  
-**Status:** Proposed; implementation target after nominal `String` and JSON stabilization  
+**Date:** 2026-08-03
+
+**Status:** Proposed replacement; specification and tests precede implementation
+
 **Topic:** canonical modules, imports, interfaces, dependencies, and emission
+
+This document supersedes the implementation strategy in the earlier import,
+auto-order, and canonical-loader designs. Those documents remain useful as a
+record of observed failures, but they are not implementation authorities.
+
+The existing pipeline is now **legacy behavior under characterization**. No
+more local fixes are to be added to its loader, import ordering, prelude merge,
+or emission recovery paths unless needed to make a characterization test
+reproducible. The replacement is built alongside it, tested from its public
+contracts inward, switched over as one pipeline, and followed by deletion of
+the legacy paths.
 
 ## 1. Decision
 
@@ -66,38 +79,55 @@ DepGraph scanning, deterministic ordering, duplicate detection, artifact
 closure, and the distinction between lexical visibility and dependency
 availability remain useful and are retained under the stronger model below.
 
-## 3. Evidence from other compilers
+## 3. Comparative design study
 
-The design follows common compiler boundaries rather than copying one language
-wholesale.
+The replacement borrows boundaries, not surface syntax. No one comparison
+language has Cure's exact combination of dependent types, elaborator macros,
+type-class-like conformances, BEAM output, and ambient prelude.
 
-- **Swift:** all files in a module are visible to the frontend even when
-  separate primary-file jobs emit separate object files. External declarations
-  are obtained from serialized module interfaces. Job partitioning is not
-  language-visible file order.
-- **Rust:** a crate-wide module graph is built before staged name resolution.
-  `use` creates lexical bindings; declaration order does not schedule files.
-  Expansion-time resolutions are validated after expansion so macro order does
-  not change identity.
-- **Zig:** declarations, including declarations in imported files, are analyzed
-  on demand and are explicitly order-independent. Cure adopts demand-driven
-  body/interface loading, but not Zig's unchecked top-level model.
-- **Idris 2:** imported modules contribute checked interfaces, while backend
-  code generation receives a compiler-owned global definition context. Its
-  backend does not reconstruct dependent semantics from host-language modules.
-- **Elixir:** the parallel compiler waits when a file needs a module another
-  compiler process is producing. Cure adopts this only for final artifact work;
-  BEAM availability is too late to serve as Cure's semantic interface.
+| Language | Useful invariant | What Cure copies | What Cure does not copy |
+| --- | --- | --- | --- |
+| Idris 2 | Module names are canonical, imports consume checked TTC information, and visibility distinguishes private, `export`, and `public export`. Definitions needed for reduction by clients must be exported with their bodies. | Checked dependent interfaces; explicit distinction between signature visibility and reducibility; canonical qualified names. | Filename-driven semantic identity and the exact Idris visibility syntax. |
+| Lean 4 | Elaboration produces a kernel-checked environment; `.olean` files serialize constants and persistent environment extensions. Ordinary imports add public scope privately, `public import` reexports, and imported module environments are not recreated by executing source commands. | One checked environment containing declarations, instances, macros, aliases, and extension data; explicit reexport; artifact loading without source re-elaboration; an independent artifact checker. | Lean's default transitive unqualified availability and its filename-derived module identity. |
+| Rust | Name resolution is staged; `use` creates bindings while paths resolve in namespaces. Expansion-time resolution is provisional only if the final result remains stable. | Separate lexical bindings from module availability; namespace-aware canonical resolution; macro expansion must not make identity order-dependent. | Rust's precise namespace set, item visibility syntax, and crate/file surface model. |
+| Swift | A module is the compilation/distribution unit, separate from its source files. Serialized or textual module interfaces are compile-time inputs. Emitted textual interfaces can be immediately re-typechecked with `-verify-emitted-module-interface`. | Source order is not language semantics; interfaces are self-contained consumer inputs; every emitted interface is verified from a clean consumer view. | Swift's implicit same-module cross-file visibility as Cure's module declaration model, and ABI/library-evolution details. |
+| Zig | Declarations are order-independent and discovered on demand. Its module dependency graph may contain loops. | Order-independent declaration discovery and demand-driven ordinary-body analysis. | Treating an imported source file as a struct value, lazily analyzing source as the cross-module interface, or accepting a loop merely because discovery terminates. |
+| OCaml | A compilation unit has a signature and implementation; clients consume `.cmi` signatures rather than implementations. | Strong interface/implementation boundary and separately cacheable checked interfaces. | File-derived module identity and link-order semantics. |
+| GHC | `.hi` files are compiler-readable interfaces. Cross-module recursion is not guessed: each cycle is cut by an explicit, checked `hs-boot` contract that must agree with the implementation. | Interface cycles require a finite checked contract; implementation is checked against that contract. | A second hand-maintained boot file for every cycle. Cure derives a skeleton from explicit signatures in the source. |
+| Elixir | Parallel compilation may wait on another artifact producer. | Waiting is permitted at artifact publication/link verification only. | Using host module loading or export probing as Cure name resolution. |
 
-Primary references:
+Primary sources:
 
-- <https://download.swift.org/docs/assets/generics.pdf>
-- <https://doc.rust-lang.org/reference/names/name-resolution.html>
-- <https://doc.rust-lang.org/reference/items/use-declarations.html>
-- <https://ziglang.org/documentation/master/>
-- <https://idris2.readthedocs.io/en/latest/tutorial/modules.html>
-- <https://github.com/idris-lang/Idris2/blob/master/docs/source/backends/backend-cookbook.rst>
-- <https://hexdocs.pm/elixir/Kernel.ParallelCompiler.html>
+- [Idris 2 modules and visibility](https://idris2.readthedocs.io/en/latest/tutorial/modules.html)
+- [Idris 2 backend context](https://github.com/idris-lang/Idris2/blob/master/docs/source/backends/backend-cookbook.rst)
+- [Lean source files, imports, and `.olean` environments](https://lean-lang.org/doc/reference/latest/Source-Files-and-Modules/)
+- [Lean elaboration, kernel checking, and `lean4checker`](https://lean-lang.org/doc/reference/latest/Elaboration-and-Compilation/)
+- [Rust name-resolution stages and namespaces](https://doc.rust-lang.org/reference/names/name-resolution.html)
+- [Rust `use` declarations](https://doc.rust-lang.org/reference/items/use-declarations.html)
+- [Swift modules, files, and packages](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/accesscontrol/#Modules-Source-Files-and-Packages)
+- [Swift module-interface verification failure and verification flag](https://github.com/swiftlang/swift/issues/56573)
+- [Zig compilation model and declaration discovery](https://ziglang.org/documentation/master/#Compilation-Model)
+- [OCaml modules and separate compilation](https://ocaml.org/manual/4.06/moduleexamples.html#s%3Aseparate-compilation)
+- [GHC interface files and checked recursive-module boot contracts](https://ghc.gitlab.haskell.org/ghc/doc/users_guide/separate_compilation.html#mutually-recursive-modules-and-hs-boot-files)
+- [Elixir parallel compiler](https://hexdocs.pm/elixir/Kernel.ParallelCompiler.html)
+
+### 3.1 Decisions produced by the comparison
+
+1. Cure's semantic import product is a kernel-checked interface/environment,
+   not source, AST, BEAM exports, or a mutable elaborator environment.
+2. `use` is only a lexical projection. Dependency discovery and qualified
+   resolution are compiler services and cannot depend on a `use` side effect.
+3. Imported interfaces include all semantic extension data required to obtain
+   the same result: conformances, aliases, fixities, operators, macros,
+   reducibility, totality certificates, and extern ownership.
+4. A cycle is legal only when an interface contract for the whole component can
+   be checked without evaluating an unavailable peer body. Runtime-call cycles
+   are therefore easy; arbitrary compile-time cycles are not.
+5. Every serialized interface is loaded and checked in a fresh environment in
+   which its provider source, provider BEAM, and build-session mutable state are
+   unavailable.
+6. Demand-driven checking is an optimization after interfaces are sound. It is
+   never a substitute for constructing the module universe or checking exports.
 
 ## 4. Terminology and identities
 
@@ -116,6 +146,14 @@ available to one invocation. Every bulk entry point constructs one universe:
 - macro compilation and fallback evaluation.
 
 No entry point may independently invent a smaller name-resolution model.
+
+The universe is constructed from one immutable `ModuleManifest`. Package
+configuration, stdlib policy, compiler-owned modules, source roots, and cached
+interfaces are inputs to that manifest. The filesystem scanner, dependency
+sorter, elaborator, macro runner, incremental compiler, REPL, and emitter may
+query the manifest; none may maintain a synchronized copy of module identity or
+availability. If two inputs claim the same package/module identity, universe
+construction fails before parsing bodies.
 
 ### 4.2 Canonical module identity
 
@@ -410,6 +448,37 @@ universe/positivity/termination rules, or fail to reach a stable expansion are
 rejected with the full canonical cycle and triggering declarations. Alphabetical
 intra-SCC compilation is not a semantic solution.
 
+Cure does not infer an interface contract from bodies in a recursive component.
+Every declaration used across an interface-cycle edge must have an explicit
+surface signature. Exported types may be abstract across the edge, or may
+publish constructors/reduction rules explicitly. A declaration whose body is
+needed for definitional equality across the edge must be explicitly marked
+reducible/exported and must pass termination checking as part of the component.
+
+Consequently:
+
+```text
+A.f calls B.g, B.h calls A.k
+```
+
+is legal when all four signatures check and the calls are ordinary runtime
+references. In contrast:
+
+```text
+A.T = B.F(A.T)
+B.F(t) computes by inspecting A.T's unavailable definition
+```
+
+is rejected unless the complete published reduction rules form a terminating,
+kernel-checkable component. A macro which must run to discover the signature of
+its own provider is always rejected. The diagnostic identifies the exact edge
+that needs an unavailable body and suggests adding a signature, making the
+export opaque, moving the compile-time definition, or breaking the cycle.
+
+This is intentionally closer to GHC's explicit boot contract than Zig's
+permitted discovery loops. Cure keeps the contract in the ordinary source
+signature instead of duplicating it in a boot file.
+
 ### 9.3 Macro and compile-time execution cycles
 
 A macro provider may depend on checked interfaces, but a cycle requiring an
@@ -469,10 +538,12 @@ dependency absence or a cascade from a rejected provider.
 
 ## 12. Public language behavior
 
-This redesign adds no required surface syntax. Existing source remains:
+Ordinary source remains unchanged. Cure adds the `public` modifier only for an
+explicit reexport; an ordinary `use` is never inferred to be public:
 
 ```cure
 use Std.List
+public use Public.Api
 
 fn first(values: List(t)) -> Option(t) = head(values)
 fn length_of(s: String) -> Int = Std.String.length(s)
@@ -481,6 +552,8 @@ fn length_of(s: String) -> Int = Std.String.length(s)
 Normative behavior:
 
 - `head` is bare-visible because of `use Std.List`.
+- names exported by `Public.Api` may cross this module boundary because its use
+  is explicitly `public`;
 - `Std.String.length` is qualified-resolved without exposing bare `length`.
 - `String` may be ambient because the prelude exports it.
 - `Std.List`'s imports do not leak into the consumer.
@@ -489,8 +562,8 @@ Normative behavior:
 - Macro generation of the qualified call produces the same canonical Core as
   authored syntax.
 
-The future `exposing` syntax changes only the lexical projection of `use`; it
-does not change interface availability or build scheduling.
+The future `exposing` syntax changes only the lexical projection of `use` or
+`public use`; it does not change interface availability or build scheduling.
 
 ## 13. Required architecture changes
 
@@ -527,59 +600,142 @@ module interfaces and need not be present in the Cure source universe. Extern
 owners and targets are recorded for packaging and diagnostics, while permitted
 dynamic host calls remain an explicit language/FFI choice.
 
-## 14. Implementation sequence
+## 14. TDD rebuild and cutover
 
-Each phase lands with focused regressions and a full applicable gate.
+The replacement is not implemented as edits distributed through the legacy
+pipeline. It begins behind one internal `module_pipeline: :interface_v2` switch
+and owns new data structures. Tests call the new boundary directly before any
+production entry point uses it.
 
-### I1 — Freeze counterexamples and invariants
+For every stage below, the order is mandatory:
 
-- Preserve the nominal-`String`/`Regex.Syntax.Model` reversed-order fixture.
-- Add authored and macro-generated qualified-call parity fixtures.
-- Assert ordinary Core globals are canonical before emission.
-- Trace every remaining loaded-BEAM semantic probe.
+1. add a failing public-contract example;
+2. add a failing structural/property test for the underlying invariant;
+3. implement the smallest stage that makes both pass;
+4. run all earlier stage tests unchanged; and
+5. compare legacy and replacement output only where legacy behavior is valid.
 
-### I2 — Canonical qualified resolution
+### R0 — Preserve evidence, freeze legacy
 
-- Route qualified paths through `ModuleIndex` and `ModuleInterface` only.
-- Separate interface availability from lexical `use` projections.
-- Make repeated interface loads idempotent and hash-keyed.
-- Remove macro-specific generated-dependency resolution.
+Before new implementation code:
 
-### I3 — Prelude and semantic edge recording
+- turn every known failure into a fixture, including nominal
+  `String`/`Regex.Syntax.Model`, the prelude provider recursively elaborating
+  `Std.Binary`, reversed file order, macro-generated qualified calls, and bare
+  `:same` reaching emission;
+- inventory every semantic call to the BEAM code server, every source-AST
+  dependency scan, every environment merge, and every compilation entry point;
+- snapshot valid public diagnostics and canonical Core, not internal legacy
+  maps; and
+- prohibit new production references to inventoried legacy APIs with an
+  architectural test.
 
-- Construct the ambient prelude once from canonical interfaces.
-- Record actual provider edges when ambient names are selected.
-- Complete edge recording for implementations, macros, generated declarations,
-  type references, externs, and runtime calls.
+### R1 — Pure manifest and identities
 
-### I4 — Interface SCC construction
+Tests first cover duplicate modules, missing providers, package/module identity,
+path independence, input-order independence, and deterministic diagnostics.
+Then implement the immutable `ModuleManifest`, canonical namespace-tagged
+`DefinitionKey`, and source provenance. No parser or elaborator environment is
+stored in the manifest.
 
-- Add skeleton predeclaration for the complete compilation universe.
-- Check interface SCCs as groups.
-- Implement component hashes and phase-specific cycle diagnostics.
-- Ensure no partial interface enters a consumer environment.
+Exit test: permuting roots, files, and discovery concurrency produces the same
+manifest serialization and diagnostics.
 
-### I5 — Body checking and validated closure
+### R2 — Skeletons, import semantics, and pure resolver
 
-- Make definition identity canonical from predeclaration through Core,
-  totality, reachability, and emission.
-- Replace atom-name closure with validated `ClosureEntry` values and paths.
-- Remove late bare-name recovery.
+Tests first specify every lookup case: local, bare `use`, qualified, prelude,
+private, reexported, transitive, ambiguous, macro definition-site, and each
+namespace. Then implement header/skeleton collection and pure
+`resolve_bare`/`resolve_qualified` functions returning canonical keys plus a
+resolution trace.
 
-### I6 — Unified entry points and emission
+Exit test: authored and generated syntax resolve identically without loading a
+Cure BEAM or elaborating a provider body.
 
-- Migrate stdlib, project, incremental, test, REPL, docs, bundle, escript, and
-  macro builds to the same pipeline.
-- Remove semantic BEAM probing.
-- Parallelize only artifact-safe work.
-- Publish complete verified generations atomically.
+### R3 — Checked interface artifacts
 
-### I7 — Cleanup and performance
+Tests first construct tiny valid and invalid semantic interfaces, including
+aliases, data families, conformances, operators, macros, externs, reducible
+definitions, and totality certificates. Then implement interface checking,
+normalization, hashing, serialization, and immutable idempotent loading.
 
-- Delete superseded bridges and order-only workarounds.
-- Add cold/warm interface and module timing diagnostics.
-- Cache interfaces and SCCs by semantic inputs.
-- Verify focused builds do not rebuild the entire stdlib unnecessarily.
+Every artifact test has a clean-consumer variant that removes source and BEAM
+availability, starts a fresh environment, loads only declared interface
+dependencies, and kernel-checks the result. This is a mandatory test helper,
+not an optional release flag.
+
+Exit test: source-built and artifact-loaded consumers produce identical
+canonical Core and selected conformances.
+
+### R4 — Prelude boot image and environment laws
+
+Tests first define the ambient surface and prove merge idempotence, identity
+stability, non-leakage, and direct-import preference. Then compile prelude
+providers into an ordinary verified interface set and construct one immutable
+ambient environment from that set. Building the prelude uses skeletons and
+interface components; it never recursively elaborates a provider's source.
+
+Exit test: `Std.Bool` cannot fail because an unrelated body in `Std.Binary` was
+elaborated while constructing ambient scope.
+
+### R5 — Graph completion, macros, and components
+
+Tests first cover each edge kind, recursive expansion, sibling freshening,
+generated declarations, newly generated module references, legal runtime
+cycles, explicit-signature interface cycles, and rejected compile-time cycles.
+Then implement the bootstrap graph, stable expansion/publication rounds,
+checked semantic graph, and component interface checking.
+
+Exit test: graph order and expansion execution mode do not change canonical
+interfaces; every semantic reference has an edge with provenance.
+
+### R6 — Bodies, totality, reachability, and emission
+
+Tests first assert that each reachable global resolves to a checked body,
+erased certified definition, or extern and that failures contain a predecessor
+path. Then check bodies against frozen interfaces and pass typed
+`ClosureEntry` values through totality and emission. Emission accepts canonical
+checked Core only and has no resolver fallback.
+
+Exit test: no bare ordinary definition key can be constructed after resolution,
+and emission has no `no such definition` exception path.
+
+### R7 — Entry-point shadowing
+
+Migrate clean project compilation first, then stdlib, incremental builds, tests,
+docs, macro execution, REPL, bundle, and escript. Each adapter is thin and is
+tested to submit the same manifest/options and consume the same result type.
+For valid programs, shadow mode compares diagnostics, normalized checked Core,
+semantic interface hashes, and runtime results. Artifact byte identity is not
+required where nondeterministic host metadata exists.
+
+No entry point switches by default until all entry points can run replacement
+mode in CI and the full verification matrix passes.
+
+### R8 — Atomic cutover and deletion
+
+Switch all entry points in one commit. In the immediately following deletion
+commit remove, rather than leave dormant:
+
+- `env_with_generated_dependencies/2` and stamped-AST scans;
+- recursive source/provider loading and loader-session semantic state;
+- loaded-BEAM export probing for Cure definitions;
+- late bare-tail guessing and alias-dependent recovery;
+- macro-specific module availability bridges;
+- duplicate prelude/import environment builders;
+- entry-point-specific dependency ordering; and
+- codegen re-elaboration or resolver fallback.
+
+An architectural test scans for the forbidden calls and modules. The legacy
+feature switch is deleted after one release candidate, not retained as a second
+pipeline.
+
+### R9 — Optimize only the finished model
+
+Add semantic-interface and component caches, parallel body/artifact work,
+atomic generation publication, cold/warm timing, and focused-build performance
+budgets. An optimization must pass the same permutation, clean-consumer, and
+property suites with caching disabled and enabled.
 
 ## 15. Verification matrix
 
@@ -661,4 +817,3 @@ This design is implemented only when:
 7. provider failures yield one causal diagnostic rather than missing-module
    cascades; and
 8. the full stabilization gate in section 15 is green.
-
