@@ -50,6 +50,7 @@ defmodule Cure.Elab.TotalityClosure do
     # postulate — spec §2.1 point 4). Certification is a category error for it, so
     # skip it here rather than hand its sentinel body to Kernel.check.
     |> Enum.reject(&extern_def?(env, &1))
+    |> Enum.reject(&bodyless_def?(env, &1))
     |> Enum.reduce_while({:ok, env}, fn name, {:ok, acc} ->
       case Kernel.validate_certificate(acc, name) do
         {:ok, acc2} -> {:cont, {:ok, acc2}}
@@ -112,6 +113,9 @@ defmodule Cure.Elab.TotalityClosure do
         Env.certified?(acc, name) ->
           acc
 
+        is_nil(def.body) ->
+          acc
+
         match?(%{body: {:hole, _}}, def) ->
           acc
 
@@ -131,6 +135,7 @@ defmodule Cure.Elab.TotalityClosure do
   end
 
   defp extern_def?(env, name), do: match?(%{body: {:extern, _}}, Env.get_def(env, name))
+  defp bodyless_def?(env, name), do: match?(%{body: nil}, Env.get_def(env, name))
 
   # -- seeds: globals appearing in family/constructor type positions ----------
 

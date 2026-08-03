@@ -33,6 +33,7 @@ defmodule Cure.Elab.Implementation do
     for_type = Keyword.fetch!(meta, :for_type)
     for_name = surface_for_name(for_type, Keyword.get(meta, :for))
     as_name = Keyword.get(meta, :as)
+    constraints = Keyword.get(meta, :constraints, [])
     implementation_span = implementation_header_span(meta)
     interface_span = implementation_interface_span(meta)
     interface_candidates = Map.keys(env.interfaces)
@@ -41,8 +42,15 @@ defmodule Cure.Elab.Implementation do
          desc when not is_nil(desc) <- Env.get_interface(env, iface),
          :ok <- check_no_stray_clauses(desc, iface, body),
          {:ok, method_map, mangled_fns} <-
-           build_methods(desc, iface, head, for_name, for_type, body, implementation_span, env),
-         ref = %{iface: iface, head: head, methods: method_map, as: as_name},
+           build_methods(desc, iface, head, for_name, for_type, body, implementation_span, constraints, env),
+         ref = %{
+           iface: iface,
+           head: head,
+           methods: method_map,
+           as: as_name,
+           for_type: for_type,
+           constraints: constraints
+         },
          {:ok, env1} <-
            register_instance(env, iface, head, as_name, ref, %{
              interface: iface,
@@ -222,13 +230,13 @@ defmodule Cure.Elab.Implementation do
   # function_def — either the instance's own clause renamed, or the interface
   # default specialised to this head type. Returns the `method => mangled_atom`
   # map alongside the decls.
-  defp build_methods(desc, iface, head, for_name, for_type, body, implementation_span, env) do
+  defp build_methods(desc, iface, head, for_name, for_type, body, implementation_span, constraints, env) do
     Enum.reduce_while(desc.method_order, {:ok, %{}, []}, fn method, {:ok, mm, fns} ->
       mangled = mangled_name(env, iface, head, method)
 
       with {:ok, fn_decl, origin} <- method_def(desc, method, for_type, body),
            :ok <- check_method_signature(desc, iface, method, for_type, fn_decl, origin, env) do
-        renamed = rename_fn(fn_decl, mangled)
+        renamed = rename_fn(fn_decl, mangled, constraints)
         {:cont, {:ok, Map.put(mm, method, mangled), fns ++ [renamed]}}
       else
         :missing ->
@@ -451,8 +459,14 @@ defmodule Cure.Elab.Implementation do
   defp type_ctor_name({:variable, _m, name}), do: name
   defp type_ctor_name(_other), do: nil
 
-  defp rename_fn({:function_def, m, b}, mangled),
-    do: {:function_def, Keyword.put(m, :name, Atom.to_string(mangled)), b}
+  defp rename_fn({:function_def, m, b}, mangled, constraints) do
+    meta =
+      m
+      |> Keyword.put(:name, Atom.to_string(mangled))
+      |> Keyword.update(:constraints, constraints, &(constraints ++ &1))
+
+    {:function_def, meta, b}
+  end
 
   defp mangled_name(env, iface, head, method) do
     base = :"__impl_#{iface}_#{head}_#{method}"

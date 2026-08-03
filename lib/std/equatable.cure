@@ -1,12 +1,7 @@
 @group(:core)
 @prelude
 mod Std.Equatable
-  ## `use Std.String` makes `String` the transparent `List(Char)` synonym, so
-  ## the `Equatable for String` instance's `==` resolves like any other list.
-  use Std.String
-  ## `use Std.Char` keeps the `Char` type name in scope for the Char instance;
   ## `use Std.Bool` supplies `` `not` `` for the derived `` `!=` ``.
-  use Std.Char
   use Std.Bool
   ## `use Std.Nat` keeps the `Nat` type name in scope for the `Nat` instance.
   ## `Nat` is a `@prelude` bootstrap type, so its `==` cannot be auto-derived
@@ -78,12 +73,6 @@ mod Std.Equatable
   implementation Equatable for Atom
     ## Structural atom equality (matches `build_binop`'s `struct_eq` lowering).
     fn `==`(a: Atom, b: Atom) -> Bool = Std.Builtin.struct_eq(Atom, a, b)
-
-  ## `Equatable` impl for `Char`: structural equality on the code-point-erased
-  ## value (matches `build_binop`'s `struct_eq` lowering for `:bounded` Char).
-  implementation Equatable for Char
-    ## Character equality.
-    fn `==`(a: Char, b: Char) -> Bool = Std.Builtin.struct_eq(Char, a, b)
 
   ## `Equatable` impl for `Nat`: structural equality on the Peano value. `Nat`
   ## is a bootstrap `@prelude` ADT, so it cannot auto-derive its own instance;

@@ -34,6 +34,25 @@ defmodule Cure.Elab.RecordTest do
     assert apply(mod, :g, []) == {:S, :Z}
   end
 
+  test "a same-named record family wins over its constructor in a Type-valued branch" do
+    src = """
+    mod RecordTypeBranch
+      type Shape = RecordShape | IntShape
+
+      rec Payload
+        value: Int
+
+      fn Sem(shape: Shape) -> Type = match shape
+        RecordShape -> Payload
+        IntShape -> Int
+
+      fn keep(value: Sem(RecordShape)) -> Payload = value
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
   test "brace construction with fields in declaration order" do
     src =
       @pt <>

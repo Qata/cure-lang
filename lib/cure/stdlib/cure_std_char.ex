@@ -2,9 +2,10 @@ defmodule :cure_std_char do
   @moduledoc """
   Runtime helper for `Std.Char`.
 
-  Target of the `@extern` bridge in `lib/std/char.cure`. A `Char` is
-  `Bounded(0x110000)`, which erases to a native integer (its Unicode code
-  point), so exposing the code point as an `Int` is the identity at run time.
+  Target of the `@extern` bridge in `lib/std/char.cure`. `Char` is a nominal
+  opaque carrier declared with `@erases(:integer)`, so it erases to its native
+  Unicode code-point integer and exposing that code point as an `Int` is the
+  identity at run time.
   The bridge exists purely to give that type-level `Char -> Int` coercion a
   name (`Std.Char.code_point`, the Lean `Fin.val` analog), which `Std.Comparable`'s
   `Char`/`String` instances use to compare code points. The name is

@@ -113,7 +113,7 @@ mod Std.Decimal
 
   implementation ExpressibleByDecimalLiteral for Decimal
     fn from_decimal_literal(literal: DecimalLiteral) -> LiteralResult(Decimal) =
-      match parse_numeric(literal.spelling, literal.spelling)
+      match parse_numeric(literal.spelling, Std.String.from_characters(literal.spelling))
         Ok(pair) -> match pair.2
           [] -> LiteralValue(pair.1)
           _ -> InvalidLiteral()
@@ -131,19 +131,19 @@ mod Std.Decimal
     let converted = assert_type from_natural_literal(literal) : LiteralResult(Decimal)
     match converted
       LiteralValue(value) -> Ok(value)
-      InvalidLiteral() -> Error(Std.Json.InvalidNumber(literal.spelling))
+      InvalidLiteral() -> Error(Std.Json.InvalidNumber(Std.String.from_characters(literal.spelling)))
 
   local fn decimal_json_integer(literal: IntegerLiteral) -> Result(Decimal, DecodeError) =
     let converted = assert_type from_integer_literal(literal) : LiteralResult(Decimal)
     match converted
       LiteralValue(value) -> Ok(value)
-      InvalidLiteral() -> Error(Std.Json.InvalidNumber(literal.spelling))
+      InvalidLiteral() -> Error(Std.Json.InvalidNumber(Std.String.from_characters(literal.spelling)))
 
   local fn decimal_json_decimal(literal: DecimalLiteral) -> Result(Decimal, DecodeError) =
     let converted = assert_type from_decimal_literal(literal) : LiteralResult(Decimal)
     match converted
       LiteralValue(value) -> Ok(value)
-      InvalidLiteral() -> Error(Std.Json.InvalidNumber(literal.spelling))
+      InvalidLiteral() -> Error(Std.Json.InvalidNumber(Std.String.from_characters(literal.spelling)))
 
   # -- Exact string parser --------------------------------------------------
 

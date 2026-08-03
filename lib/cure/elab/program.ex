@@ -64,7 +64,13 @@ defmodule Cure.Elab.Program do
   its dependency is always compiled first.
   """
   @spec validate_stdlib_imports(tuple() | list()) :: :ok | {:error, term()}
-  def validate_stdlib_imports(ast) do
+  def validate_stdlib_imports(ast), do: validate_stdlib_imports(ast, [])
+
+  @spec validate_stdlib_imports(tuple() | list(), [{String.t(), Env.t()}]) ::
+          :ok | {:error, term()}
+  def validate_stdlib_imports(ast, available_interfaces) do
+    available = MapSet.new(available_interfaces, fn {module_name, _env} -> module_name end)
+
     ast
     |> import_entries()
     |> Enum.reject(fn {_sources, meta} -> Keyword.get(meta, :prelude_injected, false) end)
@@ -74,7 +80,7 @@ defmodule Cure.Elab.Program do
         {:ok, module_name, _path} ->
           module = String.to_atom("Cure." <> module_name)
 
-          if match?({:file, _}, :code.is_loaded(module)) do
+          if MapSet.member?(available, module_name) or match?({:file, _}, :code.is_loaded(module)) do
             nil
           else
             missing_stdlib_error(module_name)
@@ -740,8 +746,8 @@ defmodule Cure.Elab.Program do
     do: with_loader_session(fn -> check_ast_elixir_core_in_session(ast, [], :ordinary) end)
 
   defp check_ast_elixir_core_in_session(ast, source_opts, prelude_mode, qualified_envs \\ []) do
-    with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
-         {:ok, qualified} <- qualified_resolved_imports(ast),
+    with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast, qualified_envs),
+         {:ok, qualified} <- qualified_resolved_imports(ast, qualified_envs),
          {:ok, prelude} <- checked_prelude_env(ast, prelude_mode),
          owner = find_module_name(ast) || "Main",
          imported = without_incoming_owner(imported, owner),
@@ -802,6 +808,7 @@ defmodule Cure.Elab.Program do
   defp without_incoming_owner(%Env{} = env, owner) when is_binary(owner) do
     defs = reject_owned(env.defs, owner)
     equations = reject_owned(env.equations, owner)
+    coherence = without_owned_coherence(env.coherence, owner)
 
     certified =
       case env.certified do
@@ -809,11 +816,25 @@ defmodule Cure.Elab.Program do
         nil -> nil
       end
 
-    %{env | defs: defs, equations: equations, certified: certified}
+    %{env | defs: defs, equations: equations, certified: certified, coherence: coherence}
   end
 
   defp reject_owned(table, owner),
     do: Map.reject(table, fn {key, _value} -> Cure.Elab.Name.owner(key) == owner end)
+
+  defp without_owned_coherence(nil, _owner), do: nil
+
+  defp without_owned_coherence(%Coherence{} = coherence, owner) do
+    anon = Map.reject(coherence.anon, fn {_key, ref} -> instance_owned_by?(ref, owner) end)
+    named = Map.reject(coherence.named, fn {_key, ref} -> instance_owned_by?(ref, owner) end)
+
+    %Coherence{
+      anon: anon,
+      named: named,
+      anon_origins: Map.take(coherence.anon_origins, Map.keys(anon)),
+      named_origins: Map.take(coherence.named_origins, Map.keys(named))
+    }
+  end
 
   defp certify_type_level_with_source(ast, env, opts) do
     case TotalityClosure.certify_type_level_detailed(env) do
@@ -1861,6 +1882,147 @@ defmodule Cure.Elab.Program do
 
   defp declarations(_other), do: []
 
+  @doc """
+  Build the canonical type-family skeleton for one source module.
+
+  Skeletons contain only predeclared family headers. They are sufficient to
+  break interface SCCs whose signatures mention a peer nominal type, but they
+  expose no unchecked function body or constructor payload to consumers.
+  """
+  @spec module_type_skeleton(String.t(), String.t()) :: {:ok, Env.t()} | {:error, term()}
+  def module_type_skeleton(module_name, path) when is_binary(module_name) and is_binary(path) do
+    with {:ok, source} <- File.read(path),
+         {:ok, tokens} <- Lexer.tokenize(source, file: path, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, file: path, emit_events: false),
+         :ok <- validate_module_identity(ast, module_name, Path.expand(path)),
+         :ok <- check_declarations(ast) do
+      env = Env.with_owner(seed_with_telescope_support(ast), module_name)
+
+      Enum.reduce_while(declarations(ast), {:ok, env}, fn declaration, {:ok, acc} ->
+        case Declarations.declare_header(declaration, acc) do
+          {:ok, next} -> {:cont, {:ok, next}}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+    end
+  end
+
+  @doc false
+  @spec module_signature_skeleton(String.t(), String.t(), [{String.t(), Env.t()}]) ::
+          {:ok, Env.t()} | {:error, term()}
+  def module_signature_skeleton(module_name, path, type_skeletons) do
+    with {:ok, source} <- File.read(path),
+         {:ok, tokens} <- Lexer.tokenize(source, file: path, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, file: path, emit_events: false),
+         {:ok, own} <- skeleton_env(module_name, type_skeletons),
+         {:ok, imported, _} <- shadow_resolved_imports(ast, type_skeletons),
+         {:ok, base} <- merge_env(imported, own),
+         base = Env.with_owner(base, module_name),
+         base = install_module_visibility(base, ast),
+         base = %{base | certified: base.certified || MapSet.new()},
+         {:ok, with_types} <-
+           Enum.reduce_while(declarations(ast), {:ok, base}, fn
+             declaration, {:ok, acc}
+             when elem(declaration, 0) in [:container, :indexed_type, :type_annotation] ->
+               case Declarations.elaborate(declaration, acc) do
+                 {:ok, next} -> {:cont, {:ok, next}}
+                 {:error, _} = error -> {:halt, error}
+               end
+
+             _declaration, state ->
+               {:cont, state}
+           end),
+         with_types = TotalityClosure.certify_deferred(with_types),
+         {:ok, with_interfaces} <-
+           Enum.reduce_while(declarations(ast), {:ok, with_types}, fn
+             {:interface, _, _} = declaration, {:ok, acc} ->
+               case Declarations.elaborate(declaration, acc) do
+                 {:ok, next} -> {:cont, {:ok, next}}
+                 {:error, _} = error -> {:halt, error}
+               end
+
+             _declaration, state ->
+               {:cont, state}
+           end),
+         {:ok, complete} <-
+           Enum.reduce_while(declarations(ast), {:ok, with_interfaces}, fn
+             {:function_def, _, _} = declaration, {:ok, acc} ->
+               case Declarations.register_signature(declaration, acc) do
+                 {:ok, next} -> {:cont, {:ok, next}}
+                 {:error, _} = error -> {:halt, error}
+               end
+
+             _declaration, state ->
+               {:cont, state}
+           end) do
+      signature = owned_signature_skeleton(complete, module_name)
+      # Conformance headers belong to the next SCC phase. A signature skeleton
+      # can otherwise retain a same-owner instance that arrived transitively
+      # through a previously loaded interface, and the conformance phase then
+      # reports the authored declaration as overlapping with itself.
+      {:ok, %{signature | coherence: nil}}
+    end
+  end
+
+  @doc false
+  @spec module_conformance_skeleton(String.t(), String.t(), [{String.t(), Env.t()}]) ::
+          {:ok, Env.t()} | {:error, term()}
+  def module_conformance_skeleton(module_name, path, signature_skeletons) do
+    with {:ok, source} <- File.read(path),
+         {:ok, tokens} <- Lexer.tokenize(source, file: path, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, file: path, emit_events: false),
+         {:ok, own} <- skeleton_env(module_name, signature_skeletons),
+         {:ok, imported, _} <- shadow_resolved_imports(ast, signature_skeletons),
+         {:ok, base} <- merge_env(imported, own),
+         base = Env.with_owner(base, module_name),
+         base = install_module_visibility(base, ast),
+         {:ok, complete} <-
+           Enum.reduce_while(declarations(ast), {:ok, base}, fn
+             {:implementation, _, _} = declaration, {:ok, acc} ->
+               case Cure.Elab.Implementation.register(declaration, acc) do
+                 {:ok, next, _method_declarations, _obligations} ->
+                   {:cont, {:ok, next}}
+
+                 {:error, _} = error ->
+                   {:halt, error}
+               end
+
+             _declaration, state ->
+               {:cont, state}
+           end) do
+      {:ok, owned_signature_skeleton(complete, module_name)}
+    end
+  end
+
+  defp owned_signature_skeleton(%Env{} = env, owner) do
+    owned? = fn key -> Cure.Elab.Name.owner(key) == owner end
+    defs = Map.filter(env.defs, fn {key, _} -> owned?.(key) end)
+    families = Map.filter(env.families, fn {key, _} -> owned?.(key) end)
+    ctors = Map.filter(env.ctors, fn {key, _} -> owned?.(key) end)
+
+    ctor_to_family =
+      Map.filter(env.ctor_to_family, fn {ctor, family} -> owned?.(ctor) and owned?.(family) end)
+
+    certified =
+      case env.certified do
+        %MapSet{} = names -> MapSet.filter(names, owned?)
+        nil -> nil
+      end
+
+    %{
+      env
+      | defs: defs,
+        families: families,
+        ctors: ctors,
+        ctor_to_family: ctor_to_family,
+        certified: certified,
+        coherence: owned_coherence(env.coherence, owner),
+        import_modules: MapSet.new(),
+        bare_modules: MapSet.new(),
+        bare_bindings: MapSet.new()
+    }
+  end
+
   defp append_context_field({:container, meta, fields}, rule) do
     if Keyword.get(meta, :name) == Map.get(rule, :syntax_type) and
          not Enum.any?(fields, &match?({:param, _, "context"}, &1)) do
@@ -2073,8 +2235,10 @@ defmodule Cure.Elab.Program do
         {:error, {:duplicate_module_identity, module_name, other_path, path}}
 
       {:loading, _stack, ^path} ->
-        cycle = loader_cycle(loader_active_stack(state), module_name)
-        {:error, {:import_cycle, cycle}}
+        # A back-edge may be an interface-only cycle. Publish the declaration
+        # and signature skeleton for this edge; the outer load still checks
+        # every body once the complete peer interfaces are available.
+        loading_signature_skeleton(state, module_name, path)
 
       {:loading, _stack, other_path} ->
         {:error, {:duplicate_module_identity, module_name, other_path, path}}
@@ -2092,12 +2256,6 @@ defmodule Cure.Elab.Program do
           other_name -> {:error, {:module_path_identity_mismatch, path, other_name, module_name}}
         end
     end
-  end
-
-  defp loader_cycle(stack, module_name) do
-    stack
-    |> Enum.drop_while(&(&1 != module_name))
-    |> Kernel.++([module_name])
   end
 
   defp load_new_module_interface(module_name, path) do
@@ -2121,6 +2279,31 @@ defmodule Cure.Elab.Program do
       {:error, reason} ->
         put_loader_state(%{state | modules: Map.put(state.modules, module_name, {:failed, path, reason})})
         {:error, reason}
+    end
+  end
+
+  defp loading_signature_skeleton(state, module_name, path) do
+    loading =
+      Enum.flat_map(state.modules, fn
+        {name, {:loading, _stack, loading_path}} -> [{name, loading_path}]
+        _ -> []
+      end)
+
+    with {:ok, types} <-
+           Enum.reduce_while(loading, {:ok, []}, fn {name, loading_path}, {:ok, acc} ->
+             case module_type_skeleton(name, loading_path) do
+               {:ok, env} -> {:cont, {:ok, [{name, env} | acc]}}
+               {:error, _} = error -> {:halt, error}
+             end
+           end),
+         {:ok, signatures} <-
+           Enum.reduce_while(loading, {:ok, []}, fn {name, loading_path}, {:ok, acc} ->
+             case module_signature_skeleton(name, loading_path, types) do
+               {:ok, env} -> {:cont, {:ok, [{name, env} | acc]}}
+               {:error, _} = error -> {:halt, error}
+             end
+           end) do
+      module_conformance_skeleton(module_name, path, signatures)
     end
   end
 
@@ -2896,7 +3079,7 @@ defmodule Cure.Elab.Program do
   # slices are elaborated, so merging is now a pure identity-preserving map
   # operation. Ambiguity is diagnosed later by Resolution against canonical
   # suffixes and the direct-import set.
-  defp shadow_resolved_imports(ast) do
+  defp shadow_resolved_imports(ast, skeletons) do
     # Prelude providers are loaded and export-filtered by `prelude_slice_env/1`.
     # Merging their full interfaces here would leak every sibling declaration
     # from an item-level marker (for example Std.String.length alongside the
@@ -2905,12 +3088,30 @@ defmodule Cure.Elab.Program do
 
     with {:ok, modules} <- resolve_import_modules(sources),
          {:ok, merged} <-
-           Enum.reduce_while(modules, {:ok, Env.empty()}, fn {_module_id, path}, {:ok, acc} ->
-             case module_slice_env(path) do
+           Enum.reduce_while(modules, {:ok, Env.empty()}, fn {module_id, path}, {:ok, acc} ->
+             interface =
+               case skeleton_env(module_id, skeletons) do
+                 {:ok, skeleton} -> {:ok, skeleton}
+                 :error -> module_slice_env(path)
+               end
+
+             case interface do
                {:ok, slice} ->
                  case merge_env(acc, slice) do
                    {:ok, merged} -> {:cont, {:ok, merged}}
                    {:error, _} = err -> {:halt, err}
+                 end
+
+               {:error, {:import_cycle, _}} = err ->
+                 case skeleton_env(module_id, skeletons) do
+                   {:ok, skeleton} ->
+                     case merge_env(acc, skeleton) do
+                       {:ok, merged} -> {:cont, {:ok, merged}}
+                       {:error, _} = merge_error -> {:halt, merge_error}
+                     end
+
+                   _ ->
+                     {:halt, err}
                  end
 
                {:error, _} = err ->
@@ -2925,11 +3126,14 @@ defmodule Cure.Elab.Program do
   # Qualified availability is not a lexical import. We load the same canonical
   # module interface so `M.f` and an imported `f` refer to one identity, but
   # install no `import_modules` directness and therefore expose no bare names.
-  defp qualified_resolved_imports(ast) do
+  defp qualified_resolved_imports(ast, skeletons) do
     names = qualified_module_names(ast)
     source_modules = Enum.reject(names, &ModuleIndex.compiler_owned?/1)
+    skeleton_names = MapSet.new(skeletons, fn {name, _env} -> name end)
+    loadable_modules = Enum.reject(source_modules, &MapSet.member?(skeleton_names, &1))
 
-    with {:ok, env} <- load_dependency_env(source_modules) do
+    with {:ok, env} <- load_dependency_env(loadable_modules),
+         {:ok, env} <- merge_lifted_surfaces(env, skeletons, find_module_name(ast) || "Main") do
       {:ok,
        %{
          env
@@ -2938,6 +3142,13 @@ defmodule Cure.Elab.Program do
            bare_bindings: MapSet.new(),
            qualified_modules: MapSet.new(names)
        }}
+    end
+  end
+
+  defp skeleton_env(module_name, skeletons) do
+    case Enum.find(skeletons, fn {name, _env} -> name == module_name end) do
+      {_name, %Env{} = env} -> {:ok, env}
+      nil -> :error
     end
   end
 
@@ -3250,31 +3461,41 @@ defmodule Cure.Elab.Program do
     Enum.reduce_while(right.anon, {:ok, left.anon, left.anon_origins}, fn {key = {iface, head}, ref},
                                                                           {:ok, anon, origins} ->
       case Map.fetch(anon, key) do
-        {:ok, ^ref} ->
-          origin = Map.get(origins, key) || Map.get(right.anon_origins, key, %{})
-          {:cont, {:ok, anon, Map.put(origins, key, origin)}}
+        {:ok, other} ->
+          if same_instance_ref?(other, ref) do
+            origin = Map.get(origins, key) || Map.get(right.anon_origins, key, %{})
+            {:cont, {:ok, anon, Map.put(origins, key, origin)}}
+          else
+            stored_first = Map.get(origins, key, %{})
+            stored_second = Map.get(right.anon_origins, key, %{})
+            {first, second} = merged_instance_origins(:anonymous, key, stored_first, stored_second)
 
-        {:ok, _other} ->
-          stored_first = Map.get(origins, key, %{})
-          stored_second = Map.get(right.anon_origins, key, %{})
-          {first, second} = merged_instance_origins(:anonymous, key, stored_first, stored_second)
-
-          {:halt,
-           {:error,
-            {:overlapping_instance,
-             %{
-               interface: iface,
-               head: head,
-               first_span: Map.get(first, :span),
-               second_span: Map.get(second, :span),
-               first_for: Map.get(first, :for),
-               second_for: Map.get(second, :for)
-             }}}}
+            {:halt,
+             {:error,
+              {:overlapping_instance,
+               %{
+                 interface: iface,
+                 head: head,
+                 first_span: Map.get(first, :span),
+                 second_span: Map.get(second, :span),
+                 first_for: Map.get(first, :for),
+                 second_for: Map.get(second, :for)
+               }}}}
+          end
 
         :error ->
           {:cont, {:ok, Map.put(anon, key, ref), Map.put(origins, key, Map.get(right.anon_origins, key, %{}))}}
       end
     end)
+  end
+
+  # Interface skeletons and full interfaces describe the same conformance with
+  # ASTs parsed in different source trees (`lib/std` versus the staged build
+  # copy). Source spelling and spans are provenance, not definition identity.
+  # The interface/head and owned method globals are the canonical identity; two
+  # genuinely distinct implementations cannot own the same canonical methods.
+  defp same_instance_ref?(left, right) do
+    Map.take(left, [:iface, :head, :methods, :as]) == Map.take(right, [:iface, :head, :methods, :as])
   end
 
   defp merge_named_instances(%Coherence{} = left, %Coherence{} = right) do
@@ -4090,8 +4311,10 @@ defmodule Cure.Elab.Program do
   end
 
   defp register_pass(items, env, prelude?) do
-    with {:ok, env_h} <- declare_type_headers(items, env) do
-      body_register_pass(items, env_h, prelude?)
+    with {:ok, env_h} <- declare_type_headers(items, env),
+         {:ok, alias_order} <- typealias_order(items, env_h),
+         {:ok, env_with_aliases} <- complete_typealiases(alias_order, items, env_h) do
+      body_register_pass(items, env_with_aliases, prelude?)
     end
   end
 
@@ -4242,7 +4465,7 @@ defmodule Cure.Elab.Program do
           {:ok, head} <- [Cure.Elab.Implementation.head_of(env, for_type)],
           ref = Map.get(coherence.anon, {iface, head}),
           not is_nil(ref),
-          instance_owned_by?(ref, owner),
+          instance_owned_by?(ref, owner) or Cure.Elab.Name.owner(head) == owner,
           do: {iface, head}
 
     # Auto-derived instances can also arrive back through a module's own stale

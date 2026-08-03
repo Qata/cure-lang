@@ -55,34 +55,11 @@ mod Std.Literal
   interface ExpressibleByAtomLiteral(t)
     fn from_atom_literal(literal: AtomLiteral) -> LiteralResult(t)
 
-  fn bounded_from_natural(bound: Nat, value: Nat) -> LiteralResult(Bounded(bound)) =
-    match bound
-      Z() -> assert_type InvalidLiteral() : LiteralResult(Bounded(Z()))
-      S(smaller_bound) ->
-        match value
-          Z() -> assert_type LiteralValue(First()) : LiteralResult(Bounded(S(smaller_bound)))
-          S(smaller_value) ->
-            match bounded_from_natural(smaller_bound, smaller_value)
-              LiteralValue(result) ->
-                assert_type LiteralValue(Next(result)) : LiteralResult(Bounded(S(smaller_bound)))
-              InvalidLiteral() ->
-                assert_type InvalidLiteral() : LiteralResult(Bounded(S(smaller_bound)))
-
   implementation ExpressibleByNaturalLiteral for Nat
     fn from_natural_literal(literal: NaturalLiteral) -> LiteralResult(Nat) = LiteralValue(literal.value)
 
   implementation ExpressibleByIntegerLiteral for Int
     fn from_integer_literal(literal: IntegerLiteral) -> LiteralResult(Int) = LiteralValue(literal.value)
-
-  implementation ExpressibleByNaturalLiteral for Char
-    fn from_natural_literal(literal: NaturalLiteral) -> LiteralResult(Char) =
-      bounded_from_natural(1114112, literal.value)
-
-  implementation ExpressibleByStringLiteral for List(Char)
-    fn from_string_literal(literal: StringLiteral) -> LiteralResult(List(Char)) = LiteralValue(literal.value)
-
-  implementation ExpressibleByCharacterLiteral for Char
-    fn from_character_literal(literal: CharacterLiteral) -> LiteralResult(Char) = LiteralValue(literal.value)
 
   implementation ExpressibleByAtomLiteral for Atom
     fn from_atom_literal(literal: AtomLiteral) -> LiteralResult(Atom) = LiteralValue(literal.value)

@@ -2,25 +2,45 @@
 mod Std.Char
   ## The Unicode code point — Cure's character type.
   ##
-  ## A `Char` is a Unicode scalar: an index below the code-point ceiling
-  ## `0x110000` (1114112). It is `Bounded(0x110000)`, so a `Char` value is one
-  ## machine integer that erases to its code point. Character literals (`'a'`,
+  ## A `Char` is a Unicode scalar, represented by its code point. It is a
+  ## nominal opaque carrier rather than an alias for `Bounded(0x110000)`, so
+  ## APIs cannot accidentally accept arbitrary bounded values as characters.
+  ## `@erases(:integer)` keeps the runtime representation to one machine integer.
+  ## Character literals (`'a'`,
   ## `'\n'`) elaborate to `Char` values, and a `String` is a `List(Char)`. This
   ## module gives the type its visible, documented home, mirroring
   ## `Std.Int`/`Std.Float`/`Std.Binary`/`Std.Atom`.
   ##
-  ## `use Std.Char` also brings `Bounded` into scope (via `use Std.Bounded`), so
-  ## a bare character literal elaborates without a separate `Bounded` import.
+  ## Construction is confined to literals and the checked `from_code_point`
+  ## boundary below, which excludes values outside Unicode scalar space.
 
-  use Std.Bounded
+  use Std.String
+  use Std.Equatable
+  use Std.Comparable
+  use Std.Literal
 
   ## `@prelude`: `Char` is ambient like `String` (which is `List(Char)`), so a
   ## bare `Char` return/field type and character literals resolve with no `use`.
   @prelude
-  typealias Char = Bounded(1114112)
+  @erases(:integer)
+  opaque type Char
 
-  ## The Unicode code point of `c` as an `Int` (the Lean `Fin.val` analog for
-  ## `Char = Bounded(0x110000)`). A `Char` already erases to its code point, so
+  implementation Equatable for Char
+    fn `==`(a: Char, b: Char) -> Bool = same(a, b)
+
+  implementation Comparable for Char
+    fn `<`(a: Char, b: Char) -> Bool = less_than(a, b)
+
+  implementation ExpressibleByNaturalLiteral for Char
+    fn from_natural_literal(literal: NaturalLiteral) -> LiteralResult(Char) =
+      match from_code_point(FromNat(literal.value))
+        Std.Option.Some(value) -> LiteralValue(value)
+        Std.Option.None() -> InvalidLiteral()
+
+  implementation ExpressibleByCharacterLiteral for Char
+    fn from_character_literal(literal: CharacterLiteral) -> LiteralResult(Char) = LiteralValue(literal.value)
+
+  ## The Unicode code point of `c` as an `Int`. A `Char` already erases to its code point, so
   ## the runtime bridge is the identity; this names the `Char -> Int` coercion
   ## so `Std.Comparable`'s `Char`/`String` instances can compare code points. Named
   ## `code_point` (not `to_int`) because `Std.String` also exposes a `to_int`

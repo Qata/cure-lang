@@ -481,7 +481,8 @@ defmodule Cure.Core.Env do
 
   @doc """
   Record that global `name` carries interface constraints — a list of
-  `%{iface, tyvar, head_arg_index, return_type, dict_name}` descriptors, one per
+  `%{iface, tyvar, head_arg_index, head_arg_type, return_type, dict_name}`
+  descriptors, one per
   `requires Iface(a)` clause. A concrete call to a constrained global supplies
   the resolved dictionary as a trailing argument (`Cure.Elab.Resolve`). A nil
   `head_arg_index` means the expected result type determines the head.

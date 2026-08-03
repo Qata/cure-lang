@@ -815,8 +815,8 @@ defmodule Cure.Elab.Elaborator do
   # A synthetic dictionary argument `{:dict_value, iface, head}`, inserted by
   # `Cure.Elab.Resolve` at a concrete call to a constrained function: build the
   # instance's dictionary record value (its type is `iface(head)`).
-  def elaborate_expr_typed({:dict_value, iface, head}, _names, ctx, env),
-    do: Cure.Elab.Resolve.dict_value(env, iface, head, ctx)
+  def elaborate_expr_typed({:dict_value, iface, head, type_value}, names, ctx, env),
+    do: Cure.Elab.Resolve.dict_value(env, iface, head, type_value, names, ctx)
 
   # A forced (dot) pattern `{:forced_pattern, …}` is only meaningful in a
   # constructor-argument PATTERN position (handled by the pattern path in a later
@@ -1003,9 +1003,9 @@ defmodule Cure.Elab.Elaborator do
       :char when is_integer(value) ->
         {:error, {:char_literal_out_of_range, value}}
 
-      # A string literal IS `List(Char)` — desugar to the char-literal list
-      # `['c₀', …, 'cₙ']` (one element per Unicode codepoint) and elaborate that,
-      # so `"abc"` and `['a','b','c']` produce the identical Cons spine.
+      # A bare string literal constructs the nominal prelude `String`. Its
+      # descriptor still carries `List(Char)` so user literal implementations
+      # receive decoded code points without depending on String's storage.
       :string when is_binary(value) ->
         elaborate_expr_typed(desugar_string(value, meta), names, ctx, env)
 
@@ -2738,8 +2738,8 @@ defmodule Cure.Elab.Elaborator do
   # A synthetic dictionary argument in checking position (the constrained-call
   # applicator's dictionary slot): build the instance's dictionary record value
   # and let the kernel check it against the expected `iface(head)` type.
-  def elaborate_expr_checked({:dict_value, iface, head}, expected_core, _names, ctx, env) do
-    with {:ok, term, _type} <- Cure.Elab.Resolve.dict_value(env, iface, head, ctx),
+  def elaborate_expr_checked({:dict_value, iface, head, type_value}, expected_core, names, ctx, env) do
+    with {:ok, term, _type} <- Cure.Elab.Resolve.dict_value(env, iface, head, type_value, names, ctx),
          :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
       {:ok, term}
     end
@@ -3003,7 +3003,7 @@ defmodule Cure.Elab.Elaborator do
       # A string literal checks as its `List(Char)` desugaring (see the typed
       # clause), so the expected `List(Char)`/`String` type drives each char.
       string? and literal_protocol == :string_argument ->
-        elaborate_expr_checked(desugar_string(value, meta), expected_core, names, ctx, env)
+        elaborate_expr_checked(desugar_string_characters(value, meta), expected_core, names, ctx, env)
 
       string? and scalar_literal_protocol_available?(env, :from_string_literal) ->
         elaborate_scalar_literal_protocol(
@@ -3150,7 +3150,24 @@ defmodule Cure.Elab.Elaborator do
         end
 
       _ ->
-        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+        expected = Eval.eval(expected_core, Context.env(ctx))
+
+        case {name in names, expected} do
+          {false, {:vtype, _level}} ->
+            case resolve_type_free(name, env) do
+              {:ok, term} ->
+                case Kernel.check(ctx, term, expected) do
+                  :ok -> {:ok, term}
+                  {:error, _} -> elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+                end
+
+              :error ->
+                elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+            end
+
+          _ ->
+            elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+        end
     end
   end
 
@@ -9605,6 +9622,12 @@ defmodule Cure.Elab.Elaborator do
       effect_goal?(expected, ctx) ->
         elaborate_effect_branch(expr, expected, names, ctx, env)
 
+      match?({:vtype, _}, Eval.eval(expected, Context.env(ctx))) ->
+        # A branch of a large elimination is checked against `Type`. Inferring a
+        # same-named record identifier first would select its value constructor
+        # (`fields -> Record`) before the expected universe can select the family.
+        elaborate_expr_checked(expr, expected, names, ctx, env)
+
       Keyword.has_key?(meta, :induction_hypothesis) ->
         elaborate_expr_checked(expr, expected, names, ctx, env)
 
@@ -10919,11 +10942,14 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # `"abc"` → the `:list` literal `['a', 'b', 'c']`: one char-literal element per
-  # Unicode codepoint (`String.to_charlist` decodes UTF-8), so a string is exactly
-  # `List(Char)` and reuses all of `desugar_list`'s Cons/Nil machinery. The empty
-  # string yields the empty list (`Nil`).
+  # A source string constructs the nominal `Std.String.String` around its
+  # decoded character list. The qualified constructor identity avoids collision
+  # with user constructors such as `Std.Json.String`.
   defp desugar_string(value, meta) when is_binary(value) do
+    {:function_call, [name: "Std.String.String"] ++ generated_meta(meta), [desugar_string_characters(value, meta)]}
+  end
+
+  defp desugar_string_characters(value, meta) when is_binary(value) do
     loc = generated_meta(meta)
     chars = Enum.map(String.to_charlist(value), fn cp -> {:literal, [subtype: :char] ++ loc, cp} end)
     {:list, meta, chars}
@@ -13374,6 +13400,38 @@ defmodule Cure.Elab.Elaborator do
           {:ok, key} -> {:ok, {:global, key}}
           _ -> {:ok, {:global, atom}}
         end
+    end
+  end
+
+  # A bare name checked against a universe is in type position. Records bind
+  # their family and constructor under the same source spelling, so family/type
+  # bindings must win here even though constructors correctly win in ordinary
+  # expression position. This mirrors Declarations.resolve_index_name/2 for
+  # expression bodies whose result itself is a type (large elimination).
+  defp resolve_type_free(name, env) do
+    atom = String.to_atom(name)
+
+    cond do
+      primitive = Env.primitive(env, name) ->
+        {:ok, primitive}
+
+      Inductive.family?(env, atom) ->
+        {:ok, {:data, Env.resolve_key(env, env.families, atom), [], []}}
+
+      Env.get_def(env, atom) ->
+        {:ok, {:global, Env.resolve_key(env, env.defs, atom)}}
+
+      match?({:ok, _}, Cure.Elab.Resolution.resolve_bare(env, atom)) ->
+        {:ok, key} = Cure.Elab.Resolution.resolve_bare(env, atom)
+
+        cond do
+          Inductive.family?(env, key) -> {:ok, {:data, key, [], []}}
+          Env.get_def(env, key) -> {:ok, {:global, key}}
+          true -> :error
+        end
+
+      true ->
+        :error
     end
   end
 

@@ -669,6 +669,40 @@ defmodule Cure.Compiler.Incremental do
           changed_dependencies(member, external_dependencies, state) != []
         end)
 
+    type_skeletons =
+      Enum.reduce_while(members, {:ok, []}, fn member, {:ok, acc} ->
+        path = Map.fetch!(state.module_paths, member)
+
+        case Cure.Elab.Program.module_type_skeleton(member, path) do
+          {:ok, env} -> {:cont, {:ok, [{member, env} | acc]}}
+          {:error, reason} -> {:halt, {:error, {member, reason}}}
+        end
+      end)
+
+    signature_skeletons =
+      with {:ok, types} <- type_skeletons do
+        Enum.reduce_while(members, {:ok, []}, fn member, {:ok, acc} ->
+          path = Map.fetch!(state.module_paths, member)
+
+          case Cure.Elab.Program.module_signature_skeleton(member, path, types) do
+            {:ok, env} -> {:cont, {:ok, [{member, env} | acc]}}
+            {:error, reason} -> {:halt, {:error, {member, reason}}}
+          end
+        end)
+      end
+
+    skeletons =
+      with {:ok, signatures} <- signature_skeletons do
+        Enum.reduce_while(members, {:ok, []}, fn member, {:ok, acc} ->
+          path = Map.fetch!(state.module_paths, member)
+
+          case Cure.Elab.Program.module_conformance_skeleton(member, path, signatures) do
+            {:ok, env} -> {:cont, {:ok, [{member, env} | acc]}}
+            {:error, reason} -> {:halt, {:error, {member, reason}}}
+          end
+        end)
+      end
+
     if dirty? do
       base_dirty = Enum.reduce(members, state.base_dirty, &Map.put(&2, &1, true))
 
@@ -679,11 +713,27 @@ defmodule Cure.Compiler.Incremental do
           end)
         end)
 
-      Enum.reduce(
-        members,
-        %{state | base_dirty: base_dirty, rebuild_reasons: rebuild_reasons},
-        &visit_module/2
-      )
+      case skeletons do
+        {:ok, interfaces} ->
+          original_opts = state.compile_opts
+
+          result =
+            Enum.reduce(
+              members,
+              %{
+                state
+                | base_dirty: base_dirty,
+                  rebuild_reasons: rebuild_reasons,
+                  compile_opts: Keyword.put(state.compile_opts, :qualified_envs, interfaces)
+              },
+              &visit_module/2
+            )
+
+          %{result | compile_opts: original_opts}
+
+        {:error, {member, reason}} ->
+          %{state | errors: [{member, reason} | state.errors]}
+      end
     else
       Enum.reduce(members, state, &visit_module/2)
     end
@@ -693,7 +743,9 @@ defmodule Cure.Compiler.Incremental do
     notify_progress(state, {:compile_started, mod, path})
 
     compile_opts =
-      maybe_put_migration_sink(state.compile_opts, state.migration_diagnostic_sink)
+      state.compile_opts
+      |> exclude_self_skeleton(mod)
+      |> maybe_put_migration_sink(state.migration_diagnostic_sink)
 
     case Cure.Compiler.compile_file_with_artifact(
            path,
@@ -776,6 +828,16 @@ defmodule Cure.Compiler.Incremental do
             errors: [{mod, reason} | state.errors]
         }
     end
+  end
+
+  # An SCC member needs its peers' staged interfaces, never its own. Feeding the
+  # self skeleton back into full elaboration duplicates exactly the declarations
+  # now being authored (most visibly conformance headers) and turns a legitimate
+  # cycle into a spurious self-overlap.
+  defp exclude_self_skeleton(opts, mod) do
+    Keyword.update(opts, :qualified_envs, [], fn interfaces ->
+      Enum.reject(interfaces, fn {module_name, _env} -> to_string(module_name) == to_string(mod) end)
+    end)
   end
 
   defp notify_progress(%{progress: progress}, event) when is_function(progress, 1) do

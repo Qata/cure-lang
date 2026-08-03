@@ -26,8 +26,8 @@ defmodule Cure.Stdlib.JsonRunTest do
              apply(@json, :decode, [~c"12.00"])
   end
 
-  test "rejects malformed numbers and trailing input" do
-    for source <- [~c"01", ~c"1.", ~c"1e", ~c"1 true"] do
+  test "rejects malformed numbers, trailing input, and trailing commas" do
+    for source <- [~c"01", ~c"1.", ~c"1e", ~c"1 true", ~c"[1,]", ~c"{\"a\":1,}"] do
       assert {:error, _reason} = apply(@json, :decode, [source])
     end
   end
@@ -41,6 +41,16 @@ defmodule Cure.Stdlib.JsonRunTest do
        ]}
 
     assert ~c"{\"message\":\"a\\n\\\"b\",\"number\":1.2300}" = apply(@json, :encode, [value])
+  end
+
+  test "escapes every JSON control character" do
+    text = Enum.to_list(0..31)
+    encoded = apply(@json, :encode, [{:String, text}])
+
+    assert encoded ==
+             ~c"\"\\u0000\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a\\u001b\\u001c\\u001d\\u001e\\u001f\""
+
+    assert {:ok, {:String, ^text}} = apply(@json, :decode, [encoded])
   end
 
   test "Decimal decoding routes exact JSON numbers through literal protocols" do
@@ -57,5 +67,98 @@ defmodule Cure.Stdlib.JsonRunTest do
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert {:ok, {:Finite, {:FiniteDecimal, :Positive, 12300, -4}}} = apply(module, :value, [])
+  end
+
+  test "Nat uses its typed JSON instance" do
+    source = """
+    mod TypedJsonNat
+      use Std.Json
+      use Std.Result
+
+      fn natural() -> Result(Nat, DecodeError) =
+        assert_type decode_as("42") : Result(Nat, DecodeError)
+
+      fn encoded() -> String = to_json(assert_type 42 : Nat)
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:ok, 42} = apply(module, :natural, [])
+    assert ~c"42" = apply(module, :encoded, [])
+  end
+
+  test "parameterized Option codecs receive their element dictionaries" do
+    source = """
+    mod TypedJsonOption
+      use Std.Json
+      use Std.Option
+      use Std.Result
+
+      fn present() -> Result(Option(Int), DecodeError) =
+        assert_type decode_as("-7") : Result(Option(Int), DecodeError)
+
+      fn absent() -> Result(Option(Int), DecodeError) =
+        assert_type decode_as("null") : Result(Option(Int), DecodeError)
+
+      fn encoded() -> String =
+        encode_optional(assert_type Some(42) : Option(Int))
+
+      fn encoded_nested() -> String =
+        to_json(assert_type Some(Some(42)) : Option(Option(Int)))
+
+      fn encode_optional(value: Option(t)) -> String requires ToJSON(t) =
+        to_json(value)
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:ok, {:some, -7}} = apply(module, :present, [])
+    assert {:ok, :none} = apply(module, :absent, [])
+    assert ~c"42" = apply(module, :encoded, [])
+    assert ~c"42" = apply(module, :encoded_nested, [])
+  end
+
+  test "derived record encoding constructs structured JSON and escapes fields" do
+    source = """
+    mod DerivedJsonRecord
+      use Std.Json
+
+      @derive(ToJSON)
+      rec Person
+        name: String
+        age: Int
+
+      fn encoded() -> String =
+        to_json(Person{name: "A\\nB", age: 42})
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert ~c"{\"name\":\"A\\nB\",\"age\":42}" = apply(module, :encoded, [])
+  end
+
+  test "derived record decoding checks fields through their FromJSON instances" do
+    source = """
+    mod DerivedJsonDecodeRecord
+      use Std.Json
+      use Std.Result
+
+      @derive(FromJSON)
+      rec Person
+        name: String
+        age: Int
+
+      fn decoded() -> Result(Person, DecodeError) =
+        assert_type decode_as("{\\\"name\\\":\\\"Ada\\\",\\\"age\\\":36}") : Result(Person, DecodeError)
+
+      fn missing() -> Result(Person, DecodeError) =
+        assert_type decode_as("{\\\"name\\\":\\\"Ada\\\"}") : Result(Person, DecodeError)
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:ok, {:Person, ~c"Ada", 36}} = apply(module, :decoded, [])
+    assert {:error, {:UnexpectedValue, message}} = apply(module, :missing, [])
+    assert message == ~c"missing JSON object member: age"
   end
 end

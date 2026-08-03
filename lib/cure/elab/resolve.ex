@@ -16,7 +16,7 @@ defmodule Cure.Elab.Resolve do
   ordinary implicit applicator threads it through.
   """
 
-  alias Cure.Core.{Context, Env, Eval}
+  alias Cure.Core.{Context, Env, Eval, Quote, Term}
   alias Cure.Elab.{Coherence, Elaborator, Interface}
 
   @doc "Is `atom` the name of a method declared by some in-scope interface?"
@@ -52,7 +52,7 @@ defmodule Cure.Elab.Resolve do
     # are elaborated by the application machinery once the callee is fixed.
     with {:ok, _term, tval} <- Elaborator.elaborate_expr_typed(head_ast, names, ctx, env) do
       case classify(env, tval, MapSet.new()) do
-        {:concrete, hc} -> concrete(env, desc, method, hc, args, names, ctx)
+        {:concrete, hc} -> concrete(env, desc, method, hc, tval, args, names, ctx)
         {:rigid, lvl} -> abstract(env, desc, method, args, lvl, names, ctx)
         {:unknown, tval2} -> {:error, {:no_instance, desc.name, tval2}}
       end
@@ -81,8 +81,8 @@ defmodule Cure.Elab.Resolve do
       {:rigid, level} ->
         checked_dispatch(abstract(env, desc, method, args, level, names, ctx))
 
-      {:concrete, head} ->
-        checked_dispatch(concrete(env, desc, method, head, args, names, ctx))
+      {:concrete, head, type_value} ->
+        checked_dispatch(concrete(env, desc, method, head, type_value, args, names, ctx))
 
       :unknown ->
         method_call_checked_candidates(env, desc, method, args, expected_core, names, ctx)
@@ -132,7 +132,7 @@ defmodule Cure.Elab.Resolve do
       {:ok, head_core} ->
         case classify(env, Eval.eval(head_core, Context.env(ctx)), MapSet.new()) do
           {:rigid, _} = rigid -> rigid
-          {:concrete, _} = concrete -> concrete
+          {:concrete, head} -> {:concrete, head, Eval.eval(head_core, Context.env(ctx))}
           {:unknown, _} -> :unknown
         end
 
@@ -195,11 +195,13 @@ defmodule Cure.Elab.Resolve do
   mangled method globals. Its type is `Iface(head)`. Used by the elaborator when
   it reaches a `{:dict_value, iface, head}` synthetic argument.
   """
-  @spec dict_value(Env.t(), atom(), atom(), term()) :: {:ok, term(), term()} | {:error, term()}
-  def dict_value(env, iface, head, ctx) do
-    with {:ok, term} <- dict_term(env, iface, head) do
+  @spec dict_value(Env.t(), atom(), atom(), term(), [term()], term()) ::
+          {:ok, term(), term()} | {:error, term()}
+  def dict_value(env, iface, head, type_value, names, ctx) do
+    with {:ok, term} <- dict_term_for_type_value(env, iface, head, type_value, names, ctx) do
       iface_key = Env.resolve_key(env, env.families, iface)
-      type = Eval.eval({:data, iface_key, [head_type_core(head)], []}, Context.env(ctx))
+      head_type = Quote.reify(type_value, Context.length(ctx))
+      type = Eval.eval({:data, iface_key, [head_type], []}, Context.env(ctx))
       {:ok, term, type}
     end
   end
@@ -209,7 +211,7 @@ defmodule Cure.Elab.Resolve do
           {:ok, term(), term()} | {:error, term()}
   def dictionary_for_type_value(env, iface, type_value, ctx) do
     case classify(env, type_value, MapSet.new()) do
-      {:concrete, head} -> dict_value(env, iface, head, ctx)
+      {:concrete, head} -> dict_value(env, iface, head, type_value, [], ctx)
       {:rigid, level} -> {:error, {:no_instance, iface, {:rigid, level}}}
       {:unknown, value} -> {:error, {:no_instance, iface, value}}
     end
@@ -301,11 +303,14 @@ defmodule Cure.Elab.Resolve do
   # ordinary implicit-aware application machinery (so a lambda argument like
   # `fmap`'s `g` is checked against its domain, and any method-level implicits are
   # solved).
-  defp concrete(env, desc, method, head, args, names, ctx) do
+  defp concrete(env, desc, method, head, type_value, args, names, ctx) do
     case Coherence.lookup_anon(Env.coherence(env), desc.name, head) do
       {:ok, ref} ->
         mangled = Map.fetch!(ref.methods, method)
-        Elaborator.elaborate_implicit_global_app(env, mangled, args, names, ctx)
+
+        with {:ok, dict_asts} <- instance_constraint_dict_asts(ref, type_value, names, ctx, env) do
+          Elaborator.elaborate_implicit_global_app(env, mangled, args ++ dict_asts, names, ctx)
+        end
 
       {:error, _} ->
         {:error, {:no_instance, desc.name, head}}
@@ -371,9 +376,11 @@ defmodule Cure.Elab.Resolve do
 
       case Elaborator.elaborate_expr_typed(head_ast, names, ctx, env) do
         {:ok, _term, tval} ->
-          case classify(env, tval, MapSet.new()) do
+          head_value = constraint_head_from_argument(spec, tval, ctx)
+
+          case classify(env, head_value, MapSet.new()) do
             {:concrete, head} ->
-              {:cont, {:ok, acc ++ [{:dict_value, spec.iface, head}]}}
+              {:cont, {:ok, acc ++ [{:dict_value, spec.iface, head, head_value}]}}
 
             {:rigid, lvl} ->
               case find_dict_binder(ctx, names, spec.iface, lvl, env) do
@@ -409,7 +416,16 @@ defmodule Cure.Elab.Resolve do
 
   defp dictionary_ast_from_argument(spec, head_ast, names, ctx, env) do
     with {:ok, _term, tval} <- Elaborator.elaborate_expr_typed(head_ast, names, ctx, env) do
-      dictionary_ast_from_type(spec, tval, names, ctx, env)
+      dictionary_ast_from_type(spec, constraint_head_from_argument(spec, tval, ctx), names, ctx, env)
+    end
+  end
+
+  defp constraint_head_from_argument(spec, type_value, ctx) do
+    core = Quote.reify(type_value, Context.length(ctx))
+
+    case result_head_core(Map.get(spec, :head_arg_type), core, spec.tyvar) do
+      {:ok, head_core} -> Eval.eval(head_core, Context.env(ctx))
+      :error -> type_value
     end
   end
 
@@ -426,7 +442,7 @@ defmodule Cure.Elab.Resolve do
   defp dictionary_ast_from_type(spec, tval, names, ctx, env) do
     case classify(env, tval, MapSet.new()) do
       {:concrete, head} ->
-        {:ok, {:dict_value, spec.iface, head}}
+        {:ok, {:dict_value, spec.iface, head, tval}}
 
       {:rigid, lvl} ->
         case find_dict_binder(ctx, names, spec.iface, lvl, env) do
@@ -439,6 +455,59 @@ defmodule Cure.Elab.Resolve do
     end
   end
 
+  defp instance_constraint_dict_asts(ref, type_value, names, ctx, env) do
+    bindings = bind_instance_type(Map.get(ref, :for_type), type_value, %{})
+
+    ref
+    |> Map.get(:constraints, [])
+    |> Enum.reduce_while({:ok, []}, fn constraint, {:ok, acc} ->
+      with {:ok, iface, required_type} <- constraint_type_value(constraint, bindings),
+           {:ok, dict_ast} <- dictionary_ast_for_value(iface, required_type, names, ctx, env) do
+        {:cont, {:ok, acc ++ [dict_ast]}}
+      else
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp dictionary_ast_for_value(iface, type_value, names, ctx, env) do
+    case classify(env, type_value, MapSet.new()) do
+      {:concrete, head} ->
+        {:ok, {:dict_value, iface, head, type_value}}
+
+      {:rigid, level} ->
+        case find_dict_binder(ctx, names, iface, level, env) do
+          {:ok, name} -> {:ok, {:variable, [], name}}
+          :error -> {:error, {:no_instance, iface, {:rigid, level}}}
+        end
+
+      {:unknown, value} ->
+        {:error, {:no_instance, iface, value}}
+    end
+  end
+
+  defp bind_instance_type({:variable, _meta, name}, value, bindings) do
+    if type_variable_name?(name), do: Map.put(bindings, name, value), else: bindings
+  end
+
+  defp bind_instance_type({:function_call, _meta, ast_args}, {:vdata, _name, value_args}, bindings) do
+    ast_args
+    |> Enum.zip(value_args)
+    |> Enum.reduce(bindings, fn {ast, value}, acc -> bind_instance_type(ast, value, acc) end)
+  end
+
+  defp bind_instance_type(_surface, _value, bindings), do: bindings
+
+  defp constraint_type_value({:function_call, meta, [{:variable, _vm, name}]}, bindings) do
+    case Map.fetch(bindings, name) do
+      {:ok, value} -> {:ok, String.to_atom(Keyword.fetch!(meta, :name)), value}
+      :error -> {:error, {:instance_constraint_not_determined, name}}
+    end
+  end
+
+  defp constraint_type_value(constraint, _bindings),
+    do: {:error, {:unsupported_parameterized_instance_constraint, constraint}}
+
   # The single-constructor record value `Iface{ m1 = impl₁, … }`: the interface's
   # constructor applied to the instance's mangled method globals, in method order.
   # The erased head parameter is NOT a `:ctor` argument (it is recovered from the
@@ -450,12 +519,75 @@ defmodule Cure.Elab.Resolve do
   # emits as a fixed-arity `fun name/n`, which a 1-argument apply would mis-call. The
   # eta-expansion lowers to curried 1-argument funs whose inner *saturated* spine is
   # a direct `impl(x, y)` call — ABI-correct at both the projection and the call.
-  defp dict_term(env, iface, head) do
+  defp dict_term_for_type_value(env, iface, head, type_value, names, ctx) do
     case Coherence.lookup_anon(Env.coherence(env), iface, head) do
-      {:ok, ref} -> {:ok, dict_term_from_ref(env, iface, ref)}
-      {:error, _} -> {:error, {:no_instance, iface, head}}
+      {:ok, ref} ->
+        bindings = bind_instance_type(Map.get(ref, :for_type), type_value, %{})
+
+        with {:ok, dependencies} <- instance_constraint_terms(ref, bindings, names, ctx, env) do
+          type_args =
+            ref
+            |> Map.get(:for_type)
+            |> surface_type_variables()
+            |> Enum.map(&Map.fetch!(bindings, &1))
+            |> Enum.map(&Quote.reify(&1, Context.length(ctx)))
+
+          {:ok, dict_term_from_ref(env, iface, ref, type_args, dependencies)}
+        end
+
+      {:error, _} ->
+        {:error, {:no_instance, iface, head}}
     end
   end
+
+  defp instance_constraint_terms(ref, bindings, names, ctx, env) do
+    ref
+    |> Map.get(:constraints, [])
+    |> Enum.reduce_while({:ok, []}, fn constraint, {:ok, acc} ->
+      with {:ok, iface, type_value} <- constraint_type_value(constraint, bindings),
+           {:ok, term} <- dictionary_term_for_value(iface, type_value, names, ctx, env) do
+        {:cont, {:ok, acc ++ [term]}}
+      else
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp dictionary_term_for_value(iface, type_value, names, ctx, env) do
+    case classify(env, type_value, MapSet.new()) do
+      {:concrete, head} ->
+        dict_term_for_type_value(env, iface, head, type_value, names, ctx)
+
+      {:rigid, level} ->
+        case find_dict_binder(ctx, names, iface, level, env) do
+          {:ok, name} ->
+            case Enum.find_index(names, &(&1 == name)) do
+              nil -> {:error, {:no_instance, iface, {:rigid, level}}}
+              index -> {:ok, {:var, index}}
+            end
+
+          :error ->
+            {:error, {:no_instance, iface, {:rigid, level}}}
+        end
+
+      {:unknown, value} ->
+        {:error, {:no_instance, iface, value}}
+    end
+  end
+
+  defp surface_type_variables(nil), do: []
+
+  defp surface_type_variables({:variable, _meta, name}) do
+    if type_variable_name?(name), do: [name], else: []
+  end
+
+  defp surface_type_variables({:function_call, _meta, args}),
+    do: args |> Enum.flat_map(&surface_type_variables/1) |> Enum.uniq()
+
+  defp surface_type_variables(_surface), do: []
+
+  defp type_variable_name?(<<first::utf8, _rest::binary>>), do: first in ?a..?z
+  defp type_variable_name?(_name), do: false
 
   @doc """
   The dictionary value for an instance `ref`, independent of how the instance is registered.
@@ -474,6 +606,54 @@ defmodule Cure.Elab.Resolve do
       end)
 
     {:ctor, Env.resolve_key(env, env.ctors, iface), fields}
+  end
+
+  defp dict_term_from_ref(env, iface, ref, [], []), do: dict_term_from_ref(env, iface, ref)
+
+  defp dict_term_from_ref(env, iface, ref, type_args, dependencies) do
+    desc = Env.get_interface(env, iface)
+
+    fields =
+      Enum.map(desc.method_order, fn method ->
+        arity = length(Map.fetch!(desc.methods, method).params)
+        eta_expand_parameterized(env, Map.fetch!(ref.methods, method), arity, type_args, dependencies)
+      end)
+
+    {:ctor, Env.resolve_key(env, env.ctors, iface), fields}
+  end
+
+  defp eta_expand_parameterized(env, gname, arity, type_args, dependencies) do
+    %{type: pi} = Env.get_def(env, gname)
+
+    {callee, specialised_pi} =
+      Enum.reduce(type_args, {{:global, gname}, pi}, fn argument, {term, {:pi, _grade, _domain, codomain}} ->
+        {
+          {:app, term, Term.shift(argument, arity, 0)},
+          instantiate_codomain(codomain, argument)
+        }
+      end)
+
+    domains = peel_domains(specialised_pi, arity)
+
+    body =
+      Enum.reduce(0..(arity - 1), callee, fn index, term ->
+        {:app, term, {:var, arity - 1 - index}}
+      end)
+
+    body =
+      Enum.reduce(dependencies, body, fn dependency, term ->
+        {:app, term, Term.shift(dependency, arity, 0)}
+      end)
+
+    Enum.reduce(Enum.reverse(domains), body, fn domain, term ->
+      {:lam, Cure.Core.Grade.unrestricted(), domain, term}
+    end)
+  end
+
+  defp instantiate_codomain(codomain, argument) do
+    codomain
+    |> Term.subst(0, Term.shift(argument, 1, 0))
+    |> Term.shift(-1, 0)
   end
 
   @doc "The Core type `Iface(head)` of a dictionary value for `iface` at `head`."

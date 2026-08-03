@@ -9,6 +9,7 @@ mod Std.Regex
 
   use Std.Char
   use Std.Option
+  use Std.String
   use Std.Syntax
 
   ## Cure does not otherwise expose a general-purpose Either in the current
@@ -539,24 +540,24 @@ mod Std.Regex
       constraints_hold(constraints, boundary) -> [Active(state, routine, []) | filter_boundary_states(rest, boundary)]
       else -> filter_boundary_states(rest, boundary)
 
-  fn position_line_end(input: String) -> Bool = match input
+  fn position_line_end(input: List(Char)) -> Bool = match input
     [] -> true
     [char | _] -> Std.Char.is_newline(char)
 
-  fn position_subject_end(input: String) -> Bool = match input
+  fn position_subject_end(input: List(Char)) -> Bool = match input
     [] -> true
     [char] -> Std.Char.is_newline(char)
     _ -> false
 
-  fn next_ascii_word(input: String) -> Bool = match input
+  fn next_ascii_word(input: List(Char)) -> Bool = match input
     [] -> false
     [char | _] -> ascii_word(char)
 
-  fn next_unicode_word(input: String) -> Bool = match input
+  fn next_unicode_word(input: List(Char)) -> Bool = match input
     [] -> false
     [char | _] -> option_word(char, true)
 
-  fn position_boundary(subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool, input: String) -> Boundary =
+  fn position_boundary(subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool, input: List(Char)) -> Boundary =
     Boundary(
       subject_start,
       position_subject_end(input),
@@ -567,18 +568,20 @@ mod Std.Regex
       previous_unicode_word != next_unicode_word(input)
     )
 
-  fn position_strict_subject_end(input: String) -> Bool = match input
+  fn position_strict_subject_end(input: List(Char)) -> Bool = match input
     [] -> true
     _ -> false
 
-  fn machine_accepts_chars(next: Nat -> Char -> List(MachineState), input: String, current: List(MachineState)) -> Bool = match input
+  fn machine_accepts_chars(next: Nat -> Char -> List(MachineState), input: List(Char), current: List(MachineState)) -> Bool = match input
     [] -> machine_has_accept(current)
     [char | rest] ->
       machine_accepts_chars(next, rest, filter_boundary_states(machine_step(next, char, current), position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)))
 
   fn pattern_accepts({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Bool =
     match compile_pattern(pattern)
-      PatternMachine(_count, starts, next) -> machine_accepts_chars(next, input, filter_boundary_states(starts, position_boundary(true, true, false, false, input)))
+      PatternMachine(_count, starts, next) ->
+        let chars = Std.String.characters(input)
+        machine_accepts_chars(next, chars, filter_boundary_states(starts, position_boundary(true, true, false, false, chars)))
 
   ## Evidence is a postfix program result stored in reverse order, so emitting
   ## is constant-time. Pair/branch/list markers precede their operands in the
@@ -714,16 +717,16 @@ mod Std.Regex
     [] -> Some(value)
     _ -> None()
 
-  type CaptureFrame = CaptureFrame(String, List(Evidence))
+  type CaptureFrame = CaptureFrame(List(Char), List(Evidence))
   type EvidenceExecution = EvidenceExecution(List(Evidence), List(CaptureFrame))
   type ThreadState = ThreadActive(Nat) | ThreadAccepted
   type EvidenceThread = EvidenceThread(ThreadState, List(Evidence), List(CaptureFrame))
-  type EvidencePrefix = EvidencePrefix(List(Evidence), String)
+  type EvidencePrefix = EvidencePrefix(List(Evidence), List(Char))
 
   type Match(result: Type) = Match(result, String, String, String)
 
-  fn evidence_reverse_chars(input: String) -> String = evidence_reverse_chars_into(input, [])
-  fn evidence_reverse_chars_into(input: String, output: String) -> String = match input
+  fn evidence_reverse_chars(input: List(Char)) -> List(Char) = evidence_reverse_chars_into(input, [])
+  fn evidence_reverse_chars_into(input: List(Char), output: List(Char)) -> List(Char) = match input
     [] -> output
     [head | rest] -> evidence_reverse_chars_into(rest, [head | output])
 
@@ -742,7 +745,7 @@ mod Std.Regex
     BeginCapture() -> EvidenceExecution(evidence, [CaptureFrame([], evidence) | captures])
     EndCapture() -> match captures
       [] -> EvidenceExecution(evidence, [])
-      [CaptureFrame(chars, saved) | rest] -> EvidenceExecution([StringEvidence(evidence_reverse_chars(chars)) | saved], rest)
+      [CaptureFrame(chars, saved) | rest] -> EvidenceExecution([StringEvidence(Std.String.from_characters(evidence_reverse_chars(chars))) | saved], rest)
 
   fn execute_routine(routine: List(EvidenceInstruction), evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceExecution = match routine
     [] -> EvidenceExecution(evidence, captures)
@@ -816,13 +819,13 @@ mod Std.Regex
     [EvidenceThread(ThreadAccepted(), evidence, _) | _] -> Some(evidence)
     [_ | rest] -> first_accepted_evidence(rest)
 
-  fn run_evidence(next: Nat -> Char -> List(MachineState), input: String, threads: List(EvidenceThread)) -> Option(List(Evidence)) = match input
+  fn run_evidence(next: Nat -> Char -> List(MachineState), input: List(Char), threads: List(EvidenceThread)) -> Option(List(Evidence)) = match input
     [] -> first_accepted_evidence(threads)
     [char | rest] ->
       let boundary = position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)
       run_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)))
 
-  fn run_first_prefix_evidence(next: Nat -> Char -> List(MachineState), input: String, threads: List(EvidenceThread)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
+  fn run_first_prefix_evidence(next: Nat -> Char -> List(MachineState), input: List(Char), threads: List(EvidenceThread)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
     Some(evidence) -> Some(EvidencePrefix(evidence, input))
     None() -> match input
       [] -> None()
@@ -830,11 +833,11 @@ mod Std.Regex
         let boundary = position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)
         run_first_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)))
 
-  fn remember_prefix(threads: List(EvidenceThread), rest: String, previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
+  fn remember_prefix(threads: List(EvidenceThread), rest: List(Char), previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
     Some(evidence) -> Some(EvidencePrefix(evidence, rest))
     None() -> previous
 
-  fn run_last_prefix_evidence(next: Nat -> Char -> List(MachineState), input: String, threads: List(EvidenceThread), previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) =
+  fn run_last_prefix_evidence(next: Nat -> Char -> List(MachineState), input: List(Char), threads: List(EvidenceThread), previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) =
     let remembered = remember_prefix(threads, input, previous)
     match input
       [] -> remembered
@@ -844,21 +847,21 @@ mod Std.Regex
           let boundary = position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)
           run_last_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)), remembered)
 
-  fn pattern_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Option(List(Evidence)) = match compile_pattern(pattern)
+  fn pattern_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: List(Char)) -> Option(List(Evidence)) = match compile_pattern(pattern)
     PatternMachine(_count, starts, next) ->
       run_evidence(next, input, distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(true, true, false, false, input)))))
 
-  fn pattern_prefix_evidence_at({shape: ShapeCode}, pattern: Pattern(shape), input: String, greedy: Bool, subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool) -> Option(EvidencePrefix) = match compile_pattern(pattern)
+  fn pattern_prefix_evidence_at({shape: ShapeCode}, pattern: Pattern(shape), input: List(Char), greedy: Bool, subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool) -> Option(EvidencePrefix) = match compile_pattern(pattern)
     PatternMachine(_count, starts, next) ->
       let threads = distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(subject_start, line_start, previous_ascii_word, previous_unicode_word, input))))
       pickup
         greedy -> run_last_prefix_evidence(next, input, threads, None())
         else -> run_first_prefix_evidence(next, input, threads)
 
-  fn pattern_prefix_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: String, greedy: Bool) -> Option(EvidencePrefix) =
+  fn pattern_prefix_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: List(Char), greedy: Bool) -> Option(EvidencePrefix) =
     pattern_prefix_evidence_at(pattern, input, greedy, true, true, false, false)
 
-  fn parse_pattern_full({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Option(Sem(shape)) = match pattern_evidence(pattern, input)
+  fn parse_pattern_full({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Option(Sem(shape)) = match pattern_evidence(pattern, Std.String.characters(input))
     None() -> None()
     Some(evidence) -> extract_complete_encoding(decode_pattern_encoding(pattern, evidence))
 
@@ -1063,7 +1066,7 @@ mod Std.Regex
     Some(value) -> Some(execute_conversion(conversion, value))
 
   fn parse_program_full({result: Type}, program: RegexProgram(result), input: String) -> Option(result) = match program
-    BuiltRegex(_shape, pattern, conversion) -> match pattern_evidence(pattern, input)
+    BuiltRegex(_shape, pattern, conversion) -> match pattern_evidence(pattern, Std.String.characters(input))
       None() -> None()
       Some(evidence) -> convert_complete_extraction(pattern, conversion, evidence)
 
@@ -1074,17 +1077,17 @@ mod Std.Regex
   fn convert_prefix_extraction({shape: ShapeCode}, {result: Type}, pattern: Pattern(shape), conversion: Conversion(Sem(shape), result), prefix: EvidencePrefix) -> Option(Tuple(result, String)) = match prefix
     EvidencePrefix(evidence, rest) -> match convert_complete_extraction(pattern, conversion, evidence)
       None() -> None()
-      Some(value) -> Some(%[value, rest])
+      Some(value) -> Some(%[value, Std.String.from_characters(rest)])
 
   fn parse_prefix_with({result: Type}, regex: Regex(result), input: String, greedy: Bool) -> Option(Tuple(result, String)) = match compile_regex(regex)
     None() -> None()
-    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence(pattern, input, greedy)
+    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence(pattern, Std.String.characters(input), greedy)
       None() -> None()
       Some(prefix) -> convert_prefix_extraction(pattern, conversion, prefix)
 
   fn parse_prefix_at({result: Type}, regex: Regex(result), input: String, subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool) -> Option(Tuple(result, String)) = match compile_regex(regex)
     None() -> None()
-    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence_at(pattern, input, true, subject_start, line_start, previous_ascii_word, previous_unicode_word)
+    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence_at(pattern, Std.String.characters(input), true, subject_start, line_start, previous_ascii_word, previous_unicode_word)
       None() -> None()
       Some(prefix) -> convert_prefix_extraction(pattern, conversion, prefix)
 
@@ -1099,19 +1102,43 @@ mod Std.Regex
     _ -> false
 
   fn search({result: Type}, regex: Regex(result), input: String) -> Option(Match(result)) =
-    search_from(regex, input, [], true, true, false, false, regex_firstline(regex))
+    search_from(regex, Std.String.characters(input), [], true, true, false, false, regex_firstline(regex))
 
-  fn search_from({result: Type}, regex: Regex(result), candidate: String, reversed_prefix: String, subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool, firstline_only: Bool) -> Option(Match(result)) =
-    match parse_prefix_at(regex, candidate, subject_start, line_start, previous_ascii_word, previous_unicode_word)
+  fn search_from({result: Type}, regex: Regex(result), candidate: List(Char), reversed_prefix: List(Char), subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool, firstline_only: Bool) -> Option(Match(result)) =
+    match pattern_prefix_program_at(regex, candidate, subject_start, line_start, previous_ascii_word, previous_unicode_word)
       Some(found) ->
         let rest = found.2
-        let matched = Std.String.drop_last(candidate, Std.String.length(rest))
-        Some(Match(found.1, Std.String.reverse(reversed_prefix), matched, rest))
+        let matched = list_drop_last(candidate, list_length(rest))
+        Some(Match(found.1, Std.String.from_characters(evidence_reverse_chars(reversed_prefix)), Std.String.from_characters(matched), Std.String.from_characters(rest)))
       None() -> match candidate
         [] -> None()
         [char | rest] -> pickup
           firstline_only and Std.Char.is_newline(char) -> None()
           else -> search_from(regex, rest, [char | reversed_prefix], false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), firstline_only)
+
+  fn pattern_prefix_program_at({result: Type}, regex: Regex(result), input: List(Char), subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool) -> Option(Tuple(result, List(Char))) = match compile_regex(regex)
+    None() -> None()
+    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence_at(pattern, input, true, subject_start, line_start, previous_ascii_word, previous_unicode_word)
+      None() -> None()
+      Some(prefix) -> convert_prefix_chars(pattern, conversion, prefix)
+
+  fn convert_prefix_chars({shape: ShapeCode}, {result: Type}, pattern: Pattern(shape), conversion: Conversion(Sem(shape), result), prefix: EvidencePrefix) -> Option(Tuple(result, List(Char))) = match prefix
+    EvidencePrefix(evidence, rest) -> match convert_complete_extraction(pattern, conversion, evidence)
+      None() -> None()
+      Some(value) -> Some(%[value, rest])
+
+  fn list_length(values: List(Char)) -> Int = match values
+    [] -> 0
+    [_ | rest] -> Std.Builtin.int_add(1, list_length(rest))
+
+  fn list_drop_last(values: List(Char), count: Int) -> List(Char) =
+    reverse_drop(evidence_reverse_chars(values), count)
+
+  fn reverse_drop(values: List(Char), count: Int) -> List(Char) = pickup
+    Std.Builtin.int_lt(0, count) -> match values
+      [] -> []
+      [_ | rest] -> reverse_drop(rest, Std.Builtin.int_sub(count, 1))
+    else -> evidence_reverse_chars(values)
 
   fn matches({result: Type}, regex: Regex(result), input: String) -> Bool = match search(regex, input)
     Some(_) -> true
@@ -1201,7 +1228,7 @@ mod Std.Regex
 
   fn exactly(expected: Char) -> Regex(Unit) = map(predicate(exact_test(expected)), discard_char)
 
-  fn same_chars(left: String, right: String) -> Bool = match left
+  fn same_chars(left: List(Char), right: List(Char)) -> Bool = match left
     [] -> match right
       [] -> true
       _ -> false
@@ -1211,8 +1238,11 @@ mod Std.Regex
         Std.Char.same(left_char, right_char) -> same_chars(left_rest, right_rest)
         else -> false
 
+  fn lowercased_characters(value: Char) -> List(Char) =
+    Std.String.characters(Std.Char.lowercased(value))
+
   fn caseless_same(expected: Char, actual: Char, unicode: Bool) -> Bool = pickup
-    unicode -> same_chars(Std.Char.lowercased(expected), Std.Char.lowercased(actual))
+    unicode -> same_chars(lowercased_characters(expected), lowercased_characters(actual))
     else -> Std.Char.same(Std.Char.ascii_lowercased(expected), Std.Char.ascii_lowercased(actual))
 
   fn option_exact_predicate(expected: Char, caseless: Bool, unicode: Bool, actual: Char) -> Bool = pickup
@@ -1266,7 +1296,7 @@ mod Std.Regex
 
   fn folded_range_match(first: Char, last: Char, actual: Char, unicode: Bool) -> Bool = pickup
     Std.Char.between(actual, first, last) -> true
-    unicode -> match Std.Char.lowercased(actual)
+    unicode -> match Std.String.characters(Std.Char.lowercased(actual))
       [folded] -> Std.Char.between(folded, first, last)
       _ -> false
     else -> Std.Char.between(Std.Char.ascii_lowercased(actual), Std.Char.ascii_lowercased(first), Std.Char.ascii_lowercased(last))

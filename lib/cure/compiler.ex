@@ -119,6 +119,7 @@ defmodule Cure.Compiler do
     emit? = Keyword.get(opts, :emit_events, true)
     declared_phases = Keyword.get(opts, :declared_phases)
     prelude_providers = Keyword.get(opts, :prelude_providers, [])
+    qualified_envs = Keyword.get(opts, :qualified_envs, [])
 
     with_source_roots(file, opts, fn ->
       with {:ok, edition} <- resolve_edition(source, opts),
@@ -136,7 +137,7 @@ defmodule Cure.Compiler do
            {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
            :ok <- validate_lifted_modules(ast),
            {:ok, units, cg_warnings, artifact} <-
-             codegen(ast, source, file, emit?, output_dir, declared_phases),
+             codegen(ast, source, file, emit?, output_dir, declared_phases, qualified_envs),
            units = inject_artifact_provenance(units, source, file, artifact, opts),
            {:ok, module, warnings} <-
              write_beam_units(units, output_dir, emit?, file, cg_warnings) do
@@ -546,6 +547,7 @@ defmodule Cure.Compiler do
     file = Keyword.get(opts, :file, "nofile")
     emit? = Keyword.get(opts, :emit_events, false)
     declared_phases = Keyword.get(opts, :declared_phases)
+    qualified_envs = Keyword.get(opts, :qualified_envs, [])
     prelude_providers = Keyword.get(opts, :prelude_providers, [])
 
     with_source_roots(file, opts, fn ->
@@ -555,7 +557,7 @@ defmodule Cure.Compiler do
            ast = inject_prelude_uses(ast, prelude_providers),
            {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
            {:ok, units, _cg_warnings, artifact} <-
-             codegen(ast, source, file, emit?, nil, declared_phases),
+             codegen(ast, source, file, emit?, nil, declared_phases, qualified_envs),
            units = inject_artifact_provenance(units, source, file, artifact, opts) do
         # compile_and_load/2 intentionally does NOT persist bytecode to
         # disk -- it only loads into the current VM.
@@ -867,28 +869,28 @@ defmodule Cure.Compiler do
     end
   end
 
-  defp codegen(ast, source, file, _emit?, _output_dir, _declared_phases) do
+  defp codegen(ast, source, file, _emit?, _output_dir, _declared_phases, qualified_envs) do
     case Cure.Compiler.LiftModule.collect(ast) do
       {:ok, lifted_requests} ->
-        codegen_modules(ast, Cure.Compiler.LiftModule.strip(ast), lifted_requests, source, file)
+        codegen_modules(ast, Cure.Compiler.LiftModule.strip(ast), lifted_requests, source, file, qualified_envs)
 
       {:error, reason} ->
         {:error, {:codegen_error, reason}}
     end
   end
 
-  defp codegen_modules(original_ast, main_ast, lifted_requests, source, file) do
+  defp codegen_modules(original_ast, main_ast, lifted_requests, source, file, qualified_envs) do
     if match?({:lift_module, _, _}, main_ast) do
       case emit_lifted_modules(lifted_requests) do
         {:ok, lifted_units} -> {:ok, module_forms(lifted_units), [], nil}
         {:error, _} = error -> error
       end
     else
-      codegen_modules_with_main(original_ast, main_ast, lifted_requests, source, file)
+      codegen_modules_with_main(original_ast, main_ast, lifted_requests, source, file, qualified_envs)
     end
   end
 
-  defp codegen_modules_with_main(original_ast, main_ast, lifted_requests, source, file) do
+  defp codegen_modules_with_main(original_ast, main_ast, lifted_requests, source, file, qualified_envs) do
     # Lifted modules are checked FIRST so the enclosing unit can name their
     # members. A lifted module never depends on the enclosing module by name --
     # `LiftModule.inherit_scope/2` has already inlined the declarations it needs
@@ -902,14 +904,14 @@ defmodule Cure.Compiler do
     # exactly as it was before lifting was reordered.
     lifted_surfaces =
       case lifted do
-        {:ok, lifted_units} -> qualified_envs(lifted_units)
-        {:error, _} -> []
+        {:ok, lifted_units} -> qualified_envs(lifted_units) ++ qualified_envs
+        {:error, _} -> qualified_envs
       end
 
     # Single pipeline: every module is elaborated, checked, erased, and emitted
     # through the dependent Core.
     result =
-      with :ok <- Cure.Elab.Program.validate_stdlib_imports(main_ast) do
+      with :ok <- Cure.Elab.Program.validate_stdlib_imports(main_ast, lifted_surfaces) do
         case dependent_codegen(main_ast, source, file, lifted_surfaces) do
           {:ok, forms, artifact} -> {:ok, forms, [], artifact}
           {:error, {:codegen_error, {:expansion_ill_typed, _} = reason}} -> {:error, reason}

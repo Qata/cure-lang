@@ -30,8 +30,8 @@ mod Std.Regex.Syntax.Model
     | LiteralFinalEnd
     | LiteralWordBoundary(Bool)
 
-  type LiteralParse = LiteralParsed(LiteralPattern, String) | LiteralInvalid(Atom)
-  type LiteralClassParse = LiteralClassParsed(List(Char), List(LiteralCharacterRange), LiteralClassKinds, String) | LiteralClassInvalid(Atom)
+  type LiteralParse = LiteralParsed(LiteralPattern, List(Char)) | LiteralInvalid(Atom)
+  type LiteralClassParse = LiteralClassParsed(List(Char), List(LiteralCharacterRange), LiteralClassKinds, List(Char)) | LiteralClassInvalid(Atom)
   type LiteralFlags = LiteralFlagsParsed(LiteralRegexOptions) | LiteralFlagsInvalid(Atom)
 
 
@@ -177,7 +177,7 @@ mod Std.Regex.Syntax.Model
     | OptionC(LiteralShapeCode)
     | ListC(LiteralShapeCode)
 
-  fn literal_fuel(input: String) -> Nat = match input
+  fn literal_fuel(input: List(Char)) -> Nat = match input
     [] -> parse_fuel_step(Z())
     [_ | rest] -> parse_fuel_step(literal_fuel(rest))
 
@@ -199,7 +199,7 @@ mod Std.Regex.Syntax.Model
         First() -> false
         Next(right_rest) -> literal_bounded_less(left_rest, right_rest)
 
-  fn empty_regex_input() -> String = []
+  fn empty_regex_input() -> List(Char) = []
 
   fn reverse_chars(values: List(Char)) -> List(Char) = reverse_chars_into(values, [])
   fn reverse_chars_into(values: List(Char), output: List(Char)) -> List(Char) = match values

@@ -5,7 +5,7 @@ mod Std.Regex.Syntax.Parser
   use Std.Regex.Syntax.Model
   use Std.Regex.Syntax.Class
 
-  fn parse_literal(input: String) -> LiteralParse =
+  fn parse_literal(input: List(Char)) -> LiteralParse =
     parse_literal_complete(parse_literal_alternate_fuel(input, literal_fuel(input)))
 
   fn parse_literal_complete(result: LiteralParse) -> LiteralParse = match result
@@ -14,13 +14,13 @@ mod Std.Regex.Syntax.Parser
       _ -> LiteralInvalid(:UnexpectedRegexToken)
     LiteralInvalid(reason) -> LiteralInvalid(reason)
 
-  fn parse_literal_alternate_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+  fn parse_literal_alternate_fuel(input: List(Char), fuel: Nat) -> LiteralParse = match fuel
     Z() -> LiteralInvalid(:RegexParseLimit)
     S(next_fuel) -> match parse_literal_sequence_fuel(input, next_fuel)
       LiteralParsed(left, rest) -> parse_literal_alternate_tail_fuel(left, rest, next_fuel)
       LiteralInvalid(reason) -> LiteralInvalid(reason)
 
-  fn parse_literal_alternate_tail_fuel(left: LiteralPattern, input: String, fuel: Nat) -> LiteralParse = match fuel
+  fn parse_literal_alternate_tail_fuel(left: LiteralPattern, input: List(Char), fuel: Nat) -> LiteralParse = match fuel
     Z() -> LiteralParsed(left, input)
     S(next_fuel) -> match input
       ['|' | rest] -> match parse_literal_sequence_fuel(rest, next_fuel)
@@ -28,7 +28,7 @@ mod Std.Regex.Syntax.Parser
         LiteralInvalid(reason) -> LiteralInvalid(reason)
       _ -> LiteralParsed(left, input)
 
-  fn parse_literal_sequence_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+  fn parse_literal_sequence_fuel(input: List(Char), fuel: Nat) -> LiteralParse = match fuel
     Z() -> LiteralInvalid(:RegexParseLimit)
     S(next_fuel) -> match input
       [] -> LiteralParsed(LiteralEmpty, [])
@@ -38,7 +38,7 @@ mod Std.Regex.Syntax.Parser
           LiteralParsed(first, rest) -> parse_literal_sequence_tail_fuel(first, rest, next_fuel)
           LiteralInvalid(reason) -> LiteralInvalid(reason)
 
-  fn parse_literal_sequence_tail_fuel(left: LiteralPattern, input: String, fuel: Nat) -> LiteralParse = match fuel
+  fn parse_literal_sequence_tail_fuel(left: LiteralPattern, input: List(Char), fuel: Nat) -> LiteralParse = match fuel
     Z() -> LiteralParsed(left, input)
     S(next_fuel) -> match input
       [] -> LiteralParsed(left, [])
@@ -48,7 +48,7 @@ mod Std.Regex.Syntax.Parser
           LiteralParsed(right, rest) -> parse_literal_sequence_tail_fuel(LiteralSequence(left, right), rest, next_fuel)
           LiteralInvalid(reason) -> LiteralInvalid(reason)
 
-  fn parse_literal_repetition_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+  fn parse_literal_repetition_fuel(input: List(Char), fuel: Nat) -> LiteralParse = match fuel
     Z() -> LiteralInvalid(:RegexParseLimit)
     S(next_fuel) -> match parse_literal_atom_fuel(input, next_fuel)
       LiteralParsed(atom, ['*', '?' | rest]) -> LiteralParsed(LiteralRepeat(atom, true), rest)
@@ -59,7 +59,7 @@ mod Std.Regex.Syntax.Parser
       LiteralParsed(atom, ['?' | rest]) -> LiteralParsed(LiteralOptional(atom, false), rest)
       result -> result
 
-  fn parse_literal_atom_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+  fn parse_literal_atom_fuel(input: List(Char), fuel: Nat) -> LiteralParse = match fuel
     Z() -> LiteralInvalid(:RegexParseLimit)
     S(next_fuel) -> match input
       [] -> LiteralInvalid(:MissingRegexAtom)
@@ -74,27 +74,27 @@ mod Std.Regex.Syntax.Parser
       ['?' | _] -> LiteralInvalid(:QuantifierWithoutAtom)
       [char | rest] -> LiteralParsed(LiteralExact(char), rest)
 
-  fn parse_literal_group_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+  fn parse_literal_group_fuel(input: List(Char), fuel: Nat) -> LiteralParse = match fuel
     Z() -> LiteralInvalid(:RegexParseLimit)
     S(next_fuel) -> match input
       ['?', ':' | rest] -> parse_literal_non_capture_fuel(rest, next_fuel)
       _ -> parse_literal_capture_fuel(input, next_fuel)
 
-  fn parse_literal_capture_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+  fn parse_literal_capture_fuel(input: List(Char), fuel: Nat) -> LiteralParse = match fuel
     Z() -> LiteralInvalid(:RegexParseLimit)
     S(next_fuel) -> match parse_literal_alternate_fuel(input, next_fuel)
       LiteralParsed(pattern, [')' | rest]) -> LiteralParsed(LiteralCapture(pattern), rest)
       LiteralParsed(_, _) -> LiteralInvalid(:UnclosedRegexGroup)
       LiteralInvalid(reason) -> LiteralInvalid(reason)
 
-  fn parse_literal_non_capture_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+  fn parse_literal_non_capture_fuel(input: List(Char), fuel: Nat) -> LiteralParse = match fuel
     Z() -> LiteralInvalid(:RegexParseLimit)
     S(next_fuel) -> match parse_literal_alternate_fuel(input, next_fuel)
       LiteralParsed(pattern, [')' | rest]) -> LiteralParsed(pattern, rest)
       LiteralParsed(_, _) -> LiteralInvalid(:UnclosedRegexGroup)
       LiteralInvalid(reason) -> LiteralInvalid(reason)
 
-  fn parse_literal_escape(input: String) -> LiteralParse = match input
+  fn parse_literal_escape(input: List(Char)) -> LiteralParse = match input
     [] -> LiteralInvalid(:TrailingRegexEscape)
     ['d' | rest] -> LiteralParsed(LiteralDigit(false), rest)
     ['D' | rest] -> LiteralParsed(LiteralDigit(true), rest)

@@ -31,6 +31,14 @@ deployment must share one content-addressed artifact-set sweep with per-BEAM
 hashes and provenance, complete-set validation, and atomic generation
 publication.
 
+**2026-08-03 interface-first amendment.**
+`2026-08-03-interface-first-module-pipeline-design.md` supersedes the remaining
+loaded-BEAM and order-edge assumptions in the auto-import-order design. `use`
+controls lexical exposure only. Qualified access, ambient Prelude selection,
+macro output, checking, reachability, and emission resolve through immutable
+canonical module interfaces and a checked semantic graph. BEAM availability is
+an artifact concern and never a semantic resolver.
+
 ---
 
 ## 1. Import surface & name visibility (must-import) — PARTIALLY LANDED / remainder PARKED
@@ -521,6 +529,11 @@ illustrative; evaluation doctests are the separate existing `cure>`/`=>` Doctest
 
 ## Source specs
 
+- `2026-08-03-interface-first-module-pipeline-design.md` — interface-first
+  compilation universe; lexical `use` versus qualified/interface availability;
+  bootstrap and checked semantic graphs; interface SCCs; canonical resolution;
+  BEAM-independent emission; incremental/component hashing; migration and
+  stabilization gates. Supersedes the 2026-07-08 loaded-BEAM/order assumptions.
 - `2026-07-08-auto-import-order-design.md` — DepGraph dependency-ordered compilation; order- vs closure-edges; W086
   SCC cycle policy; entry-point and Preload integration.
 - `2026-07-08-neutral-app-sort-design.md` — kernel neutral-application sort inference via reify+infer (two TCB

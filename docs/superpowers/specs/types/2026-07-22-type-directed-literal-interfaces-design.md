@@ -523,8 +523,11 @@ the compiler never hard-codes target types such as Vector.
 
 ## 7. Bounded values, refinement, and runtime proof
 
-`Char` remains definitionally `Bounded(1114112)`, exactly matching Erlang
-`char() = 0..1114111`, including zero and surrogate integers.
+`Char` is a nominal, constructor-less carrier declared with
+`@erases(:integer)`. It therefore remains one raw BEAM code-point integer at
+runtime without being definitionally interchangeable with an arbitrary
+`Bounded(1114112)`. Construction is restricted to Unicode scalar values:
+`0..0x10ffff` excluding the UTF-16 surrogate interval `0xd800..0xdfff`.
 
 An arbitrary runtime Nat uses a fallible general conversion:
 
@@ -557,6 +560,22 @@ out-of-range value must report the range reason directly, preserving the value,
 bound, authored spelling, and source span. `invalid_literal_implementation` is
 reserved for an implementation whose declaration or returned Core value
 violates the literal-protocol contract.
+
+Generic JSON collection instances expose a separate coherence requirement. An
+instance such as `ToJSON(Option(t)) requires ToJSON(t)` is a dictionary factory:
+constructing the outer dictionary requires the inner `ToJSON(t)` dictionary.
+The coherence registry keeps the normalized outer head (`Option`) for candidate
+selection and retains the instance's applied head plus `requires` templates as
+the canonical factory description. Dispatch unifies the concrete applied type
+with that template, recursively constructs each required dictionary, and closes
+the outer method dictionary over those dependencies. With a rigid inner type it
+captures the caller's in-scope dictionary; with a concrete inner type it selects
+the canonical implementation recursively. The same `requires` source is copied
+onto the mangled method for checking its body. This mechanism is general and
+must not be replaced by JSON-specific whitelists or unchecked structural
+encoding. `String = List(Char)` still requires normal-form overlap handling so
+the specialized JSON string representation remains distinct from a generic JSON
+array representation.
 
 `Bounded(0)` has no values; `Bounded(1)` contains exactly zero. Compact bounded
 values remain definitionally equal to their `First`/`Next` forms and erase to
@@ -647,7 +666,7 @@ For example:
 ```text
 1114112 cannot be converted to Char
 
-Char accepts values from 0 through 1114111.
+Char accepts Unicode scalar values from 0 through 1114111, excluding surrogates.
 The supplied literal is one greater than the maximum.
 ```
 
@@ -716,7 +735,8 @@ round-trip floating syntax through a host float or discard list/binary indices.
 ### Safety and runtime behavior
 
 - arbitrary runtime Nat-to-Bounded is fallible; refined proof input is total;
-- `Char` accepts exactly `0..1114111`, including zero;
+- `Char` accepts exactly the Unicode scalar values in `0..1114111`, including
+  zero and excluding `0xd800..0xdfff`;
 - every compile-time-produced payload is kernel-checked;
 - non-total, stuck, extern-dependent, and fuel-exhausting conversions receive
   dedicated diagnostics;

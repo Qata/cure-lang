@@ -148,6 +148,38 @@ defmodule Cure.Compiler.IncrementalTest do
     assert s.errors == []
   end
 
+  test "an interface SCC may mention peer nominal types before either body is checked",
+       %{src: src, out: out, write: write} do
+    write.(
+      "interface_a.cure",
+      """
+      mod InterfaceA
+        use InterfaceB
+        rec AValue
+          value: Int
+        fn accepts_b(value: BValue) -> Int = 1
+      """
+    )
+
+    write.(
+      "interface_b.cure",
+      """
+      mod InterfaceB
+        use InterfaceA
+        rec BValue
+          value: Int
+        fn accepts_a(value: AValue) -> Int = 2
+      """
+    )
+
+    assert {:ok, summary} = compile(src, out)
+    assert summary.errors == []
+    assert "InterfaceA" in summary.compiled
+    assert "InterfaceB" in summary.compiled
+    assert File.exists?(Path.join(artifact_root(out), "Cure.InterfaceA.beam"))
+    assert File.exists?(Path.join(artifact_root(out), "Cure.InterfaceB.beam"))
+  end
+
   test "progress callback reports each module that actually starts compiling", %{src: src, out: out} do
     owner = self()
     progress = fn event -> send(owner, {:progress, event}) end

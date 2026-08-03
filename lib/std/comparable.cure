@@ -1,11 +1,6 @@
 @group(:core)
 @prelude
 mod Std.Comparable
-  ## `Std.Char` supplies `code_point` (Char -> Int) for the `Char` instance's
-  ## code-point ordering; `Std.String` makes `String` the transparent
-  ## `List(Char)` synonym the lexicographic `String` comparison folds over.
-  use Std.Char
-  use Std.String
   ## `use Std.Bool` supplies `` `not` `` for the derived `` `<=` ``/`` `>=` ``;
   ## `use Std.Equatable` provides the `Equatable(t)` superinterface required by
   ## `Comparable(t)`.
@@ -54,43 +49,6 @@ mod Std.Comparable
   implementation Comparable for Float
     ## Primitive float less-than (matches `build_binop`'s `float_lt` lowering).
     fn `<`(a: Float, b: Float) -> Bool = Std.Builtin.float_lt(a, b)
-
-  ## `Comparable` impl for `Char`: compare Unicode code points. `code_point` is
-  ## the `Char -> Int` coercion (Char erases to its code point), so this is an
-  ## `Int` comparison — no method dispatch, works on both pipelines.
-  implementation Comparable for Char
-    ## Character less-than on code points.
-    fn `<`(a: Char, b: Char) -> Bool = Std.Builtin.int_lt(code_point(a), code_point(b))
-
-  ## Lexicographic strict less-than over `String = List(Char)`: compare heads by
-  ## code point, and on a tie recurse into the tails. A prefix sorts before its
-  ## extension (`"ad" < "ada"`). Written as a plain top-level recursion (not a
-  ## self-recursive interface method) so the impl body carries no nested method
-  ## dispatch. Typed over the underlying `List(Char)` — the function destructures
-  ## list cells (`[]`/`[h | t]`), so its parameter type is the concrete inductive
-  ## it eliminates, not the transparent `String` presentation alias. (A `match`
-  ## scrutinee typed at a bare typealias global is not a `{:data, …}` head until
-  ## it is δ-unfolded, which the kernel's `case` inference does not do in place;
-  ## `String` values still pass, as `String` *is* `List(Char)`.)
-  fn string_lt(a: List(Char), b: List(Char)) -> Bool =
-    match a
-      [] ->
-        match b
-          []      -> False()
-          [_ | _] -> True()
-      [ha | ta] ->
-        match b
-          []        -> False()
-          [hb | tb] ->
-            pickup
-              Std.Builtin.int_lt(code_point(ha), code_point(hb)) -> True()
-              Std.Builtin.int_lt(code_point(hb), code_point(ha)) -> False()
-              else                                               -> string_lt(ta, tb)
-
-  ## `Comparable` impl for `String`. Delegates to lexicographic `string_lt`.
-  implementation Comparable for String
-    ## String less-than, character by character.
-    fn `<`(a: String, b: String) -> Bool = string_lt(a, b)
 
   ## `` `<=` `` derived: `a <= b` iff `not (b < a)`.
   fn `<=`(a: t, b: t) -> Bool requires Comparable(t) = Std.Bool.`not`(`<`(b, a))

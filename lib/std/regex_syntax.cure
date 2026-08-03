@@ -7,6 +7,7 @@ mod Std.Regex.Syntax
   use Std.Regex.Syntax.Parser
   use Std.Regex.Syntax.Emitter
   use Std.Syntax
+  use Std.String
 
   macro RegexLiterals
     literal regex <pattern: String> <flags: String> computed by expand_literal
@@ -19,9 +20,9 @@ mod Std.Regex.Syntax
       _ -> reject(Failure(:InvalidRegexPatternInput, []))
     _ -> reject(Failure(:InvalidRegexLiteralInput, []))
 
-  fn expand_literal_strings(pattern: String, flags: String) -> MacroResult = match parse_literal_flags(flags, literal_default_options())
+  fn expand_literal_strings(pattern: String, flags: String) -> MacroResult = match parse_literal_flags(Std.String.characters(flags), literal_default_options())
     LiteralFlagsParsed(options) ->
-      match parse_literal(prepare_literal(pattern, options))
+      match parse_literal(prepare_literal(Std.String.characters(pattern), options))
         LiteralParsed(parsed, rest) -> match rest
           [] ->
             expand(

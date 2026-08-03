@@ -68,7 +68,7 @@ defmodule Cure.Elab.Deriving do
   end
 
   def generate(iface, {:container, meta, body}, env)
-      when iface in [:Equatable, :Ord, :Comparable, :Show, :ToJSON] do
+      when iface in [:Equatable, :Ord, :Comparable, :Show, :ToJSON, :FromJSON] do
     case Env.get_interface(env, iface) do
       nil ->
         {:error, {:no_such_interface, iface}}
@@ -591,6 +591,15 @@ defmodule Cure.Elab.Deriving do
     ]
 
     case Enum.map(params, fn {:param, _pm, pname} -> pname end) do
+      [value] when iface == :FromJSON ->
+        fields = record_fields(declaration_body)
+
+        if not record? do
+          {:error, {:cannot_derive_shape, iface, String.to_atom(type_name)}}
+        else
+          {:ok, {:function_def, meta, [json_decode_record_body(value, fields, type_name, info.name)]}}
+        end
+
       [value] when iface in [:Show, :ToJSON] ->
         fields = record_fields(declaration_body)
 
@@ -697,6 +706,49 @@ defmodule Cure.Elab.Deriving do
       end)
 
     call("Object", [{:list, [], members}])
+  end
+
+  defp json_decode_record_body(value, fields, type_name, method) do
+    members = "__json_members"
+
+    match(var(value), [
+      arm(ctor_pat("Object", [members]), json_decode_fields(fields, members, type_name, method, [], 0)),
+      arm(
+        wildcard(),
+        call("Error", [call("UnexpectedValue", [string("expected JSON object for #{type_name}")])])
+      )
+    ])
+  end
+
+  defp json_decode_fields([], _members, type_name, _method, decoded, _index) do
+    fields =
+      Enum.map(Enum.reverse(decoded), fn {field, binder} ->
+        {:pair, [], [atom_lit(String.to_atom(field)), var(binder)]}
+      end)
+
+    call("Ok", [{:function_call, [name: type_name, record: true], fields}])
+  end
+
+  defp json_decode_fields([{field, field_type} | rest], members, type_name, method, decoded, index) do
+    raw = "__json_raw_#{index}"
+    result = "__json_value_#{index}"
+    reason = "__json_error_#{index}"
+    result_type = call("Result", [field_type, var("DecodeError")])
+    decode = {:assert_type, [], [call(method, [var(raw)]), result_type]}
+
+    decoded_field =
+      match(decode, [
+        arm(
+          ctor_pat("Ok", [result]),
+          json_decode_fields(rest, members, type_name, method, [{field, result} | decoded], index + 1)
+        ),
+        arm(ctor_pat("Error", [reason]), call("Error", [var(reason)]))
+      ])
+
+    match(call("required_member", [string(field), var(members)]), [
+      arm(ctor_pat("Ok", [raw]), decoded_field),
+      arm(ctor_pat("Error", [reason]), call("Error", [var(reason)]))
+    ])
   end
 
   defp record_fields(body) do

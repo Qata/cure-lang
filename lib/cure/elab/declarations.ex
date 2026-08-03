@@ -373,6 +373,15 @@ defmodule Cure.Elab.Declarations do
           register_header(name, params, [], env)
         end
 
+      Keyword.get(meta, :container_type) == :opaque ->
+        # Opaque carriers participate in interface SCCs exactly like ordinary
+        # families: peer signatures must be able to mention the nominal type
+        # before either module's bodies are elaborated. Register the complete
+        # constructor-less family here (including its declared erasure class).
+        # The ordinary declaration pass installs the same canonical family
+        # again, so this is an idempotent header rather than a second identity.
+        elaborate({:container, meta, []}, env)
+
       true ->
         {:ok, env}
     end
@@ -423,7 +432,12 @@ defmodule Cure.Elab.Declarations do
 
     with :ok <- reject_reserved_family_name(name),
          {:ok, telescope, quantities, _scope} <- elaborate_param_telescope(params, env) do
-      type = wrap_binders(:pi, telescope, quantities, {:type, @ceiling})
+      # A nullary alias names an ordinary small type. Giving its placeholder
+      # the ceiling universe makes every signature that mentions it infer
+      # `Type2` until the real RHS overwrites the entry, which is too late for
+      # an interface SCC (for example `Char = Bounded(...)` <-> `String`).
+      result_sort = if telescope == [], do: {:type, 0}, else: {:type, @ceiling}
+      type = wrap_binders(:pi, telescope, quantities, result_sort)
       {:ok, Env.add_def(env, name, type, nil, quantities)}
     end
   end
@@ -1506,10 +1520,24 @@ defmodule Cure.Elab.Declarations do
         {:variable, _, tyvar} = tyvar_ast
         dict_name = "__dict_#{iface_str}_#{tyvar}"
 
-        idx =
+        direct_idx =
           Enum.find_index(explicit_value_params, fn {:param, pm, _n} ->
             match?({:variable, _, ^tyvar}, Keyword.get(pm, :type))
           end)
+
+        idx =
+          direct_idx ||
+            Enum.find_index(explicit_value_params, fn {:param, pm, _n} ->
+              type_ast_mentions_variable?(Keyword.get(pm, :type), tyvar)
+            end)
+
+        head_arg_type =
+          if is_integer(idx) do
+            {:param, pm, _name} = Enum.at(explicit_value_params, idx)
+            Keyword.get(pm, :type)
+          else
+            nil
+          end
 
         dparam =
           {:param, [type: {:function_call, [name: iface_str], [tyvar_ast]}, constraint_dict: {iface_atom, tyvar}],
@@ -1520,6 +1548,7 @@ defmodule Cure.Elab.Declarations do
            iface: iface_atom,
            tyvar: tyvar,
            head_arg_index: idx,
+           head_arg_type: head_arg_type,
            return_type: return_expr,
            dict_name: dict_name
          }}
@@ -1528,6 +1557,13 @@ defmodule Cure.Elab.Declarations do
 
     {params ++ dict_params, specs}
   end
+
+  defp type_ast_mentions_variable?({:variable, _meta, name}, name), do: true
+
+  defp type_ast_mentions_variable?({_tag, _meta, children}, name) when is_list(children),
+    do: Enum.any?(children, &type_ast_mentions_variable?(&1, name))
+
+  defp type_ast_mentions_variable?(_ast, _name), do: false
 
   # Demote each dictionary parameter to `:erased` when the body would still pass
   # the relevance check with it erased — i.e. it is never used relevantly. This is
