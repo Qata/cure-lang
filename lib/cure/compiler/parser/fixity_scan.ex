@@ -153,6 +153,7 @@ defmodule Cure.Compiler.Parser.FixityScan do
     |> collect_qualified_targets(nil, [])
     |> Enum.reverse()
     |> Enum.uniq_by(&{&1.target, &1.line})
+    |> reject_qualified_prefixes()
   end
 
   defp collect_qualified_targets(node, inherited_line, acc) when is_tuple(node) do
@@ -169,6 +170,15 @@ defmodule Cure.Compiler.Parser.FixityScan do
           case qualified_owner(Keyword.get(call_meta, :name)) do
             nil -> acc
             owner -> [%{target: owner, line: line || 1} | acc]
+          end
+
+        {:attribute_access, _access_meta, _children} = access ->
+          case access |> dotted_attribute_name() |> qualified_owner() do
+            owner when is_binary(owner) ->
+              if module_path?(owner), do: [%{target: owner, line: line || 1} | acc], else: acc
+
+            nil ->
+              acc
           end
 
         _ ->
@@ -197,6 +207,33 @@ defmodule Cure.Compiler.Parser.FixityScan do
   end
 
   defp qualified_owner(_name), do: nil
+
+  defp dotted_attribute_name({:variable, _meta, name}) when is_binary(name), do: name
+
+  defp dotted_attribute_name({:attribute_access, meta, [inner]}) when is_list(meta) do
+    case {dotted_attribute_name(inner), Keyword.get(meta, :attribute)} do
+      {prefix, attribute} when is_binary(prefix) and is_binary(attribute) -> prefix <> "." <> attribute
+      _ -> nil
+    end
+  end
+
+  defp dotted_attribute_name(_node), do: nil
+
+  defp module_path?(owner) do
+    owner
+    |> String.split(".")
+    |> Enum.all?(&String.match?(&1, ~r/^\p{Lu}/u))
+  end
+
+  defp reject_qualified_prefixes(references) do
+    Enum.reject(references, fn reference ->
+      Enum.any?(references, fn other ->
+        other.line == reference.line and
+          other.target != reference.target and
+          String.starts_with?(other.target, reference.target <> ".")
+      end)
+    end)
+  end
 
   defp source_line(meta) do
     case Cure.MetaAST.Metadata.source_info(meta) do

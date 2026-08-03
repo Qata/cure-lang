@@ -144,6 +144,23 @@ defmodule Cure.Elab.Program do
   end
 
   @doc false
+  @spec canonical_type_skeleton(tuple() | list(), Env.t(), keyword()) ::
+          {:ok, Env.t()} | {:error, term()}
+  def canonical_type_skeleton(ast, %Env{} = imported_env, opts \\ []) do
+    owner = Keyword.get(opts, :module_name, find_module_name(ast) || "Main")
+
+    with :ok <- check_declarations(ast),
+         seeded = Env.with_owner(seed_with_telescope_support(ast), owner),
+         {:ok, merged} <- merge_env(seeded, without_incoming_owner(imported_env, owner)),
+         env0 = install_canonical_module_visibility(merged, ast, opts),
+         {:ok, lifted} <- Cure.Elab.Induction.lift_declarations(declarations(ast)),
+         items = lifted |> expand_where_declarations() |> annotate_overload_ordinals(),
+         {:ok, skeleton} <- declare_type_headers(items, env0) do
+      {:ok, skeleton}
+    end
+  end
+
+  @doc false
   @spec canonical_check_bodies(map()) :: {:ok, Env.t()} | {:error, term()}
   def canonical_check_bodies(%{
         ast: ast,
@@ -159,6 +176,25 @@ defmodule Cure.Elab.Program do
          {:ok, certified} <- Cure.Elab.Equation.generate_all(certified, ast) do
       {:ok, mark_inline_hints(certified, owner)}
     end
+  end
+
+  @doc false
+  @spec canonical_install_component_environment(map(), Env.t()) :: map()
+  def canonical_install_component_environment(
+        %{interface_env: %Env{} = local} = prepared,
+        %Env{} = component
+      ) do
+    env = %Env{
+      component
+      | module_owner: local.module_owner,
+        import_modules: local.import_modules,
+        bare_modules: local.bare_modules,
+        bare_bindings: local.bare_bindings,
+        qualified_modules: local.qualified_modules,
+        current_def: nil
+    }
+
+    Map.put(prepared, :interface_env, env)
   end
 
   @doc false

@@ -14,7 +14,7 @@ defmodule Cure.Compiler.ModulePipeline.Interface do
 
   @spec write(ModuleInterface.t(), Path.t()) :: :ok | {:error, term()}
   def write(%ModuleInterface{} = interface, root) do
-    with :ok <- verify(interface),
+    with :ok <- ModuleInterface.validate(interface),
          :ok <- File.mkdir_p(root) do
       destination = path(root, interface.module_name)
       payload = :erlang.term_to_binary(interface, [:deterministic, compressed: 6])
@@ -28,7 +28,7 @@ defmodule Cure.Compiler.ModulePipeline.Interface do
     with {:ok, <<@artifact_magic, @artifact_version, checksum::binary-size(32), payload::binary>>} <- File.read(path),
          :ok <- verify_payload_checksum(checksum, payload),
          {:ok, interface} <- decode(payload),
-         :ok <- verify(interface) do
+         :ok <- ModuleInterface.validate(interface) do
       {:ok, interface}
     else
       {:ok, <<@artifact_magic, version, _::binary>>} ->
@@ -44,18 +44,25 @@ defmodule Cure.Compiler.ModulePipeline.Interface do
 
   @spec load_roots([Path.t()]) :: {:ok, %{String.t() => ModuleInterface.t()}} | {:error, term()}
   def load_roots(roots) when is_list(roots) do
-    roots
-    |> Enum.flat_map(&Path.wildcard(Path.join(&1, "*" <> @extension)))
-    |> Enum.uniq()
-    |> Enum.sort()
-    |> Enum.reduce_while({:ok, %{}}, fn artifact, {:ok, interfaces} ->
-      with {:ok, interface} <- read(artifact),
-           :ok <- reject_duplicate_provider(interfaces, interface, artifact) do
-        {:cont, {:ok, Map.put(interfaces, interface.module_name, interface)}}
-      else
-        {:error, reason} -> {:halt, {:error, {:invalid_interface_artifact, artifact, reason}}}
-      end
-    end)
+    result =
+      roots
+      |> Enum.flat_map(&Path.wildcard(Path.join(&1, "*" <> @extension)))
+      |> Enum.uniq()
+      |> Enum.sort()
+      |> Enum.reduce_while({:ok, %{}}, fn artifact, {:ok, interfaces} ->
+        with {:ok, interface} <- read(artifact),
+             :ok <- reject_duplicate_provider(interfaces, interface, artifact) do
+          {:cont, {:ok, Map.put(interfaces, interface.module_name, interface)}}
+        else
+          {:error, reason} -> {:halt, {:error, {:invalid_interface_artifact, artifact, reason}}}
+        end
+      end)
+
+    with {:ok, interfaces} <- result,
+         {:ok, universe} <- environment(interfaces),
+         :ok <- verify_all(interfaces, universe) do
+      {:ok, interfaces}
+    end
   end
 
   defp decode(payload) do
@@ -140,16 +147,42 @@ defmodule Cure.Compiler.ModulePipeline.Interface do
     end
   end
 
-  @spec verify(ModuleInterface.t()) :: :ok | {:error, term()}
-  def verify(%ModuleInterface{} = interface) do
+  @spec verify(ModuleInterface.t(), Env.t()) :: :ok | {:error, term()}
+  def verify(%ModuleInterface{} = interface, %Env{} = dependencies \\ Env.empty()) do
     with {:ok, interface_env} <- to_env(interface),
          seeded = Builtins.seed(Env.empty(), MapSet.new()),
-         env = merge_for_verification(seeded, interface_env),
+         env = seeded |> merge_for_verification(dependencies) |> merge_for_verification(interface_env),
          :ok <- verify_families(env, interface),
          :ok <- verify_constructors(env, interface),
          :ok <- verify_definitions(env, interface) do
       :ok
     end
+  end
+
+  @spec environment(map()) :: {:ok, Env.t()} | {:error, term()}
+  def environment(interfaces) when is_map(interfaces) do
+    interfaces
+    |> Map.values()
+    |> Enum.uniq_by(&{&1.module_name, &1.interface_hash})
+    |> Enum.reduce_while({:ok, Env.empty()}, fn interface, {:ok, env} ->
+      case to_env(interface) do
+        {:ok, next} -> {:cont, {:ok, merge_for_verification(env, next)}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  @spec verify_all(map(), Env.t()) :: :ok | {:error, term()}
+  def verify_all(interfaces, %Env{} = universe) when is_map(interfaces) do
+    interfaces
+    |> Map.values()
+    |> Enum.uniq_by(&{&1.module_name, &1.interface_hash})
+    |> Enum.reduce_while(:ok, fn interface, :ok ->
+      case verify(interface, universe) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {:invalid_checked_interface, interface.module_name, reason}}}
+      end
+    end)
   end
 
   defp merge_for_verification(%Env{} = base, %Env{} = interface) do

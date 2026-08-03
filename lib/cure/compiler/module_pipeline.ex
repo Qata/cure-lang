@@ -26,8 +26,9 @@ defmodule Cure.Compiler.ModulePipeline do
          {:ok, manifest} <-
            ModuleManifest.build(paths, manifest_options(request, external_interfaces)),
          {:ok, skeletons, asts, sources} <- collect_units(manifest),
+         components = strongly_connected_components(manifest),
          {:ok, interfaces, checked_envs} <-
-           check_modules(manifest, asts, sources, external_interfaces, external_envs) do
+           check_modules(manifest, asts, sources, external_interfaces, external_envs, components) do
       {:ok,
        %Result{
          request: request,
@@ -35,7 +36,8 @@ defmodule Cure.Compiler.ModulePipeline do
          skeletons: skeletons,
          asts: asts,
          interfaces: interfaces,
-         checked_envs: checked_envs
+         checked_envs: checked_envs,
+         components: components
        }}
     end
   end
@@ -62,14 +64,38 @@ defmodule Cure.Compiler.ModulePipeline do
 
   @spec kernel_verify_interfaces(Result.t()) :: :ok | {:error, term()}
   def kernel_verify_interfaces(%Result{} = result) do
-    result.interfaces
-    |> Map.values()
-    |> Enum.uniq_by(&{&1.module_name, &1.interface_hash})
-    |> Enum.reduce_while(:ok, fn interface, :ok ->
-      case Interface.verify(interface) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, {:invalid_checked_interface, interface.module_name, reason}}}
-      end
+    with {:ok, universe} <- Interface.environment(result.interfaces),
+         :ok <- Interface.verify_all(result.interfaces, universe) do
+      :ok
+    end
+  end
+
+  @spec component_members(Result.t(), String.t()) :: [String.t()]
+  def component_members(%Result{} = result, module_name) when is_binary(module_name) do
+    result.components
+    |> Enum.find([], fn component -> Enum.any?(component, &(elem(&1, 1) == module_name)) end)
+    |> Enum.map(&elem(&1, 1))
+    |> Enum.sort()
+  end
+
+  @spec component_class(Result.t(), String.t()) :: :acyclic | :runtime_cycle
+  def component_class(%Result{} = result, module_name) when is_binary(module_name) do
+    case component_members(result, module_name) do
+      [_] -> :acyclic
+      [_ | _] -> :runtime_cycle
+      [] -> :acyclic
+    end
+  end
+
+  @spec interfaces_frozen_together?(Result.t(), [String.t()]) :: boolean()
+  def interfaces_frozen_together?(%Result{} = result, module_names) when is_list(module_names) do
+    expected = Enum.sort(module_names)
+
+    Enum.any?(result.components, fn component ->
+      names = component |> Enum.map(&elem(&1, 1)) |> Enum.sort()
+
+      names == expected and
+        Enum.all?(component, &Map.has_key?(result.interfaces, &1))
     end)
   end
 
@@ -113,33 +139,160 @@ defmodule Cure.Compiler.ModulePipeline do
     end)
   end
 
-  defp check_modules(manifest, asts, sources, external_interfaces, external_envs) do
-    manifest
-    |> dependency_order()
+  defp check_modules(manifest, asts, sources, external_interfaces, external_envs, components) do
+    components
     |> Enum.reduce_while(
       {:ok, external_interface_table(manifest, external_interfaces), external_env_table(manifest, external_envs)},
-      fn identity, {:ok, interfaces, checked_envs} ->
-        entry = Map.fetch!(manifest.entries, identity)
-
-        with {:ok, imported} <- imported_environment(manifest, identity, checked_envs),
-             {:ok, prepared} <-
-               Program.canonical_register_interface(Map.fetch!(asts, identity), imported,
-                 module_name: entry.module_name,
-                 source: Map.fetch!(sources, identity),
-                 file: entry.source_path,
-                 module_visibility: module_visibility(manifest, identity)
-               ),
-             {:ok, checked} <- Program.canonical_check_bodies(prepared),
-             dependency_hashes = dependency_hashes(manifest, identity, interfaces),
-             interface <- Interface.from_checked_env(checked, entry, manifest.package, dependency_hashes),
-             :ok <- Interface.verify(interface),
-             {:ok, interface_env} <- Interface.to_env(interface) do
-          {:cont, {:ok, Map.put(interfaces, identity, interface), Map.put(checked_envs, identity, interface_env)}}
-        else
-          {:error, reason} -> {:halt, {:error, {:module_check_failed, identity, reason}}}
+      fn component, {:ok, interfaces, checked_envs} ->
+        case check_component(manifest, component, asts, sources, interfaces, checked_envs) do
+          {:ok, next_interfaces, next_envs} -> {:cont, {:ok, next_interfaces, next_envs}}
+          {:error, _} = error -> {:halt, error}
         end
       end
     )
+  end
+
+  defp check_component(manifest, component, asts, sources, interfaces, checked_envs) do
+    members = MapSet.new(component)
+
+    with {:ok, prepared} <- register_component(manifest, component, members, asts, sources, checked_envs),
+         {:ok, component_env} <- merge_component_environments(prepared),
+         {:ok, checked} <- check_component_bodies(component, prepared, component_env),
+         {:ok, component_interfaces, component_envs} <-
+           freeze_component_interfaces(manifest, component, checked, interfaces) do
+      {:ok, Map.merge(interfaces, component_interfaces), Map.merge(checked_envs, component_envs)}
+    end
+  end
+
+  defp register_component(manifest, component, members, asts, sources, checked_envs) do
+    with {:ok, skeletons} <- register_component_type_skeletons(manifest, component, members, asts, checked_envs),
+         {:ok, component_skeleton} <- merge_environments(skeletons, :component_type_skeleton_merge_failed) do
+      register_component_interfaces(
+        manifest,
+        component,
+        members,
+        asts,
+        sources,
+        checked_envs,
+        component_skeleton
+      )
+    end
+  end
+
+  defp register_component_type_skeletons(manifest, component, members, asts, checked_envs) do
+    Enum.reduce_while(component, {:ok, %{}}, fn identity, {:ok, skeletons} ->
+      entry = Map.fetch!(manifest.entries, identity)
+
+      with {:ok, imported} <- imported_environment(manifest, identity, checked_envs, members),
+           {:ok, skeleton} <-
+             Program.canonical_type_skeleton(Map.fetch!(asts, identity), imported,
+               module_name: entry.module_name,
+               module_visibility: module_visibility(manifest, identity)
+             ) do
+        {:cont, {:ok, Map.put(skeletons, identity, skeleton)}}
+      else
+        {:error, reason} -> {:halt, {:error, {:module_type_skeleton_failed, identity, reason}}}
+      end
+    end)
+  end
+
+  defp register_component_interfaces(
+         manifest,
+         component,
+         members,
+         asts,
+         sources,
+         checked_envs,
+         component_skeleton
+       ) do
+    Enum.reduce_while(component, {:ok, %{}}, fn identity, {:ok, prepared} ->
+      entry = Map.fetch!(manifest.entries, identity)
+
+      with {:ok, imported} <- imported_environment(manifest, identity, checked_envs, members),
+           {:ok, imported} <- Program.merge_canonical_environments(imported, component_skeleton),
+           {:ok, module} <-
+             Program.canonical_register_interface(Map.fetch!(asts, identity), imported,
+               module_name: entry.module_name,
+               source: Map.fetch!(sources, identity),
+               file: entry.source_path,
+               module_visibility: module_visibility(manifest, identity)
+             ) do
+        {:cont, {:ok, Map.put(prepared, identity, module)}}
+      else
+        {:error, reason} -> {:halt, {:error, {:module_interface_registration_failed, identity, reason}}}
+      end
+    end)
+  end
+
+  defp merge_component_environments(prepared) do
+    environments = Map.new(prepared, fn {identity, module} -> {identity, module.interface_env} end)
+    merge_environments(environments, :component_interface_merge_failed)
+  end
+
+  defp merge_environments(environments, error_tag) do
+    environments
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.reduce_while({:ok, Env.empty()}, fn {_identity, environment}, {:ok, merged} ->
+      case Program.merge_canonical_environments(merged, environment) do
+        {:ok, env} -> {:cont, {:ok, env}}
+        {:error, reason} -> {:halt, {:error, {error_tag, reason}}}
+      end
+    end)
+  end
+
+  defp check_component_bodies(component, prepared, component_env) do
+    Enum.reduce_while(component, {:ok, %{}}, fn identity, {:ok, checked} ->
+      module =
+        prepared
+        |> Map.fetch!(identity)
+        |> Program.canonical_install_component_environment(component_env)
+
+      case Program.canonical_check_bodies(module) do
+        {:ok, env} -> {:cont, {:ok, Map.put(checked, identity, env)}}
+        {:error, reason} -> {:halt, {:error, {:module_body_check_failed, identity, reason}}}
+      end
+    end)
+  end
+
+  defp freeze_component_interfaces(manifest, component, checked, available_interfaces) do
+    provisional =
+      Map.new(component, fn identity ->
+        entry = Map.fetch!(manifest.entries, identity)
+        {identity, Interface.from_checked_env(Map.fetch!(checked, identity), entry, manifest.package, %{})}
+      end)
+
+    all_interfaces = Map.merge(available_interfaces, provisional)
+
+    with {:ok, verification_env} <- Interface.environment(all_interfaces) do
+      freeze_component_interfaces(
+        manifest,
+        component,
+        checked,
+        all_interfaces,
+        verification_env
+      )
+    end
+  end
+
+  defp freeze_component_interfaces(
+         manifest,
+         component,
+         checked,
+         all_interfaces,
+         verification_env
+       ) do
+    Enum.reduce_while(component, {:ok, %{}, %{}}, fn identity, {:ok, interfaces, envs} ->
+      entry = Map.fetch!(manifest.entries, identity)
+      hashes = dependency_hashes(manifest, identity, all_interfaces)
+      interface = Interface.from_checked_env(Map.fetch!(checked, identity), entry, manifest.package, hashes)
+
+      with :ok <- Interface.verify(interface, verification_env),
+           {:ok, interface_env} <- Interface.to_env(interface) do
+        {:cont, {:ok, Map.put(interfaces, identity, interface), Map.put(envs, identity, interface_env)}}
+      else
+        {:error, reason} -> {:halt, {:error, {:module_interface_freeze_failed, identity, reason}}}
+      end
+    end)
   end
 
   defp interface_environments(interfaces) do
@@ -196,11 +349,12 @@ defmodule Cure.Compiler.ModulePipeline do
     end
   end
 
-  defp imported_environment(manifest, identity, checked_envs) do
+  defp imported_environment(manifest, identity, checked_envs, excluded) do
     manifest
     |> ModuleManifest.dependencies(identity)
     |> Enum.map(& &1.target)
     |> Enum.uniq()
+    |> Enum.reject(&MapSet.member?(excluded, &1))
     |> Enum.sort()
     |> Enum.reduce_while({:ok, Env.empty()}, fn dependency, {:ok, imported} ->
       case Map.fetch(checked_envs, dependency) do
@@ -225,6 +379,45 @@ defmodule Cure.Compiler.ModulePipeline do
       interface = Map.fetch!(interfaces, dependency)
       {elem(dependency, 1), interface.interface_hash}
     end)
+  end
+
+  defp strongly_connected_components(manifest) do
+    order = dependency_order(manifest)
+
+    Enum.reduce(order, [], fn identity, components ->
+      if Enum.any?(components, &(identity in &1)) do
+        components
+      else
+        forward = reachable_modules(manifest, identity)
+
+        component =
+          order
+          |> Enum.filter(fn candidate ->
+            MapSet.member?(forward, candidate) and
+              MapSet.member?(reachable_modules(manifest, candidate), identity)
+          end)
+          |> Enum.sort()
+
+        components ++ [component]
+      end
+    end)
+  end
+
+  defp reachable_modules(manifest, root), do: reachable_modules(manifest, [root], MapSet.new())
+  defp reachable_modules(_manifest, [], seen), do: seen
+
+  defp reachable_modules(manifest, [identity | rest], seen) do
+    if MapSet.member?(seen, identity) do
+      reachable_modules(manifest, rest, seen)
+    else
+      dependencies =
+        manifest
+        |> ModuleManifest.dependencies(identity)
+        |> Enum.map(& &1.target)
+        |> Enum.filter(&Map.has_key?(manifest.entries, &1))
+
+      reachable_modules(manifest, dependencies ++ rest, MapSet.put(seen, identity))
+    end
   end
 
   defp resolve_qualified(result, namespace, written_name) do

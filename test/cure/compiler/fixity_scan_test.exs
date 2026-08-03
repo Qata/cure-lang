@@ -46,6 +46,12 @@ defmodule Cure.Compiler.Parser.FixityScanTest do
     assert scan(source).qualified_targets == [%{target: "Std.Otp.Raw", line: 3}]
   end
 
+  test "qualified type references participate in dependency discovery" do
+    source = "mod Cycle.TypeA\n  type A = MkA(Cycle.TypeB.B)\n"
+
+    assert scan(source).qualified_targets == [%{target: "Cycle.TypeB", line: 2}]
+  end
+
   test "a lexer error yields the empty scan rather than raising" do
     s = FixityScan.harvest_source(~s|mod M\n  fn f() = "unterminated|, "m.cure", FixityTable.new())
 

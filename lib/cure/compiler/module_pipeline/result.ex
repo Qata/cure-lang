@@ -8,6 +8,7 @@ defmodule Cure.Compiler.ModulePipeline.Result do
             asts: %{},
             interfaces: %{},
             checked_envs: %{},
+            components: [],
             semantic_graph: nil,
             diagnostics: []
 
