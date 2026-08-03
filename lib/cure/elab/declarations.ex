@@ -1409,7 +1409,7 @@ defmodule Cure.Elab.Declarations do
     # dictionary (and so its de-Bruijn index is stable). `constraint_specs` tells a
     # concrete call site which argument fixes `a` and how to name the dict binder.
     {params, constraint_specs} =
-      inject_constraint_dicts(params1, Keyword.get(meta, :constraints, []))
+      inject_constraint_dicts(params1, Keyword.get(meta, :constraints, []), return_expr)
 
     source_info = Cure.MetaAST.Metadata.source_info(meta)
 
@@ -1489,12 +1489,12 @@ defmodule Cure.Elab.Declarations do
 
   # Turn each `where Iface(a)` constraint into an implicit-style dictionary
   # parameter `__dict_Iface_a : Iface(a)`, appended to the telescope. Returns the
-  # extended parameter list and a spec per constraint recording which explicit
-  # value parameter fixes the head variable `a` (`head_arg_index`) — a concrete
-  # call resolves the instance from that argument's type.
-  defp inject_constraint_dicts(params, []), do: {params, []}
+  # extended parameter list and a spec per constraint recording either the
+  # explicit value parameter that fixes `a` (`head_arg_index`) or, when there is
+  # none, the result shape from which checking mode can recover it.
+  defp inject_constraint_dicts(params, [], _return_expr), do: {params, []}
 
-  defp inject_constraint_dicts(params, constraints) do
+  defp inject_constraint_dicts(params, constraints, return_expr) do
     explicit_value_params =
       Enum.filter(params, fn {:param, m, _n} -> not Keyword.get(m, :implicit, false) end)
 
@@ -1509,13 +1509,20 @@ defmodule Cure.Elab.Declarations do
         idx =
           Enum.find_index(explicit_value_params, fn {:param, pm, _n} ->
             match?({:variable, _, ^tyvar}, Keyword.get(pm, :type))
-          end) || 0
+          end)
 
         dparam =
           {:param, [type: {:function_call, [name: iface_str], [tyvar_ast]}, constraint_dict: {iface_atom, tyvar}],
            dict_name}
 
-        {dparam, %{iface: iface_atom, tyvar: tyvar, head_arg_index: idx, dict_name: dict_name}}
+        {dparam,
+         %{
+           iface: iface_atom,
+           tyvar: tyvar,
+           head_arg_index: idx,
+           return_type: return_expr,
+           dict_name: dict_name
+         }}
       end)
       |> Enum.unzip()
 
@@ -3731,6 +3738,18 @@ defmodule Cure.Elab.Declarations do
 
       Inductive.family?(env, atom) ->
         {:data, Env.resolve_key(env, env.families, atom), [], []}
+
+      # Transparent type aliases are stored as type-level definitions rather
+      # than inductive families. In a type position they must win over a
+      # same-spelled value constructor just as a family does. Without this,
+      # declaring `Value.String(String)` made the second `String` (and every
+      # later field annotation named `String`) resolve to the freshly declared
+      # constructor, eventually leaking a bare kernel `:ctor_arity` failure.
+      # Ordinary term definitions remain usable in dependent indices through
+      # this same global form; the kernel checks that the selected definition is
+      # actually well-sorted for its position.
+      Env.get_def(env, atom) != nil ->
+        {:global, Env.resolve_key(env, env.defs, atom)}
 
       Inductive.get_ctor(env, atom) ->
         {:ctor, Env.resolve_key(env, env.ctors, atom), []}

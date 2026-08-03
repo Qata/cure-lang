@@ -894,7 +894,7 @@ defmodule Cure.Compiler.Lexer do
       {:error, {:invalid_hex_literal, state.line, start_col}, state}
     else
       value = String.to_integer(clean, 16)
-      token = Token.new(:integer, value, state.line, start_col)
+      token = %{Token.new(:integer, value, state.line, start_col) | lexeme: "0x" <> clean}
       maybe_emit_event(state, token)
       {:ok, %{state | tokens: [token | state.tokens]}}
     end
@@ -916,7 +916,7 @@ defmodule Cure.Compiler.Lexer do
       {:error, {:invalid_binary_literal, state.line, start_col}, state}
     else
       value = String.to_integer(clean, 2)
-      token = Token.new(:integer, value, state.line, start_col)
+      token = %{Token.new(:integer, value, state.line, start_col) | lexeme: "0b" <> clean}
       maybe_emit_event(state, token)
       {:ok, %{state | tokens: [token | state.tokens]}}
     end
@@ -932,18 +932,19 @@ defmodule Cure.Compiler.Lexer do
         {frac_part, state} = consume_while(state, fn c -> c in ?0..?9 or c == ?_ end)
         {exp_part, state} = lex_exponent(state)
         raw = "#{int_part}.#{frac_part}#{exp_part}" |> String.replace("_", "")
-        finish_float(raw, state, start_col)
+        finish_float(raw, raw, state, start_col)
 
       # Scientific notation without dot: 1e3
       peek(state) in [?e, ?E] ->
         {exp_part, state} = lex_exponent(state)
-        raw = "#{int_part}.0#{exp_part}" |> String.replace("_", "")
-        finish_float(raw, state, start_col)
+        exact = "#{int_part}#{exp_part}" |> String.replace("_", "")
+        host = "#{int_part}.0#{exp_part}" |> String.replace("_", "")
+        finish_float(exact, host, state, start_col)
 
       true ->
         clean = String.replace(int_part, "_", "")
         value = String.to_integer(clean)
-        token = Token.new(:integer, value, state.line, start_col)
+        token = %{Token.new(:integer, value, state.line, start_col) | lexeme: clean}
         maybe_emit_event(state, token)
         {:ok, %{state | tokens: [token | state.tokens]}}
     end
@@ -954,8 +955,8 @@ defmodule Cure.Compiler.Lexer do
   # or an out-of-range magnitude (`1.0e400`, which overflows the IEEE double) —
   # into a clean lexer error instead of a raised ArgumentError that would crash
   # the whole tokenize.
-  defp finish_float(raw, state, start_col) do
-    token = Token.new(:float, String.to_float(raw), state.line, start_col)
+  defp finish_float(exact, host, state, start_col) do
+    token = %{Token.new(:float, String.to_float(host), state.line, start_col) | lexeme: exact}
     maybe_emit_event(state, token)
     {:ok, %{state | tokens: [token | state.tokens]}}
   rescue
@@ -1152,6 +1153,12 @@ defmodule Cure.Compiler.Lexer do
 
               ?r ->
                 {?\r, advance(state, 1)}
+
+              ?b ->
+                {?\b, advance(state, 1)}
+
+              ?f ->
+                {?\f, advance(state, 1)}
 
               ?\\ ->
                 {?\\, advance(state, 1)}

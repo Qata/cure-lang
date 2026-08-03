@@ -12,12 +12,12 @@ defmodule Cure.Elab.LiteralProtocolTest do
       type IntegerBox = IntegerBoxValue(Int)
 
       implementation ExpressibleByNaturalLiteral for NaturalBox
-        fn from_natural_literal(value: Nat) -> LiteralResult(NaturalBox) =
-          LiteralValue(NaturalBoxValue(value))
+        fn from_natural_literal(literal: NaturalLiteral) -> LiteralResult(NaturalBox) =
+          LiteralValue(NaturalBoxValue(literal.value))
 
       implementation ExpressibleByIntegerLiteral for IntegerBox
-        fn from_integer_literal(value: Int) -> LiteralResult(IntegerBox) =
-          LiteralValue(IntegerBoxValue(value))
+        fn from_integer_literal(literal: IntegerLiteral) -> LiteralResult(IntegerBox) =
+          LiteralValue(IntegerBoxValue(literal.value))
 
       fn natural() -> NaturalBox = 7
       fn integer_fallback() -> IntegerBox = 9
@@ -65,16 +65,63 @@ defmodule Cure.Elab.LiteralProtocolTest do
     assert {:int_lit, 23} = Env.get_def(env, :value).body
   end
 
+  test "numeric descriptor protocols preserve normalized exact spelling" do
+    source = """
+    mod ExactLiteralSpelling
+      type Exact = ExactValue(List(Char))
+
+      implementation ExpressibleByNaturalLiteral for Exact
+        fn from_natural_literal(literal: NaturalLiteral) -> LiteralResult(Exact) =
+          LiteralValue(ExactValue(literal.spelling))
+
+      implementation ExpressibleByIntegerLiteral for Exact
+        fn from_integer_literal(literal: IntegerLiteral) -> LiteralResult(Exact) =
+          LiteralValue(ExactValue(literal.spelling))
+
+      implementation ExpressibleByDecimalLiteral for Exact
+        fn from_decimal_literal(literal: DecimalLiteral) -> LiteralResult(Exact) =
+          LiteralValue(ExactValue(literal.spelling))
+
+      fn natural() -> Exact = 1_024
+      fn integer() -> Exact = -42
+      fn decimal() -> Exact = -1.2300e+4
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:ExactValue, ~c"1024"} = apply(module, :natural, [])
+    assert {:ExactValue, ~c"-42"} = apply(module, :integer, [])
+    assert {:ExactValue, ~c"-1.2300e+4"} = apply(module, :decimal, [])
+  end
+
+  test "Float and Decimal accept natural, integer, and decimal syntax" do
+    source = """
+    mod StandardNumericLiterals
+      use Std.Decimal
+
+      fn float_natural() -> Float = 2
+      fn float_integer() -> Float = -1
+      fn float_decimal() -> Float = 0.125
+
+      fn decimal_natural() -> Decimal = 2
+      fn decimal_integer() -> Decimal = -1
+      fn decimal_decimal() -> Decimal = 1.2300
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
+
   test "a type conforming to both protocols routes negatives exclusively through integer" do
     source = """
     mod CoherentLiteralDispatch
       type Dual = FromNatural(Nat) | FromInteger(Int)
 
       implementation ExpressibleByNaturalLiteral for Dual
-        fn from_natural_literal(value: Nat) -> LiteralResult(Dual) = LiteralValue(FromNatural(value))
+        fn from_natural_literal(literal: NaturalLiteral) -> LiteralResult(Dual) = LiteralValue(FromNatural(literal.value))
 
       implementation ExpressibleByIntegerLiteral for Dual
-        fn from_integer_literal(value: Int) -> LiteralResult(Dual) = LiteralValue(FromInteger(value))
+        fn from_integer_literal(literal: IntegerLiteral) -> LiteralResult(Dual) = LiteralValue(FromInteger(literal.value))
 
       fn positive() -> Dual = 3
       fn negative() -> Dual = -3
@@ -92,7 +139,7 @@ defmodule Cure.Elab.LiteralProtocolTest do
       type Tiny = TinyValue(Nat)
 
       implementation ExpressibleByNaturalLiteral for Tiny
-        fn from_natural_literal(value: Nat) -> LiteralResult(Tiny) = InvalidLiteral()
+        fn from_natural_literal(literal: NaturalLiteral) -> LiteralResult(Tiny) = InvalidLiteral()
 
       fn invalid() -> Tiny = 4
     end
@@ -116,7 +163,7 @@ defmodule Cure.Elab.LiteralProtocolTest do
         type Custom = CustomValue(Nat)
 
         implementation ExpressibleByNaturalLiteral for Custom
-          fn from_natural_literal(value: Nat) -> LiteralResult(Custom) = LiteralValue(CustomValue(value))
+          fn from_natural_literal(literal: NaturalLiteral) -> LiteralResult(Custom) = LiteralValue(CustomValue(literal.value))
 
         fn natural() -> Nat = #{natural}
         fn signed() -> Int = #{signed}

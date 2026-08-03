@@ -31,10 +31,14 @@ defmodule Cure.Compiler.CharLexerTest do
     # Before the fix, an unknown escape fell through to `decode_char_at`, which read the byte
     # AFTER the backslash literally — silently yielding the codepoint for `r` (114)
     # instead of reporting an error. That corruption then round-tripped stably
-    # as an ordinary character. Cure recognizes `\n \r \t \\ \' \0`; any
+    # as an ordinary character. Cure recognizes `\b \f \n \r \t \\ \' \0`; any
     # other escape must error rather than miscompile.
-    assert {:error, {:invalid_char_escape, _, _}} = Lexer.tokenize(~S"fn f() = '\b'", emit_events: false)
     assert {:error, {:invalid_char_escape, _, _}} = Lexer.tokenize(~S"fn f() = '\z'", emit_events: false)
+  end
+
+  test "backspace and form-feed escapes decode to their control code points" do
+    assert [?\b, ?\f] = char_tokens(~S"fn backspace() = '\b'
+fn form_feed() = '\f'")
   end
 
   test "a truncated multi-byte tail at EOF is an unterminated-char error, not a crash" do

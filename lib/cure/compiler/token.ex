@@ -11,11 +11,12 @@ defmodule Cure.Compiler.Token do
           value: term(),
           line: pos_integer(),
           col: pos_integer(),
+          lexeme: binary() | nil,
           span: Cure.Diagnostic.Span.t() | nil
         }
 
   @enforce_keys [:type, :value, :line, :col]
-  defstruct [:type, :value, :line, :col, :span]
+  defstruct [:type, :value, :line, :col, :lexeme, :span]
 
   @doc "Create a new token."
   @spec new(atom(), term(), pos_integer(), pos_integer()) :: t()

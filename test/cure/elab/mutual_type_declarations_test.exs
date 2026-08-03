@@ -70,4 +70,24 @@ defmodule Cure.Elab.MutualTypeDeclarationsTest do
 
     assert :ok = elaborates?(src)
   end
+
+  test "a type alias wins over a same-spelled constructor in type position" do
+    src = """
+    mod ConstructorAliasSeparation
+      use Std.String
+
+      type Value = String(String) | Empty
+
+      rec Error
+        message: String
+
+      fn text(value: Value) -> String =
+        match value
+          String(contents) -> contents
+          Empty() -> ""
+    end
+    """
+
+    assert :ok = elaborates?(src)
+  end
 end

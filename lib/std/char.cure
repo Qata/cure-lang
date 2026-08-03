@@ -28,6 +28,17 @@ mod Std.Char
   @extern(:cure_std_char, :code_point, 1)
   fn code_point(c: Char) -> Int
 
+  ## Checked inverse of `code_point`. JSON and other text decoders use this for
+  ## escaped Unicode scalars; invalid values and UTF-16 surrogate code points
+  ## are rejected rather than wrapped into `Bounded(0x110000)`.
+  @extern(:cure_std_char, :from_code_point, 1)
+  fn from_code_point(value: Int) -> Option(Char)
+
+  ## Construct from a code point the caller has already proved is a Unicode
+  ## scalar. Parsers use this only after checking range and surrogate rules.
+  @extern(:cure_std_char, :code_point, 1)
+  fn from_valid_code_point(value: Int) -> Char
+
   ## Scalar equality and ordering. Keeping these operations here prevents
   ## consumers from unpacking `Char` into implementation-level integers.
   @extern(:cure_std_char, :same?, 2)

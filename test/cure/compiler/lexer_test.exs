@@ -255,6 +255,8 @@ defmodule Cure.Compiler.LexerTest do
     test "escaped char" do
       assert [%Token{type: :char, value: ?\n}, _] = lex!("'\\n'")
       assert [%Token{type: :char, value: ?\r}, _] = lex!("'\\r'")
+      assert [%Token{type: :char, value: ?\b}, _] = lex!("'\\b'")
+      assert [%Token{type: :char, value: ?\f}, _] = lex!("'\\f'")
       assert [%Token{type: :char, value: ?\\}, _] = lex!("'\\\\'")
     end
 

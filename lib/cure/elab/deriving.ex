@@ -24,7 +24,7 @@ defmodule Cure.Elab.Deriving do
   `Show` clause is added here once those primitives land.
   """
 
-  alias Cure.Core.Env
+  alias Cure.Core.{Env, Inductive}
 
   @doc """
   Build the `{:implementation, …}` AST deriving `iface` for the ADT described by
@@ -68,7 +68,7 @@ defmodule Cure.Elab.Deriving do
   end
 
   def generate(iface, {:container, meta, body}, env)
-      when iface in [:Equatable, :Ord, :Comparable, :Show, :JSON] do
+      when iface in [:Equatable, :Ord, :Comparable, :Show, :ToJSON] do
     case Env.get_interface(env, iface) do
       nil ->
         {:error, {:no_such_interface, iface}}
@@ -129,7 +129,10 @@ defmodule Cure.Elab.Deriving do
   structural equality to derive.
   """
   @spec struct_eq_instance(tuple(), String.t()) :: {:ok, tuple()} | :skip
-  def struct_eq_instance({:container, meta, body}, method_name) do
+  def struct_eq_instance(container, method_name), do: struct_eq_instance(container, method_name, nil)
+
+  @doc false
+  def struct_eq_instance({:container, meta, body}, method_name, env) do
     type_name = Keyword.fetch!(meta, :name)
     type_params = Keyword.get(meta, :type_params, [])
 
@@ -139,6 +142,17 @@ defmodule Cure.Elab.Deriving do
 
       ctors ->
         cond do
+          # `struct_eq` receives the represented type as an explicit term-level
+          # argument. If another family has a constructor with the same
+          # canonical spelling (for example JSON's `Value.Number` beside the
+          # `Number` type), today's Core name atom cannot disambiguate those two
+          # namespaces in that term position. Decline the optional automatic
+          # instance instead of generating a constructor where a type is
+          # required. Authored type annotations remain unambiguous through the
+          # type-position resolver.
+          constructor_shadows_type_term?(env, type_name) ->
+            :skip
+
           # The `struct_eq` type argument is spelled as `for_type` in TERM position.
           # When the type's name is also one of its constructor names (`type Iter(a) =
           # Iter(...)`, `type NonEmpty(t) = NonEmpty(t, List(t))`), that spelling
@@ -170,7 +184,10 @@ defmodule Cure.Elab.Deriving do
             :skip
 
           true ->
-            for_type = for_type_ast(type_name, type_params)
+            generated_type_name =
+              if type_params == [], do: canonical_type_name(env, type_name), else: type_name
+
+            for_type = for_type_ast(generated_type_name, type_params)
             impl_meta = [interface: "Equatable", for: type_name, for_type: for_type, as: nil]
             method = struct_eq_method_def(method_name, for_type, type_params)
             {:ok, {:implementation, impl_meta, [method]}}
@@ -178,7 +195,31 @@ defmodule Cure.Elab.Deriving do
     end
   end
 
-  def struct_eq_instance(_decl, _method_name), do: :skip
+  def struct_eq_instance(_decl, _method_name, _owner), do: :skip
+
+  defp constructor_shadows_type_term?(%Env{} = env, type_name) do
+    atom = String.to_atom(type_name)
+    family = Env.resolve_key(env, env.families, atom)
+
+    case Inductive.get_ctor(env, atom) do
+      nil -> false
+      _ctor -> Inductive.ctor_family(env, Env.resolve_key(env, env.ctors, atom)) != family
+    end
+  end
+
+  defp constructor_shadows_type_term?(_env, _type_name), do: false
+
+  defp canonical_type_name(nil, type_name), do: type_name
+  # Generated AST can carry the canonical family key directly. Using authored
+  # dotted syntax here would unnecessarily re-enter module-availability lookup
+  # and even makes a module's own family unavailable while its interface is
+  # still being built.
+  defp canonical_type_name(%Env{} = env, type_name) do
+    type_name
+    |> String.to_atom()
+    |> then(&Env.resolve_key(env, env.families, &1))
+    |> Atom.to_string()
+  end
 
   @doc """
   Synthesise the canonical zero-copy `BeamEncode` implementation for an ADT.
@@ -550,7 +591,7 @@ defmodule Cure.Elab.Deriving do
     ]
 
     case Enum.map(params, fn {:param, _pm, pname} -> pname end) do
-      [value] when iface in [:Show, :JSON] ->
+      [value] when iface in [:Show, :ToJSON] ->
         fields = record_fields(declaration_body)
 
         if not record? do
@@ -650,19 +691,12 @@ defmodule Cure.Elab.Deriving do
   end
 
   defp json_record_body(value, fields, method) do
-    contents =
-      fields
-      |> Enum.with_index()
-      |> Enum.flat_map(fn {{field, _type}, index} ->
-        separator = if index == 0, do: "", else: ","
-
-        [
-          string(separator <> "\"" <> field <> "\":"),
-          call(method, [field_access(value, field)])
-        ]
+    members =
+      Enum.map(fields, fn {field, _type} ->
+        call("member", [string(field), call(method, [field_access(value, field)])])
       end)
 
-    concat([string("{")] ++ contents ++ [string("}")])
+    call("Object", [{:list, [], members}])
   end
 
   defp record_fields(body) do

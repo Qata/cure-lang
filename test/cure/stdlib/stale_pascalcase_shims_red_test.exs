@@ -41,20 +41,6 @@ defmodule Cure.Stdlib.StalePascalCaseShimsRedTest do
     end
   end
 
-  describe "cure_std_json.decode/1 (lib/cure/stdlib/cure_std_json.ex:48-53)" do
-    test "valid JSON decodes to {:ok, value}, not {:Ok, value}" do
-      # Only the outer Result tag is in scope for this finding; the inner
-      # `Std.Json.Value` constructor tag (`:Obj`) is a separate, intentional
-      # PascalCase convention (matches the surface ADT constructor name) and
-      # is left untouched here.
-      assert {:ok, {:Obj, _}} = :cure_std_json.decode(~s({"a":1}))
-    end
-
-    test "invalid JSON decodes to {:error, msg}, not {:Error, msg}" do
-      assert {:error, _msg} = :cure_std_json.decode("{bogus")
-    end
-  end
-
   describe "cure_std_test.forall_shrunk/3 (lib/cure/stdlib/cure_std_test.ex:21-29)" do
     test "a property that always holds returns {:ok, :unit}, not {:Ok, :unit}" do
       gen = fn _ -> 7 end

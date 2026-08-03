@@ -9,7 +9,7 @@ defmodule Cure.Core.PositivityNestedTest do
   every occurrence of the family in another family's arguments
   (`inductive.ex` `strictly_positive?`, the `:data`-other clause), which is sound
   but rejects genuinely-positive nested types the stdlib needs (`Std.Json.Value`'s
-  `Arr(List(Value))`, `Std.Iter`'s mutual `Iter`/`IterStep`).
+  `Array(List(Value))`, `Std.Iter`'s mutual `Iter`/`IterStep`).
 
   The fix instantiates the other family's constructor fields with the ACTUAL
   arguments and re-checks positivity: a positive parameter (`List`, `Option`)

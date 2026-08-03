@@ -188,6 +188,16 @@ position without explicit handling.
 
 ## 3. Literal representations
 
+> **0.34 bootstrap debt — spelling fields use `List(Char)`:** `Std.Literal` is
+> compiled before the friendly `String` alias in `Std.String`, so the initial
+> implementation spells the `NaturalLiteral`, `IntegerLiteral`, and
+> `DecimalLiteral` text fields as `List(Char)`. This is definitionally the
+> current representation of `String`, but it is not the intended long-term
+> public abstraction. Fix the foundational module layering so the descriptor
+> API can name `String` directly without making `Std.Literal` depend on a later
+> stdlib layer or exposing String's representation. Do not add conversions or
+> duplicate storage merely to hide this ordering problem.
+
 Literal representations are ordinary, stdlib-visible indexed types with
 compiler construction support. They are not trusted evidence: their
 constructors and indices are checked normally by the kernel.
@@ -197,21 +207,20 @@ accessors, but these are ordinary well-kinded declarations):
 
 ```cure
 rec NaturalLiteral
+  spelling: String
   value: Nat
 
 rec IntegerLiteral
-  negative: Bool
-  magnitude: Nat
+  spelling: String
+  value: Int
 
-rec FloatLiteral
-  negative: Bool
-  coefficient: Nat
-  exponent10: Int
+rec DecimalLiteral
+  spelling: String
 
 rec StringLiteral
-  decoded: String
+  value: String
 
-rec CharLiteral
+rec CharacterLiteral
   value: Char
 
 rec AtomLiteral
@@ -225,16 +234,19 @@ rec BinaryLiteral indices (bits: Nat)
   value: Binary
 ```
 
-The scalar descriptors retain an exact semantic value and authored provenance:
+Numeric descriptors retain normalized exact spelling. Integral descriptors also
+carry their already-checked semantic value; decimal syntax deliberately does
+not carry a host `Float`, coefficient/exponent decomposition, or a duplicate
+parsed representation:
 
 ```text
 12       -> NaturalLiteral(value=12, spelling="12")
--12      -> IntegerLiteral(negative=true, magnitude=12)
-12.340   -> FloatLiteral(negative=false, coefficient=12340, exponent10=-3)
-1.2e6    -> FloatLiteral(negative=false, coefficient=12, exponent10=5)
--0.0     -> FloatLiteral(negative=true, coefficient=0, exponent10=-1)
-"\n"     -> StringLiteral(decoded=[U+000A], spelling="\\n")
-'\n'      -> CharLiteral(value=10, spelling="\\n")
+-12      -> IntegerLiteral(value=-12, spelling="-12")
+12.340   -> DecimalLiteral(spelling="12.340")
+1.2e6    -> DecimalLiteral(spelling="1.2e6")
+-0.0     -> DecimalLiteral(spelling="-0.0")
+"\n"     -> StringLiteral(value=[U+000A])
+'\n'      -> CharacterLiteral(value=10)
 ```
 
 Source spans and authored spelling live in metadata/provenance and are not part
@@ -251,7 +263,7 @@ to diagnostics and future refinements.
 
 The compiler must preserve descriptors through parsing, printing, MetaAST,
 macro transport, hashing, caching, and incremental interfaces. It must not turn
-a `FloatLiteral` into a host float before selecting a conversion.
+a `DecimalLiteral` into a host float before selecting a conversion.
 
 Each category exposes a small, specified candidate representation set to the
 literal tier:
@@ -260,9 +272,9 @@ literal tier:
 |---|---|
 | unsigned integral | `NaturalLiteral`, `Nat`, normalized `String` |
 | negative integral | `IntegerLiteral`, `Int`, normalized `String` |
-| decimal/exponent | `FloatLiteral`, exact `String`, rounded `Float` |
+| decimal/exponent | `DecimalLiteral`, exact `String`, rounded `Float` |
 | string | `StringLiteral`, decoded `String`, UTF-8 `Binary` |
-| character | `CharLiteral`, `Char`, `Nat` |
+| character | `CharacterLiteral`, `Char`, `Nat` |
 | atom | `AtomLiteral`, `Atom` |
 | list | `ListLiteral(a,n)`, ordinary `List(a)` |
 | statically-sized binary | `BinaryLiteral(bits)`, `Binary`, and byte-aligned `List(Int)` |
@@ -437,17 +449,18 @@ are already ordinary values and therefore begin directly in the general tier.
 
 ## 5. Exact floating and Decimal behavior
 
-A floating literal may expose multiple literal-tier representations, including
-its exact `FloatLiteral`, normalized exact `String`, and explicitly rounded
-BEAM `Float`. Implementations state which representation they consume using
-ordinary source types:
+A decimal/exponent literal is initially represented only by its exact
+`DecimalLiteral` spelling. The selected target's protocol implementation owns
+parsing and validation:
 
 ```cure
-implementation FromLiteral(Float) for Float
-  fn from_literal(value: Float) -> Float = value
+implementation ExpressibleByDecimalLiteral for Float
+  fn from_decimal_literal(literal: DecimalLiteral) -> LiteralResult(Float) =
+    # parse exact spelling using the specified binary64 policy
 
-implementation FromLiteral(String) for Decimal
-  fn from_literal(text: String) -> Decimal = Decimal.from_valid_literal(text)
+implementation ExpressibleByDecimalLiteral for Decimal
+  fn from_decimal_literal(literal: DecimalLiteral) -> LiteralResult(Decimal) =
+    # parse literal.spelling directly as an exact decimal
 ```
 
 Thus:
@@ -457,8 +470,8 @@ let f: Float = 0.1
 let d: Decimal = 0.1
 ```
 
-Float deliberately requests IEEE-754 conversion. Decimal consumes exact text
-and never round-trips through Float. Runtime values use the general interfaces:
+Float deliberately performs IEEE-754 conversion. Decimal consumes exact text
+and never round-trips through Float. Runtime strings use the general interfaces:
 
 ```cure
 implementation TryFrom(String, DecimalError) for Decimal
@@ -470,9 +483,9 @@ ties-to-even, negative-zero preserving, finite normal/subnormal permitting, and
 overflow rejecting rather than silently producing infinity. NaN and infinities
 are named values, not numeric literal spellings.
 
-If exact-String and Float literal implementations are both visible for the same
-target, the literal is ambiguous. Precision is never sacrificed by an implicit
-preference.
+There is exactly one decimal-literal protocol lookup for a target, so competing
+intermediate representations cannot make a literal ambiguous. Precision is
+never sacrificed by an implicit intermediate conversion.
 
 ---
 
@@ -533,6 +546,17 @@ A natural literal can use `TryFromLiteral` or the general `TryFrom` fallback.
 Because its value is known, the elaborator evaluates the check, inserts the
 compact `{:bounded_lit,k}` on success, and gives a range diagnostic on failure.
 There is no unchecked `Nat -> Bounded(n)` cast.
+
+Implementation status (2026-08-03): range rejection is enforced, but the
+property suite currently exposes a diagnostic-shaping defect. The semantic
+reason
+`{:bounded_lit_out_of_range, value, bound}` is wrapped as
+`{:invalid_literal_implementation, :from_natural_literal, reason}`. This is not
+the specified public diagnostic: a valid literal implementation rejecting an
+out-of-range value must report the range reason directly, preserving the value,
+bound, authored spelling, and source span. `invalid_literal_implementation` is
+reserved for an implementation whose declaration or returned Core value
+violates the literal-protocol contract.
 
 `Bounded(0)` has no values; `Bounded(1)` contains exactly zero. Compact bounded
 values remain definitionally equal to their `First`/`Next` forms and erase to

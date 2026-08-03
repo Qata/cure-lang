@@ -63,6 +63,36 @@ defmodule Cure.Elab.Resolve do
   def method_call_checked(env, method, args, expected_core, names, ctx) do
     desc = Interface.for_method(env, method)
 
+    # A result-dispatched method may be called under a polymorphic constraint:
+    #
+    #   from_json_value(value) : Result(t, DecodeError)
+    #     requires FromJSON(t)
+    #
+    # There is no argument whose type is `t`, but checking mode already knows
+    # the complete expected result. Recover the interface head from the method's
+    # declared result shape. A rigid head dispatches through the dictionary
+    # binder introduced by `requires`; a concrete head can use the ordinary
+    # static path. Previously this case fell through to candidate enumeration,
+    # which cannot find a concrete implementation for a rigid variable and
+    # misleadingly reported `no_instance` for the whole `Result(...)` type.
+    checked_head = result_head_value(desc, method, expected_core, ctx, env)
+
+    case checked_head do
+      {:rigid, level} ->
+        checked_dispatch(abstract(env, desc, method, args, level, names, ctx))
+
+      {:concrete, head} ->
+        checked_dispatch(concrete(env, desc, method, head, args, names, ctx))
+
+      :unknown ->
+        method_call_checked_candidates(env, desc, method, args, expected_core, names, ctx)
+    end
+  end
+
+  defp checked_dispatch({:ok, term, _type}), do: {:ok, term}
+  defp checked_dispatch({:error, _reason} = error), do: error
+
+  defp method_call_checked_candidates(env, desc, method, args, expected_core, names, ctx) do
     candidates =
       case Env.coherence(env) do
         %Coherence{anon: anon} ->
@@ -95,6 +125,41 @@ defmodule Cure.Elab.Resolve do
     end
   end
 
+  defp result_head_value(desc, method, expected_core, ctx, env) do
+    return_ast = Map.fetch!(desc.methods, method).return_type
+
+    case result_head_core(return_ast, expected_core, desc.head_var) do
+      {:ok, head_core} ->
+        case classify(env, Eval.eval(head_core, Context.env(ctx)), MapSet.new()) do
+          {:rigid, _} = rigid -> rigid
+          {:concrete, _} = concrete -> concrete
+          {:unknown, _} -> :unknown
+        end
+
+      :error ->
+        :unknown
+    end
+  end
+
+  defp result_head_core({:variable, _meta, head_var}, core, head_var), do: {:ok, core}
+
+  defp result_head_core({:function_call, _meta, ast_args}, {:data, _family, params, indices}, head_var) do
+    find_result_head(ast_args, params ++ indices, head_var)
+  end
+
+  defp result_head_core(_ast, _core, _head_var), do: :error
+
+  defp find_result_head(ast_args, core_args, head_var) do
+    ast_args
+    |> Enum.zip(core_args)
+    |> Enum.reduce_while(:error, fn {ast, core}, :error ->
+      case result_head_core(ast, core, head_var) do
+        {:ok, _} = found -> {:halt, found}
+        :error -> {:cont, :error}
+      end
+    end)
+  end
+
   @doc """
   Elaborate a call to a constrained global `name(args...)`, appending the
   dictionary each `where Iface(a)` clause requires. The dictionary is resolved
@@ -109,6 +174,18 @@ defmodule Cure.Elab.Resolve do
 
     with {:ok, dict_asts} <- dict_arguments(specs, args, names, ctx, env) do
       Elaborator.elaborate_implicit_global_app(env, name, args ++ dict_asts, names, ctx)
+    end
+  end
+
+  @doc "Elaborate a constrained global whose expected result may determine a constraint head."
+  def constrained_call_checked(env, name, args, expected_core, names, ctx) do
+    specs = Env.constrained(env, name)
+
+    with {:ok, dict_asts} <- dict_arguments_checked(specs, args, expected_core, names, ctx, env),
+         {:ok, term, _type} <-
+           Elaborator.elaborate_implicit_global_app(env, name, args ++ dict_asts, names, ctx),
+         :ok <- Cure.Core.Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+      {:ok, term}
     end
   end
 
@@ -312,6 +389,54 @@ defmodule Cure.Elab.Resolve do
           {:halt, err}
       end
     end)
+  end
+
+  defp dict_arguments_checked(specs, args, expected_core, names, ctx, env) do
+    Enum.reduce_while(specs, {:ok, []}, fn spec, {:ok, acc} ->
+      result =
+        if is_integer(spec.head_arg_index) do
+          dictionary_ast_from_argument(spec, Enum.at(args, spec.head_arg_index), names, ctx, env)
+        else
+          dictionary_ast_from_result(spec, expected_core, names, ctx, env)
+        end
+
+      case result do
+        {:ok, dict_ast} -> {:cont, {:ok, acc ++ [dict_ast]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp dictionary_ast_from_argument(spec, head_ast, names, ctx, env) do
+    with {:ok, _term, tval} <- Elaborator.elaborate_expr_typed(head_ast, names, ctx, env) do
+      dictionary_ast_from_type(spec, tval, names, ctx, env)
+    end
+  end
+
+  defp dictionary_ast_from_result(spec, expected_core, names, ctx, env) do
+    case result_head_core(spec.return_type, expected_core, spec.tyvar) do
+      {:ok, head_core} ->
+        dictionary_ast_from_type(spec, Eval.eval(head_core, Context.env(ctx)), names, ctx, env)
+
+      :error ->
+        {:error, {:constraint_head_not_determined, spec.iface, spec.tyvar}}
+    end
+  end
+
+  defp dictionary_ast_from_type(spec, tval, names, ctx, env) do
+    case classify(env, tval, MapSet.new()) do
+      {:concrete, head} ->
+        {:ok, {:dict_value, spec.iface, head}}
+
+      {:rigid, lvl} ->
+        case find_dict_binder(ctx, names, spec.iface, lvl, env) do
+          {:ok, dname} -> {:ok, {:variable, [], dname}}
+          :error -> {:error, {:no_instance, spec.iface, {:rigid, lvl}}}
+        end
+
+      {:unknown, value} ->
+        {:error, {:no_instance, spec.iface, value}}
+    end
   end
 
   # The single-constructor record value `Iface{ m1 = impl₁, … }`: the interface's

@@ -2,7 +2,7 @@ defmodule Cure.Stdlib.JsonElaboratesTest do
   @moduledoc """
   `Std.Json` elaborates on the dependent pipeline. Two things had to land first:
 
-    * nested strict positivity in the kernel — `Value`'s `Arr(List(Value))`
+    * nested strict positivity in the kernel — `Value`'s `Array(List(Value))`
       nests the family in `List`'s (strictly-positive) parameter; the old
       checker blanket-rejected it (`{:non_strictly_positive, :Arr}`);
 

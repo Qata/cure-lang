@@ -137,22 +137,6 @@ defmodule Cure.Audit.ShimConformance do
     end)
   end
 
-  # Exercise every Value constructor `encode/1` handles, not just Num and empty
-  # Arr: the nullary `:Null`, `Bool`, `Str`, a non-empty nested `Arr`, and an
-  # `Obj` of `JsonPair`s.
-  defp json_value do
-    {:member_of,
-     [
-       {:Num, 1.5},
-       :Null,
-       {:Bool, true},
-       {:Bool, false},
-       {:Str, "hi"},
-       {:Arr, [{:Num, 1.0}, {:Str, "x"}]},
-       {:Obj, [{:JsonPair, "k", {:Num, 2.0}}]}
-     ]}
-  end
-
   # A deterministic generator + property pair for `forall_shrunk`.
   defp gen_fn, do: {:member_of, [fn _ -> 7 end, fn _ -> 100 end]}
   defp prop_fn, do: {:member_of, [fn _ -> true end, fn n -> n < 50 end]}
@@ -163,7 +147,7 @@ defmodule Cure.Audit.ShimConformance do
 
   @doc "Every `CURE RUNTIME` axiom this harness executes."
   def axioms do
-    crdt() ++ time() ++ json() ++ gen() ++ test_axioms()
+    crdt() ++ time() ++ gen() ++ test_axioms()
   end
 
   @doc """
@@ -240,18 +224,6 @@ defmodule Cure.Audit.ShimConformance do
       ),
       a({:cure_std_time, :to_unix, 1}, seq([instant()]), :int),
       a({:cure_std_time, :of_unix, 1}, seq([int()]), inst)
-    ]
-  end
-
-  defp json do
-    [
-      a({:cure_std_json, :encode, 1}, seq([json_value()]), :binary),
-      a(
-        {:cure_std_json, :decode, 1},
-        seq([{:member_of, ["[1,2]", "3", "null", "true", "\"s\"", "{\"k\":1}", "{oops"]}]),
-        {:result, :json, :binary}
-      ),
-      a({:cure_std_json, :num_of_int, 1}, seq([int()]), :json)
     ]
   end
 

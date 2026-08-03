@@ -62,7 +62,7 @@ examples read themselves.
 - `Point{x: 1, y: 2}`, `p.x`, `Point{p | x: 3}` — build / read / copy-update a record.
 - `:ok`, `:locked` — **atoms** (interned symbolic constants).
 - `## text` is a doc comment; `# text` is an inline comment (used for `# => result`).
-- `@extern(...)`, `@group(:g)`, `@builtin(:nat)`, `@derive(JSON)` — **attributes**
+- `@extern(...)`, `@group(:g)`, `@builtin(:nat)`, `@derive(ToJSON)` — **attributes**
   attached to the declaration below them.
 - `-> R ! Io` — a return type with an **effect** annotation (`! Io`).
 

@@ -32,6 +32,14 @@ defmodule :cure_std_char do
   @doc "Code point of a Char. Char erases to its integer code point, so this is `id`."
   def code_point(cp) when is_integer(cp), do: cp
 
+  @doc "Construct a Char from a valid Unicode scalar value."
+  def from_code_point(cp)
+      when is_integer(cp) and cp >= 0 and cp <= 0x10FFFF and
+             not (cp >= 0xD800 and cp <= 0xDFFF),
+      do: {:some, cp}
+
+  def from_code_point(_cp), do: :none
+
   def same?(left, right) when is_integer(left) and is_integer(right), do: left == right
   def less_than?(left, right) when is_integer(left) and is_integer(right), do: left < right
   def between?(cp, first, last), do: not less_than?(cp, first) and not less_than?(last, cp)

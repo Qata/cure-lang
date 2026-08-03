@@ -648,7 +648,13 @@ defmodule Cure.Elab.Equation do
   defp single_body(body), do: body
 
   defp functions(list) when is_list(list), do: Enum.flat_map(list, &functions/1)
-  defp functions({:function_def, meta, body}), do: [{meta, body}]
+  # Enum constructors with fields share the parser's `:function_def` shape but
+  # are marked `variant: true`; they are declarations, not executable function
+  # bodies. Treating `Value.String(String)` as a function made equation
+  # generation interpret its field-type AST as formal parameters and crash.
+  defp functions({:function_def, meta, body}) when is_list(meta) do
+    if Keyword.get(meta, :variant, false), do: [], else: [{meta, body}]
+  end
 
   defp functions({_tag, _meta, children}) when is_list(children),
     do: Enum.flat_map(children, &functions/1)

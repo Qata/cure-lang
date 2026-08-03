@@ -4347,7 +4347,7 @@ defmodule Cure.Elab.Program do
 
   defp auto_derive_equatable(items, env, method_name) do
     Enum.reduce_while(items, {:ok, env, []}, fn decl, {:ok, acc, fns} ->
-      case Cure.Elab.Deriving.struct_eq_instance(decl, method_name) do
+      case Cure.Elab.Deriving.struct_eq_instance(decl, method_name, acc) do
         :skip ->
           {:cont, {:ok, acc, fns}}
 
@@ -4485,10 +4485,36 @@ defmodule Cure.Elab.Program do
           {:cont, {:ok, acc2}}
 
         {:error, _reason} = err ->
-          {:halt, err}
+          {:halt, contextualize_body_pass_error(err, decl)}
       end
     end)
   end
+
+  # Body elaboration normally attaches expression-level source context itself.
+  # Kernel invariant failures such as `:ctor_arity`, however, used to escape as
+  # an anonymous atom. Preserve the declaration boundary so an internal failure
+  # at least identifies the function and authored span that produced the Core.
+  defp contextualize_body_pass_error(
+         {:error, {:source_context, _reason, _context}} = error,
+         _decl
+       ),
+       do: error
+
+  defp contextualize_body_pass_error({:error, reason}, {:function_def, meta, _body})
+       when is_list(meta) do
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+
+    {:error,
+     {:source_context, reason,
+      %{
+        span: if(source_info, do: source_info.whole),
+        checking: Keyword.get(meta, :name),
+        expression_category: :function_definition,
+        elaboration_stage: :body_pass
+      }}}
+  end
+
+  defp contextualize_body_pass_error(error, _decl), do: error
 
   # A computed macro can construct `M.f(...)` even when that spelling was not
   # present in the authored AST. Resolve that failure exactly once through the

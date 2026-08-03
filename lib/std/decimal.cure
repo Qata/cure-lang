@@ -17,6 +17,7 @@ mod Std.Decimal
   use Std.Comparable
   use Std.Equatable
   use Std.Bool
+  use Std.Json
 
   type Sign = Positive | Negative
 
@@ -101,6 +102,48 @@ mod Std.Decimal
     match from_string(Std.String.from_float(value))
       Ok(d) -> d
       Error(_) -> nan()
+
+  implementation ExpressibleByNaturalLiteral for Decimal
+    fn from_natural_literal(literal: NaturalLiteral) -> LiteralResult(Decimal) =
+      LiteralValue(from_int(FromNat(literal.value)))
+
+  implementation ExpressibleByIntegerLiteral for Decimal
+    fn from_integer_literal(literal: IntegerLiteral) -> LiteralResult(Decimal) =
+      LiteralValue(from_int(literal.value))
+
+  implementation ExpressibleByDecimalLiteral for Decimal
+    fn from_decimal_literal(literal: DecimalLiteral) -> LiteralResult(Decimal) =
+      match parse_numeric(literal.spelling, literal.spelling)
+        Ok(pair) -> match pair.2
+          [] -> LiteralValue(pair.1)
+          _ -> InvalidLiteral()
+        Error(_) -> InvalidLiteral()
+
+  implementation FromJSON for Decimal
+    fn from_json_value(value: Value) -> Result(Decimal, DecodeError) =
+      match value
+        Std.Json.Number(Std.Json.NaturalNumber(literal)) -> decimal_json_natural(literal)
+        Std.Json.Number(Std.Json.IntegerNumber(literal)) -> decimal_json_integer(literal)
+        Std.Json.Number(Std.Json.DecimalNumber(literal)) -> decimal_json_decimal(literal)
+        _ -> Error(Std.Json.UnexpectedValue("expected JSON number"))
+
+  local fn decimal_json_natural(literal: NaturalLiteral) -> Result(Decimal, DecodeError) =
+    let converted = assert_type from_natural_literal(literal) : LiteralResult(Decimal)
+    match converted
+      LiteralValue(value) -> Ok(value)
+      InvalidLiteral() -> Error(Std.Json.InvalidNumber(literal.spelling))
+
+  local fn decimal_json_integer(literal: IntegerLiteral) -> Result(Decimal, DecodeError) =
+    let converted = assert_type from_integer_literal(literal) : LiteralResult(Decimal)
+    match converted
+      LiteralValue(value) -> Ok(value)
+      InvalidLiteral() -> Error(Std.Json.InvalidNumber(literal.spelling))
+
+  local fn decimal_json_decimal(literal: DecimalLiteral) -> Result(Decimal, DecodeError) =
+    let converted = assert_type from_decimal_literal(literal) : LiteralResult(Decimal)
+    match converted
+      LiteralValue(value) -> Ok(value)
+      InvalidLiteral() -> Error(Std.Json.InvalidNumber(literal.spelling))
 
   # -- Exact string parser --------------------------------------------------
 
@@ -204,7 +247,7 @@ mod Std.Decimal
       _ -> -1
 
   local fn string_equal(a: String, b: String) -> Bool =
-    Std.Builtin.struct_eq(String, a, b)
+    a == b
 
   # -- Arithmetic -----------------------------------------------------------
 

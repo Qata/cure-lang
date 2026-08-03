@@ -39,6 +39,104 @@ invariants:
 The bounded-regex fixture is the final acceptance test for this programme, not
 the laboratory in which the foundational invariants are discovered.
 
+### Follow-up: foundational module layering and import semantics
+
+After the 0.34 literal and Cure-native JSON migrations, perform a dedicated
+module-system design audit. The current bootstrap can expose ambient prelude
+interfaces from an older artifact while compiling an earlier foundational
+module, and an otherwise reasonable explicit `use Std.List` from `Std.Literal`
+can pull later operator/interface dependencies backward into the bootstrap.
+This must not remain an order-sensitive convention.
+
+Compare how Swift, Rust, Zig, Idris, and other relevant typed languages define
+and load foundational scalar/collection types, inject preludes, own protocol or
+trait declarations and implementations, reject or break dependency cycles, and
+serialize module interfaces for incremental builds. Specify a Cure layering
+model in which:
+
+- canonical type availability is distinct from lexical value imports;
+- ambient prelude providers cannot leak stale implementations into an earlier
+  bootstrap stage;
+- source and cached interfaces obey the same dependency graph;
+- foundational aliases such as `String` can be named without importing a later
+  convenience module or exposing their representation;
+- dependency cycles are diagnosed before elaboration with their exact edge
+  provenance; and
+- clean and incremental builds produce identical module environments.
+
+Do not solve this audit by adding more filename/order exceptions.
+
+#### One canonical compilation world, not synchronized environment snapshots
+
+The compiler currently permits an elaboration call to carry both an `env` and
+a `Context.signature`. Resolution may consult the former while normalization,
+conversion, or the kernel consults the latter. This is invalid architecture:
+the two snapshots can disagree about an imported definition's body, interface
+implementation, canonical identity, or totality certificate.
+
+The literal migration exposed a concrete failure:
+
+```text
+Resolve.method_call_checked finds
+  Std.Decimal's ExpressibleByDecimalLiteral implementation in `env`
+
+Normalise.nf consults `ctx.signature`
+  and sees the implementation as an opaque/uncertified global
+
+Result
+  a valid Decimal literal remains a stuck application and is rejected as
+  "literal initializer is not a compile-time value"
+```
+
+The final model must have three distinct components:
+
+```text
+CompilationWorld
+  canonical definitions, families, constructors, module interfaces,
+  implementations, equations, extern ownership, and certification
+
+LexicalScope
+  bare-name bindings, qualified-module availability, direct-import preference,
+  and use-site visibility, all pointing into CompilationWorld
+
+LocalContext
+  the local dependent telescope and let-bound values only
+```
+
+Resolution, elaboration, normalization, conversion, totality, reachability,
+and emission must all query the same `CompilationWorld`. `LexicalScope` may
+change which canonical keys an authored name can denote, but must never copy,
+rekey, or own definition bodies or certificates. `LocalContext` must not retain
+an independently mergeable snapshot of global state; if an API carries a world
+handle for convenience, it must be the same immutable world identity used by
+resolution and every downstream phase.
+
+The temporary 0.34 bridge may replace a stale `Context.signature` with the
+current resolved environment immediately before literal normalization. Treat
+that operation as a diagnostic compatibility bridge only. It must:
+
+- be isolated behind one named helper rather than open-coded copying;
+- assert that every global referenced by the resolved conversion has the same
+  canonical definition in both views;
+- have a regression where an imported literal implementation and its helper are
+  visible and certified during normalization; and
+- be removed when `CompilationWorld`, `LexicalScope`, and `LocalContext` are
+  separated.
+
+Acceptance properties for the final model:
+
+- it is impossible to construct a phase input where resolution and the kernel
+  observe different bodies or certification for one canonical key;
+- loading or merging lexical scopes never changes `CompilationWorld` identity;
+- clean, cached, incremental, macro-expanded, and REPL elaboration use the same
+  world semantics;
+- declaration publication produces a new persistent world and all subsequent
+  phase inputs refer to that world, rather than requiring pairwise sync calls;
+- imported proof and literal-provider normalization is invariant under module
+  load order; and
+- tests contain no repair of the form `ctx.signature = env` outside the single
+  temporary bridge.
+
 ## 2. Dependency order
 
 The twenty issue groups form four layers:

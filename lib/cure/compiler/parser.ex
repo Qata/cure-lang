@@ -4468,7 +4468,21 @@ defmodule Cure.Compiler.Parser do
   # -- Literals --------------------------------------------------------------
 
   defp literal(subtype, token) do
-    meta = [subtype: subtype, line: token.line, col: token.col]
+    meta =
+      [subtype: subtype, line: token.line, col: token.col]
+      |> then(fn meta ->
+        cond do
+          subtype == :float and is_binary(token.lexeme) ->
+            Keyword.put(meta, :exact_decimal, token.lexeme)
+
+          subtype == :integer and is_binary(token.lexeme) ->
+            Keyword.put(meta, :exact_integer, token.lexeme)
+
+          true ->
+            meta
+        end
+      end)
+
     {:literal, put_token_source_info(meta, token), token.value}
   end
 
@@ -4635,8 +4649,44 @@ defmodule Cure.Compiler.Parser do
     meta = [category: category, operator: op, line: token.line, col: token.col]
     meta = put_operator_source_info(meta, nil, operand, token)
     ast = {:unary_op, meta, [operand]}
-    {ast, state}
+    {fold_signed_numeric_literal(ast), state}
   end
+
+  # A sign immediately applied to numeric syntax is part of that literal's
+  # exact descriptor, not a later call to Additive.negate. Non-literal operands
+  # remain ordinary overloadable unary operations.
+  defp fold_signed_numeric_literal(
+         {:unary_op, meta, [{:literal, literal_meta, value}]} = expression
+       )
+       when is_number(value) do
+    if Keyword.get(meta, :operator) == :- and
+         Keyword.get(literal_meta, :subtype) in [:integer, :float] do
+      literal_meta =
+        case Keyword.get(literal_meta, :subtype) do
+          :integer ->
+            Keyword.update(
+              literal_meta,
+              :exact_integer,
+              Integer.to_string(-value),
+              &("-" <> String.trim_leading(&1, "-"))
+            )
+
+          :float ->
+            Keyword.update(
+              literal_meta,
+              :exact_decimal,
+              Float.to_string(-value),
+              &("-" <> String.trim_leading(&1, "-"))
+            )
+        end
+
+      {:literal, literal_meta, -value}
+    else
+      expression
+    end
+  end
+
+  defp fold_signed_numeric_literal(expression), do: expression
 
   # Prefix binding power via the fixity table, falling back to the built-in
   # table — the single source of truth — when the session table carries no

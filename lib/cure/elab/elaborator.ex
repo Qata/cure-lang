@@ -2481,7 +2481,8 @@ defmodule Cure.Elab.Elaborator do
       when is_integer(value) and value >= 0 do
     if Keyword.get(meta, :operator) == :- and Keyword.get(literal_meta, :subtype) == :integer and
          literal_protocol_available?(env) do
-      elaborate_contextual_integer_literal(-value, expected_core, names, ctx, env)
+      spelling = "-" <> normalized_integer_spelling(Keyword.get(literal_meta, :exact_integer), value)
+      elaborate_contextual_integer_literal(-value, spelling, expected_core, names, ctx, env)
     else
       elaborate_expr_checked_fallback(
         {:unary_op, meta, [{:literal, literal_meta, value}]},
@@ -2490,6 +2491,34 @@ defmodule Cure.Elab.Elaborator do
         ctx,
         env
       )
+    end
+  end
+
+  def elaborate_expr_checked(
+        {:unary_op, meta, [{:literal, literal_meta, value}]} = expression,
+        expected_core,
+        names,
+        ctx,
+        env
+      )
+      when is_float(value) do
+    exact = Keyword.get(literal_meta, :exact_decimal)
+
+    cond do
+      Keyword.get(meta, :operator) == :- and float_expected?(expected_core, ctx) ->
+        {:ok, {:float_lit, -abs(value)}}
+
+      Keyword.get(meta, :operator) == :- and is_binary(exact) ->
+        elaborate_contextual_decimal_literal(
+          "-" <> String.trim_leading(exact, "-"),
+          expected_core,
+          names,
+          ctx,
+          env
+        )
+
+      true ->
+        elaborate_expr_checked_fallback(expression, expected_core, names, ctx, env)
     end
   end
 
@@ -2547,6 +2576,9 @@ defmodule Cure.Elab.Elaborator do
 
       Cure.Elab.Resolve.result_dispatched_method?(env, atom) ->
         Cure.Elab.Resolve.method_call_checked(env, atom, args, expected_core, names, ctx)
+
+      Cure.Elab.Resolve.constrained?(env, atom) ->
+        Cure.Elab.Resolve.constrained_call_checked(env, atom, args, expected_core, names, ctx)
 
       ctor ->
         # Checking-mode constructor: pin erased indices from the expected type (a
@@ -2943,8 +2975,12 @@ defmodule Cure.Elab.Elaborator do
     int? = Keyword.get(meta, :subtype) == :integer and is_integer(value) and value >= 0
     signed_int? = Keyword.get(meta, :subtype) == :integer and is_integer(value)
     literal_protocol = Keyword.get(meta, :literal_protocol)
+    exact_integer = Keyword.get(meta, :exact_integer)
     string? = Keyword.get(meta, :subtype) == :string and is_binary(value)
+    character? = Keyword.get(meta, :subtype) == :char and is_integer(value)
+    atom? = Keyword.get(meta, :subtype) == :symbol and is_atom(value)
     bytes? = Keyword.get(meta, :subtype) == :bytes and is_list(value)
+    exact_decimal = Keyword.get(meta, :exact_decimal)
     union_ctor = union_literal_ctor(meta, value, expected_core, ctx, env)
 
     cond do
@@ -2966,8 +3002,53 @@ defmodule Cure.Elab.Elaborator do
 
       # A string literal checks as its `List(Char)` desugaring (see the typed
       # clause), so the expected `List(Char)`/`String` type drives each char.
+      string? and literal_protocol == :string_argument ->
+        elaborate_expr_checked(desugar_string(value, meta), expected_core, names, ctx, env)
+
+      string? and scalar_literal_protocol_available?(env, :from_string_literal) ->
+        elaborate_scalar_literal_protocol(
+          :from_string_literal,
+          "StringLiteral",
+          {:literal, [subtype: :string, literal_protocol: :string_argument], value},
+          value,
+          expected_core,
+          names,
+          ctx,
+          env
+        )
+
       string? ->
         elaborate_expr_checked(desugar_string(value, meta), expected_core, names, ctx, env)
+
+      character? and literal_protocol == :character_argument ->
+        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
+      character? and scalar_literal_protocol_available?(env, :from_character_literal) ->
+        elaborate_scalar_literal_protocol(
+          :from_character_literal,
+          "CharacterLiteral",
+          {:literal, [subtype: :char, literal_protocol: :character_argument], value},
+          value,
+          expected_core,
+          names,
+          ctx,
+          env
+        )
+
+      atom? and literal_protocol == :atom_argument ->
+        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
+      atom? and scalar_literal_protocol_available?(env, :from_atom_literal) ->
+        elaborate_scalar_literal_protocol(
+          :from_atom_literal,
+          "AtomLiteral",
+          {:literal, [subtype: :symbol, literal_protocol: :atom_argument], value},
+          value,
+          expected_core,
+          names,
+          ctx,
+          env
+        )
 
       # A byte binary literal checks as its `Std.Binary.of_bytes/1` desugaring.
       bytes? ->
@@ -2990,6 +3071,9 @@ defmodule Cure.Elab.Elaborator do
       not literal_protocol_available?(env) and signed_int? and int_expected?(expected_core, ctx) ->
         {:ok, {:int_lit, value}}
 
+      signed_int? and float_expected?(expected_core, ctx) ->
+        {:ok, {:float_lit, value * 1.0}}
+
       # Contextual numerals are language-level conversions. A non-negative
       # spelling first asks `ExpressibleByNaturalLiteral`; if that expected type
       # has no natural implementation, it falls back to
@@ -2999,7 +3083,20 @@ defmodule Cure.Elab.Elaborator do
       # compile time, so no dictionary or conversion wrapper reaches emitted
       # runtime code.
       signed_int? and literal_protocol_available?(env) ->
-        elaborate_contextual_integer_literal(value, expected_core, names, ctx, env)
+        elaborate_contextual_integer_literal(
+          value,
+          exact_integer,
+          expected_core,
+          names,
+          ctx,
+          env
+        )
+
+      is_float(value) and float_expected?(expected_core, ctx) ->
+        {:ok, {:float_lit, value}}
+
+      is_float(value) and is_binary(exact_decimal) and decimal_literal_protocol_available?(env) ->
+        elaborate_contextual_decimal_literal(exact_decimal, expected_core, names, ctx, env)
 
       true ->
         elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
@@ -3502,10 +3599,23 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # True iff the (meta-free) expected type evaluates to the canonical `Nat` family.
-  defp elaborate_contextual_integer_literal(value, expected_core, names, ctx, env) when value >= 0 do
-    case elaborate_literal_protocol(:from_natural_literal, :natural_argument, value, expected_core, names, ctx, env) do
+  defp elaborate_contextual_integer_literal(value, spelling, expected_core, names, ctx, env)
+       when value >= 0 do
+    argument = {:natural_argument, normalized_integer_spelling(spelling, value)}
+
+    case elaborate_literal_protocol(:from_natural_literal, argument, value, expected_core, names, ctx, env) do
       {:error, {:no_instance, :ExpressibleByNaturalLiteral, _}} ->
-        case elaborate_literal_protocol(:from_integer_literal, :integer_argument, value, expected_core, names, ctx, env) do
+        integer_argument = {:integer_argument, normalized_integer_spelling(spelling, value)}
+
+        case elaborate_literal_protocol(
+               :from_integer_literal,
+               integer_argument,
+               value,
+               expected_core,
+               names,
+               ctx,
+               env
+             ) do
           {:error, {:no_instance, :ExpressibleByIntegerLiteral, _}} ->
             elaborate_bounded_literal_fallback(value, expected_core, ctx, env)
 
@@ -3518,8 +3628,23 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp elaborate_contextual_integer_literal(value, expected_core, names, ctx, env),
-    do: elaborate_literal_protocol(:from_integer_literal, :integer_argument, value, expected_core, names, ctx, env)
+  defp elaborate_contextual_integer_literal(value, spelling, expected_core, names, ctx, env),
+    do:
+      elaborate_literal_protocol(
+        :from_integer_literal,
+        {:integer_argument, normalized_integer_spelling(spelling, value)},
+        value,
+        expected_core,
+        names,
+        ctx,
+        env
+      )
+
+  defp normalized_integer_spelling(spelling, value) when is_binary(spelling) and value < 0,
+    do: "-" <> String.trim_leading(spelling, "-")
+
+  defp normalized_integer_spelling(spelling, _value) when is_binary(spelling), do: spelling
+  defp normalized_integer_spelling(_spelling, value), do: Integer.to_string(value)
 
   # Prelude bootstrap modules are elaborated before the literal interfaces can
   # be ambiently imported. Preserve the ordinary infer-and-convert path there;
@@ -3531,6 +3656,51 @@ defmodule Cure.Elab.Elaborator do
     Map.has_key?(env.families, result_family) and
       Cure.Elab.Resolve.method?(env, :from_integer_literal) and
       Cure.Elab.Resolve.method?(env, :from_natural_literal)
+  end
+
+  defp decimal_literal_protocol_available?(env),
+    do: Cure.Elab.Resolve.method?(env, :from_decimal_literal)
+
+  defp scalar_literal_protocol_available?(env, method),
+    do: Cure.Elab.Resolve.method?(env, method)
+
+  defp elaborate_contextual_decimal_literal(exact, expected_core, names, ctx, env) do
+    descriptor =
+      {:function_call, [name: "DecimalLiteral"],
+       [{:literal, [subtype: :string, literal_protocol: :string_argument], exact}]}
+
+    elaborate_literal_protocol(
+      :from_decimal_literal,
+      {:decimal_argument, descriptor},
+      exact,
+      expected_core,
+      names,
+      ctx,
+      env
+    )
+  end
+
+  defp elaborate_scalar_literal_protocol(
+         method,
+         constructor,
+         value_ast,
+         display,
+         expected_core,
+         names,
+         ctx,
+         env
+       ) do
+    descriptor = {:function_call, [name: constructor], [value_ast]}
+
+    elaborate_literal_protocol(
+      method,
+      {:descriptor_argument, descriptor},
+      display,
+      expected_core,
+      names,
+      ctx,
+      env
+    )
   end
 
   # Compatibility for indexed `Bounded(n)` until coherence keys retain indices
@@ -3558,18 +3728,30 @@ defmodule Cure.Elab.Elaborator do
 
   defp elaborate_literal_protocol(method, argument_kind, value, expected_core, names, ctx, env) do
     result_family = Env.resolve_key(env, env.families, :LiteralResult)
+    literal_ctx = literal_normalization_context(ctx, env)
 
     if Map.has_key?(env.families, result_family) and Cure.Elab.Resolve.method?(env, method) do
       result_type = {:data, result_family, [expected_core], []}
-      argument = {:literal, [subtype: :integer, literal_protocol: argument_kind], value}
+      argument = literal_protocol_argument(argument_kind, value)
       value_ctor = resolve_ctor_key(env, :LiteralValue)
       invalid_ctor = resolve_ctor_key(env, :InvalidLiteral)
 
       with {:ok, conversion} <-
-             Cure.Elab.Resolve.method_call_checked(env, method, [argument], result_type, names, ctx) do
-        case Normalise.nf(ctx, conversion, delta: :certified, fuel: 5_000_000) do
+             Cure.Elab.Resolve.method_call_checked(
+               env,
+               method,
+               [argument],
+               result_type,
+               names,
+               literal_ctx
+             ) do
+        case Normalise.nf(literal_ctx, conversion, delta: :certified, fuel: 5_000_000) do
           {:ctor, ^value_ctor, [literal]} ->
-            case Kernel.check(ctx, literal, Eval.eval(expected_core, Context.env(ctx))) do
+            case Kernel.check(
+                   literal_ctx,
+                   literal,
+                   Eval.eval(expected_core, Context.env(literal_ctx))
+                 ) do
               :ok -> {:ok, literal}
               {:error, reason} -> {:error, {:invalid_literal_implementation, method, reason}}
             end
@@ -3582,10 +3764,48 @@ defmodule Cure.Elab.Elaborator do
         end
       end
     else
-      iface = if method == :from_natural_literal, do: :ExpressibleByNaturalLiteral, else: :ExpressibleByIntegerLiteral
+      iface =
+        case method do
+          :from_natural_literal -> :ExpressibleByNaturalLiteral
+          :from_integer_literal -> :ExpressibleByIntegerLiteral
+          :from_decimal_literal -> :ExpressibleByDecimalLiteral
+          :from_string_literal -> :ExpressibleByStringLiteral
+          :from_character_literal -> :ExpressibleByCharacterLiteral
+          :from_atom_literal -> :ExpressibleByAtomLiteral
+        end
+
       {:error, {:no_instance, iface, expected_core}}
     end
   end
+
+  # Temporary 0.34 bridge. Name resolution already used `env`; literal
+  # normalization must see that same canonical world rather than the older
+  # snapshot retained by `ctx.signature`. The module-system follow-up replaces
+  # both with one CompilationWorld and removes this helper.
+  defp literal_normalization_context(ctx, env), do: %{ctx | signature: env}
+
+  defp literal_protocol_argument({:decimal_argument, descriptor}, _value), do: descriptor
+
+  defp literal_protocol_argument({:descriptor_argument, descriptor}, _value), do: descriptor
+
+  defp literal_protocol_argument({:natural_argument, spelling}, value) do
+    {:function_call, [name: "NaturalLiteral"],
+     [
+       {:literal, [subtype: :string, literal_protocol: :string_argument], spelling},
+       {:literal, [subtype: :integer, literal_protocol: :natural_argument], value}
+     ]}
+  end
+
+  defp literal_protocol_argument({:integer_argument, spelling}, value) do
+    {:function_call, [name: "IntegerLiteral"],
+     [
+       {:literal, [subtype: :string, literal_protocol: :string_argument], spelling},
+       {:literal, [subtype: :integer, literal_protocol: :integer_argument], value}
+     ]}
+  end
+
+  defp literal_protocol_argument(argument_kind, value),
+    do: {:literal, [subtype: :integer, literal_protocol: argument_kind], value}
 
   defp nat_expected?(expected_core, ctx) do
     sig = Context.signature(ctx)
@@ -3601,6 +3821,11 @@ defmodule Cure.Elab.Elaborator do
 
     not is_nil(int_fid) and not Unify.has_meta?(expected_core) and
       match?({:vdata, ^int_fid, []}, Eval.eval(expected_core, Context.env(ctx)))
+  end
+
+  defp float_expected?(expected_core, ctx) do
+    not Unify.has_meta?(expected_core) and
+      match?({:vfloat_type}, Eval.eval(expected_core, Context.env(ctx)))
   end
 
   # The type of every character literal: Char = Bounded(0x110000). A char literal

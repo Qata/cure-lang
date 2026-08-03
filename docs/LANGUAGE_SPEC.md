@@ -501,6 +501,24 @@ Generic callers state dictionary requirements explicitly:
 fn display(x: t) -> String requires Show(t) = show(x)
 ```
 
+A constraint head need not occur as the direct type of a value parameter. When
+it occurs only in the result, a call in checking position obtains the head from
+the expected result type and supplies the corresponding dictionary:
+
+```cure
+fn decode_as(source: String) -> Result(t, DecodeError) requires FromJSON(t) =
+  # ...
+
+fn decimal() -> Result(Decimal, DecodeError) =
+  assert_type decode_as("1.2300") : Result(Decimal, DecodeError)
+```
+
+The annotation (or another surrounding expected type) is semantically relevant:
+without an argument or expected result that fixes `t`, the call is
+underconstrained. For a rigid `t` inside another constrained generic function,
+resolution threads that function's in-scope dictionary rather than selecting a
+concrete implementation.
+
 Definitions, methods, and implementations are published under canonical
 owner-qualified identities. A bare method is available only when its interface
 and implementation dictionary are in lexical scope; qualified module
