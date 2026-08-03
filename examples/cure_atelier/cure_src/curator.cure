@@ -1,4 +1,14 @@
 ## Transparent actor example. Handler algebra is defined in Cure callbacks.
 
-actor Cure.Curator with %[:waiting, 0]
-  fn initial_count() -> Int = 0
+use Std.Actor
+use Std.Regex
+
+actor Curator
+  state Tuple(Atom, Int)
+  initial %[:waiting, 0]
+  body
+    fn initial_count() -> Int = 0
+
+    ## Regex literals are parsed and typed at Cure compile time; there is no
+    ## host-side pattern compiler or opaque regex handle.
+    fn valid_title(title: String) -> Bool = Std.Regex.matches(/^[A-Z][\w ]+\s\(\d\d\d\d\)$/, title)

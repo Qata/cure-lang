@@ -21,7 +21,12 @@ defmodule Cure.Migrate.ProtoToInterfaceTest do
     assert out =~ ~r/\bimplementation\s+P\s+for\s+Int/
     refute out =~ ~r/\bproto\s+P/
     refute out =~ ~r/\bimpl\s+P\s+for/
-    assert Enum.any?(warns, &(&1.rule == :W_proto_to_interface))
+    proto_warnings = Enum.filter(warns, &(&1.rule == :W_proto_to_interface))
+
+    assert Enum.map(proto_warnings, fn warning ->
+             {warning.span.start_line, warning.span.start_column, warning.span.end_column}
+           end) == [{2, 3, 8}, {4, 3, 7}]
+
     assert reparses?(out)
   end
 end

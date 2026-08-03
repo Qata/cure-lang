@@ -831,7 +831,7 @@ sigma value against shapes that disagree with its declared components.
 **E013: Totality Failure** -- an `@total true`-annotated function is not provably
 total.
 
-**E014: Unfilled Hole** -- a `?name` or `??` placeholder remained unfilled.
+**E014: Unfilled Hole** -- a `?name` or `?_` placeholder remained unfilled.
 Informational unless `cure check --strict` is active.
 
 **E015: Refinement Counterexample** -- a value flowing into a refinement-typed

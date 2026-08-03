@@ -121,7 +121,7 @@ it by definitional equality. This means
 While writing a function you don't yet know how to finish, leave a
 hole:
 ```cure E014
-fn safe_head(xs: List(T)) -> T = ?body
+fn safe_head({t: Type}, xs: List(t)) -> t = ?body
 ```
 Compile, and Cure tells you the goal type and the local context.
 Add `@total true` above a function to require totality:
@@ -165,14 +165,14 @@ See `docs/BINARIES.md` for the authoritative reference and
 `fsm` is an auto-preluded macro that creates a transparent lifted
 `gen_statem` module:
 ```text
-fsm Turnstile state Int handle_event
-  let pid: Pid(Atom) = beam_ops self
-  :keep_state_and_data
+fsm Turnstile
+  state Int
+  events
+    Coin -> :keep_state_and_data
 ```
-The callback body is checked as an erased `Effect(Atom)` result, so ordinary
-values and checked `beam_ops` sequences use the same path. Transition tables
-are a library-level macro built on this callback floor rather than compiler
-syntax.
+Each event branch is checked as an `FsmAction` (`Keep`, `Next`, or `Stop`).
+Transition tables are a library-level macro over the same generated
+`gen_statem` substrate rather than compiler syntax.
 ## 13. Documenting your modules
 `cure doc` produces a browsable, ExDoc-like documentation site from
 your `.cure` sources. The layout has a persistent left sidebar with
@@ -214,7 +214,7 @@ mod MyApp.Math
   ## let neg  = fn(x: Int) -> Int = 0 - x
   ## compose(neg, add1)(3)             # => -4
   ## ```
-  fn compose(f: B -> C, g: A -> B) -> (A -> C) =
+  fn compose({a: Type}, {b: Type}, {c: Type}, f: b -> c, g: a -> b) -> (a -> c) =
     fn(x) -> f(g(x))
 ```
 

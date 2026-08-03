@@ -84,6 +84,60 @@ defmodule Cure.Elab.GuardTest do
     assert apply(mod, :miss, []) == ?x
   end
 
+  test "guarded tuple matrices bind constructor payloads and preserve ordered fallthrough" do
+    src = """
+    mod M
+      type State = Counting | Done
+      type Event = Tick(Int) | Finish
+
+      fn decide(state: State, event: Event, data: Int) -> Int
+        | Counting(), Tick(amount), data when amount > 0 -> data + amount
+        | Counting(), Tick(_), data -> data
+        | _, _, _ -> 0
+
+      fn positive() -> Int = decide(Counting(), Tick(3), 10)
+      fn guarded_fallthrough() -> Int = decide(Counting(), Tick(0), 10)
+      fn pattern_fallthrough() -> Int = decide(Done(), Finish(), 10)
+    end
+    """
+
+    {:ok, env} = Program.elaborate(src)
+
+    {:ok, mod} =
+      Emit.compile_and_load(env,
+        module: :"Cure.GuardedTupleMatrix",
+        functions: [:decide, :positive, :guarded_fallthrough, :pattern_fallthrough]
+      )
+
+    assert apply(mod, :positive, []) == 13
+    assert apply(mod, :guarded_fallthrough, []) == 10
+    assert apply(mod, :pattern_fallthrough, []) == 0
+  end
+
+  test "a let-bound tuple supports ordered constructor rows" do
+    src = """
+    mod M
+      type State = Open | Closed
+      type Event = Shut | OpenDoor
+
+      fn responds(state: State, event: Event) -> Bool =
+        let key = %[state, event]
+        match key
+          %[Open(), Shut()] -> true
+          %[_, _] -> false
+
+      fn hit() -> Bool = responds(Open(), Shut())
+      fn miss() -> Bool = responds(Closed(), OpenDoor())
+    end
+    """
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.LetBoundTupleMatrix", functions: [:responds, :hit, :miss])
+
+    assert apply(mod, :hit, [])
+    refute apply(mod, :miss, [])
+  end
+
   test "where helpers support one structural parameter column across arities 2 through 6" do
     src = """
     mod M

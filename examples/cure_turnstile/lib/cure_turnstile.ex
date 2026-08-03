@@ -32,7 +32,7 @@ defmodule CureTurnstile do
   suite for the exact shape.
   """
 
-  @fsm_module :"Cure.Turnstile"
+  @fsm_module :"Cure.Main.Turnstile"
 
   @doc """
   Start a turnstile FSM. The initial `:payload` is `0` (coins) and the
@@ -44,7 +44,7 @@ defmodule CureTurnstile do
   """
   @spec start_link() :: {:ok, pid()} | {:error, term()}
   def start_link do
-    @fsm_module.start_link({0, 0})
+    apply(@fsm_module, :start_link, [{0, 0}])
   end
 
   @doc "Insert a coin. Delivered as an event; the FSM advances asynchronously."
@@ -71,14 +71,14 @@ defmodule CureTurnstile do
   @spec state(pid()) :: atom()
   def state(pid) do
     {current, _payload} = :sys.get_state(pid)
-    current
+    external_state(current)
   end
 
   @doc "Return a stats map with `:state`, `:coins`, and `:passages`."
   @spec stats(pid()) :: map()
   def stats(pid) do
     {current, {coins, passages}} = :sys.get_state(pid)
-    %{state: current, coins: coins, passages: passages}
+    %{state: external_state(current), coins: coins, passages: passages}
   end
 
   @doc "Check whether the turnstile is currently unlocked."
@@ -89,4 +89,7 @@ defmodule CureTurnstile do
   # blocks until the event has been handled so callers can immediately
   # read the resulting state.
   defp sync(pid), do: _ = :sys.get_state(pid)
+
+  defp external_state(:Locked), do: :locked
+  defp external_state(:Unlocked), do: :unlocked
 end

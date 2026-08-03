@@ -29,9 +29,9 @@ mod Std.Operators
 #   90 prefix - not bnot
 #   100 .                left   -- dot / attribute access
 #
-# `.`, `|>`, `<-|`, `✉`, `=`, and the ranges keep dedicated AST nodes and never
-# route through the overloadable function-call desugar, so redeclaring their
-# fixity would be meaningless; the conflict check rejects any attempt.
+# `.`, `|>`, `=`, and the ranges keep dedicated AST nodes. The Melquiades
+# precedence group lives in this core lattice, while `Std.Otp` owns its two
+# infix declarations and ordinary overloadable function meanings.
 
 precedencegroup Assignment
   associativity: right
@@ -74,10 +74,6 @@ precedencegroup Dot
 
 # Assignment (BP 5, right) -- let / single binding
 infix `=` : Assignment
-
-# Melquiades send (BP 8, none) -- ASCII `<-|` and envelope `✉` forms
-infix `<-|` : Melquiades
-infix `✉`   : Melquiades
 
 # Pipe (BP 10, left)
 infix `|>` : Pipe

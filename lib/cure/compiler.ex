@@ -124,9 +124,17 @@ defmodule Cure.Compiler do
       with {:ok, edition} <- resolve_edition(source, opts),
            {:ok, tokens} <- lex(source, file, emit?, edition),
            {:ok, ast} <- parse(tokens, file, emit?, edition, prelude_providers),
-           {:ok, ast} <- migrate_warn(ast, file),
+           {:ok, ast} <-
+             migrate_warn(
+               ast,
+               file,
+               source,
+               edition,
+               Keyword.get(opts, :migration_diagnostic_sink)
+             ),
            ast = inject_prelude_uses(ast, prelude_providers),
            {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
+           :ok <- validate_lifted_modules(ast),
            {:ok, units, cg_warnings, artifact} <-
              codegen(ast, source, file, emit?, output_dir, declared_phases),
            units = inject_artifact_provenance(units, source, file, artifact, opts),
@@ -136,6 +144,17 @@ defmodule Cure.Compiler do
         {:ok, module, warnings, artifact}
       end
     end)
+  end
+
+  # Lifted-module requests are authored/generated source and therefore belong to
+  # validation, not the internal-codegen error bucket. Codegen collects them
+  # again to emit units; this early pass exists so malformed requests surface as
+  # ordinary actionable diagnostics in both compile and check workflows.
+  defp validate_lifted_modules(ast) do
+    case Cure.Compiler.LiftModule.collect(ast) do
+      {:ok, _requests} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc """
@@ -682,10 +701,40 @@ defmodule Cure.Compiler do
   # §5.1): run the deprecation rules, print each warning to stderr, and continue
   # compiling on the *tolerated* (rewritten-in-memory) AST — the source file is
   # never modified. `cure migrate` is the separate rewrite-and-write consumer.
-  defp migrate_warn(ast, file) do
+  defp migrate_warn(ast, file, source, edition, diagnostic_sink) do
+    source_ast = ast
     {ast, warnings} = Cure.Migrate.run(ast, file: file, apply: :safe_only)
+
+    warnings =
+      case migration_preview_ast(source_ast, source, file, edition) do
+        {:ok, preview_ast} ->
+          {_preview_ast, preview_warnings} =
+            Cure.Migrate.run(preview_ast, file: file, apply: :safe_only)
+
+          if length(preview_warnings) == length(warnings), do: preview_warnings, else: warnings
+
+        :error ->
+          warnings
+      end
+
     registry = migration_source_registry(file)
 
+    diagnostics = Enum.map(warnings, &migration_warning_diagnostic(&1, registry))
+    emit_migration_diagnostics(diagnostics, registry, diagnostic_sink)
+
+    {:ok, ast}
+  end
+
+  defp emit_migration_diagnostics(diagnostics, registry, sink) when is_function(sink, 2) do
+    sink.(diagnostics, registry)
+    :ok
+  rescue
+    _ -> emit_migration_diagnostics(diagnostics, registry, nil)
+  catch
+    _, _ -> emit_migration_diagnostics(diagnostics, registry, nil)
+  end
+
+  defp emit_migration_diagnostics(diagnostics, registry, _sink) do
     sink =
       Cure.Diagnostic.Sink.new(
         registry: registry,
@@ -694,12 +743,117 @@ defmodule Cure.Compiler do
         width: 80
       )
 
-    warnings
-    |> Enum.map(&Cure.Diagnostic.Operational.migration_warning/1)
-    |> then(&Cure.Diagnostic.Sink.emit_all(sink, &1))
+    sink
+    |> Cure.Diagnostic.Sink.emit_all(diagnostics)
     |> Cure.Diagnostic.Sink.flush()
+  end
 
-    {:ok, ast}
+  # Compilation deliberately parses without trivia. A whole-file migration
+  # preview must not be printed from that AST because doing so would silently
+  # omit comments. Re-tokenize only for trivia and attach it to the already
+  # parsed tree; this copy feeds diagnostics only, never code generation.
+  defp migration_preview_ast(ast, source, file, edition) do
+    case Cure.Compiler.Lexer.tokenize(source,
+           file: file,
+           trivia: true,
+           emit_events: false,
+           edition: edition
+         ) do
+      {:ok, _tokens, trivia} -> {:ok, Cure.Compiler.Trivia.attach(ast, trivia)}
+      _ -> :error
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp migration_warning_diagnostic(warning, registry) do
+    details = Map.from_struct(warning)
+
+    details =
+      case warning.span || migration_warning_line_span(registry, warning.file, warning.line) do
+        %Cure.Diagnostic.Span{} = span -> Map.put(details, :span, span)
+        nil -> details
+      end
+
+    details = Map.put(details, :suggestions, migration_warning_suggestions(warning, registry))
+    Cure.Diagnostic.Operational.migration_warning(details)
+  end
+
+  defp migration_warning_suggestions(%{tier: :manual}, _registry) do
+    [%Cure.Diagnostic.Suggestion{message: "Port this deprecated syntax by hand.", applicability: :manual}]
+  end
+
+  defp migration_warning_suggestions(%{preview: preview, tier: tier, file: file}, registry)
+       when is_binary(preview) and tier in [:machine, :review] do
+    case migration_whole_source_span(registry, file) do
+      %Cure.Diagnostic.Span{} = span ->
+        applicability = if tier == :machine, do: :machine_applicable, else: :maybe_incorrect
+
+        message =
+          if tier == :machine,
+            do: "Apply the semantics-preserving migration.",
+            else: "Review and apply the proposed migration."
+
+        [
+          %Cure.Diagnostic.Suggestion{
+            message: message,
+            applicability: applicability,
+            edits: [%Cure.Diagnostic.TextEdit{span: span, replacement: preview}]
+          }
+        ]
+
+      nil ->
+        []
+    end
+  end
+
+  defp migration_warning_suggestions(_warning, _registry), do: []
+
+  defp migration_whole_source_span(nil, _file), do: nil
+
+  defp migration_whole_source_span(registry, file) do
+    with {:ok, source} <- Cure.Diagnostic.SourceRegistry.fetch(registry, file) do
+      lines = String.split(source, "\n", trim: false)
+
+      Cure.Diagnostic.Span.new(
+        source_id: file,
+        path: file,
+        start_byte: 0,
+        end_byte: byte_size(source),
+        start_line: 1,
+        start_column: 1,
+        end_line: length(lines),
+        end_column: String.length(List.last(lines) || "") + 1
+      )
+    else
+      _ -> nil
+    end
+  end
+
+  # Migration rules historically report a line only. Until each producer is
+  # upgraded to return its exact token span, turn that location into a useful
+  # primary range covering the authored, non-blank portion of the line. This is
+  # a real source-backed span (and therefore works in terminal/JSON/LSP), not a
+  # renderer-side reconstruction.
+  defp migration_warning_line_span(nil, _file, _line), do: nil
+  defp migration_warning_line_span(_registry, _file, nil), do: nil
+  defp migration_warning_line_span(_registry, _file, line) when not is_integer(line) or line < 1, do: nil
+
+  defp migration_warning_line_span(registry, file, line) do
+    with {:ok, source} <- Cure.Diagnostic.SourceRegistry.fetch(registry, file),
+         text when is_binary(text) <- Enum.at(String.split(source, "\n", trim: false), line - 1) do
+      leading = text |> String.codepoints() |> Enum.take_while(&(&1 in [" ", "\t"])) |> Enum.join()
+      content = text |> String.trim_leading() |> String.trim_trailing("\r")
+      column = String.length(leading) + 1
+      length = max(String.length(content), 1)
+
+      case Cure.Diagnostic.SourceRegistry.span_at(registry, file, line, column, length) do
+        {:ok, span} -> span
+        {:error, _} -> nil
+      end
+    else
+      _ -> nil
+    end
   end
 
   defp migration_source_registry(file) do
@@ -777,8 +931,7 @@ defmodule Cure.Compiler do
         # attribute after the ordinary dependent pipeline has produced forms.
         main_forms = inject_group_attribute(forms, original_ast)
 
-        {:ok, [{forms_module(main_forms), main_forms} | module_forms(lifted_units)], warnings,
-         artifact}
+        {:ok, [{forms_module(main_forms), main_forms} | module_forms(lifted_units)], warnings, artifact}
 
       {{:error, _} = error, _} ->
         error

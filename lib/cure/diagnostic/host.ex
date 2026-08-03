@@ -120,7 +120,15 @@ defmodule Cure.Diagnostic.Host do
          registry,
          source_id
        ) do
-    case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, span.start_line, span.start_column, 0) do
+    length = if span.end_line == span.start_line, do: max(span.end_column - span.start_column, 0), else: 0
+
+    case Cure.Diagnostic.SourceRegistry.span_at(
+           registry,
+           source_id,
+           span.start_line,
+           span.start_column,
+           length
+         ) do
       {:ok, remapped} -> %{diagnostic | primary: %{label | span: remapped}}
       {:error, _} -> diagnostic
     end
@@ -132,9 +140,9 @@ defmodule Cure.Diagnostic.Host do
          source_id
        )
        when is_integer(line) and line > 0 do
-    column = Map.get(payload, :column, 1)
+    {column, length} = operational_line_range(registry, source_id, line, Map.get(payload, :column))
 
-    case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, line, column, 0) do
+    case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, line, column, length) do
       {:ok, span} ->
         label = %Cure.Diagnostic.Label{
           span: span,
@@ -150,6 +158,18 @@ defmodule Cure.Diagnostic.Host do
   end
 
   defp remap_operational_span(diagnostic, _registry, _source_id), do: diagnostic
+
+  defp operational_line_range(registry, source_id, line, explicit_column) do
+    with nil <- explicit_column,
+         {:ok, source} <- Cure.Diagnostic.SourceRegistry.fetch(registry, source_id),
+         text when is_binary(text) <- Enum.at(String.split(source, "\n", trim: false), line - 1) do
+      leading = text |> String.codepoints() |> Enum.take_while(&(&1 in [" ", "\t"])) |> Enum.join()
+      content = text |> String.trim_leading() |> String.trim_trailing("\r")
+      {String.length(leading) + 1, max(String.length(content), 1)}
+    else
+      _ -> {explicit_column || 1, 0}
+    end
+  end
 
   defp operational_location_message(%{rule: rule}), do: "rule #{rule} applies here"
   defp operational_location_message(_payload), do: "warning applies here"

@@ -19,16 +19,20 @@ defmodule Cure.Migrate do
     @moduledoc """
     A migration warning emitted when a rule rewrites (or, in `cure build`,
     *would* rewrite) a file. `:rule` is the rule's stable id atom; `:file` and
-    `:line` locate it for the user.
+    `:span` locates it precisely for the user (`:line` remains for compatibility
+    with callers that consume migration warnings as data).
     """
     @enforce_keys [:rule, :message, :file]
-    defstruct [:rule, :message, :file, :line]
+    defstruct [:rule, :message, :file, :line, :span, :tier, :preview]
 
     @type t :: %__MODULE__{
             rule: atom(),
             message: String.t(),
             file: String.t(),
-            line: pos_integer() | nil
+            line: pos_integer() | nil,
+            span: Cure.Diagnostic.Span.t() | nil,
+            tier: Rule.tier(),
+            preview: String.t() | nil
           }
   end
 
@@ -111,14 +115,18 @@ defmodule Cure.Migrate do
         case rule.detect_and_rewrite.(acc_ast, ctx) do
           {:rewrite, new_ast} ->
             committed = commit(rule, apply_mode, acc_ast, new_ast)
-            {committed, warns ++ warnings_for(rule, file, [nil]), maybe_rewriter(rewriters, rule, committed, acc_ast)}
 
-          {:rewrite, new_ast, lines} ->
+            {committed, warns ++ warnings_for(rule, file, [nil], new_ast),
+             maybe_rewriter(rewriters, rule, committed, acc_ast)}
+
+          {:rewrite, new_ast, locations} ->
             committed = commit(rule, apply_mode, acc_ast, new_ast)
-            {committed, warns ++ warnings_for(rule, file, lines), maybe_rewriter(rewriters, rule, committed, acc_ast)}
 
-          {:warn, lines} ->
-            {acc_ast, warns ++ warnings_for(rule, file, lines), rewriters}
+            {committed, warns ++ warnings_for(rule, file, locations, new_ast),
+             maybe_rewriter(rewriters, rule, committed, acc_ast)}
+
+          {:warn, locations} ->
+            {acc_ast, warns ++ warnings_for(rule, file, locations, nil), rewriters}
 
           :no_change ->
             {acc_ast, warns, rewriters}
@@ -140,11 +148,51 @@ defmodule Cure.Migrate do
   defp commit(%Rule{tier: :machine}, :safe_only, _old_ast, new_ast), do: new_ast
   defp commit(%Rule{}, :safe_only, old_ast, _new_ast), do: old_ast
 
-  defp warnings_for(%Rule{} = rule, file, lines) do
-    Enum.map(lines, fn line ->
-      %Warning{rule: rule.id, message: rule.warning_template, file: file, line: line}
+  defp warnings_for(%Rule{} = rule, file, locations, preview_ast) do
+    preview = if preview_ast, do: preview_source(preview_ast)
+    message = tier_message(rule)
+
+    Enum.map(locations, fn
+      %Cure.Diagnostic.Span{} = span ->
+        %Warning{
+          rule: rule.id,
+          message: message,
+          file: file,
+          line: span.start_line,
+          span: span,
+          tier: rule.tier,
+          preview: preview
+        }
+
+      line ->
+        %Warning{
+          rule: rule.id,
+          message: message,
+          file: file,
+          line: line,
+          tier: rule.tier,
+          preview: preview
+        }
     end)
   end
+
+  defp preview_source(ast) do
+    case safe_print(ast) do
+      {:ok, source} -> source
+      {:error, _} -> nil
+    end
+  end
+
+  defp tier_message(%Rule{tier: :machine, warning_template: message}),
+    do: message <> ". This migration is semantics-preserving and can be applied automatically."
+
+  defp tier_message(%Rule{tier: :review, warning_template: message}) do
+    proposal = message |> String.replace(" will be ", " can be ") |> String.replace(" will ", " can ")
+    proposal <> ". Review the proposed result before applying it."
+  end
+
+  defp tier_message(%Rule{tier: :manual, warning_template: message}),
+    do: message <> ". This migration must be completed by hand."
 
   @max_passes 8
 
@@ -338,14 +386,18 @@ defmodule Cure.Migrate do
   # the first group, was deleted in the #18 rip-out). Group 1 = the surface
   # primitive types (`Int`/`Float`/`String`/`Bool`/`Atom`/`Unit`/`Any`/`Never`/
   # `Char`). Group 2: `Type` is the universe kind (`fn F(a: Type) -> Type`);
-  # `Pid`/`Ref`/`Binary`/`Bitstring` are BEAM primitive types; `Map`/`Tuple` are
+  # `Binary`/`Bitstring` are BEAM primitive types; `Map`/`Tuple` are
   # built-in containers; `Nat` is the Int-tier foundational numeric (dedicated
   # kernel literal forms). Without these, container/kind signatures warn
   # spuriously and `cure migrate --all` would corrupt them (`Pid` -> `pid`). Data
   # *constructors* of imported inductives (e.g. `Std.Nat`'s `Z`/`S`) are a
   # different category — resolved per-import (`imported_names/2`), not here.
+  # Unindexed `Pid` and `Ref` belonged to the retired unrestricted process
+  # surface. The formal OTP API provides `Std.Otp.Pid(m)`, `MonitorRef`, and
+  # `TimerRef`; treating the old spellings as builtins hid stale declarations
+  # until a later Core read-back happened to expose `unknown_global`.
   @builtin_type_names ~w(Int Float String Bool Atom Unit Any Never Char
-                         Type Pid Ref Binary Bitstring Map Tuple Nat)
+                         Type Binary Bitstring Map Tuple Nat)
 
   defp builtin_type_names, do: MapSet.new(@builtin_type_names)
 
@@ -688,14 +740,11 @@ defmodule Cure.Migrate do
   # stdlib source directories the elaborator uses (`import_source_path/1`). Only
   # `Std.*` is handled — a bare/user module resolves to `:error` and is skipped.
   defp stdlib_source_path(source) do
-    case String.split(source, ".") do
-      ["Std", name] ->
-        Cure.Stdlib.Paths.source_dirs()
-        |> Enum.map(&Path.join(&1, String.downcase(name) <> ".cure"))
-        |> Enum.find(&File.exists?/1)
-        |> case do
-          nil -> :error
-          path -> {:ok, path}
+    case source do
+      "Std." <> _ ->
+        case Cure.Compiler.SourceResolver.module_path(source) do
+          {:ok, path} -> {:ok, path}
+          :not_found -> :error
         end
 
       _ ->

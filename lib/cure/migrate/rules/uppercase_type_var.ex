@@ -88,7 +88,7 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
     # local `t` forced the bump) is independently re-lowercased to `t` by a method
     # that lacks that local — desyncing the method's uses from the head binder.
     {new_meta, rename_map} = rewrite_signature(meta, ctx, body_names, active)
-    lines = if rename_map != %{}, do: [Keyword.get(meta, :line) | lines], else: lines
+    lines = if rename_map != %{}, do: [signature_location(meta, rename_map) | lines], else: lines
     # A nested signature's own binders shadow an outer variable of the same name.
     inner = Map.merge(active, rename_map)
     {new_body, lines} = walk(body, ctx, inner, lines)
@@ -190,7 +190,11 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
       |> rewrite_str_fields(str_fields, rename_map)
       |> rewrite_expr_fields(expr_fields, rename_map)
 
-    lines = if rename_map != %{}, do: [Keyword.get(meta, :line) | lines], else: lines
+    lines =
+      if rename_map != %{},
+        do: [head_location(meta, rename_map, str_fields, expr_fields) | lines],
+        else: lines
+
     inner = Map.merge(active, rename_map)
     {new_body, lines} = walk(body, ctx, inner, lines)
     {{tag, new_meta, new_body}, lines}
@@ -222,6 +226,60 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
   end
 
   defp rename_strings(other, _map), do: other
+
+  # Locate the actual authored type-variable token. The parser already carries
+  # precise SourceInfo on type variables and implicit parameter names, so the
+  # migration warning need not point at the entire declaration.
+  defp signature_location(meta, rename_map) do
+    keys = rename_map |> Map.keys() |> MapSet.new()
+
+    Enum.find_value(Keyword.get(meta, :params, []), &rename_span(&1, keys)) ||
+      rename_span(Keyword.get(meta, :return_type), keys) ||
+      Rule.source_span(meta, :whole) || Rule.source_line(meta)
+  end
+
+  defp head_location(meta, rename_map, str_fields, expr_fields) do
+    keys = rename_map |> Map.keys() |> MapSet.new()
+
+    names = Enum.flat_map(str_fields, &head_string_names(Keyword.get(meta, &1)))
+
+    spans =
+      case Cure.MetaAST.Metadata.source_info(meta) do
+        %Cure.MetaAST.SourceInfo{arguments: spans} -> spans
+        _ -> []
+      end
+
+    string_span =
+      names
+      |> Enum.zip(spans)
+      |> Enum.find_value(fn {name, span} ->
+        if MapSet.member?(keys, name) and match?(%Cure.Diagnostic.Span{}, span), do: span
+      end)
+
+    expr_span =
+      Enum.find_value(expr_fields, fn field -> rename_span(Keyword.get(meta, field), keys) end)
+
+    string_span || expr_span || Rule.source_span(meta, :opener) ||
+      Rule.source_span(meta, :whole) || Rule.source_line(meta)
+  end
+
+  defp rename_span({:variable, meta, name}, keys) when is_binary(name) do
+    if MapSet.member?(keys, name), do: Rule.source_span(meta, :name)
+  end
+
+  defp rename_span({:param, meta, name}, keys) when is_binary(name) do
+    if MapSet.member?(keys, name) do
+      Rule.source_span(meta, :name)
+    else
+      rename_span(Keyword.get(meta, :type), keys)
+    end
+  end
+
+  defp rename_span(tuple, keys) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.find_value(&rename_span(&1, keys))
+
+  defp rename_span(list, keys) when is_list(list), do: Enum.find_value(list, &rename_span(&1, keys))
+  defp rename_span(_other, _keys), do: nil
 
   # ── Signature rewrite ──────────────────────────────────────────────────────
 
@@ -346,6 +404,9 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
   # ── Type-expression helpers ────────────────────────────────────────────────
 
   # Every variable name appearing in a type expression, in order.
+  # A dotted type such as `Std.Bool.Bool` is one qualified constructor name;
+  # its `Std` base is a module path, never a free type variable.
+  defp type_var_names({:attribute_access, _meta, [_base]}), do: []
   defp type_var_names({:variable, _meta, name}) when is_binary(name), do: [name]
   defp type_var_names({_k, _meta, ch}) when is_list(ch), do: Enum.flat_map(ch, &type_var_names/1)
   defp type_var_names(l) when is_list(l), do: Enum.flat_map(l, &type_var_names/1)
@@ -375,6 +436,8 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
   defp meta_values(_), do: []
 
   # Rewrite variable nodes whose name is a rename key; recurse into applications.
+  defp rename_in_type({:attribute_access, _meta, [_base]} = qualified, _map), do: qualified
+
   defp rename_in_type({:variable, meta, name}, map) when is_binary(name) do
     {:variable, meta, Map.get(map, name, name)}
   end

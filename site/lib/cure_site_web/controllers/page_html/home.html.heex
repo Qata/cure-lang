@@ -13,8 +13,9 @@
     <div class="grid items-stretch gap-10 lg:grid-cols-[1.05fr_0.95fr]">
       <div>
         <p class="max-w-2xl text-xl leading-relaxed text-base-content/70">
-          Cure brings expressive types, compile-time invariants, and OTP concurrency
-          together in one language for software that keeps its shape as it grows.
+          Cure sends every program through one dependent compiler pipeline:
+          elaboration, kernel checking, quantitative erasure, and native BEAM code.
+          Indexed types and ordinary OTP concurrency live in the same language.
         </p>
         <div class="mt-8 flex flex-wrap items-center gap-3">
           <a
@@ -53,8 +54,8 @@
     <div>
       <h2 class="font-semibold">Make invariants explicit</h2>
       <p class="mt-2 text-sm leading-relaxed text-base-content/65">
-        Express relationships between values in types and get useful feedback
-        before the program reaches production.
+        Express relationships between values in indexed types and prove them
+        with evidence independently checked by the dependent kernel.
       </p>
     </div>
     <div>
@@ -87,8 +88,8 @@
         <p class="text-sm font-mono text-primary">01</p>
         <h3 class="mt-4 font-semibold">Describe the domain</h3>
         <p class="mt-2 text-sm leading-relaxed text-base-content/65">
-          Use algebraic data types, pattern matching, and refinements to give
-          your values meaningful structure.
+          Use algebraic and indexed data types, dependent functions, and pattern
+          refinement to give values meaningful, machine-checked structure.
         </p>
       </div>
       <div class="rounded-xl border border-base-300 p-6">

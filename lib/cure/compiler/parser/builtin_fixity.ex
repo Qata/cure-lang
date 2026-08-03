@@ -49,6 +49,7 @@ defmodule Cure.Compiler.Parser.BuiltinFixity do
   # nothing) and keeps the model uniform: no module is named; ANY `@prelude` file
   # that declares a fixity is picked up. Today only `operators.cure` matches.
   @fixity_kw ~r/^\s*(infix|prefix|postfix|precedencegroup)\b/m
+  @prelude_kw ~r/^\s*@prelude\b/m
 
   # The bundled stdlib sources that syntactically declare a fixity, resolved once
   # at compile time via the fixed `@stdlib_source_dir` wildcard — independent of
@@ -59,8 +60,11 @@ defmodule Cure.Compiler.Parser.BuiltinFixity do
                           |> Enum.sort()
                           |> Enum.filter(fn path ->
                             case File.read(path) do
-                              {:ok, source} -> Regex.match?(@fixity_kw, source)
-                              _ -> false
+                              {:ok, source} ->
+                                Regex.match?(@prelude_kw, source) and Regex.match?(@fixity_kw, source)
+
+                              _ ->
+                                false
                             end
                           end)
 

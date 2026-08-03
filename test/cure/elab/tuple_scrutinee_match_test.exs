@@ -58,6 +58,28 @@ defmodule Cure.Elab.TupleScrutineeMatchTest do
     assert {:ok, _env} = Program.elaborate(src)
   end
 
+  test "a tuple-of-variables scrutinee with nested rows reaches its catchall" do
+    src = """
+    mod TupleCatchall
+      fn add_heads(xs: List(Int), ys: List(Int)) -> Int = match %[xs, ys]
+        %[[x | _], [y | _]] -> x + y
+        _ -> 0
+
+      fn add_heads_explicit(xs: List(Int), ys: List(Int)) -> Int =
+        let key = %[xs, ys]
+        match key
+          %[[x | _], [y | _]] -> x + y
+          %[_, _] -> 0
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(module, :add_heads, [[2], [3]]) == 5
+    assert apply(module, :add_heads, [[], [3]]) == 0
+    assert apply(module, :add_heads_explicit, [[2], [3]]) == 5
+    assert apply(module, :add_heads_explicit, [[], [3]]) == 0
+  end
+
   test "a non-tuple scrutinee is untouched by the desugaring" do
     src =
       @vec <>

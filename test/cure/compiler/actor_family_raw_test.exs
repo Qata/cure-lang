@@ -25,6 +25,10 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert module == :"Cure.M"
     assert apply(:"Cure.Generated.RawFamilyCast", :handle_cast, [:ping, 7]) == {:noreply, 7}
+
+    assert {:reply, _unit, 7} =
+             apply(:"Cure.Generated.RawFamilyCast", :handle_call, [:unexpected, self(), 7])
+
     assert apply(:"Cure.Generated.RawFamilyCast", :init, [3]) == {:ok, 3}
     assert {:ok, pid} = apply(:"Cure.Generated.RawFamilyCast", :start_link, [5])
     assert :gen_server.cast(pid, :ping) == :ok

@@ -2,6 +2,7 @@ defmodule Cure.Elab.ModuleInterfaceTest do
   use ExUnit.Case, async: false
 
   alias Cure.Compiler.ModuleInterface
+  alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Elab.Program
 
   @moduletag :tmp_dir
@@ -41,6 +42,26 @@ defmodule Cure.Elab.ModuleInterfaceTest do
     # Two cache reads of the same key return the identical off-heap term, proving
     # the stdlib interface is served from the persistent_term cache, not recomputed.
     assert :erts_debug.same(a, b)
+  end
+
+  test "ordinary checking keeps prelude-bootstrap modules out of the ambient prelude" do
+    path = Path.expand("lib/std/int.cure")
+    source = File.read!(path)
+    assert {:ok, tokens} = Lexer.tokenize(source, file: path, emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: path, emit_events: false)
+
+    assert {:ok, checked} =
+             Program.check_ast_artifact(ast,
+               source: source,
+               file: path,
+               module_name: "Std.Int",
+               require_module_identity: true
+             )
+
+    coherence = checked.env.coherence
+
+    refute coherence && Map.has_key?(coherence.anon, {:Equatable, :"Std.Int#Int"}),
+           "Std.Int is in the prelude bootstrap closure and must not auto-derive the ambient Equatable instance"
   end
 
   test "concurrent cold prelude-manifest readers share one completed value" do

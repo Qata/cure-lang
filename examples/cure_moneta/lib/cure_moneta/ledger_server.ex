@@ -81,21 +81,21 @@ defmodule CureMoneta.LedgerServer do
   def handle_call({:deposit, id, amount}, _from, ledger) do
     case @moneta.deposit(ledger, id, to_cure_money(amount)) do
       {:ok, new_ledger} -> {:reply, :ok, new_ledger}
-      {:error, _} = err -> {:reply, err, ledger}
+      {:error, reason} -> {:reply, {:error, List.to_string(reason)}, ledger}
     end
   end
 
   def handle_call({:withdraw, id, amount}, _from, ledger) do
     case @moneta.withdraw(ledger, id, to_cure_money(amount)) do
       {:ok, new_ledger} -> {:reply, :ok, new_ledger}
-      {:error, _} = err -> {:reply, err, ledger}
+      {:error, reason} -> {:reply, {:error, List.to_string(reason)}, ledger}
     end
   end
 
   def handle_call({:transfer, from_id, to_id, amount}, _from, ledger) do
     case @moneta.transfer(ledger, from_id, to_id, to_cure_money(amount)) do
       {:ok, new_ledger} -> {:reply, :ok, new_ledger}
-      {:error, _} = err -> {:reply, err, ledger}
+      {:error, reason} -> {:reply, {:error, List.to_string(reason)}, ledger}
     end
   end
 
@@ -105,8 +105,14 @@ defmodule CureMoneta.LedgerServer do
 
   defp to_cure_money({:Money, _amount, _currency, _fractional_units} = money), do: money
 
-  defp to_cure_money(%{__struct__: :money, amount: amount, currency: {currency}, fractional_units: fractional_units}) do
-    {:Money, amount, currency |> Atom.to_string() |> String.upcase() |> String.to_atom(), fractional_units}
+  defp to_cure_money(%{
+         __struct__: :money,
+         amount: amount,
+         currency: {currency},
+         fractional_units: fractional_units
+       }) do
+    {:Money, amount, currency |> Atom.to_string() |> String.upcase() |> String.to_atom(),
+     fractional_units}
   end
 
   defp map_money_result({:ok, {:Money, amount, currency, fractional_units}}) do
@@ -119,5 +125,6 @@ defmodule CureMoneta.LedgerServer do
      }}
   end
 
+  defp map_money_result({:error, reason}), do: {:error, List.to_string(reason)}
   defp map_money_result(other), do: other
 end

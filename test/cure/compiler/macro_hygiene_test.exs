@@ -27,6 +27,22 @@ defmodule Cure.Compiler.MacroHygieneTest do
     assert {:fresh_name, _meta, "h"} = find_fresh(ast)
   end
 
+  test "a <fresh Name> lambda parameter binds matching fresh references" do
+    {:ok, ast} =
+      parse(
+        "mod FreshLambda\n  macro Apply\n    syntax apply <n: Code> becomes (fn(<fresh tmp>) -> <fresh tmp>)(n)\n  fn value() -> Int = apply 7\n"
+      )
+
+    {:function_call, meta, [_argument]} = fn_body(ast, "value")
+    {:lambda, lambda_meta, [{:variable, _, reference}]} = Keyword.fetch!(meta, :callee)
+    [{:param, param_meta, binder}] = Keyword.fetch!(lambda_meta, :params)
+
+    assert param_meta[:explicit_fresh]
+    assert binder == reference
+    refute binder == "tmp"
+    refute find_fresh(fn_body(ast, "value"))
+  end
+
   # Find fn body by name (function_def carries name in meta, body as [body]).
   defp fn_body({:function_def, meta, [body]}, name),
     do: if(to_string(Keyword.get(meta, :name)) == name, do: body)

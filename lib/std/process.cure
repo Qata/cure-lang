@@ -1,87 +1,33 @@
-## Raw process primitives: links, monitors, trap_exit.
+## Compatibility façade for process-signal operations.
 ##
-## These wrappers call `:erlang` BIFs directly via `@extern`; they
-## do not go through the actor runtime, so they work on any BEAM
-## process (actors, FSMs, or plain `spawn/1` results).
-##
-## The monitor reference returned by `monitor/1` uses the `Ref`
-## primitive type introduced for typed concurrency; see
-## `docs/TYPE_SYSTEM.md`.
-##
-## ## Examples
-##
-## ```cure
-## use Std.Process
-##
-## let me = self()
-## is_alive(me)                            # => true
-## ```
-##
-## ```cure
-## use Std.Process
-##
-## # Monitor a spawned process and wait for its down message.
-## let kid = Std.Otp.spawn(fn() -> unit())
-## let ref = monitor(kid)
-## trap_exit(true)
-## ```
-
-# Group tag consumed by `Cure.Stdlib.Preload`.
-## Link the calling process to `pid`. Exits from either side
-## propagate as `:EXIT` messages.
+## The unrestricted process algebra formerly exposed unindexed `Pid` and `Ref`
+## primitives and declared effectful BEAM BIFs as pure functions. Those types
+## and that purity lie were retired by the formal OTP surface. New code should
+## use `Std.Otp` directly; this module keeps the familiar signal-operation
+## namespace while preserving exactly the same indexed handles and `Effect`
+## results as `Std.Otp`.
 
 @group(:concurrency)
 mod Std.Process
-  use Std.ExitReason
-  @extern(:erlang, :link, 1)
-  local fn raw_link(pid: Pid) -> Atom
+  use Std.Otp
 
-  fn link(pid: Pid) -> Unit =
-    let _ = raw_link(pid)
-    ()
+  fn self({m: Type}) -> Effect(Pid(m)) = Std.Otp.self()
 
-  ## Undo a previous `link/1`.
-  @extern(:erlang, :unlink, 1)
-  local fn raw_unlink(pid: Pid) -> Atom
+  fn monitor(
+    {m: Type},
+    {r: Type},
+    {k: Type},
+    kind: MonitorKind,
+    pid: RawPid(m, r, k)
+  ) -> Effect(MonitorRef) = Std.Otp.monitor(kind, pid)
 
-  fn unlink(pid: Pid) -> Unit =
-    let _ = raw_unlink(pid)
-    ()
+  fn demonitor(ref: MonitorRef) -> Effect(Unit) = Std.Otp.demonitor(ref)
 
-  ## Install a process monitor. Returns the `Ref` that identifies the
-  ## monitor; the caller will later receive
-  ## `{:DOWN, ref, :process, pid, reason}` when the monitored process
-  ## terminates.
-  @extern(Elixir.Cure.Process.Builtins, :proc_monitor, 1)
-  fn monitor(pid: Pid) -> Ref
+  fn link({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Unit) =
+    Std.Otp.link(pid)
 
-  ## Remove a previously installed monitor.
-  @extern(:erlang, :demonitor, 1)
-  fn demonitor(ref: Ref) -> Bool
+  fn unlink({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Unit) =
+    Std.Otp.unlink(pid)
 
-  ## Toggle `trap_exit` on the caller. Returns the previous value;
-  ## once enabled, exit signals arrive as regular `:EXIT` messages.
-  @extern(Elixir.Cure.Process.Builtins, :proc_trap_exit, 1)
-  fn trap_exit(flag: Bool) -> Bool
-
-  local fn exit_reason_atom(reason: ExitReason) -> Atom = match reason
-    Normal()       -> :normal
-    Kill()         -> :kill
-    Shutdown()     -> :shutdown
-    Because(value) -> value
-
-  ## Send a typed exit reason as an exit signal to `pid`.
-  @extern(:erlang, :exit, 2)
-  local fn raw_exit(pid: Pid, reason: Atom) -> Atom
-
-  fn exit(pid: Pid, reason: ExitReason) -> Unit =
-    let _ = raw_exit(pid, exit_reason_atom(reason))
-    ()
-
-  ## Return the caller's own pid.
-  @extern(:erlang, :self, 0)
-  fn self() -> Pid
-
-  ## Is `pid` still alive on this node?
-  @extern(:erlang, :is_process_alive, 1)
-  fn is_alive(pid: Pid) -> Bool
+  fn is_alive({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Bool) =
+    Std.Otp.is_alive(pid)

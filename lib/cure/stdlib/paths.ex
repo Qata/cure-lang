@@ -43,16 +43,19 @@ defmodule Cure.Stdlib.Paths do
 
     1. `Application.get_env(:cure, :stdlib_beam_dir)` -- explicit
        override (tests, alternative deployment layouts).
-    2. `<priv_dir>/ebin` -- the canonical bundled location, populated
+    2. The `_build/cure/ebin` belonging to the checkout that contains this
+       module -- the current development generation, including when Cure is a
+       path dependency of a nested project.
+    3. `<priv_dir>/ebin` -- the canonical bundled location, populated
        by `Mix.Tasks.Cure.BundleStdlibBeams`. Rides along with OTP
        releases the same way `priv/std` does.
-    3. `$CURE_HOME/priv/ebin`, then `$CURE_HOME/_build/cure/ebin` --
+    4. `$CURE_HOME/priv/ebin`, then `$CURE_HOME/_build/cure/ebin` --
        locations derived from the `CURE_HOME` environment variable.
        The `priv/ebin` form matches a fully-bundled checkout (the
        output of `mix compile`); the `_build` form matches a fresh
        development checkout that has only ever run
        `mix cure.compile_stdlib`.
-    4. `_build/cure/ebin` relative to the current working directory
+    5. `_build/cure/ebin` relative to the current working directory
        -- the legacy `mix cure.compile_stdlib` output, kept so
        checkouts that never produced a `priv/ebin/` bundle still work
        in development.
@@ -63,6 +66,7 @@ defmodule Cure.Stdlib.Paths do
   @legacy_cwd_source Path.join(["lib", "std"])
   @legacy_cwd_beam Path.join(["_build", "cure", "ebin"])
   @checkout_source Path.expand("../../std", __DIR__)
+  @checkout_beam Path.expand("../../../_build/cure/ebin", __DIR__)
 
   @cure_home_env_var "CURE_HOME"
   @cure_lib_env_var "CURE_LIB"
@@ -106,11 +110,13 @@ defmodule Cure.Stdlib.Paths do
   def beam_dirs do
     ([configured_beam_dir()] ++
        cure_lib_beam_dirs() ++
+       [@checkout_beam] ++
        [bundled_beam_dir()] ++
        cure_home_beam_dirs() ++
        launcher_home_beam_dirs() ++
        [@legacy_cwd_beam])
     |> Enum.reject(&is_nil/1)
+    |> Enum.map(&Cure.Compiler.Artifacts.Writer.resolve/1)
     |> Enum.uniq()
     |> Enum.filter(&File.dir?/1)
   end

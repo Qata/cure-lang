@@ -88,7 +88,13 @@ defmodule Cure.CLI do
           out: :string,
           target: :string,
           diagrams: :boolean,
-          step: :boolean
+          step: :boolean,
+          raw: :boolean,
+          theme: :string,
+          mode: :string,
+          history: :string,
+          no_history: :boolean,
+          error_device: :string
         ],
         aliases: [o: :output_dir, v: :verbose, h: :help, f: :filter, t: :template]
       )
@@ -180,7 +186,7 @@ defmodule Cure.CLI do
           cmd_doc(paths, opts)
 
         ["repl"] ->
-          cmd_repl()
+          cmd_repl(opts)
 
         ["repl" | _] ->
           usage_error("Usage: cure repl")
@@ -484,7 +490,12 @@ defmodule Cure.CLI do
           exit({:shutdown, 1})
       end
 
-    preload_runtime_dependencies!(project, stdlib_modules_for_files(files))
+    # Compilation validates explicit imports by asking whether their provider
+    # module is loaded. Dependency closure scanning is intentionally about
+    # project ordering and does not include every ambient/prelude provider, so
+    # using it as a selective stdlib loader made a valid `use Std.Fsm` fail in a
+    # fresh escript VM. CLI compilation promises the complete stdlib surface.
+    preload_runtime_dependencies!(project)
 
     # A user `@prelude` module reached by the scan contributes its operators to
     # every file compiled in this run — even siblings that do not `use` it.
@@ -548,7 +559,7 @@ defmodule Cure.CLI do
         _ -> nil
       end
 
-    preload_runtime_dependencies!(project, stdlib_modules_for_files([path]))
+    preload_runtime_dependencies!(project)
     source_roots = [Path.dirname(Path.expand(path)) | dependency_source_roots(project)]
 
     source =
@@ -706,29 +717,6 @@ defmodule Cure.CLI do
     end
   end
 
-  defp stdlib_modules_for_files(files) do
-    known =
-      Cure.Stdlib.Preload.module_groups()
-      |> Map.keys()
-      |> Enum.map(fn module ->
-        module |> Atom.to_string() |> String.replace_prefix("Cure.", "")
-      end)
-
-    case Cure.Compiler.DepGraph.scan(files, known_modules: known) do
-      {:ok, graph} ->
-        graph
-        |> Cure.Compiler.DepGraph.closure_deps_map()
-        |> Map.values()
-        |> List.flatten()
-        |> Enum.filter(&String.starts_with?(&1, "Std."))
-        |> Enum.map(&String.to_atom("Cure." <> &1))
-        |> Enum.uniq()
-
-      {:error, _reason} ->
-        nil
-    end
-  end
-
   defp dependency_source_roots(%Cure.Project{} = project),
     do: Cure.Project.dependency_source_paths(project)
 
@@ -767,6 +755,8 @@ defmodule Cure.CLI do
 
     with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: path, emit_events: false),
          {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, file: path, emit_events: false),
+         {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
+         {:ok, _lifted_requests} <- Cure.Compiler.LiftModule.collect(ast),
          {:ok, _env} <- Cure.Elab.Program.check_ast(ast) do
       info("#{path}: OK")
     else
@@ -1220,8 +1210,15 @@ defmodule Cure.CLI do
 
   # -- repl --------------------------------------------------------------------
 
-  defp cmd_repl do
-    Cure.REPL.start()
+  defp cmd_repl(opts) do
+    repl_keys = Keyword.keys(Cure.REPL.Options.switches())
+    {repl_opts, warnings} = opts |> Keyword.take(repl_keys) |> Cure.REPL.Options.build_opts()
+
+    if warnings != [] do
+      usage_error(Enum.join(warnings, "\n"))
+    end
+
+    Cure.REPL.start(repl_opts)
   end
 
   # -- fmt ---------------------------------------------------------------------
@@ -1511,12 +1508,18 @@ defmodule Cure.CLI do
   end
 
   defp plan_migration_source_crossing(src, target, from, opts) do
-    {:ok, toks, trivia} = Cure.Compiler.Lexer.tokenize(src, trivia: true, edition: from)
-    {:ok, ast} = Cure.Compiler.Parser.parse(toks, emit_events: false, edition: from)
+    file = Keyword.get(opts, :file, "nofile")
+
+    {:ok, toks, trivia} =
+      Cure.Compiler.Lexer.tokenize(src, file: file, trivia: true, edition: from)
+
+    {:ok, ast} =
+      Cure.Compiler.Parser.parse(toks, file: file, emit_events: false, edition: from)
+
     attached = Cure.Compiler.Trivia.attach(ast, trivia)
     rules = Cure.Migrate.rules_for_crossing(target)
 
-    case Cure.Migrate.run_to_fixpoint(attached, rules: rules, edition: target) do
+    case Cure.Migrate.run_to_fixpoint(attached, file: file, rules: rules, edition: target) do
       {:ok, out_ast, warns} ->
         blocking =
           Cure.Migrate.blocking_manual(target)
@@ -1650,7 +1653,7 @@ defmodule Cure.CLI do
       baseline =
         Cure.Compiler.Printer.quoted_to_string(Cure.Compiler.Trivia.attach(in_ast, trivia))
 
-      case plan_migration_source(source, target: target, from: from) do
+      case plan_migration_source(source, target: target, from: from, file: file) do
         {:ok, printed, warnings, bump} ->
           output = if String.ends_with?(printed, "\n"), do: printed, else: printed <> "\n"
 
@@ -2424,6 +2427,7 @@ defmodule Cure.CLI do
       stdlib               Compile the standard library
       doc [path|dir]       Generate HTML documentation
       fmt [path|dir]       Format .cure source files (algebra by default; --safe, --aggressive, --check)
+      migrate [path|dir]   Port source to an edition (--check, --print, --strict, --edition YYYY)
       repl                 Interactive Cure session (multi-line, :help for commands)
       watch [path]         Recompile/check/test on every save
       new <name>           Scaffold a new project (--lib | --app | --fsm)
@@ -2451,6 +2455,10 @@ defmodule Cure.CLI do
       --action ACTION        Watch action: compile (default) | check | test
       --poll-ms N            Watch poll interval (default 500)
       --debounce N           Watch coalesce window (default 200)
+      --check                Report pending formatting or migrations without writing
+      --print                Print migrated source without writing
+      --strict               Reject review-required migration warnings
+      --edition YYYY         Target language edition for `migrate`
       --lib | --app | --fsm  `cure new` template selector
       --filter PATTERN       `cure test` filter
       --doctests             `cure test` includes doctests

@@ -838,6 +838,9 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
     cond do
+      equation_named_call?(meta, env) ->
+        elaborate_equation_named_call(meta, args, names, ctx, env)
+
       # `element(t, i)` — dependent n-ary telescope/tuple projection. ONE surface
       # for the i-th component, typed at the true `Ti` (not a numbered `tproj_i`),
       # with a COMPILE-TIME bounds check: an `i` beyond the arity is rejected at
@@ -1171,7 +1174,7 @@ defmodule Cure.Elab.Elaborator do
         overloaded_op_call(op, l, r, expr, names, ctx, env)
 
       op == :<> ->
-        combine_call(l, r, names, ctx, env)
+        combine_call(l, r, expr, names, ctx, env)
 
       true ->
         elaborate_binop(op, l, r, expr, names, ctx, env)
@@ -1465,6 +1468,118 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # `f.Ctor` without arguments is attribute access, but `f.Ctor(args...)` is
+  # flattened by the parser into a named call literally called `"f.Ctor"`.
+  # Resolve that representation to the certified theorem before global lookup.
+  defp equation_named_call?(meta, env) do
+    case equation_call_parts(Keyword.get(meta, :name)) do
+      {:ok, function_name, members} ->
+        Cure.Elab.Equation.resolve_path(env, function_name, members) != :not_equation
+
+      :error ->
+        false
+    end
+  end
+
+  defp elaborate_equation_named_call(meta, args, names, ctx, env) do
+    {:ok, function_name, members} = equation_call_parts(Keyword.fetch!(meta, :name))
+    info = Cure.MetaAST.Metadata.source_info(meta)
+    span = info && info.whole
+
+    case Cure.Elab.Equation.resolve_path(env, function_name, members) do
+      {:ok, descriptor} ->
+        apply_equation_descriptor(descriptor, args, names, ctx, env)
+
+      _ ->
+        with {:ok, term, type} <- resolve_equation_member(env, function_name, members, span, ctx),
+             {:ok, applied, result_type} <- check_app_args(term, type, args, names, ctx, env) do
+          {:ok, applied, result_type}
+        end
+    end
+  end
+
+  defp apply_equation_descriptor(descriptor, args, names, ctx, env) do
+    parameter_count = Map.get(descriptor, :application_parameter_count, 0)
+    field_count = Map.get(descriptor, :application_field_count, 0)
+    replacements = Map.get(descriptor, :application_replacements, %{})
+    unaffected_count = parameter_count - map_size(replacements)
+
+    if length(args) == field_count + unaffected_count do
+      with {:ok, surface_terms} <- map_typed_terms(args, names, ctx, env) do
+        {field_terms, unaffected_terms} = Enum.split(surface_terms, field_count)
+
+        {original_terms, []} =
+          Enum.map_reduce(0..(parameter_count - 1)//1, unaffected_terms, fn position, remaining ->
+            original_index = parameter_count - 1 - position
+
+            case Map.fetch(replacements, original_index) do
+              {:ok, template} ->
+                {replace_equation_field_vars(template, field_terms), remaining}
+
+              :error ->
+                [term | rest] = remaining
+                {term, rest}
+            end
+          end)
+
+        copy_terms =
+          descriptor
+          |> Map.get(:application_copy_map, %{})
+          |> Enum.sort_by(fn {_original, copy_index} -> -copy_index end)
+          |> Enum.map(fn {original_index, _copy_index} ->
+            Enum.at(original_terms, parameter_count - 1 - original_index)
+          end)
+
+        applied =
+          Enum.reduce(original_terms ++ field_terms ++ copy_terms, {:global, descriptor.theorem}, fn argument, call ->
+            {:app, call, argument}
+          end)
+
+        case Kernel.infer(ctx, applied) do
+          {:ok, result_type} -> {:ok, applied, result_type}
+          {:error, _} = error -> error
+        end
+      end
+    else
+      {:error,
+       {:arity_mismatch, %{function: descriptor.theorem, expected: field_count + unaffected_count, got: length(args)}}}
+    end
+  end
+
+  defp map_typed_terms(args, names, ctx, env) do
+    Enum.reduce_while(args, {:ok, []}, fn arg, {:ok, terms} ->
+      case elaborate_expr_typed(arg, names, ctx, env) do
+        {:ok, term, _type} -> {:cont, {:ok, terms ++ [term]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp replace_equation_field_vars({:var, index}, field_terms) when is_integer(index) do
+    Enum.at(field_terms, length(field_terms) - 1 - index)
+  end
+
+  defp replace_equation_field_vars(tuple, field_terms) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.map(&replace_equation_field_vars(&1, field_terms))
+    |> List.to_tuple()
+  end
+
+  defp replace_equation_field_vars(list, field_terms) when is_list(list),
+    do: Enum.map(list, &replace_equation_field_vars(&1, field_terms))
+
+  defp replace_equation_field_vars(other, _field_terms), do: other
+
+  defp equation_call_parts(name) when is_binary(name) do
+    case String.split(name, ".", trim: true) do
+      [function_name, member | rest] -> {:ok, function_name, [member | rest]}
+      _ -> :error
+    end
+  end
+
+  defp equation_call_parts(_), do: :error
+
   defp resolve_equation_member(env, function_name, members, use_span, ctx) do
     case Cure.Elab.Equation.resolve_path(env, function_name, members) do
       {:ok, descriptor} ->
@@ -1560,8 +1675,15 @@ defmodule Cure.Elab.Elaborator do
 
   # Desugar a concatenation operator to the `Std.Semigroup.combine` method call,
   # letting the interface-dispatch machinery pick the instance by operand type.
-  defp combine_call(l, r, names, ctx, env),
-    do: elaborate_expr_typed({:function_call, [name: "combine"], [l, r]}, names, ctx, env)
+  defp combine_call(l, r, expr, names, ctx, env) do
+    if operator_meaning?(env, :combine) do
+      elaborate_expr_typed({:function_call, [name: "combine"], [l, r]}, names, ctx, env)
+    else
+      details = %{operator: :<>, method: :combine, provider: "Std.Semigroup"}
+      context = operator_expression_context(expr, l, r, :<>, [], ctx)
+      {:error, {:source_context, {:operator_provider_not_in_scope, details}, context}}
+    end
+  end
 
   # Desugar an operator on a NON-primitive operand to the bare-name method call
   # for its lexeme — the SOLE route to `==`/`!=`/`<`/`<=`/`>`/`>=` for any type
@@ -1604,7 +1726,7 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term, type}
         else
           {:error, {:unsupported_operand_type, :+}} ->
-            combine_call(l, r, names, ctx, env)
+            combine_call(l, r, expr, names, ctx, env)
 
           {:error, {:unsupported_operand_type, cmp}}
           when cmp in [:<, :>, :<=, :>=] ->
@@ -2394,6 +2516,12 @@ defmodule Cure.Elab.Elaborator do
     expr = {:function_call, meta, args}
 
     cond do
+      equation_named_call?(meta, env) ->
+        with {:ok, term, _type} <- elaborate_equation_named_call(meta, args, names, ctx, env),
+             :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+          {:ok, term}
+        end
+
       Keyword.get(meta, :record) ->
         case desugar_record_construction(meta, args, env) do
           {:ok, positional} ->
@@ -4578,9 +4706,9 @@ defmodule Cure.Elab.Elaborator do
          # before the shape-dispatching paths (each of which would silently drop
          # the guard). Claims EVERY guarded match: handles the tractable subset,
          # errors on the rest — so no path below ever ignores a guard.
+         :not_applicable <- try_tuple_match(scrut_expr, arms, result_type_term, names, ctx, env),
          :not_applicable <-
            try_guard_match(scrut_expr, arms, result_type_term, names, ctx, env),
-         :not_applicable <- try_tuple_match(scrut_expr, arms, result_type_term, names, ctx, env),
          {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env),
          :ok <- validate_typed_pattern_annotations(arms, scrut_type, names, ctx, env),
          :not_applicable <-
@@ -6615,10 +6743,10 @@ defmodule Cure.Elab.Elaborator do
       not distinct?(constructor_heads) ->
         :not_applicable
 
-      Enum.count(col0, &match?({:variable, _meta, _name}, &1)) > 1 ->
-        :not_applicable
-
-      Enum.any?(Enum.drop(col0, -1), &match?({:variable, _meta, _name}, &1)) ->
+      # A catch-all row is a continuation for an inner-column mismatch. Splitting
+      # it into a sibling outer arm would commit to an earlier constructor and
+      # lose that fallthrough. Ordered tuple lowering below preserves it.
+      Enum.any?(col0, &match?({:variable, _meta, _name}, &1)) ->
         :not_applicable
 
       true ->
@@ -6653,6 +6781,93 @@ defmodule Cure.Elab.Elaborator do
   # tuple of variables/wildcards. The scrutinee type owns the arity: checking it
   # here prevents unused extra binders from making a malformed pattern appear to
   # work merely because their out-of-bounds projections are never elaborated.
+  defp try_tuple_match(
+         {:tuple, _scrut_meta, scrut_elements},
+         [
+           {:match_arm, tuple_meta, tuple_body},
+           {:match_arm, fallback_meta, fallback_body}
+         ],
+         expected,
+         names,
+         ctx,
+         env
+       )
+       when length(scrut_elements) >= 2 do
+    pattern = Keyword.fetch!(tuple_meta, :pattern)
+    fallback_pattern = Keyword.fetch!(fallback_meta, :pattern)
+
+    case {pattern, fallback_pattern} do
+      {{:tuple, _pattern_meta, elements}, {:variable, _fallback_meta, fallback_name}}
+      when length(elements) == length(scrut_elements) ->
+        # A tuple literal of variables is already an evaluated collection of
+        # scrutinees, so compile its structural elements directly. This is the
+        # simultaneous-match surface used by algorithms that advance multiple
+        # lists in lockstep (`match %[xs, ys]`). Non-variable tuple expressions
+        # retain the existing path so an effectful expression is never copied.
+        if Enum.all?(scrut_elements, &match?({:variable, _meta, _name}, &1)) do
+          fallback =
+            if fallback_name == "_",
+              do: single_body(fallback_body),
+              else: subst_surface_var(single_body(fallback_body), fallback_name, {:tuple, [], scrut_elements})
+
+          {success, structural, equalities} =
+            compile_tuple_row(elements, scrut_elements, single_body(tuple_body))
+
+          success =
+            Enum.reduce(Enum.reverse(equalities), success, fn {left, right}, body ->
+              condition = {:binary_op, [category: :comparison, operator: :==], [left, right]}
+              {:conditional, [], [condition, body, fallback]}
+            end)
+
+          decision =
+            Enum.reduce(Enum.reverse(structural), success, fn {value, nested_pattern}, body ->
+              nested_pattern_decision(value, nested_pattern, body, fallback)
+            end)
+
+          elaborate_expr_checked(decision, expected, names, ctx, env)
+        else
+          :not_applicable
+        end
+
+      {{:tuple, _pattern_meta, _elements}, {:tuple, _fallback_meta, _fallback_elements}} ->
+        arms = [
+          {:match_arm, tuple_meta, tuple_body},
+          {:match_arm, fallback_meta, fallback_body}
+        ]
+
+        patterns = [pattern, fallback_pattern]
+
+        if Enum.all?(scrut_elements, &match?({:variable, _meta, _name}, &1)) do
+          with :ok <- validate_tuple_pattern_arities(patterns, length(scrut_elements)) do
+            lower_ordered_tuple_rows(scrut_elements, arms, expected, names, ctx, env)
+          end
+        else
+          :not_applicable
+        end
+
+      _ ->
+        :not_applicable
+    end
+  end
+
+  # Keep the general all-tuple matrix clause after the tuple-plus-catchall
+  # clause above. Otherwise its broad `length(arms) >= 2` head claims a
+  # two-arm match, returns `:not_applicable` for the catchall, and prevents the
+  # ordered-row lowering from ever seeing the match.
+  defp try_tuple_match({:tuple, _scrut_meta, scrut_elements}, arms, expected, names, ctx, env)
+       when length(scrut_elements) >= 2 and length(arms) >= 2 do
+    patterns = Enum.map(arms, fn {:match_arm, meta, _body} -> Keyword.fetch!(meta, :pattern) end)
+
+    if Enum.all?(scrut_elements, &match?({:variable, _meta, _name}, &1)) and
+         Enum.all?(patterns, &match?({:tuple, _meta, _elements}, &1)) do
+      with :ok <- validate_tuple_pattern_arities(patterns, length(scrut_elements)) do
+        lower_ordered_tuple_rows(scrut_elements, arms, expected, names, ctx, env)
+      end
+    else
+      :not_applicable
+    end
+  end
+
   defp try_tuple_match(
          {:variable, _sm, _sn} = scrut,
          [
@@ -6695,6 +6910,23 @@ defmodule Cure.Elab.Elaborator do
             end)
 
           elaborate_expr_checked(decision, expected, names, ctx, env)
+        end
+
+      {{:tuple, _tm, _elements}, {:tuple, _fm, _fallback_elements}} ->
+        # A generated two-row decision commonly ends with an explicit tuple of
+        # wildcards (`%[_, _]`) rather than a scalar `_`. This clause used to
+        # claim that shape and return `:not_applicable`, preventing the general
+        # all-tuple matrix clause below from running.
+        arms = [
+          {:match_arm, tuple_meta, tuple_body},
+          {:match_arm, fallback_meta, fallback_body}
+        ]
+
+        patterns = [pattern, fallback_pattern]
+
+        with {:ok, tuple_arity} <- tuple_pattern_arity(scrut, names, ctx, env),
+             :ok <- validate_tuple_pattern_arities(patterns, tuple_arity) do
+          lower_refutable_tuple_match(scrut, arms, tuple_arity, expected, names, ctx, env)
         end
 
       _ ->
@@ -6809,6 +7041,18 @@ defmodule Cure.Elab.Elaborator do
 
   defp lower_refutable_tuple_match(scrut, arms, tuple_arity, expected, names, ctx, env) do
     projections = for index <- 1..tuple_arity, do: tuple_proj(scrut, Integer.to_string(index))
+
+    # A final catch-all is ordered row fallthrough, not merely a coverage arm.
+    # Column splitting would commit after the first matching constructor and an
+    # inner-column mismatch could never reach that final row.
+    if guardless_tuple_catchall?(List.last(arms)) do
+      lower_ordered_tuple_rows(projections, arms, expected, names, ctx, env)
+    else
+      lower_refutable_tuple_match_by_columns(arms, tuple_arity, expected, names, ctx, env, projections)
+    end
+  end
+
+  defp lower_refutable_tuple_match_by_columns(arms, tuple_arity, expected, names, ctx, env, projections) do
     position = tuple_refutable_position(arms, tuple_arity)
     reordered_projections = move_tuple_position_first(projections, position)
 
@@ -6823,17 +7067,68 @@ defmodule Cure.Elab.Elaborator do
     {lowered_scrutinee, lowered_arms} = desugar_tuple_scrutinee(synthetic_scrutinee, reordered_arms)
 
     if lowered_scrutinee == synthetic_scrutinee do
+      lower_ordered_tuple_rows(projections, arms, expected, names, ctx, env)
+    else
+      lowered_scrutinee
+      |> elaborate_match(lowered_arms, expected, names, ctx, env)
+      |> contextualize_tuple_pattern_result(arms, tuple_arity, position)
+    end
+  end
+
+  # The column-splitting fast path above produces compact dependent cases when
+  # constructor heads are disjoint.  General ordered matrices (for example
+  # `%[Pending(), Submit()]`, `%[Pending(), Cancel()]`, `%[_, Kill()]`) need to
+  # preserve source-order fallthrough instead.  Compile each row into decisions
+  # over the tuple projections, folding from the last row to the first.
+  defp lower_ordered_tuple_rows(projections, arms, expected, names, ctx, env) do
+    if guardless_tuple_catchall?(List.last(arms)) do
+      decision =
+        Enum.reduce(Enum.reverse(arms), nil, fn {:match_arm, meta, body}, fallback ->
+          {:tuple, _tuple_meta, patterns} = Keyword.fetch!(meta, :pattern)
+          row_body = single_body(body)
+          fallback = fallback || row_body
+          {success, structural, equalities} = compile_tuple_row(patterns, projections, row_body)
+
+          success =
+            case Keyword.fetch(meta, :guard) do
+              {:ok, guard} ->
+                {bound_guard, _guard_structural, _guard_equalities} =
+                  compile_tuple_row(patterns, projections, guard)
+
+                {:conditional, [], [bound_guard, success, fallback]}
+
+              :error ->
+                success
+            end
+
+          success =
+            Enum.reduce(Enum.reverse(equalities), success, fn {left, right}, expression ->
+              condition = {:binary_op, [category: :comparison, operator: :==], [left, right]}
+              {:conditional, [], [condition, expression, fallback]}
+            end)
+
+          Enum.reduce(Enum.reverse(structural), success, fn {projection, pattern}, expression ->
+            nested_pattern_decision(projection, pattern, expression, fallback)
+          end)
+        end)
+
+      elaborate_expr_checked(decision, expected, names, ctx, env)
+    else
       {:error,
        {:unsupported_pattern,
         %{
           reason: :tuple_pattern_matrix,
           span: arms |> hd() |> arm_pattern() |> surface_expression_span()
         }}}
-    else
-      lowered_scrutinee
-      |> elaborate_match(lowered_arms, expected, names, ctx, env)
-      |> contextualize_tuple_pattern_result(arms, tuple_arity, position)
     end
+  end
+
+  defp guardless_tuple_catchall?({:match_arm, meta, _body}) do
+    not Keyword.has_key?(meta, :guard) and
+      case Keyword.fetch!(meta, :pattern) do
+        {:tuple, _tuple_meta, patterns} -> Enum.all?(patterns, &catchall_pat?/1)
+        _ -> false
+      end
   end
 
   defp tuple_refutable_position(arms, tuple_arity) do
@@ -8005,6 +8300,7 @@ defmodule Cure.Elab.Elaborator do
     end)
   end
 
+  defp pattern_vars_deep({:variable, _m, "_"}), do: []
   defp pattern_vars_deep({:variable, _m, v}), do: [v]
   defp pattern_vars_deep({:function_call, _m, args}), do: Enum.flat_map(args, &pattern_vars_deep/1)
   defp pattern_vars_deep(_), do: []
@@ -9335,10 +9631,22 @@ defmodule Cure.Elab.Elaborator do
        )
        when rest != [] do
     if Keyword.get(meta, :let, false) do
+      # Match dispatch has several structural fast paths (notably tuple
+      # projection) which deliberately require a variable scrutinee so they
+      # cannot duplicate an effectful expression. Give every pattern-let that
+      # same safe shape: evaluate the initializer once, then eliminate the
+      # fresh binder. `$` is not a source identifier character, so authored
+      # code cannot capture this name.
+      scrutinee_name = "$letpat" <> fresh_tag()
+      scrutinee = {:variable, [], scrutinee_name}
       body = {:block, Keyword.take(meta, [:line, :col]), rest}
       arm = {:match_arm, Keyword.put([], :pattern, pattern), [body]}
-      match = {:pattern_match, Keyword.take(meta, [:line, :col]), [rhs, arm]}
-      elaborate_expr_checked(match, expected_core, names, ctx, env)
+      match = {:pattern_match, Keyword.take(meta, [:line, :col]), [scrutinee, arm]}
+
+      binding =
+        {:assignment, Keyword.merge(Keyword.take(meta, [:line, :col]), let: true, opaque: true), [scrutinee, rhs]}
+
+      elaborate_let_block([binding, match], expected_core, names, ctx, env)
     else
       {:error, {:unsupported_block_statement, assignment}}
     end
@@ -9546,6 +9854,11 @@ defmodule Cure.Elab.Elaborator do
           _ ->
             ty_core = Quote.reify(rhs_type, Context.length(ctx), Context.signature(ctx))
 
+            rest =
+              if Keyword.get(meta, :opaque, false),
+                do: rest,
+                else: expose_transparent_tuple_scrutinee(rest, name, rhs)
+
             bind_once_let(
               name,
               rhs_core,
@@ -9628,6 +9941,25 @@ defmodule Cure.Elab.Elaborator do
         end
     end
   end
+
+  # Preserve the single Core `let`, but expose a pure tuple initializer to a
+  # directly following match. Tuple-matrix lowering needs the authored element
+  # expressions to build its decision tree; retaining only the local variable
+  # can leave a dependent Sigma closure tied to the pre-let context and obscure
+  # its telescope arity. This rewrite does not duplicate evaluation: tuple
+  # construction remains in the Core let, while the match sees only the tuple's
+  # already-bound element expressions.
+  defp expose_transparent_tuple_scrutinee(rest, name, {:tuple, _, _} = rhs) do
+    Enum.map(rest, fn
+      {:pattern_match, meta, [{:variable, _, ^name} | arms]} ->
+        {:pattern_match, meta, [rhs | arms]}
+
+      expression ->
+        expression
+    end)
+  end
+
+  defp expose_transparent_tuple_scrutinee(rest, _name, _rhs), do: rest
 
   defp local_binding_annotation_error(
          kind,
@@ -10417,6 +10749,15 @@ defmodule Cure.Elab.Elaborator do
 
   defp desugar_pattern_lists({:function_call, meta, args}) do
     {:function_call, meta, Enum.map(args, &desugar_pattern_lists/1)}
+  end
+
+  # A tuple pattern is a structural pattern container too. Without descending
+  # here, list sugar nested in `%[[head | tail], other]` reaches the tuple
+  # matrix as an opaque `:list` node. The matrix then rejects a pattern that the
+  # equivalent pair of nested matches accepts. Normalize tuple elements before
+  # tuple projection so both surfaces share the constructor-pattern path.
+  defp desugar_pattern_lists({:tuple, meta, elements}) do
+    {:tuple, meta, Enum.map(elements, &desugar_pattern_lists/1)}
   end
 
   defp desugar_pattern_lists({:named_implicit_pat, meta, children}) do

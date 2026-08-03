@@ -502,6 +502,17 @@ defmodule Cure.Compiler.LexerTest do
   end
 
   describe "hole spans" do
+    test "?_ is the anonymous hole and does not disturb predicate identifiers" do
+      assert [%Token{type: :hole, value: "_"}, _eof] = lex!("?_")
+
+      assert [%Token{type: :identifier, value: "is_empty?"}, %Token{type: :identifier, value: "foo"}, _eof] =
+               lex!("is_empty? foo")
+    end
+
+    test "the obsolete ?? anonymous spelling is a targeted lexer error" do
+      assert {:error, {:obsolete_anonymous_hole, 1, 1}} = Lexer.tokenize("??", emit_events: false)
+    end
+
     test "a generated triple-question hole owns one token before a following declaration" do
       source = "mod M\n  fn bad() -> Int = ???\nend\n"
       tokens = lex!(source)

@@ -8,9 +8,8 @@ defmodule Cure.Elab.MacroExpansionSoundnessTest do
   # the hand-written program it expands to — accepting when well-typed, and
   # rejecting with the SAME error term when ill-typed (well-formed-but-mistyped
   # included). If a future change ever lets macro output reach codegen without
-  # full elaboration, one of these equalities breaks. The classic-pipeline
-  # (`cure build`) route is guarded separately + transitionally by
-  # test/cure/compiler/macro_expansion_classic_soundness_test.exs.
+  # full elaboration, one of these equalities breaks. The public compiler entry
+  # is guarded separately by the compiler-entry soundness suite.
   use ExUnit.Case, async: true
   alias Cure.Elab.Program
 

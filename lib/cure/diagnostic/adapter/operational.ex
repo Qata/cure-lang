@@ -2,6 +2,7 @@ defmodule Cure.Diagnostic.Adapter.Operational do
   @moduledoc "Explicit diagnostics for failures outside elaboration."
 
   alias Cure.Diagnostic
+  alias Cure.Diagnostic.Label
 
   @artifact_failure_tags [
     :artifact_set_invalid,
@@ -217,27 +218,35 @@ defmodule Cure.Diagnostic.Adapter.Operational do
   def unknown_watch_action(action),
     do: diagnostic("E098", :command_failure, "unknown watch action `#{display_value(action)}`", %{action: action})
 
-  def migration_warning(%{rule: rule, file: file, line: line, message: message}) do
+  def migration_warning(%{rule: rule, file: file, line: line, message: message} = details) do
     Diagnostic.new(
       code: "W001",
       key: :migration_warning,
       severity: :warning,
       title: "Migration warning",
       message: message,
-      payload: %{rule: rule, file: file, line: line, source_location: :line}
+      primary: warning_primary(details, "deprecated syntax appears here"),
+      suggestions: Map.get(details, :suggestions, []),
+      payload: %{rule: rule, file: file, line: line}
     )
   end
 
-  def compiler_warning(%{file: file, line: line, message: message}) do
+  def compiler_warning(%{file: file, line: line, message: message} = details) do
     Diagnostic.new(
       code: "W000",
       key: :compiler_warning,
       severity: :warning,
       title: "Compiler warning",
       message: message,
+      primary: warning_primary(details, "compiler warning applies here"),
       payload: %{file: file, line: line}
     )
   end
+
+  defp warning_primary(%{span: %Cure.Diagnostic.Span{} = span}, message),
+    do: %Label{span: span, style: :primary, message: message}
+
+  defp warning_primary(_details, _message), do: nil
 
   def export_unmappable(reason),
     do: diagnostic("E068", :export_type_unmappable, "Export type cannot be represented: #{reason}", %{reason: reason})

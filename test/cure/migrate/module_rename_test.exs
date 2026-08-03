@@ -42,14 +42,13 @@ defmodule Cure.Migrate.ModuleRenameTest do
   end
 
   test "renames the module prefix of a qualified call, keeping the function name" do
-    {:rewrite, ast, lines} =
+    {:rewrite, ast, [span]} =
       apply_rule("mod M\n  fn f(x: Int) -> Bool = Std.Eq.eq(x, x)\n", "b.cure")
 
     names = qualified_names(ast)
     assert "Std.Equatable.eq" in names
     refute "Std.Eq.eq" in names
-    # it knows the exact line it fired on
-    assert lines == [2]
+    assert %Cure.Diagnostic.Span{start_line: 2, start_column: 26, end_column: 35} = span
   end
 
   test "a file that references no renamed module is untouched (:no_change)" do

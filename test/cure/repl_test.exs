@@ -32,7 +32,8 @@ defmodule Cure.REPLTest do
     end
 
     test "lone block-opening keywords are continuations" do
-      for kw <- ~w(match if case cond try fn do let mod rec type proto impl proof actor fsm) do
+      for kw <-
+            ~w(match pickup if case cond try fn do let mod rec type interface implementation proto impl proof actor fsm) do
         assert :continue = REPL.__classify_input__(kw),
                "expected lone #{inspect(kw)} to be classified as continuation"
       end
@@ -69,6 +70,42 @@ defmodule Cure.REPLTest do
     test "submitting a lone `if` accumulates instead of dispatching" do
       state = REPL.__submit__(REPL.__new_state__(), "if")
       assert state.input_buffer == ["if"]
+    end
+
+    test "a match nested in a function header remains open for indented arms" do
+      line = "fn choose(x: Bool) -> Int = match x"
+      state = REPL.__submit__(REPL.__new_state__(), line)
+      assert state.input_buffer == [line]
+      assert state.n == 1
+    end
+
+    test "indented clauses and blank lines remain buffered until explicit submission" do
+      state =
+        REPL.__new_state__()
+        |> REPL.__submit__("fn choose(x: Bool) -> Int = match x")
+        |> REPL.__submit__("  True() -> 1")
+        |> REPL.__submit__("")
+        |> REPL.__submit__("  False() -> 0")
+
+      assert state.input_buffer == [
+               "fn choose(x: Bool) -> Int = match x",
+               "  True() -> 1",
+               "",
+               "  False() -> 0"
+             ]
+
+      {state, stdout, stderr} = submit_capture(state, ";;")
+      assert state.input_buffer == []
+      assert stdout =~ "defined choose/1"
+      assert stderr == ""
+    end
+
+    test "proof authoring keywords are continuation cues" do
+      for line <- ["proof chain", "induction n", "have step", "because p", "rewrite using p", "simplify"] do
+        assert :continue = REPL.__classify_input__(line)
+      end
+
+      assert :continue = REPL.__classify_input__("case S(k, ih) =>")
     end
   end
 
@@ -149,6 +186,15 @@ defmodule Cure.REPLTest do
       assert captured =~ "^"
       assert captured =~ "this definition is unused"
     end
+
+    test "evaluation failures render the synthesized source instead of a blank evidence line" do
+      {_state, _stdout, stderr} = submit_capture(REPL.__new_state__(), "missing_repl_name")
+
+      assert stderr =~ "missing_repl_name"
+      assert stderr =~ "repl/Repl.M1.cure"
+      assert stderr =~ "^"
+      refute stderr =~ ~r/\d+ \|\s*\n\s*\^/
+    end
   end
 
   describe "definitions" do
@@ -174,6 +220,26 @@ defmodule Cure.REPLTest do
 
       {_state, stdout, _stderr} = submit_capture(state, "add(2, 3)")
       assert stdout =~ "=> 5"
+    end
+
+    test "proof decorators and generated defining equations survive session inlining" do
+      state = REPL.__new_state__() |> submit(":use Std.Equivalent")
+
+      state =
+        state
+        |> submit("type Nat3 = Z3 | S3(Nat3)")
+        |> submit("fn add3(x: Nat3, y: Nat3) -> Nat3 = match x\n  Z3() -> y\n  S3(k) -> S3(add3(k, y))")
+
+      theorem =
+        "@lemma\nfn add3_succ_eq(k: Nat3, y: Nat3) -> Equivalent(Nat3, add3(S3(k), y), S3(add3(k, y))) = add3.S3(k, y)"
+
+      {state, stdout, stderr} = submit_capture(state, theorem)
+      assert stderr == ""
+      assert stdout =~ "defined add3_succ_eq/2"
+
+      {_state, stdout, stderr} = submit_capture(state, "add3(S3(Z3()), S3(Z3()))")
+      assert stdout =~ "{:S3, {:S3, :Z3}}"
+      assert stderr == ""
     end
 
     test "redefining a function replaces the previous entry in place" do
@@ -223,10 +289,62 @@ defmodule Cure.REPLTest do
       assert stdout =~ "type Color"
     end
 
-    # The `:t` command relied on classic expression-level type inference
-    # (`Cure.Types.Checker.infer_expr/2`), removed with the pathway rip-out (#18).
-    # The dependent pipeline has no surface type-renderer, so the command — and its
-    # test — are gone (mirrors the dropped `: () -> T` suffix on `:let`).
+    test ":t uses the dependent elaborator and prints the inferred type" do
+      {_state, stdout, stderr} = submit_capture(REPL.__new_state__(), ":t 1 + 2")
+
+      assert stdout =~ "1 + 2 : Int"
+      assert stderr == ""
+    end
+
+    test ":t can inspect expressions using session definitions" do
+      state =
+        REPL.__new_state__()
+        |> submit("fn add(a: Int, b: Int) -> Int = a + b")
+
+      {_state, stdout, stderr} = submit_capture(state, ":type add(2, 3)")
+      assert stdout =~ "add(2, 3) : Int"
+      assert stderr == ""
+    end
+
+    test ":effects distinguishes pure expressions" do
+      {_state, stdout, stderr} = submit_capture(REPL.__new_state__(), ":effects 1 + 2")
+      assert stdout =~ "1 + 2 : pure"
+      assert stderr == ""
+    end
+
+    test ":printdef prints the authored session definition" do
+      state = submit(REPL.__new_state__(), "fn double(x: Int) -> Int = x + x")
+      {_state, stdout, stderr} = submit_capture(state, ":printdef double")
+      assert stdout =~ "fn double(x: Int) -> Int = x + x"
+      assert stderr == ""
+    end
+
+    test ":total reports the kernel certificate for a session function" do
+      state = submit(REPL.__new_state__(), "fn identity(x: Int) -> Int = x")
+      {_state, stdout, stderr} = submit_capture(state, ":total identity")
+      assert stdout =~ "identity/1 is total"
+      assert stderr == ""
+    end
+
+    test ":apropos searches stdlib declaration names" do
+      {_state, stdout, stderr} = submit_capture(REPL.__new_state__(), ":apropos map")
+      assert stdout =~ "Std.List.map/2"
+      assert stderr == ""
+    end
+
+    test ":holes reports typed goals retained from session definitions" do
+      {state, stdout, stderr} =
+        submit_capture(REPL.__new_state__(), "fn unfinished() -> Int = ?")
+
+      assert stdout =~ "defined unfinished/0 (with holes)"
+      assert stderr == ""
+      assert [%{goal: _, context: []}] = state.holes
+
+      {_state, stdout, stderr} = submit_capture(state, ":holes")
+      assert stdout =~ "unfinished"
+      assert stdout =~ "Int"
+      assert stderr == ""
+    end
   end
 
   describe "bare `use` sugar" do

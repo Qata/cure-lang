@@ -1028,14 +1028,13 @@ defmodule Cure.Compiler.Printer do
     "{ " <> Keyword.get(meta, :name) <> " = " <> render(inner, depth, indent) <> " }"
   end
 
-  # -- Hole (`?name` / `??`) -------------------------------------------------
+  # -- Hole (`?name` / `?_`) -------------------------------------------------
   #
-  # A deferred term that reports its goal type. The lexer stores the anonymous
-  # hole `??` with name `"?"`; a named hole keeps its bare name.
+  # Anonymous holes carry `_`; compiler-generated `???` placeholders carry `?`.
 
   defp to_string({:hole, meta, _children}, _depth, _indent) do
     case Keyword.get(meta, :name) do
-      "?" -> "??"
+      "?" -> "???"
       name -> "?" <> name
     end
   end
@@ -1428,6 +1427,18 @@ defmodule Cure.Compiler.Printer do
     "$(" <> render(expr, depth, indent) <> " ...)"
   end
 
+  # Optional captures inside a source-defined syntax-family production retain
+  # an explicit wrapper in the parser AST. At the surface, however, absence is
+  # represented by no tokens and presence by the captured value itself.
+  defp to_string({:family_option, meta, []}, _depth, _indent) when is_list(meta), do: ""
+
+  defp to_string({:family_option, meta, [values]}, depth, indent)
+       when is_list(meta) and is_list(values),
+       do: render_family_production_values(values, depth, indent)
+
+  defp to_string({:family_option, meta, [value]}, depth, indent) when is_list(meta),
+    do: render(value, depth, indent)
+
   defp to_string(other, _depth, _indent) when is_binary(other), do: other
 
   defp to_string(other, _depth, _indent) do
@@ -1669,13 +1680,14 @@ defmodule Cure.Compiler.Printer do
   end
 
   defp render_family_capture(
-         %{grammar: %{productions: [production | _], fields: grammar_fields}},
+         %{grammar: %{productions: productions, fields: grammar_fields}},
          {:family_input, _meta, values},
          depth,
          indent,
          pad
        ) do
     bindings = Map.new(Enum.zip(Enum.map(grammar_fields, & &1.name), values))
+    production = select_family_production(productions, bindings)
     head = render_family_production(production.segments, bindings, depth, indent)
 
     nested =
@@ -1695,6 +1707,22 @@ defmodule Cure.Compiler.Printer do
 
   defp render_family_capture(%{name: name}, value, depth, indent, pad),
     do: ["\n#{pad}#{name}" | render_family_capture_value(value, depth, indent, pad)]
+
+  defp select_family_production(productions, bindings) do
+    participating_fields = productions |> Enum.flat_map(& &1.fields) |> MapSet.new()
+
+    Enum.find(productions, List.first(productions), fn production ->
+      Enum.all?(participating_fields, fn name ->
+        case Map.get(bindings, name) do
+          {:family_option, meta, _} when is_list(meta) ->
+            Keyword.get(meta, :present, false) == name in production.fields
+
+          _ ->
+            name in production.fields
+        end
+      end)
+    end)
+  end
 
   defp render_family_capture_value({:case_block, _meta, arms}, depth, indent, pad) do
     body_pad = pad <> indent
@@ -1722,8 +1750,11 @@ defmodule Cure.Compiler.Printer do
       |> Enum.map_reduce(nil, fn {segment, index}, previous ->
         text =
           case segment do
-            {:lit, word} -> word
-            {:hole, %{name: name}} -> render(Map.fetch!(bindings, name), depth, indent)
+            {:lit, word} ->
+              word
+
+            {:hole, %{name: name}} ->
+              render_family_production_value(Map.fetch!(bindings, name), depth, indent)
           end
 
         separator =
@@ -1734,6 +1765,20 @@ defmodule Cure.Compiler.Printer do
 
     Enum.join(pieces)
   end
+
+  # `Parameters` captures are represented by a list even when they occupy one
+  # production hole. Keep that representation internal and restore the
+  # comma-separated parameter surface here.
+  defp render_family_production_value(values, depth, indent) when is_list(values),
+    do: render_family_production_values(values, depth, indent)
+
+  defp render_family_production_value(value, depth, indent), do: render(value, depth, indent)
+
+  defp render_family_production_values([{:param, _, _} | _] = values, depth, indent),
+    do: typed_params_to_string(values, depth, indent)
+
+  defp render_family_production_values(values, depth, indent),
+    do: Enum.map_join(values, ", ", &render(&1, depth, indent))
 
   defp compact_production_boundary?({:lit, "-"}, {:lit, word}, _index) when word in ["-", "->"], do: true
   defp compact_production_boundary?({:lit, "-"}, {:hole, _}, _index), do: true

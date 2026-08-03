@@ -692,6 +692,20 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(details) and is_map(context),
       do: contextual_type_failure(:unsafe_call_required, Map.merge(context, details), opts)
 
+  def from_error(
+        {:source_context, {:unsupported_expression, expression}, context},
+        opts
+      )
+      when is_map(context) do
+    span = unsupported_expression_span(expression) || Map.get(context, :span)
+
+    contextual_type_failure(
+      :unsupported_expression,
+      %{detail: expression, form: unsupported_expression_form(expression)},
+      Keyword.put(opts, :span, span)
+    )
+  end
+
   def from_error({:unsafe_call_required, details}, opts) when is_map(details),
     do: contextual_type_failure(:unsafe_call_required, details, opts)
 
@@ -700,6 +714,25 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:run_arity, actual}, opts),
     do: contextual_type_failure(:run_arity, %{actual: actual}, opts)
+
+  def from_error({:operator_provider_not_in_scope, details}, opts) when is_map(details),
+    do: contextual_type_failure(:operator_provider_not_in_scope, details, opts)
+
+  def from_error({:retired_process_type, details}, opts) when is_map(details),
+    do:
+      contextual_type_failure(
+        :retired_process_type,
+        details,
+        Keyword.put_new(opts, :span, Map.get(details, :span))
+      )
+
+  def from_error({:unsupported_expression, expression}, opts) do
+    contextual_type_failure(
+      :unsupported_expression,
+      %{detail: expression, form: unsupported_expression_form(expression)},
+      Keyword.put_new(opts, :span, unsupported_expression_span(expression))
+    )
+  end
 
   def from_error({:source_context, {kind, _operator}, context} = error, opts)
       when kind in [:unsupported_operand_type, :no_operator_meaning] and is_map(context),
@@ -2270,8 +2303,32 @@ defmodule Cure.Diagnostic.Adapter do
            "add an annotation or make the constructor parameters explicit"}
 
         :unsupported_expression ->
-          {"Expression is not supported here", "This expression form is not valid in the current elaboration context.",
-           "rewrite this expression using a supported form"}
+          case Map.get(details, :form, :expression) do
+            :expression ->
+              {"Unsupported expression", "Cure does not support this expression in the current elaboration context.",
+               "rewrite this expression using a supported form"}
+
+            form ->
+              form = name_to_string(form)
+
+              {"Unsupported #{form} expression",
+               "Cure does not support this `#{form}` expression in the current elaboration context.",
+               "rewrite this `#{form}` expression using a supported form"}
+          end
+
+        :operator_provider_not_in_scope ->
+          operator = name_to_string(details.operator)
+
+          {"Operator provider is not in scope",
+           "The `#{operator}` operator dispatches through `#{details.provider}.#{details.method}/2`, but `#{details.provider}` is not imported here.",
+           "add `use #{details.provider}` to this module"}
+
+        :retired_process_type ->
+          replacement = if(details.name == :Pid, do: "Pid(message)", else: "MonitorRef or TimerRef")
+
+          {"Unindexed process type was retired",
+           "`#{details.name}` belonged to Cure's unrestricted process algebra. The formal OTP surface uses indexed process handles and distinct reference types.",
+           "use `Std.Otp` and replace `#{details.name}` with `#{replacement}`"}
 
         :unsupported_pattern ->
           {"Pattern is not supported here", "This pattern form cannot be checked in the current context.",
@@ -2510,6 +2567,18 @@ defmodule Cure.Diagnostic.Adapter do
     TypeAdapter.contextual_failure(kind, details, opts, {title, message, label})
   end
 
+  defp unsupported_expression_span({_tag, meta, _children}) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp unsupported_expression_span(_expression), do: nil
+
+  defp unsupported_expression_form({tag, _meta, _children}) when is_atom(tag), do: tag
+  defp unsupported_expression_form(_expression), do: :expression
+
   defp contextual_type_fallback(_kind, opts) do
     checking = Keyword.get(opts, :checking)
     origin = Keyword.get(opts, :expectation_origin)
@@ -2567,6 +2636,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_char_escape}), do: "Invalid character escape"
   defp syntax_problem_title(%SyntaxProblem{kind: :atom_too_long}), do: "Atom literal is too long"
   defp syntax_problem_title(%SyntaxProblem{kind: :unexpected_character}), do: "Unexpected character"
+  defp syntax_problem_title(%SyntaxProblem{kind: :obsolete_anonymous_hole}), do: "Anonymous hole spelling changed"
   defp syntax_problem_title(%SyntaxProblem{kind: :macro_use_mismatch}), do: "Macro syntax does not match"
   defp syntax_problem_title(%SyntaxProblem{kind: :macro_literal_capture}), do: "Macro literal capture is invalid"
   defp syntax_problem_title(%SyntaxProblem{kind: :non_associative}), do: "Operator chain needs parentheses"
@@ -3079,6 +3149,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :unexpected_character, observed: observed}),
     do: "#{syntax_name(observed)} does not begin any Cure token at this location."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :obsolete_anonymous_hole}),
+    do: "`??` was the anonymous-hole spelling before Cure 0.34; anonymous holes are now written `?_`."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :macro_use_mismatch,
@@ -4039,6 +4112,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name}),
     do: "write a parameter name here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :obsolete_anonymous_hole}),
+    do: "replace `??` with `?_`"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :variadic_parameter_name_missing}),
     do: "write the variadic parameter name here"
@@ -6548,6 +6624,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp lex_problem({:unexpected_character, character, line, column}, opts),
     do: syntax_problem(:unexpected_character, :token, character, line, column, opts)
+
+  defp lex_problem({:obsolete_anonymous_hole, line, column}, opts),
+    do: syntax_problem(:obsolete_anonymous_hole, :anonymous_hole, "??", line, column, opts)
 
   defp lex_problem(reason, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: {:lex_error, reason})
 

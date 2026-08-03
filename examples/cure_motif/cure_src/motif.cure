@@ -22,7 +22,7 @@ mod Motif
   # FFI helpers -- keep the Cure source self-contained.
   # ---------------------------------------------------------------------------
 
-  @extern(:erlang, :integer_to_binary, 1)
+  @extern(:erlang, :integer_to_list, 1)
   local fn int_to_string(n: Int) -> String
 
   # ---------------------------------------------------------------------------

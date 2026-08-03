@@ -355,7 +355,12 @@ defmodule Cure.Compiler.DepGraph do
               |> Map.put(:prelude_provider?, scan.prelude?)
 
             {:ok, ast} ->
-              {module, line} = find_module(ast)
+              {module, line} =
+                case find_module(ast) do
+                  {nil, nil} -> {"Main", 1}
+                  found -> found
+                end
+
               uses = collect_uses(ast)
               qualified = Cure.Compiler.Parser.FixityScan.collect_qualified_targets(ast, uses)
 
@@ -364,7 +369,7 @@ defmodule Cure.Compiler.DepGraph do
               |> Map.merge(%{
                 module: module,
                 line: line,
-                provided_modules: collect_declared_modules(ast),
+                provided_modules: Enum.uniq([module | collect_declared_modules(ast)]),
                 order_deps: uses,
                 qualified_deps: qualified,
                 closure_deps: Enum.map(uses ++ qualified, & &1.target)

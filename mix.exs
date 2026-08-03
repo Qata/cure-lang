@@ -145,7 +145,7 @@ defmodule Cure.MixProject do
   defp description do
     """
     Dependently-typed programming language for the BEAM virtual machine
-    with first-class finite state machines and Z3-assisted guard analysis.
+    with one kernel-checked compiler pipeline and first-class OTP concurrency.
     """
   end
 

@@ -1,7 +1,7 @@
 # Cure
 
 Dependently-typed programming language for the BEAM virtual machine with
-first-class finite state machines and SMT-backed verification.
+one kernel-checked compiler pipeline and first-class OTP concurrency.
 
 Cure compiles `.cure` source files to BEAM bytecode, enabling programs to run
 natively on the Erlang VM alongside Erlang and Elixir code.
@@ -66,10 +66,9 @@ Metastatic's cross-language analysis tools.
   `_build/cure/rel/<name>/`. `Std.App` exposes `ensure_all_started`,
   `start`, `stop`, `get_env`, `put_env`, `which_applications`,
   `loaded_applications`, and `start_phase` from Cure source
-- **Melquiades Operator** (v0.25.0) -- `pid <-| message` (unicode alias
-  `pid ✉ message`) is a typed send operator that lowers to Erlang's
-  `!`; the type checker unifies the message type against the receiver's
-  inbox ADT
+- **Melquiades Operator** (v0.25.0) -- `pid <-| message` (Unicode alias
+  `pid ✉ message`) is library-defined sugar for `Std.Otp.tell`; it checks the
+  message against the indexed process handle and returns `Effect(Unit)`
 - **Indentation-structured** -- no closing delimiters, visual layout determines scope
 - **Expression-oriented** -- everything is an expression, the last expression in a block is its value
 - **BEAM-native** -- compiles to standard BEAM bytecode, full OTP interoperability
@@ -274,7 +273,7 @@ See the `examples/` directory for sample Cure programs:
   a demo that renders an ASCII plot of a fitted sine, and a 25-case
   test suite
 - `cure_moneta/` -- full example project: money and ledger library;
-  multi-line ADT (`Currency`), refinement types (`PositiveAmount`, `Rate`),
+  multi-line ADT (`Currency`), domain aliases (`PositiveAmount`, `Rate`),
   `Money{amount, currency, fractional_units}` record (EUR/JPY/OMR-aware
   display), `Show` and `Equatable` interfaces, FX conversion via `@extern` FFI,
   ledger mutations with `Result`-chaining, and a payment transaction FSM
@@ -441,4 +440,4 @@ authoritative compilation/runtime checks for the root example corpus. See
 ## License
 
 MIT. See the repository's
-[LICENSE](https://github.com/Qata/cure-lang/blob/main/LICENSE).
+[LICENSE](https://github.com/cure-lang/cure-lang/blob/main/LICENSE).

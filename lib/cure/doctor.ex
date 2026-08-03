@@ -277,7 +277,7 @@ defmodule Cure.Doctor do
             code: "E014",
             message: "Unfilled type hole on line #{lineno}",
             file: file,
-            fix: "Replace the hole (`?name` or `??`) with a concrete expression."
+            fix: "Replace the hole (`?name` or `?_`) with a concrete expression."
           }
         ]
       else

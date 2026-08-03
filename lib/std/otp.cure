@@ -10,6 +10,12 @@ mod Std.Otp
   use Std.Option
   use Std.Beam
 
+  # Library-owned operator declarations. Their precedence group is part of the
+  # core lattice in Std.Operators; importing Std.Otp brings these fixities and
+  # the checked function meanings below into scope together.
+  infix `<-|` : Melquiades
+  infix `✉` : Melquiades
+
   typealias Plain = Std.Otp.Raw.Plain
   typealias Server = Std.Otp.Raw.Server
   typealias RawPid(m, r, k) = Std.Otp.Raw.RawPid(m, r, k)
@@ -362,8 +368,7 @@ mod Std.Otp
 
   ## Send a well-typed message: `msg : m` must match `dest`'s accepted type `m`,
   ## so a `Pid(Command)` can never be sent a `Telemetry`. (Named `tell`, not
-  ## `send`: `send` is the reserved Melquiades keyword — a later macro can reclaim
-  ## the `p ! msg` surface and lower it to this.)
+  ## `send`: the Melquiades operators below provide the compact send surface.)
   ##
   ## Accepts BOTH handles: a raw send to a gen_server is legitimate BEAM practice —
   ## it lands in `handle_info`.
@@ -373,6 +378,15 @@ mod Std.Otp
   fn tell({m: Type}, {r: Type}, {k: Type}, dest: RawPid(m, r, k), msg: m) -> Effect(Unit) =
     let sent = raw_send(dest, msg)
     ()
+
+  ## Melquiades is ordinary operator sugar over the checked operation above.
+  ## Both spellings have exactly `tell`'s indexed message check and effect result;
+  ## neither restores the retired raw-process send node.
+  fn `<-|`({m: Type}, {r: Type}, {k: Type}, dest: RawPid(m, r, k), msg: m) -> Effect(Unit) =
+    tell(dest, msg)
+
+  fn `✉`({m: Type}, {r: Type}, {k: Type}, dest: RawPid(m, r, k), msg: m) -> Effect(Unit) =
+    tell(dest, msg)
 
   ## Synchronous `gen_server` call: send request `q`, block for reply `r`. Both the
   ## request AND the reply are checked against the server's type.

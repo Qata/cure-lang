@@ -2,8 +2,8 @@ defmodule Cure.Elab.DroppedEffectsRejectedTest do
   @moduledoc """
   Pins the DROP decisions of the pre-#18 surface-construct batch (see
   memory pre18-surface-construct-gaps): the imperative, non-total BEAM effects the
-  classic codegen lowered — `throw`, raw `receive`/`spawn`, and typed-Pid send
-  (`<-|`) — are NOT ported into the dependent pipeline. A total dependent language
+  classic codegen lowered — `throw` and raw `receive`/`spawn` — are NOT ported
+  into the dependent pipeline. A total dependent language
   has no unwinding `throw` and no raw process algebra; concurrency is expressed
   through the `fsm`/`actor` families, and `throw` would need monadic structure the
   language does not provide. Each must therefore be REJECTED at elaboration.
@@ -47,16 +47,5 @@ defmodule Cure.Elab.DroppedEffectsRejectedTest do
     """
 
     assert {:error, _reason} = Program.elaborate(src)
-  end
-
-  test "typed-Pid send (<-|) is rejected (dies with the raw process algebra)" do
-    src = """
-    mod M
-      fn f(p: Int) -> Int = p <-| 1
-    end
-    """
-
-    assert {:error, reason} = Program.elaborate(src)
-    assert inspect(reason) =~ "send"
   end
 end

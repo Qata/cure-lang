@@ -1,4 +1,9 @@
 ## Transparent actor example. The payload is ordinary Cure data.
 
-actor Cure.Painter with %[:idle, ""]
-  fn initial_state() -> Atom = :idle
+use Std.Actor
+
+actor Painter
+  state Tuple(Atom, String)
+  initial %[:idle, ""]
+  body
+    fn initial_state() -> Atom = :idle

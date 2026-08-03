@@ -63,7 +63,7 @@ defmodule Cure.MCP.Server do
     %{
       "name" => "get_syntax_help",
       "description" =>
-        "Get help on a Cure syntax topic (functions, types, fsm, protocols, pattern_matching, modules, records).",
+        "Get help on a Cure syntax topic (functions, types, fsm, interfaces, pattern_matching, modules, records).",
       "inputSchema" => %{
         "type" => "object",
         "properties" => %{"topic" => %{"type" => "string", "description" => "Syntax topic name"}},
@@ -147,7 +147,7 @@ defmodule Cure.MCP.Server do
     %{
       "protocolVersion" => "2024-11-05",
       "capabilities" => %{"tools" => %{"listChanged" => false}},
-      "serverInfo" => %{"name" => "cure-mcp", "version" => "0.1.0"}
+      "serverInfo" => %{"name" => "cure-mcp", "version" => Cure.version()}
     }
   end
 
@@ -328,15 +328,17 @@ defmodule Cure.MCP.Server do
     === Finite State Machines ===
 
     ## Transition-table mode
-    fsm Cure.TrafficLight state Atom transitions [
-      transition :red :timer :green,
-      transition :green :timer :yellow,
-      transition :yellow :timer :red
-    ]
+    fsm TrafficLight with Int
+      initial Red
+      Red --Timer--> Green
+      Green --Timer--> Yellow
+      Yellow --Timer--> Red
 
-    ## Callback mode
-    fsm Cure.Turnstile state Int events Atom handle_event
-      :keep_state_and_data
+    ## Structured mode
+    fsm Turnstile
+      state Int
+      events
+        Coin -> :keep_state_and_data
 
     # Transition rows are checked Cure ADT values and dispatch is an ordinary
     # recursive standard-library function. Callback bodies are reparsed under
@@ -344,17 +346,19 @@ defmodule Cure.MCP.Server do
     """
   end
 
-  defp syntax_help("protocols") do
+  defp syntax_help(topic) when topic in ["interfaces", "protocols"] do
     """
-    === Protocols ===
-    proto Show(T)
-      fn show(x: T) -> String
+    === Interfaces ===
+    interface Show(t)
+      fn show(x: t) -> String
 
-    impl Show for Int
+    implementation Show for Int
       fn show(x: Int) -> String = Std.String.from_int(x)
 
-    impl Show for Bool
-      fn show(x: Bool) -> String = if x then "true" else "false"
+    implementation Show for Bool
+      fn show(x: Bool) -> String = pickup
+        x -> "true"
+        else -> "false"
     """
   end
 
@@ -392,7 +396,7 @@ defmodule Cure.MCP.Server do
   end
 
   defp syntax_help(_topic) do
-    "Available topics: functions, types, fsm, protocols, pattern_matching, modules"
+    "Available topics: functions, types, fsm, interfaces, pattern_matching, modules"
   end
 
   # -- Stdlib Docs -------------------------------------------------------------

@@ -35,7 +35,8 @@ defmodule Cure.Migrate.GroupHoistTest do
     # decorator now appears before `mod`, and not after it
     assert out =~ ~r/@group\(:core\)\s*\n\s*mod\s+M/
     refute out =~ ~r/mod\s+M[\s\S]*@group\(:core\)/
-    assert Enum.any?(warns, &(&1.rule == :W_group_hoist))
+    warning = Enum.find(warns, &(&1.rule == :W_group_hoist))
+    assert %Cure.Diagnostic.Span{start_line: 2, start_column: 2, end_column: 7} = warning.span
     assert reparses?(out, "a.cure")
   end
 

@@ -34,25 +34,25 @@ functional record updates, and the float FFI are all ordinary Cure declarations.
 
 `cure_src/transaction.cure` declares a transparent FSM module:
 
-```text
-fsm Cure.Transaction with 0
-  fn initial_state() -> Atom = :idle
+```cure
+use Std.Fsm
+
+fsm Transaction with Int
+  Idle --create--> Pending
+  Pending --submit--> Awaiting
+  Awaiting --confirm--> Settled
+  Awaiting --reject--> Failed
+    update 0
+  Failed --retry--> Pending
+    update 0
+  Awaiting --on_timer--> Failed
+    update 0
+  * --cancel--> Cancelled
 ```
 
-The `fsm` macro expands to a lifted module and uses `Std.Otp.start_statem` for
-startup. A transition-aware version can be expressed entirely in Cure:
-
-```text
-fsm Cure.TransactionFlow state Int transitions [
-  transition :idle :create :pending,
-  transition :pending :submit :settled
-]
-```
-
-The transition rows are checked ADT values and dispatch is a normal recursive
-Cure function. No `on_transition` parser or compiler-owned FSM class is involved;
-the generated `Cure.Transaction` module is a transparent lifted module.
-class is involved.
+The transition rows are checked macro data and dispatch is generated as ordinary
+Cure declarations. The bare module name is owned by top-level `Main`, producing
+`Cure.Main.Transaction`; source does not author the emitter's `Cure.` prefix.
 
 ## Layout
 

@@ -5,12 +5,12 @@ defmodule CureTurnstileTest do
   # Raw FSM (gen_statem) tests
   # ============================================================================
 
-  describe "raw Cure.Turnstile gen_statem" do
-    @fsm :"Cure.Turnstile"
+  describe "raw Cure.Main.Turnstile gen_statem" do
+    @fsm :"Cure.Main.Turnstile"
 
     test "start_link/1 initializes with a locked tuple payload" do
       {:ok, pid} = @fsm.start_link({0, 0})
-      assert {:locked, {0, 0}} = :sys.get_state(pid)
+      assert {:Locked, {0, 0}} = :sys.get_state(pid)
       :gen_statem.stop(pid)
     end
 
@@ -19,12 +19,12 @@ defmodule CureTurnstileTest do
 
       :gen_statem.cast(pid, :coin)
       _ = :sys.get_state(pid)
-      assert {:unlocked, {1, 0}} = :sys.get_state(pid)
+      assert {:Unlocked, {1, 0}} = :sys.get_state(pid)
 
       # second coin still increments
       :gen_statem.cast(pid, :coin)
       _ = :sys.get_state(pid)
-      assert {:unlocked, {2, 0}} = :sys.get_state(pid)
+      assert {:Unlocked, {2, 0}} = :sys.get_state(pid)
 
       :gen_statem.stop(pid)
     end
@@ -34,11 +34,11 @@ defmodule CureTurnstileTest do
 
       :gen_statem.cast(pid, :coin)
       _ = :sys.get_state(pid)
-      assert {:unlocked, {1, 0}} = :sys.get_state(pid)
+      assert {:Unlocked, {1, 0}} = :sys.get_state(pid)
 
       :gen_statem.cast(pid, :push)
       _ = :sys.get_state(pid)
-      assert {:locked, {1, 1}} = :sys.get_state(pid)
+      assert {:Locked, {1, 1}} = :sys.get_state(pid)
 
       :gen_statem.stop(pid)
     end
@@ -48,7 +48,7 @@ defmodule CureTurnstileTest do
 
       :gen_statem.cast(pid, :push)
       _ = :sys.get_state(pid)
-      assert {:locked, {0, 0}} = :sys.get_state(pid)
+      assert {:Locked, {0, 0}} = :sys.get_state(pid)
 
       :gen_statem.stop(pid)
     end
@@ -59,11 +59,12 @@ defmodule CureTurnstileTest do
       for n <- 1..5 do
         :gen_statem.cast(pid, :coin)
         _ = :sys.get_state(pid)
-        assert {:unlocked, {^n, 0}} = :sys.get_state(pid)
+        assert {:Unlocked, {^n, passages}} = :sys.get_state(pid)
+        assert passages == n - 1
 
         :gen_statem.cast(pid, :push)
         _ = :sys.get_state(pid)
-        assert {:locked, {^n, ^n}} = :sys.get_state(pid)
+        assert {:Locked, {^n, ^n}} = :sys.get_state(pid)
       end
 
       :gen_statem.stop(pid)

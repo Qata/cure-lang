@@ -3321,7 +3321,7 @@ defmodule Cure.Compiler.Parser do
       :char ->
         {literal(:char, token), advance(state)}
 
-      # A hole `?name` / `??` — a deferred term (design spec §6 / M8.5).
+      # A hole `?name` / `?_` — a deferred term (design spec §6 / M8.5).
       :hole ->
         meta = [name: token.value, line: token.line, col: token.col] |> put_token_source_info(token)
         {{:hole, meta, []}, advance(state)}
@@ -4703,15 +4703,17 @@ defmodule Cure.Compiler.Parser do
         {right, state} = parse_infix_rhs(state, right_bp, {op_lexeme, token.span})
         {desugar_pipe(left, right, token), state}
 
-      # Melquiades operator: `pid <-| message` or `pid ✉ message`.
-      # Lowers to `{:send, meta, [target, message]}` and carries the
-      # author's choice of ASCII vs unicode form in `:melquiades_form` so
-      # the printer can round-trip it.
+      # Melquiades spellings are now ordinary library-defined operators. Keep
+      # their dedicated lexer token (it gives both spellings excellent spans),
+      # but lower through the same overloadable `:binary_op` path as every
+      # user-defined operator. `Std.Otp` supplies the meanings; without that
+      # import the normal "operator has no definition" diagnostic applies.
       :melquiades ->
         {right, state} = parse_infix_rhs(state, right_bp, {op_lexeme, token.span})
-        form = melquiades_form(token.value)
-        meta = [line: token.line, col: token.col, melquiades_form: form]
-        {{:send, meta, [left, right]}, state}
+        op = String.to_atom(token.value)
+        meta = [category: :overloaded, operator: op, line: token.line, col: token.col]
+        meta = put_operator_source_info(meta, left, right, token)
+        {{:binary_op, meta, [left, right]}, state}
 
       # Dot access: obj.field -> {:attribute_access, ...}
       :dot ->
@@ -4809,12 +4811,6 @@ defmodule Cure.Compiler.Parser do
         end_column: ending.end_column
     }
   end
-
-  # `<-|` -> :ascii, `✉` -> :unicode. Any other lexeme (unlikely, but
-  # we guard anyway) falls back to :ascii.
-  defp melquiades_form("<-|"), do: :ascii
-  defp melquiades_form("✉"), do: :unicode
-  defp melquiades_form(_), do: :ascii
 
   # -- Pipe Desugaring -------------------------------------------------------
 
@@ -8848,12 +8844,17 @@ defmodule Cure.Compiler.Parser do
 
     name_token = peek(state)
 
-    {name, state} =
-      case name_token do
-        %Token{type: type} when type in [:identifier, :keyword] ->
-          {to_string(name_token.value), advance(state)}
+    {name, name_token, explicit_fresh?, state} =
+      case {name_token, peek_at(state, 1), peek_at(state, 2), peek_at(state, 3)} do
+        {%Token{type: :lt}, %Token{type: :identifier, value: "fresh"},
+         %Token{type: :identifier, value: name} = binder_token, %Token{type: :gt}} ->
+          state = state |> advance() |> advance() |> advance() |> advance()
+          {to_string(name), binder_token, true, state}
 
-        %Token{} when kind in [:variadic, :keyword_variadic] ->
+        {%Token{type: type}, _, _, _} when type in [:identifier, :keyword] ->
+          {to_string(name_token.value), name_token, false, advance(state)}
+
+        {%Token{}, _, _, _} when kind in [:variadic, :keyword_variadic] ->
           error =
             {:variadic_parameter_name_missing,
              %{
@@ -8874,9 +8875,9 @@ defmodule Cure.Compiler.Parser do
               do: state,
               else: advance(state)
 
-          {"_missing_variadic_parameter", state}
+          {"_missing_variadic_parameter", name_token, false, state}
 
-        %Token{} ->
+        {%Token{}, _, _, _} ->
           # Nothing that can name a parameter. Reaching the end of this case
           # without a clause used to raise a CaseClauseError out of the whole
           # compile, so a lambda like `fn(42) -> 1` crashed instead of being
@@ -8901,7 +8902,7 @@ defmodule Cure.Compiler.Parser do
               do: state,
               else: advance(state)
 
-          {"_invalid_parameter", state}
+          {"_invalid_parameter", name_token, false, state}
       end
 
     # Two-name label form `label internal: T` (Swift). A second identifier before
@@ -8914,7 +8915,7 @@ defmodule Cure.Compiler.Parser do
     # separator, instead of silently reading `fn(x y)` as one labelled binder.
     {label, label_span, name, name_token, state} =
       case peek(state) do
-        %Token{type: :identifier} = internal_token when not lambda? ->
+        %Token{type: :identifier} = internal_token when not lambda? and not explicit_fresh? ->
           {name, name_token.span, to_string(internal_token.value), internal_token, advance(state)}
 
         _ ->
@@ -8944,6 +8945,7 @@ defmodule Cure.Compiler.Parser do
     param_meta = if label, do: Keyword.put(param_meta, :label, label), else: param_meta
     param_meta = if default, do: Keyword.put(param_meta, :default, default), else: param_meta
     param_meta = if kind != :positional, do: Keyword.put(param_meta, :kind, kind), else: param_meta
+    param_meta = if explicit_fresh?, do: Keyword.put(param_meta, :explicit_fresh, true), else: param_meta
 
     terminal_span = ast_source_span(default) || annotation_span || name_token.span
 
@@ -9680,12 +9682,12 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     # Optional type params: (A, B)
-    {type_params, type_parameter_span, state} =
+    {type_params, type_parameter_spans, type_parameter_span, state} =
       case peek(state) do
         %Token{type: :lparen} ->
           open_token = peek(state)
           state = advance(state)
-          {tp, state} = parse_name_list(state, :rparen)
+          {tp, tp_spans, state} = parse_name_list_with_spans(state, :rparen)
 
           {state, close_token} =
             expect_container_close(state, :rparen, :type_parameters, open_token, tp, true, %{
@@ -9694,10 +9696,10 @@ defmodule Cure.Compiler.Parser do
             })
 
           span = through_spans(open_token.span, close_token && close_token.span) || open_token.span
-          {tp, span, state}
+          {tp, tp_spans, span, state}
 
         _ ->
-          {[], nil, state}
+          {[], [], nil, state}
       end
 
     state = skip_newlines(state)
@@ -9716,6 +9718,7 @@ defmodule Cure.Compiler.Parser do
         whole: through_spans(token.span, terminal_span) || token.span,
         opener: token.span,
         name: name_token.span,
+        arguments: type_parameter_spans,
         branches: branches,
         fields: source_fields
       })
@@ -10913,12 +10916,12 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     # Type params: (T) or (T, U)
-    {type_params, type_parameter_span, state} =
+    {type_params, type_parameter_spans, type_parameter_span, state} =
       case peek(state) do
         %Token{type: :lparen} ->
           open_token = peek(state)
           state = advance(state)
-          {tp, state} = parse_name_list(state, :rparen)
+          {tp, tp_spans, state} = parse_name_list_with_spans(state, :rparen)
 
           {state, close_token} =
             expect_container_close(state, :rparen, :type_parameters, open_token, tp, true, %{
@@ -10927,10 +10930,10 @@ defmodule Cure.Compiler.Parser do
             })
 
           span = through_spans(open_token.span, close_token && close_token.span) || open_token.span
-          {tp, span, state}
+          {tp, tp_spans, span, state}
 
         _ ->
-          {[], nil, state}
+          {[], [], nil, state}
       end
 
     state = skip_newlines(state)
@@ -10953,6 +10956,7 @@ defmodule Cure.Compiler.Parser do
         whole: through_spans(token.span, terminal_span) || token.span,
         opener: token.span,
         name: name_token.span,
+        arguments: type_parameter_spans,
         branches: branches,
         fields: source_fields
       })
@@ -11051,12 +11055,12 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    {params, type_parameter_span, state} =
+    {params, type_parameter_spans, type_parameter_span, state} =
       case peek(state) do
         %Token{type: :lparen} ->
           open_token = peek(state)
           state = advance(state)
-          {tp, state} = parse_name_list(state, :rparen)
+          {tp, tp_spans, state} = parse_name_list_with_spans(state, :rparen)
 
           {state, close_token} =
             expect_container_close(state, :rparen, :type_parameters, open_token, tp, true, %{
@@ -11065,10 +11069,10 @@ defmodule Cure.Compiler.Parser do
             })
 
           span = through_spans(open_token.span, close_token && close_token.span) || open_token.span
-          {tp, span, state}
+          {tp, tp_spans, span, state}
 
         _ ->
-          {[], nil, state}
+          {[], [], nil, state}
       end
 
     # `requires` is a CONTEXTUAL keyword: it lexes as an ordinary identifier and
@@ -11124,6 +11128,7 @@ defmodule Cure.Compiler.Parser do
         whole: through_spans(token.span, terminal_span) || token.span,
         opener: token.span,
         name: name_token.span,
+        arguments: type_parameter_spans,
         branches: branches,
         fields: source_fields
       })
@@ -13741,26 +13746,45 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp parse_name_list(state, closing) do
-    state = skip_newlines(state)
+    {names, _spans, state} = parse_name_list_with_spans(state, closing)
+    {names, state}
+  end
+
+  defp parse_name_list_with_spans(state, closing) do
+    # Explicit delimiters suspend indentation. A multiline selective import or
+    # type-parameter list therefore carries lexer `:indent`/`:dedent` tokens in
+    # addition to newlines; treating either as a name produced the misleading
+    # "imported names need a comma" diagnostic at the first real item.
+    state = skip_name_list_layout(state)
 
     case peek(state) do
       %Token{type: ^closing} ->
-        {[], state}
+        {[], [], state}
 
       _ ->
         token = peek(state)
         state = advance(state)
-        state = skip_newlines(state)
+        state = skip_name_list_layout(state)
 
         case peek(state) do
           %Token{type: :comma} ->
             state = advance(state)
-            {rest, state} = parse_name_list(state, closing)
-            {[to_string(token.value) | rest], state}
+            {rest, spans, state} = parse_name_list_with_spans(state, closing)
+            {[to_string(token.value) | rest], [token.span | spans], state}
 
           _ ->
-            {[to_string(token.value)], state}
+            {[to_string(token.value)], [token.span], state}
         end
+    end
+  end
+
+  defp skip_name_list_layout(state) do
+    case peek(state) do
+      %Token{type: type} when type in [:newline, :indent, :dedent] ->
+        state |> advance() |> skip_name_list_layout()
+
+      _ ->
+        state
     end
   end
 
@@ -13953,7 +13977,8 @@ defmodule Cure.Compiler.Parser do
         end
 
       state = %{state | seen_stmt?: true}
-      ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
+      meta = standalone_decorator_meta(dec_name, token, decorator_info)
+      ast = {:decorator, meta, args}
       {ast, state}
     else
       if dec_name in @module_level_decorators do
@@ -13964,7 +13989,8 @@ defmodule Cure.Compiler.Parser do
 
           _ ->
             state = emit_group_placement_deprecation(state, token, dec_name)
-            ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
+            meta = standalone_decorator_meta(dec_name, token, decorator_info)
+            ast = {:decorator, meta, args}
             {ast, state}
         end
       else
@@ -14032,7 +14058,8 @@ defmodule Cure.Compiler.Parser do
       _ ->
         # Standalone decorator or property
         if args != [] do
-          ast = {:decorator, [name: dec_name, line: token.line, col: token.col], args}
+          meta = standalone_decorator_meta(dec_name, token, decorator_info)
+          ast = {:decorator, meta, args}
           {ast, state}
         else
           ast = {:property, [name: dec_name, line: token.line, col: token.col], dec_name}
@@ -14180,6 +14207,16 @@ defmodule Cure.Compiler.Parser do
       _ ->
         meta
     end
+  end
+
+  defp standalone_decorator_meta(dec_name, token, decorator_info) do
+    info = %SourceInfo{
+      whole: decorator_info.whole,
+      name: decorator_info.name,
+      arguments: decorator_info.arguments
+    }
+
+    Metadata.put_source_info([name: dec_name, line: token.line, col: token.col], info)
   end
 
   defp extract_literal_value({:literal, _, val}), do: val

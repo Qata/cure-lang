@@ -151,9 +151,16 @@ defmodule Cure.Compiler.MacroFamily do
   def syntax_type(name) do
     name = to_string(name)
 
-    case name do
-      <<first::utf8, rest::binary>> -> String.upcase(<<first::utf8>>) <> rest <> "Syntax"
-      _ -> "MacroSyntax"
+    cond do
+      name != "" and String.ends_with?(name, "Syntax") ->
+        name
+
+      name == "" ->
+        "MacroSyntax"
+
+      true ->
+        <<first::utf8, rest::binary>> = name
+        String.upcase(<<first::utf8>>) <> rest <> "Syntax"
     end
   end
 

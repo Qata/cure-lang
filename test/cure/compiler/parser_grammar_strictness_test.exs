@@ -95,7 +95,8 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
     end
 
     test "Melquiades send: `a <-| b <-| c`" do
-      assert {:error, errors} = parse_raw("a <-| b <-| c")
+      source = "mod M\n  use Std.Otp\n  fn f(a: Int, b: Int, c: Int) -> Int = a <-| b <-| c\n"
+      assert {:error, errors} = parse_raw(source)
       assert Enum.any?(errors, &match?({:non_associative, %{operator: :"<-|", next_operator: :"<-|"}}, &1))
     end
 

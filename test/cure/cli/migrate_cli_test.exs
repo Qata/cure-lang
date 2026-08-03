@@ -179,6 +179,23 @@ defmodule Cure.CLI.MigrateCliTest do
     assert File.read!(f) == before
   end
 
+  test "--check resolves imported nominal types using the source path", %{dir: dir} do
+    f = Path.join(dir, "a.cure")
+
+    File.write!(f, """
+    mod A
+      use Std.ExitReason
+      fn keep(reason: ExitReason) -> ExitReason = reason
+    """)
+
+    {_, 0} = System.cmd("git", ["-C", dir, "add", "a.cure"])
+    {_, 0} = System.cmd("git", ["-C", dir, "commit", "-qm", "x"])
+    before = File.read!(f)
+
+    assert :ok = CLI.cmd_migrate([f], check: true)
+    assert File.read!(f) == before
+  end
+
   test "--print emits the migrated form to stdout and writes nothing, even on a dirty (unguarded) tree",
        %{dir: dir} do
     f = Path.join(dir, "a.cure")

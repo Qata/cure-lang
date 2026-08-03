@@ -729,7 +729,7 @@ defmodule Cure.Compiler.Lexer do
 
   # -- Holes -----------------------------------------------------------------
 
-  # `?name` (named hole) or `??` (anonymous hole) — a deferred term that reports
+  # `?name` (named hole) or `?_` (anonymous hole) — a deferred term that reports
   # its goal type and blocks codegen (design spec §6 / M8.5).
   defp lex_hole(state) do
     start_col = state.col
@@ -748,9 +748,17 @@ defmodule Cure.Compiler.Lexer do
         {name, state}
       end
 
-    token = Token.new(:hole, name, state.line, start_col)
-    maybe_emit_event(state, token)
-    {:ok, %{state | tokens: [token | state.tokens]}}
+    # `??` was the pre-0.34 anonymous spelling. Reserve it as a targeted syntax
+    # error instead of silently accepting a breaking spelling; three or more
+    # question marks remain the compiler-generated placeholder form used by
+    # proof suggestions and diagnostics.
+    if name == "?" and state.col == start_col + 2 do
+      {:error, {:obsolete_anonymous_hole, state.line, start_col}, state}
+    else
+      token = Token.new(:hole, name, state.line, start_col)
+      maybe_emit_event(state, token)
+      {:ok, %{state | tokens: [token | state.tokens]}}
+    end
   end
 
   # -- Identifiers & keywords -----------------------------------------------

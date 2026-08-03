@@ -1,8 +1,12 @@
 ## Transparent FSM example with a tuple payload.
 
-fsm Cure.Turnstile state Tuple(Int, Int) initial :locked events Atom transition
-  pickup
-    `and`(state == :locked, event == :coin) -> %[:next_state, :unlocked, %[data.1 + 1, data.2]]
-    `and`(state == :unlocked, event == :push) -> %[:next_state, :locked, %[data.1, data.2 + 1]]
-    `and`(state == :unlocked, event == :coin) -> %[:next_state, :unlocked, %[data.1 + 1, data.2]]
-    else -> %[:next_state, state, data]
+use Std.Fsm
+
+fsm Turnstile with Tuple(Int, Int)
+  Locked --coin--> Unlocked
+    update %[data.1 + 1, data.2]
+  Unlocked --push--> Locked
+    update %[data.1, data.2 + 1]
+  Unlocked --coin--> Unlocked
+    update %[data.1 + 1, data.2]
+  Locked --push--> Locked

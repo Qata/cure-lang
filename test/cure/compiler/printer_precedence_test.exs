@@ -99,7 +99,7 @@ defmodule Cure.Compiler.PrinterPrecedenceTest do
     @expr expr
     test "precedence-preserving reprint: #{expr}" do
       src =
-        "mod M\n  fn f(x: Int, a: Int, b: Int, c: Int, pid: Int, msg: Int, k: Int, v: Int, m: Int) -> Int = #{@expr}\n"
+        "mod M\n  use Std.Otp\n  fn f(x: Int, a: Int, b: Int, c: Int, pid: Int, msg: Int, k: Int, v: Int, m: Int) -> Int = #{@expr}\n"
 
       ast = parse!(src)
       out = Printer.quoted_to_string(ast)

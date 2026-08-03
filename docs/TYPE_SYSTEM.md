@@ -186,7 +186,7 @@ conversion. `@total true` requires certification at the declaration.
 
 ## Holes and diagnostics
 
-`?name` and `??` are typed holes. They report the expected type and local
+`?name` and `?_` are typed holes. They report the expected type and local
 context through the structured diagnostic pipeline. Diagnostics retain
 authored source ranges, canonical definition identities, machine-readable
 codes, related spans, and safe code actions for terminal, JSON, and LSP

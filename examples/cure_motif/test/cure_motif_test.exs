@@ -21,17 +21,10 @@ defmodule CureMotifTest do
   alias Cure.Temporal.Parser
 
   @motif :"Cure.Motif"
-  @envelope :"Cure.Envelope"
-  @clock_module :"Cure.Clock"
+  @envelope :"Cure.Main.Envelope"
 
   defp envelope_transitions do
-    [
-      {:silent, :note_on, :attack, :hard},
-      {:attack, :on_timer, :sustain, :hard},
-      {:sustain, :note_off, :release, :hard},
-      {:release, :on_timer, :silent, :hard},
-      {:wildcard, :kill, :silent, :soft}
-    ]
+    @envelope.transitions()
   end
 
   # ==========================================================================
@@ -40,19 +33,19 @@ defmodule CureMotifTest do
 
   describe "Step constructors" do
     test "note/2 builds a Note ADT tuple" do
-      assert {:note, 60, 100} = @motif.note(60, 100)
+      assert {:Note, 60, 100} = @motif.note(60, 100)
     end
 
     test "rest/0 builds a Rest ADT tuple" do
-      assert {:rest} = @motif.rest()
+      assert :Rest = @motif.rest()
     end
 
     test "chord/3 builds a Chord ADT tuple" do
-      assert {:chord, 57, 60, 64} = @motif.chord(57, 60, 64)
+      assert {:Chord, 57, 60, 64} = @motif.chord(57, 60, 64)
     end
 
     test "roll/3 builds a Roll ADT tuple" do
-      assert {:roll, 60, 100, 4} = @motif.roll(60, 100, 4)
+      assert {:Roll, 60, 100, 4} = @motif.roll(60, 100, 4)
     end
   end
 
@@ -100,10 +93,10 @@ defmodule CureMotifTest do
 
   describe "show_step/1 and show_pattern/1" do
     test "show_step renders one-character glyphs per variant" do
-      assert @motif.show_step(@motif.note(60, 100)) == "N"
-      assert @motif.show_step(@motif.rest()) == "."
-      assert @motif.show_step(@motif.chord(57, 60, 64)) == "C"
-      assert @motif.show_step(@motif.roll(60, 100, 4)) == "R"
+      assert @motif.show_step(@motif.note(60, 100)) == ~c"N"
+      assert @motif.show_step(@motif.rest()) == ~c"."
+      assert @motif.show_step(@motif.chord(57, 60, 64)) == ~c"C"
+      assert @motif.show_step(@motif.roll(60, 100, 4)) == ~c"R"
     end
 
     test "show_pattern concatenates the per-step glyphs in order" do
@@ -115,7 +108,7 @@ defmodule CureMotifTest do
           @motif.rest()
         ])
 
-      assert @motif.show_pattern(p) == "N.C."
+      assert @motif.show_pattern(p) == ~c"N.C."
     end
   end
 
@@ -125,7 +118,7 @@ defmodule CureMotifTest do
     end
 
     test "Note emits a NoteOn followed by a NoteOff" do
-      assert [{:note_on, 60, 100, 0}, {:note_off, 60, 0}] =
+      assert [{:NoteOn, 60, 100, 0}, {:NoteOff, 60, 0}] =
                @motif.step_events(@motif.note(60, 100), 0)
     end
 
@@ -133,20 +126,20 @@ defmodule CureMotifTest do
       events = @motif.step_events(@motif.chord(57, 60, 64), 0)
 
       assert [
-               {:note_on, 57, 96, 0},
-               {:note_on, 60, 96, 0},
-               {:note_on, 64, 96, 0},
-               {:note_off, 57, 0},
-               {:note_off, 60, 0},
-               {:note_off, 64, 0}
+               {:NoteOn, 57, 96, 0},
+               {:NoteOn, 60, 96, 0},
+               {:NoteOn, 64, 96, 0},
+               {:NoteOff, 57, 0},
+               {:NoteOff, 60, 0},
+               {:NoteOff, 64, 0}
              ] = events
     end
 
     test "Roll emits reps pairs of NoteOn/NoteOff" do
       events = @motif.step_events(@motif.roll(60, 90, 3), 0)
       assert length(events) == 6
-      assert Enum.count(events, &match?({:note_on, 60, 90, 0}, &1)) == 3
-      assert Enum.count(events, &match?({:note_off, 60, 0}, &1)) == 3
+      assert Enum.count(events, &match?({:NoteOn, 60, 90, 0}, &1)) == 3
+      assert Enum.count(events, &match?({:NoteOff, 60, 0}, &1)) == 3
     end
 
     test "render/2 brackets every step with a Tick" do
@@ -158,10 +151,10 @@ defmodule CureMotifTest do
         ])
 
       events = @motif.render(p, 0)
-      ticks = Enum.filter(events, &match?({:tick, _}, &1))
+      ticks = Enum.filter(events, &match?({:Tick, _}, &1))
       assert length(ticks) == 3
-      assert Enum.at(ticks, 0) == {:tick, 0}
-      assert Enum.at(ticks, 2) == {:tick, 2}
+      assert Enum.at(ticks, 0) == {:Tick, 0}
+      assert Enum.at(ticks, 2) == {:Tick, 2}
     end
   end
 
@@ -173,14 +166,14 @@ defmodule CureMotifTest do
     end
 
     test "pitch_name/1 follows scientific pitch notation" do
-      assert @motif.pitch_name(60) == "C4"
-      assert @motif.pitch_name(69) == "A4"
-      assert @motif.pitch_name(57) == "A3"
-      assert @motif.pitch_name(72) == "C5"
-      assert @motif.pitch_name(12) == "C0"
-      assert @motif.pitch_name(61) == "C#4"
-      assert @motif.pitch_name(66) == "F#4"
-      assert @motif.pitch_name(71) == "B4"
+      assert @motif.pitch_name(60) == ~c"C4"
+      assert @motif.pitch_name(69) == ~c"A4"
+      assert @motif.pitch_name(57) == ~c"A3"
+      assert @motif.pitch_name(72) == ~c"C5"
+      assert @motif.pitch_name(12) == ~c"C0"
+      assert @motif.pitch_name(61) == ~c"C#4"
+      assert @motif.pitch_name(66) == ~c"F#4"
+      assert @motif.pitch_name(71) == ~c"B4"
     end
   end
 
@@ -194,9 +187,9 @@ defmodule CureMotifTest do
   end
 
   describe "Envelope FSM: initial state and transitions" do
-    test "starts in :silent" do
+    test "starts in Silent" do
       {:ok, pid} = @envelope.start_link(0)
-      assert {:silent, _} = :sys.get_state(pid)
+      assert {:Silent, _} = :sys.get_state(pid)
       :gen_statem.stop(pid)
     end
 
@@ -206,18 +199,17 @@ defmodule CureMotifTest do
       {state, _} = :sys.get_state(pid)
       # The on_timer callback may have advanced :attack -> :sustain
       # already; either outcome is consistent with the FSM graph.
-      assert state in [:attack, :sustain]
+      assert state in [:Attack, :Sustain]
       :gen_statem.stop(pid)
     end
 
     test "note_off moves :sustain -> :release" do
       {:ok, pid} = @envelope.start_link(0)
       drive_envelope(pid, :note_on)
-      # Wait for on_timer to advance Attack -> Sustain.
-      Process.sleep(60)
+      drive_envelope(pid, :on_timer)
       drive_envelope(pid, :note_off)
       {state, _} = :sys.get_state(pid)
-      assert state in [:release, :silent]
+      assert state in [:Release, :Silent]
       :gen_statem.stop(pid)
     end
 
@@ -226,22 +218,18 @@ defmodule CureMotifTest do
       drive_envelope(pid, :note_on)
       drive_envelope(pid, :kill)
       {state, _} = :sys.get_state(pid)
-      assert state == :silent
+      assert state == :Silent
       :gen_statem.stop(pid)
     end
 
-    test "the FSM eventually reaches :silent without any intervention" do
+    test "timer events complete the release cycle back to Silent" do
       {:ok, pid} = @envelope.start_link(0)
       drive_envelope(pid, :note_on)
-      # Attack -> Sustain fires on the first on_timer tick. note_off is
-      # an external event; without it, the FSM stays in :sustain forever
-      # -- exactly the liveness property we verify with Cure.Temporal
-      # below against the graph (not against a live process).
-      Process.sleep(60)
+      drive_envelope(pid, :on_timer)
       drive_envelope(pid, :note_off)
-      Process.sleep(60)
+      drive_envelope(pid, :on_timer)
       {state, _} = :sys.get_state(pid)
-      assert state == :silent
+      assert state == :Silent
       :gen_statem.stop(pid)
     end
   end
@@ -251,19 +239,20 @@ defmodule CureMotifTest do
       table = envelope_transitions()
       assert is_list(table)
 
-      pairs =
-        for {from, event, to, _kind} <- table, do: {from, event, to}
+      pairs = for {:Explicit, from, event, to} <- table, do: {from, event, to}
 
-      assert {:silent, :note_on, :attack} in pairs
-      assert {:attack, :on_timer, :sustain} in pairs
-      assert {:sustain, :note_off, :release} in pairs
-      assert {:release, :on_timer, :silent} in pairs
+      assert {:Silent, :note_on, :Attack} in pairs
+      assert {:Attack, :on_timer, :Sustain} in pairs
+      assert {:Sustain, :note_off, :Release} in pairs
+      assert {:Release, :on_timer, :Silent} in pairs
+      assert {:Wildcard, :kill, :Silent} in table
     end
 
     test "responds?/2 answers correctly" do
-      assert {:silent, :note_on, :attack, _} in envelope_transitions()
-      assert {:sustain, :note_off, :release, _} in envelope_transitions()
-      refute Enum.any?(envelope_transitions(), fn {from, event, _to, _kind} -> from == :silent and event == :peak end)
+      assert @envelope.responds?(:Silent, :note_on)
+      assert @envelope.responds?(:Sustain, :note_off)
+      assert @envelope.responds?(:Attack, :kill)
+      refute @envelope.responds?(:Silent, :on_timer)
     end
   end
 
@@ -331,41 +320,44 @@ defmodule CureMotifTest do
     defp envelope_model do
       states =
         envelope_transitions()
-        |> Enum.flat_map(fn {f, _e, t, _k} -> [f, t] end)
+        |> Enum.flat_map(fn
+          {:Explicit, from, _event, to} -> [from, to]
+          {:Wildcard, _event, to} -> [to]
+        end)
         |> Enum.uniq()
 
       transitions =
         envelope_transitions()
         |> Enum.flat_map(fn
-          {:wildcard, _ev, to, _kind} ->
+          {:Wildcard, _event, to} ->
             for s <- states, do: %{from: to_string(s), to: to_string(to)}
 
-          {from, _ev, to, _kind} ->
+          {:Explicit, from, _event, to} ->
             [%{from: to_string(from), to: to_string(to)}]
         end)
 
-      Checker.from_fsm(transitions, "silent")
+      Checker.from_fsm(transitions, "Silent")
     end
 
     test "always eventually silent holds" do
-      {:ok, f} = Parser.parse_one("always eventually silent")
+      {:ok, f} = Parser.parse_one("always eventually Silent")
       assert {:ok, :holds} = Checker.check(f, envelope_model())
     end
 
     test "Attack eventually reaches Sustain" do
-      {:ok, f} = Parser.parse_one("always (attack -> eventually sustain)")
+      {:ok, f} = Parser.parse_one("always (Attack -> eventually Sustain)")
       assert {:ok, :holds} = Checker.check(f, envelope_model())
     end
 
     test "Release eventually returns to Silent" do
-      {:ok, f} = Parser.parse_one("always (release -> eventually silent)")
+      {:ok, f} = Parser.parse_one("always (Release -> eventually Silent)")
       assert {:ok, :holds} = Checker.check(f, envelope_model())
     end
 
     test "safety property 'never attack' fails with a counterexample trail" do
-      {:ok, f} = Parser.parse_one("never attack")
+      {:ok, f} = Parser.parse_one("never Attack")
       assert {:violation, trail} = Checker.check(f, envelope_model())
-      assert "attack" in trail
+      assert "Attack" in trail
     end
   end
 
@@ -481,7 +473,7 @@ defmodule CureMotifTest do
     end
 
     test "single Note event produces a one-column grid with one X" do
-      events = [{:tick, 0}, {:note_on, 60, 100, 0}, {:note_off, 60, 0}]
+      events = [{:Tick, 0}, {:NoteOn, 60, 100, 0}, {:NoteOff, 60, 0}]
       roll = CureMotif.PianoRoll.render(events)
 
       assert roll =~ "60"

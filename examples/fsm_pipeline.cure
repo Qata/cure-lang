@@ -9,7 +9,7 @@ use Std.Fsm
 type PipelineState = Idle | Running | Finished
 type PipelineEvent = Start | Step | Finish
 
-fsm Cure.Pipeline
+fsm Pipeline
   state Int
   states PipelineState
   initial Idle

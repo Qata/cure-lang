@@ -3,12 +3,12 @@ defmodule CureMonetaTest do
 
   @moduledoc """
   Exercises both the raw `:"Cure.Moneta"` BEAM module (compiled from Cure
-  source), the `:"Cure.Transaction"` state machine, and the high-level
+  source), the `:"Cure.Main.Transaction"` state machine, and the high-level
   `CureMoneta` Elixir wrapper.
   """
 
   @moneta :"Cure.Moneta"
-  @fsm :"Cure.Transaction"
+  @fsm :"Cure.Main.Transaction"
 
   # -- Helpers ----------------------------------------------------------------
 
@@ -50,19 +50,19 @@ defmodule CureMonetaTest do
 
   describe "Cure.Moneta: Show protocol (Money record)" do
     test "EUR renders as major.minor with two decimal places" do
-      assert @moneta.show(eur(10_050)) == "EUR 100.50"
+      assert @moneta.show(eur(10_050)) == ~c"EUR 100.50"
     end
 
     test "JPY renders without decimal point" do
-      assert @moneta.show(jpy(1250)) == "JPY 1250"
+      assert @moneta.show(jpy(1250)) == ~c"JPY 1250"
     end
 
     test "OMR renders with three decimal places" do
-      assert @moneta.show(omr(1_500)) == "OMR 1.500"
+      assert @moneta.show(omr(1_500)) == ~c"OMR 1.500"
     end
 
     test "EUR zero pads the minor part" do
-      assert @moneta.show(eur(500)) == "EUR 5.00"
+      assert @moneta.show(eur(500)) == ~c"EUR 5.00"
     end
   end
 
@@ -70,19 +70,19 @@ defmodule CureMonetaTest do
     # Currency is an Erlang tagged tuple; plain function dispatch avoids the
     # map-based protocol guard that only works for record types.
     test "EUR renders the ISO code" do
-      assert @moneta.show_currency(:EUR) == "EUR"
+      assert @moneta.show_currency(:EUR) == ~c"EUR"
     end
 
     test "OMR renders the ISO code" do
-      assert @moneta.show_currency(:OMR) == "OMR"
+      assert @moneta.show_currency(:OMR) == ~c"OMR"
     end
 
     test "JPY renders the ISO code" do
-      assert @moneta.show_currency(:JPY) == "JPY"
+      assert @moneta.show_currency(:JPY) == ~c"JPY"
     end
 
     test "show/1 on a Money value uses show_currency internally for the currency field" do
-      assert @moneta.show(eur(10_050)) == "EUR 100.50"
+      assert @moneta.show(eur(10_050)) == ~c"EUR 100.50"
     end
   end
 
@@ -108,7 +108,7 @@ defmodule CureMonetaTest do
 
     test "returns error for currency mismatch" do
       assert {:error, msg} = @moneta.add(eur(100), usd(100))
-      assert msg =~ "currency mismatch"
+      assert List.to_string(msg) =~ "currency mismatch"
     end
 
     test "addition is commutative" do
@@ -126,12 +126,12 @@ defmodule CureMonetaTest do
 
     test "returns error for insufficient funds" do
       assert {:error, msg} = @moneta.subtract(eur(100), eur(500))
-      assert msg =~ "insufficient funds"
+      assert List.to_string(msg) =~ "insufficient funds"
     end
 
     test "returns error for currency mismatch" do
       assert {:error, msg} = @moneta.subtract(eur(1000), usd(100))
-      assert msg =~ "currency mismatch"
+      assert List.to_string(msg) =~ "currency mismatch"
     end
 
     test "subtracting zero gives the same amount" do
@@ -201,7 +201,7 @@ defmodule CureMonetaTest do
 
     test "balance returns error for unknown id", %{ledger: l} do
       assert {:error, msg} = @moneta.balance(l, 99)
-      assert msg =~ "account not found"
+      assert List.to_string(msg) =~ "account not found"
     end
 
     test "deposit increases balance", %{ledger: l} do
@@ -212,7 +212,7 @@ defmodule CureMonetaTest do
 
     test "deposit rejects currency mismatch", %{ledger: l} do
       assert {:error, msg} = @moneta.deposit(l, 1, usd(100))
-      assert msg =~ "currency mismatch"
+      assert List.to_string(msg) =~ "currency mismatch"
     end
 
     test "withdraw decreases balance", %{ledger: l} do
@@ -223,7 +223,7 @@ defmodule CureMonetaTest do
 
     test "withdraw rejects insufficient funds", %{ledger: l} do
       assert {:error, msg} = @moneta.withdraw(l, 2, eur(99_999))
-      assert msg =~ "insufficient funds"
+      assert List.to_string(msg) =~ "insufficient funds"
     end
 
     test "transfer moves money between accounts", %{ledger: l} do
@@ -254,61 +254,61 @@ defmodule CureMonetaTest do
   # ===========================================================================
 
   describe "Cure.Transaction: initial state" do
-    test "FSM starts in :idle with payload 0" do
+    test "FSM starts in :Idle with payload 0" do
       {:ok, pid} = @fsm.start_link(0)
-      assert {:idle, 0} = :sys.get_state(pid)
+      assert {:Idle, 0} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
   end
 
   describe "Cure.Transaction: normal lifecycle" do
-    test "create transitions :idle -> :pending" do
+    test "create transitions :Idle -> :Pending" do
       {:ok, pid} = @fsm.start_link(0)
       :gen_statem.cast(pid, :create)
       _ = :sys.get_state(pid)
-      assert {:pending, 0} = :sys.get_state(pid)
+      assert {:Pending, 0} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
-    test "submit from :pending transitions to :submitting then dispatch! auto-fires to :awaiting" do
+    test "submit from :Pending transitions to :submitting then dispatch! auto-fires to :Awaiting" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
-      assert {:awaiting, 0} = :sys.get_state(pid)
+      assert {:Awaiting, 0} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
-    test "confirm from :awaiting transitions to :settled" do
+    test "confirm from :Awaiting transitions to :Settled" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
       :gen_statem.cast(pid, :confirm)
       _ = :sys.get_state(pid)
-      assert {:settled, _} = :sys.get_state(pid)
+      assert {:Settled, _} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
-    test "reject from :awaiting transitions to :failed" do
+    test "reject from :Awaiting transitions to :Failed" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
       :gen_statem.cast(pid, :reject)
       _ = :sys.get_state(pid)
-      assert {:failed, _} = :sys.get_state(pid)
+      assert {:Failed, _} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
   end
 
   describe "Cure.Transaction: soft events" do
-    test "retry? from :failed resets to :pending" do
+    test "retry? from :Failed resets to :Pending" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
       :gen_statem.cast(pid, :reject)
       _ = :sys.get_state(pid)
       :gen_statem.cast(pid, :retry)
       _ = :sys.get_state(pid)
-      assert {:pending, 0} = :sys.get_state(pid)
+      assert {:Pending, 0} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
-    test "retry? from :settled is silently ignored (soft event)" do
+    test "retry? from :Settled is silently ignored (soft event)" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
       :gen_statem.cast(pid, :confirm)
@@ -316,36 +316,36 @@ defmodule CureMonetaTest do
       :gen_statem.cast(pid, :retry)
       _ = :sys.get_state(pid)
       # Still settled -- retry? was a no-op
-      assert {:settled, _} = :sys.get_state(pid)
+      assert {:Settled, _} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
-    test "cancel? from :awaiting transitions to :cancelled" do
+    test "cancel? from :Awaiting transitions to :Cancelled" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
       :gen_statem.cast(pid, :cancel)
       _ = :sys.get_state(pid)
-      assert {:cancelled, _} = :sys.get_state(pid)
+      assert {:Cancelled, _} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
-    test "cancel? is a wildcard -- it cancels even from :settled (no terminal exclusion in this FSM)" do
+    test "cancel? is a wildcard -- it cancels even from :Settled (no terminal exclusion in this FSM)" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
       :gen_statem.cast(pid, :confirm)
       _ = :sys.get_state(pid)
-      # The wildcard `* --cancel?--> Cancelled` fires from every state, including :settled.
+      # The wildcard `* --cancel?--> Cancelled` fires from every state, including :Settled.
       # A soft event only silently fails when NO matching transition exists; the wildcard
       # ensures one always does.
       :gen_statem.cast(pid, :cancel)
       _ = :sys.get_state(pid)
-      assert {:cancelled, _} = :sys.get_state(pid)
+      assert {:Cancelled, _} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
   end
 
   describe "Cure.Transaction: on_timer" do
-    test "timer fires a :reject from :awaiting, moving FSM to :failed" do
+    test "timer fires a :reject from :Awaiting, moving FSM to :Failed" do
       {:ok, pid} = @fsm.start_link(0)
       reach_awaiting(pid)
 
@@ -353,11 +353,11 @@ defmodule CureMonetaTest do
       send(pid, :on_timer)
       _ = :sys.get_state(pid)
 
-      assert {:failed, 0} = :sys.get_state(pid)
+      assert {:Failed, 0} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
 
-    test "timer is a no-op from states other than :awaiting" do
+    test "timer is a no-op from states other than :Awaiting" do
       {:ok, pid} = @fsm.start_link(0)
       :gen_statem.cast(pid, :create)
       _ = :sys.get_state(pid)
@@ -365,8 +365,8 @@ defmodule CureMonetaTest do
       send(pid, :on_timer)
       _ = :sys.get_state(pid)
 
-      # Still :pending -- timer returned :ok (no-op clause)
-      assert {:pending, 0} = :sys.get_state(pid)
+      # Still :Pending -- timer returned :ok (no-op clause)
+      assert {:Pending, 0} = :sys.get_state(pid)
       GenServer.stop(pid)
     end
   end
@@ -381,15 +381,15 @@ defmodule CureMonetaTest do
 
       :gen_statem.cast(pid, :retry)
       _ = :sys.get_state(pid)
-      assert {:pending, 0} = :sys.get_state(pid)
+      assert {:Pending, 0} = :sys.get_state(pid)
 
       :gen_statem.cast(pid, :submit)
       _ = :sys.get_state(pid)
-      assert {:awaiting, 0} = :sys.get_state(pid)
+      assert {:Awaiting, 0} = :sys.get_state(pid)
 
       :gen_statem.cast(pid, :confirm)
       _ = :sys.get_state(pid)
-      assert {:settled, _} = :sys.get_state(pid)
+      assert {:Settled, _} = :sys.get_state(pid)
 
       GenServer.stop(pid)
     end
@@ -486,26 +486,26 @@ defmodule CureMonetaTest do
   end
 
   describe "CureMoneta wrapper: begin_transaction" do
-    test "begins a transaction FSM and drives it to :settled" do
+    test "begins a transaction FSM and drives it to :Settled" do
       {:ok, pid} = CureMoneta.begin_transaction()
       CureMoneta.tx_event(pid, :create)
       CureMoneta.tx_event(pid, :submit)
       _ = :sys.get_state(pid)
-      assert {:awaiting, _} = CureMoneta.tx_state(pid)
+      assert {:Awaiting, _} = CureMoneta.tx_state(pid)
       CureMoneta.tx_event(pid, :confirm)
       _ = :sys.get_state(pid)
-      assert {:settled, _} = CureMoneta.tx_state(pid)
+      assert {:Settled, _} = CureMoneta.tx_state(pid)
       GenServer.stop(pid)
     end
 
-    test "cancel? from :awaiting cancels the transaction" do
+    test "cancel? from :Awaiting cancels the transaction" do
       {:ok, pid} = CureMoneta.begin_transaction()
       CureMoneta.tx_event(pid, :create)
       CureMoneta.tx_event(pid, :submit)
       _ = :sys.get_state(pid)
       CureMoneta.tx_event(pid, :cancel)
       _ = :sys.get_state(pid)
-      assert {:cancelled, _} = CureMoneta.tx_state(pid)
+      assert {:Cancelled, _} = CureMoneta.tx_state(pid)
       GenServer.stop(pid)
     end
 
@@ -515,8 +515,8 @@ defmodule CureMonetaTest do
       assert pid1 != pid2
       CureMoneta.tx_event(pid1, :create)
       _ = :sys.get_state(pid1)
-      assert {:pending, _} = CureMoneta.tx_state(pid1)
-      assert {:idle, _} = CureMoneta.tx_state(pid2)
+      assert {:Pending, _} = CureMoneta.tx_state(pid1)
+      assert {:Idle, _} = CureMoneta.tx_state(pid2)
       GenServer.stop(pid1)
       GenServer.stop(pid2)
     end

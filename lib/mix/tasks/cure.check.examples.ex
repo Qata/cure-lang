@@ -86,6 +86,7 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
     files = Path.wildcard(Path.join(@examples_dir, "*.cure")) |> Enum.sort()
     validate_manifest!(files)
+    reject_emitter_owned_example_names!()
 
     results = Enum.map(files, &run_one/1)
 
@@ -228,6 +229,36 @@ defmodule Mix.Tasks.Cure.Check.Examples do
       end
     else
       :ok
+    end
+  end
+
+  # Lifted-module declarations are source names, not precomputed BEAM names.
+  # A bare name is qualified by its lexical owner (`Main` at top level); an
+  # authored `Cure.*` prefix bakes emitter policy back into the language and
+  # recreates the pre-dependent global-namespace coupling.
+  defp reject_emitter_owned_example_names! do
+    offenders =
+      (Path.wildcard(Path.join(@examples_dir, "**/*.cure")) ++
+         Path.wildcard(Path.join(@examples_dir, "**/*.md")))
+      |> Enum.uniq()
+      |> Enum.flat_map(fn path ->
+        path
+        |> File.stream!()
+        |> Stream.with_index(1)
+        |> Enum.flat_map(fn {line, line_number} ->
+          if Regex.match?(~r/^\s*(actor|fsm|sup|app|behavior)\s+Cure\./, line),
+            do: ["#{path}:#{line_number}"],
+            else: []
+        end)
+      end)
+
+    if offenders == [] do
+      :ok
+    else
+      usage_error(
+        "Example declarations must use source-level names; remove authored Cure.* prefixes at " <>
+          Enum.join(offenders, ", ")
+      )
     end
   end
 

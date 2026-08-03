@@ -21,11 +21,11 @@ defmodule CureForgeTest do
       assert {:ok, _} = Application.ensure_all_started(:cure_forge)
     end
 
-    test "Cure.CureForge is loaded and exposes the Application callbacks" do
-      assert Code.ensure_loaded?(:"Cure.CureForge")
+    test "Cure.Main.CureForge is loaded and exposes the Application callbacks" do
+      assert Code.ensure_loaded?(:"Cure.Main.CureForge")
 
       for callback <- [:start, :stop, :start_phase] do
-        assert function_exported?(:"Cure.CureForge", callback, callback_arity(callback))
+        assert function_exported?(:"Cure.Main.CureForge", callback, callback_arity(callback))
       end
     end
 

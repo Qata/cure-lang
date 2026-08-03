@@ -89,6 +89,13 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
     assert request.behaviour == :custom_behavior
   end
 
+  test "compilation reports an invalid lifted module name before codegen" do
+    source = "lift module Elixir.Bad\n  behaviour custom_behavior\n"
+
+    assert {:error, {:invalid_module_name, "Elixir.Bad"}} =
+             Cure.Compiler.compile_string(source, emit_events: false)
+  end
+
   test "computed syntax may provide a reflected atom module name" do
     ast = {:lift_module, [module: :"Cure.Generated.Atom", behaviour: :custom_behavior], []}
 

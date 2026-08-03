@@ -146,9 +146,11 @@ defmodule Cure.MCP.McpTest do
       assert resp =~ "fsm"
     end
 
-    test "returns help for protocols" do
-      resp = call_tool("get_syntax_help", %{"topic" => "protocols"})
-      assert resp =~ "proto"
+    test "returns help for interfaces using canonical syntax" do
+      resp = call_tool("get_syntax_help", %{"topic" => "interfaces"})
+      assert resp =~ "interface Show(t)"
+      assert resp =~ "implementation Show for Int"
+      refute resp =~ "proto Show"
     end
 
     test "unknown topic lists available topics" do

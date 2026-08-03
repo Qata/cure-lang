@@ -631,10 +631,12 @@ defmodule Cure.Project do
     mod = String.capitalize(name)
 
     File.write!(Path.join([name, "lib", "fsm.cure"]), """
-    mod #{mod}.Fsm
+    mod #{mod}
 
-    fsm Cure.#{mod}.Fsm state Atom handle_event
-      :keep_state_and_data
+      fsm Fsm
+        state Atom
+        events
+          Tick -> :keep_state_and_data
     """)
   end
 

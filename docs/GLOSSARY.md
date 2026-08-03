@@ -957,23 +957,25 @@ fsm Turnstile with Int
 **actor** — A standard-library macro (from `Std.Actor`) that expands to a generic
 lifted module with checked `gen_server` callbacks and a typed message surface.
 
-```
+```cure
+use Std.Actor
+
 actor Store
   state Int
   initial 0
-  on_call value() returns Int
+  on_call Value() returns Int
     reply state
 ```
 
-> The actor fence above is shown unchecked: the emitter does not currently emit
-> `handle_call/3` outside the `on_message`/`on_cast` paths, so every such module
-> draws `undefined callback function handle_call/3`. See
-> [`SUPERVISION.md`](SUPERVISION.md) for the full note.
+Cast-only actors receive a total default `handle_call/3` floor that replies
+with `Unit` and preserves their state; query-bearing actors derive typed call
+branches from their `on_call` declarations.
 
 **supervisor** — A standard-library macro (from `Std.Supervisor`) that expands to a
 generic lifted module whose checked `init/1` returns ordinary BEAM child
 specifications. Both macros name a lifted module, so the name must be
-`Cure.`-prefixed.
+relative to the declaration's lexical module; source does not spell the
+BEAM-only `Cure.` prefix.
 
 ```cure
 use Std.Supervisor

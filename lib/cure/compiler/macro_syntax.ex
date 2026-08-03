@@ -157,6 +157,95 @@ defmodule Cure.Compiler.MacroSyntax do
   def to_runtime({:syn_quoted, inner}), do: {:Quoted, to_runtime(inner)}
   def to_runtime({:syn_failure, name, args}), do: {:Failure, name, Enum.map(args, &to_runtime/1)}
 
+  @doc "Encode a structured macro input as the erased arguments of its compiled expander."
+  @spec to_runtime_direct_inputs(repr(), [String.t()], map()) :: [term()]
+  def to_runtime_direct_inputs({:syn_node, _tag, _attrs, kids}, fields, field_types) do
+    fields
+    |> Enum.zip(kids)
+    |> Enum.map(fn {field, kid} -> runtime_record_field(kid, Map.get(field_types, field), [], field) end)
+  end
+
+  def to_runtime_direct_inputs(repr, _fields, _field_types), do: [to_runtime(repr)]
+
+  defp runtime_record_field(kid, {:optional, inner}, repeated, field) do
+    case kid do
+      {:syn_leaf, :option_none, _attrs, :s_opaque} -> :none
+      {:syn_node, :option_some, _attrs, [value]} -> {:some, runtime_record_field(value, inner, repeated, field)}
+      value -> {:some, runtime_record_field(value, inner, repeated, field)}
+    end
+  end
+
+  defp runtime_record_field(kid, {:record, nested_name, nested_fields}, repeated, field) do
+    encode = fn item -> runtime_nested_record(item, nested_name, nested_fields) end
+
+    if field in repeated,
+      do: kid |> nested_record_items() |> Enum.map(encode),
+      else: encode.(kid)
+  end
+
+  defp runtime_record_field(kid, {:primitive, shape}, repeated, field) do
+    if field in repeated do
+      kid
+      |> runtime_syntax_items()
+      |> Enum.map(&runtime_primitive(&1, shape))
+    else
+      runtime_primitive(kid, shape)
+    end
+  end
+
+  defp runtime_record_field(kid, :syntax_list, _repeated, _field),
+    do: kid |> runtime_syntax_items() |> Enum.map(&to_runtime/1)
+
+  defp runtime_record_field(kid, _type, repeated, field) do
+    if field in repeated,
+      do: kid |> runtime_syntax_items() |> Enum.map(&to_runtime/1),
+      else: to_runtime(kid)
+  end
+
+  defp runtime_nested_record({:syn_node, _tag, _attrs, kids}, name, fields) do
+    repeated =
+      fields
+      |> Enum.filter(&(Map.get(&1, :cardinality) in [:repeated, :one_or_more]))
+      |> Enum.map(& &1.name)
+
+    field_types = family_field_types(fields)
+
+    args =
+      fields
+      |> Enum.zip(kids)
+      |> Enum.map(fn {field, kid} ->
+        runtime_record_field(kid, Map.get(field_types, field.name), repeated, field.name)
+      end)
+
+    List.to_tuple([runtime_constructor_name(name) | args])
+  end
+
+  defp runtime_nested_record(repr, _name, _fields), do: to_runtime(repr)
+
+  defp runtime_constructor_name(name) do
+    name
+    |> Cure.Elab.Name.base()
+    |> String.to_atom()
+  end
+
+  defp runtime_syntax_items({:syn_raw, {:s_list, [{:s_list, items}]}}),
+    do: Enum.map(items, &nested_record_item/1)
+
+  defp runtime_syntax_items({:syn_raw, {:s_list, items}}),
+    do: Enum.map(items, &nested_record_item/1)
+
+  defp runtime_syntax_items(item), do: [item]
+
+  defp runtime_primitive({:syn_leaf, :literal, _attrs, {:s_int, value}}, "Int"), do: value
+  defp runtime_primitive({:syn_raw, {:s_int, value}}, "Int"), do: value
+  defp runtime_primitive({:syn_leaf, :literal, _attrs, {:s_float, value}}, "Float"), do: value
+  defp runtime_primitive({:syn_raw, {:s_float, value}}, "Float"), do: value
+  defp runtime_primitive({:syn_leaf, :literal, _attrs, {:s_atom, value}}, "Atom"), do: value
+  defp runtime_primitive({:syn_raw, {:s_atom, value}}, "Atom"), do: value
+  defp runtime_primitive({:syn_leaf, :literal, _attrs, {:s_bool, value}}, "Bool"), do: value
+  defp runtime_primitive({:syn_raw, {:s_bool, value}}, "Bool"), do: value
+  defp runtime_primitive(repr, _shape), do: to_runtime(repr)
+
   defp runtime_attrs(attrs), do: Enum.map(attrs, fn {key, value} -> {:KV, key, synlit_to_runtime(value)} end)
 
   defp synlit_to_runtime({:s_int, value}), do: {:SInt, value}

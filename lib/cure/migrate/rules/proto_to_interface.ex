@@ -74,7 +74,7 @@ defmodule Cure.Migrate.Rules.ProtoToInterface do
           name: Keyword.fetch!(meta, :name),
           params: Keyword.get(meta, :type_params, []),
           defaults: interface_defaults(new_body),
-          line: Keyword.get(meta, :line),
+          line: Rule.source_line(meta),
           col: Keyword.get(meta, :col)
         ]
 
@@ -82,7 +82,7 @@ defmodule Cure.Migrate.Rules.ProtoToInterface do
         # the new node (`Trivia.carry/2`, the helper for restructuring rules);
         # body-node trivia rides along inside `new_body`.
         new_node = Trivia.carry({:container, meta, body}, {:interface, new_meta, new_body})
-        {new_node, [Keyword.get(meta, :line) | lines]}
+        {new_node, [Rule.source_span(meta, :opener) || Rule.source_line(meta) | lines]}
 
       :trait ->
         {new_body, lines} = walk(body, lines)
@@ -93,7 +93,7 @@ defmodule Cure.Migrate.Rules.ProtoToInterface do
             for: Keyword.fetch!(meta, :for),
             for_type: Keyword.fetch!(meta, :for_type),
             as: nil,
-            line: Keyword.get(meta, :line),
+            line: Rule.source_line(meta),
             col: Keyword.get(meta, :col)
           ]
           |> maybe_put(:constraints, Keyword.get(meta, :constraints))
@@ -101,7 +101,7 @@ defmodule Cure.Migrate.Rules.ProtoToInterface do
         new_node =
           Trivia.carry({:container, meta, body}, {:implementation, new_meta, new_body})
 
-        {new_node, [Keyword.get(meta, :line) | lines]}
+        {new_node, [Rule.source_span(meta, :opener) || Rule.source_line(meta) | lines]}
 
       _ ->
         {new_body, lines} = walk(body, lines)

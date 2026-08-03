@@ -15,30 +15,21 @@ before the tag, because it cannot land after one without a 0.35.
 
 ## 1. Surface changes that must land pre-tag
 
-- [ ] **Rename the anonymous hole `??` → `?_`.** (breaking)
-  - Lexer: `lib/cure/compiler/lexer.ex:734` (`lex_hole/1`). Today the `""`-name
-    branch consumes a run of `?` and yields a hole named `"?"`. Note that `?_`
-    *already* lexes as a hole named `_`, because `_` is an identifier byte in
-    the name-consuming branch — so the new spelling parses before the change,
-    which makes this a soft migration rather than a flag day.
-  - Decide whether `??` becomes an error or a deprecation warning for one
-    release. If deprecated, it needs a `Cure.Migrate` rule so
-    `cure migrate --check` catches it.
-  - Check the interaction with the predicate-name suffix (`is_empty?`,
-    `lexer.ex:816`): the "trailing `?` only when the next byte can't start an
-    identifier" rule is what keeps `is_empty?foo` from splitting. Confirm `?_`
-    doesn't open a new ambiguity there, and add a lexer regression either way.
-  - Docs to update: `LANGUAGE_SPEC.md:307`, `PROOFS.md:63`,
-    `DEPENDENT_TYPES.md:109`, `TYPE_SYSTEM.md`. ~32 `??` occurrences across
-    docs, `lib/`, and `test/`.
-  - Confirm the auto-lemma demo spelling in
-    `superpowers/specs/kernel/2026-07-18-auto-lemma-proof-search-design.md`,
-    which writes a bare `?` for a proof-search hole — decide whether bare `?`
-    stays valid alongside `?_`.
+- [x] **Rename the anonymous hole `??` → `?_`.** (breaking)
+  `?_` is now the sole authored anonymous spelling. Exact `??` produces the
+  targeted “Anonymous hole spelling changed” diagnostic with a `?_` repair;
+  bare `?` remains valid and compiler-generated `???` placeholders retain their
+  existing token and span behaviour. Lexer regressions cover `?_`, `??`, `???`,
+  and predicate identifiers ending in `?`. Current language/type/proof docs,
+  the holes demo, printer, doctor, registry, and the retained holes utility use
+  the new spelling.
 
-- [ ] Sweep for any other locked-surface spellings still in flux, so the whole
-      breaking set lands in one tag. *(Fill in — I only verified the hole
-      rename.)*
+- [x] Sweep for any other locked-surface spellings still in flux, so the whole
+      breaking set lands in one tag. Current website pages, Vim/Neovim syntax
+      and examples, the VS Code README, and Highlight.js source/distribution
+      now teach `?_`; no live actor/FSM/supervisor/application example authors
+      a BEAM-only `Cure.` module prefix. Historical release/design archives keep
+      their original spellings intentionally.
 
 ---
 
@@ -75,8 +66,8 @@ before the tag, because it cannot land after one without a 0.35.
         examples are optional. This is the doc's main narrative and it is not
         stated in any one spec.
 
-- [ ] **Expand `docs/PROOFS.md` to cover the new proof vocabulary.** It is 96
-      lines and mentions the new constructs only in a five-bullet summary, while
+- [x] **Expand `docs/PROOFS.md` to cover the new proof vocabulary.** It now
+      gives worked authoring guidance for the implemented constructs, while
       the authoritative design
       (`superpowers/specs/2026-07-21-proof-language-ergonomics-design.md`) is 786
       lines and marked *implemented*. Each of the ten features needs a worked,
@@ -90,11 +81,11 @@ before the tag, because it cannot land after one without a 0.35.
       Best existing exemplar to lift from:
       `lib/std/proof_linear_arithmetic_semantics.cure:45-150`.
 
-- [ ] Document the proof diagnostics **E109–E114** and **E115** (named
+- [x] Document the proof diagnostics **E109–E114** and **E115** (named
       arguments) at the same level as the rest of the catalog — the design gates
       each feature on its diagnostics, so the docs should show them.
 
-- [ ] Reconcile `docs/PROOFS.md` "Proof authoring surface" with
+- [x] Reconcile `docs/PROOFS.md` "Proof authoring surface" with
       `LANGUAGE_SPEC.md` §"Proof authoring" so the two don't drift.
 
 - [ ] Finalise `CHANGELOG.md`: promote `[Unreleased]` to `[0.34.0]` with a date,
@@ -115,14 +106,19 @@ before the tag, because it cannot land after one without a 0.35.
       `components/layouts.ex`. *(Fill in the remaining scope — I couldn't infer
       what "done" means for the redesign from the repo alone.)*
 
-- [ ] Make sure the source-driven stdlib docs pipeline covers the 0.34 surface.
+- [x] Make sure the source-driven stdlib docs pipeline covers the 0.34 surface.
       `stdlib_controller.ex` renders from `lib/std/*.cure` docstrings, and
       `test/cure/doc/stdlib_source_docs_test.exs` gates it — verify the new
       proof modules (`Std.Proof.LinearArithmetic`, `Std.Decision`,
-      `Std.Equivalent`) render correctly.
+      `Std.Equivalent`) render correctly. The renderer test now asserts all
+      three generated pages and their source-owned module documentation.
 
-- [ ] Landing page should reflect 0.34's actual pitch (one dependent pipeline,
-      Idris parity) rather than the 0.33 framing.
+- [x] Landing page reflects 0.34's actual pitch: one dependent pipeline from
+      elaboration through independent kernel checking and quantitative erasure
+      to BEAM emission, with indexed types and OTP on the same surface. The
+      machine-facing `llms.txt` summary was updated from the retired
+      refinement/Z3 framing at the same time and links the macro and proof
+      references directly.
 
 - [ ] Check `llms_controller.ex` / `sitemap_controller.ex` output includes the
       new docs (`MACROS.md`, expanded `PROOFS.md`) once written.
@@ -131,7 +127,7 @@ before the tag, because it cannot land after one without a 0.35.
 
 ## 4. Known bugs blocking advertised features
 
-- [ ] **Generated defining equations crash the compiler when applied (E101).**
+- [x] **Generated defining equations can be applied at their friendly names.**
       `f.Ctor` resolves and reports a correct Pi type, but applying it panics.
       Minimal reproduction:
 
@@ -146,35 +142,35 @@ before the tag, because it cannot land after one without a 0.35.
       end
       ```
 
-      → `INTERNAL COMPILER ERROR [E101]`, fingerprint `b0471f7fba6c`. A nested
-      case (`isbst.Node(l, v, r)` over a recursive tree predicate) gives
-      fingerprint `1426dd796cde`. This is item §4.8 of the proof-ergonomics
-      design and acceptance criterion 5, so it can't ship broken — either fix it
-      or drop the claim from the release notes.
+      The parser's flattened `add3.S3(...)` call now resolves to the certified
+      theorem, reconstructs the scrutinised `S3(k)` argument, and supplies the
+      complete theorem telescope. Reachable equations enter the emission
+      closure; unused equations remain compile-time-only. The reproducer is
+      covered through actual BEAM compilation in `defining_equation_test.exs`.
 
-- [ ] Audit the rest of the proof-ergonomics acceptance criteria (§11 of the
-      design, 12 items) against reality — the `f.Ctor` breakage suggests the
-      "implemented" status wasn't re-verified end-to-end after later merges.
+- [x] Re-audit the proof-ergonomics acceptance criteria (§11 of the design, 12
+      items). The implementation ledger records criterion-by-criterion parser,
+      printer, elaborator, kernel, erasure, diagnostic/LSP, restored affine-LIA,
+      and Cure/Idris evidence. The post-dependent-core release gate re-ran the
+      complete suite (6,178 tests, 0 failures, 6 excluded), canonical stdlib,
+      documentation (332/332), and Antigen (318/318); the repaired friendly
+      defining-equation application has its own real-BEAM regression.
 
-- [ ] **A bad `lift_module` name surfaces as E101 at `compile`, and `check`
-      passes.** `lift_module.ex:395` requires
-      `^Cure\.[A-Z][A-Za-z0-9_]*(\.[A-Z][A-Za-z0-9_]*)*$`. A macro that lifts
-      `Books` or `Demo.Books` instead reaches codegen and dies as
-      `CODE GENERATION FAILED [E101] … invalid_module_name` — fingerprints
-      `9da0ba28c6fe` and `625ce9c9d39b`. By E101's own catalog rule ("ordinary
-      source errors must never use E101") this is a defect twice over: it is a
-      name-convention violation with a knowable fix, and `cure check` reports
-      OK on the same file. It needs a real diagnostic, raised at check time,
-      naming the required prefix. Found while writing `docs/MACROS.md`; recorded
-      there as a sharp edge (§13) so users aren't stranded meanwhile.
+- [x] **Bad `lift_module` names are ordinary validation errors, never E101.**
+      Authored `Books`/`Demo.Books` captures are qualified under their defining
+      module by the parser. A computed macro that manufactures an invalid name
+      is now rejected immediately after declaration expansion: `compile` returns
+      `invalid_module_name` before entering codegen, and `check` runs the same
+      lifted-request validation before printing OK. Compiler and CLI regressions
+      cover both public paths.
 
-- [ ] **`<fresh …>` in a lambda parameter position crashes the parser.**
-      A `becomes` template of the form `(fn(<fresh tmp>) -> <fresh tmp>)(n)`
-      raises an uncaught `CaseClauseError` in
-      `Cure.Compiler.Parser.parse_explicit_param/1` (`parser.ex:8703`) — a raw
-      Elixir exception, not a diagnostic. Either support the position or reject
-      it with a proper error; a crash in the documented hygiene escape hatch is
-      a bad look for a flagship feature.
+- [x] **`<fresh …>` works in lambda parameter position.**
+      `parse_explicit_param/2` now consumes the complete marker as a binder,
+      preserves its source span and explicit-fresh metadata, and the scoped
+      hygiene pass gives the parameter and matching body references the same
+      gensym. `macro_hygiene_test.exs` covers the original
+      `(fn(<fresh tmp>) -> <fresh tmp>)(n)` reproducer end to end through macro
+      parsing and expansion.
 
 - [x] **`cure.check.docs`'s own tests never ran — the fixture had no artifact
       set.** Fixed. The fixture in `test/mix/tasks/cure.check.docs_test.exs` is
@@ -192,15 +188,12 @@ before the tag, because it cannot land after one without a 0.35.
       are tracked — `git checkout HEAD -- lib/cure/compiler/artifacts.ex
       lib/cure/compiler/artifacts/` restores them.)
 
-- [ ] **The repository-wide doc gate has a large backlog.** With the gate
-      actually running, `mix cure.check.docs` reports **256 passed, 205 failed**
-      across the tree. `docs/MACROS.md` and `docs/PROOFS.md` are clean; the
-      failures are older documents — `docs/LANGUAGE_SPEC.md` (36),
-      `site/priv/pages/language-guide.md` (31),
-      `site/priv/pages/finite-state-machines.md` (24) and `docs/GLOSSARY.md`
-      (19) are the worst — carrying pre-`0.34` syntax. Each one is either a
-      snippet to fix or a sketch to re-fence as ` ```text `; deciding which,
-      per fence, is the work. Triage before the gate can be made blocking.
+- [x] **The repository-wide documentation gate is green.** All historical
+      backlog was ported or correctly classified, and `mix cure.check.docs`
+      now reports **332 passed, 0 failed**. The final failures exposed and fixed
+      general compiler/macro gaps rather than being hidden: let-bound tuple
+      matrices used by generated FSMs, lexical lifted-module resolution, and a
+      complete `handle_call/3` callback floor for cast-only actors.
 
 ---
 
@@ -230,59 +223,65 @@ at /path/to/probe.cure:41:17
    >                 ^^^^^^^^^^^^^^^^ this evidence proves a different proposition
 ```
 
-- [ ] **Give warnings a primary `Label` with a real `Span`.** This is the
-      actual blocker, and it is upstream of the renderer.
+- [x] **Give warnings a primary `Label` with a real `Span`.** This was the
+      actual blocker upstream of the renderer.
       `Cure.Diagnostic.Renderer.evidence_doc/3` already draws the snippet for
       *any* diagnostic that has both a `%SourceRegistry{}` and a `primary`
-      `%Label{span: %Span{}}`; with no primary label it silently falls back to
-      `location_doc/2`. But `Adapter.Operational.migration_warning/1`
-      (`lib/cure/diagnostic/adapter/operational.ex:163`) builds its diagnostic
-      with **no primary label at all** — just `payload: %{rule:, file:, line:,
-      source_location: :line}`. So warnings can never draw carets, regardless of
-      renderer changes. (`source_location: :line` is dead weight: that key is
-      written in this one place and read nowhere in the codebase.)
+      `%Label{span: %Span{}}`. Migration producers now recover source lines from
+      canonical `SourceInfo`, the compiler resolves those lines against its
+      registered source buffer, and W001 carries a primary label through plain,
+      ANSI, JSON, and LSP renderers.
 
-- [ ] **Widen the migrate-rule contract from lines to spans.** The reason
-      `migration_warning/1` only has a line is that
-      `Cure.Migrate.Rule.detect_and_rewrite` returns `{:rewrite, new_ast}`,
-      `{:rewrite, new_ast, lines}`, or `{:warn, lines}` — line numbers only,
-      never columns or ranges. Getting carets means threading spans through that
-      return shape and updating all six rules in `lib/cure/migrate/rules/`
-      (`uppercase_type_var`, `if_elif_to_pickup`, `proto_to_interface`,
-      `module_rename`, `removed_module`, `group_hoist`). This is the bulk of the
-      work; the rendering side is close to free once spans exist.
+- [x] **Widen the migrate-rule contract from lines to spans.**
+      `Cure.Migrate.Rule.warning_loc` now accepts authored `%Span{}` locations,
+      `Cure.Migrate.Warning` carries the span while retaining its derived `line`
+      compatibility field, and the compiler consumes the producer's span
+      directly. All six rules point at the token they diagnose: the uppercase
+      binder, `if`, `proto`/`impl`, module name or qualified callee, removed
+      reference, and `group` decorator name. Standalone decorators now retain
+      canonical `SourceInfo` so the group rule does not have to reconstruct a
+      range. The complete migration plus parser suite covers the contract
+      (146 tests, 0 failures).
 
-- [ ] **Show the post-migration preview.** Cheaper than it looks: in
-      warn-and-tolerate mode `cure build` *already computes* the rewritten AST
-      (`{:rewrite, new_ast, …}`) and then discards it. Feed that through the
-      canonical printer already backing `cure fmt` / `cure migrate --print` and
-      attach it as a `Suggestion`/`TextEdit` — both structs already exist in the
-      diagnostic and already flow through the terminal, JSON, and LSP
-      projections, so a preview also becomes an LSP code action for free.
+- [x] **Show the post-migration preview.** Migration warnings now carry the
+      canonical printed proposal produced by the rule's rewritten AST. The
+      compiler turns it into a whole-file structured `TextEdit`, so the existing
+      terminal, JSON, and LSP projections expose the same proposal (including an
+      LSP code action). Preview generation uses a trivia-attached diagnostic copy
+      of the compile AST; comments are therefore retained even though the AST
+      used for code generation deliberately omits trivia.
 
-- [ ] **Respect `tier` in how the preview is worded.** `Rule.tier` is the
-      warn/rewrite/normalize authority and must not be flattened:
+- [x] **Respect `tier` in how the preview is worded.** `Rule.tier` is the
+      warn/rewrite/normalize authority and is no longer flattened:
       `:machine` is certified semantics-preserving (safe to phrase as "will
       become" and to offer as an auto-fix); `:review` warns only and must not be
       auto-normalized by `cure build` (phrase as advisory); `:manual` has no
-      auto-migration at all, so it must say the port is by hand rather than show
-      a fake preview.
+      auto-migration at all. Warnings now retain the tier: machine proposals are
+      `:machine_applicable`, review proposals are `:maybe_incorrect` and worded
+      as review-required, and manual warnings have a manual hint with no edit or
+      fake preview. Tier and comment-preservation regressions are covered by the
+      migration tier suite and the public compiler diagnostic path.
 
-- [ ] **Cover the whole warning family, not just W001.** `W000`
-      (`compiler_warning`) has the same file/line-without-span shape, and `W002`
-      (`configuration_warning`) / `W003` (`destructive_format_warning`) carry no
-      location whatsoever. Decide per code whether a span is meaningful —
-      `W002` is config-level and may legitimately have none — rather than
-      forcing a span everywhere.
+- [x] **Cover the whole warning family, not just W001.** `W000`
+      (`compiler_warning`) resolves its authored line to a primary range in the
+      host adapter and is covered in terminal, JSON, and LSP projections. W001
+      now uses exact producer spans. W002 is process/configuration-level and W003
+      is an explicit whole-operation confirmation; neither has an authored
+      source token, so both intentionally remain global diagnostics rather than
+      carrying fabricated locations.
 
-- [ ] Add terminal (plain + ANSI), JSON, and LSP snapshots for warnings at the
+- [x] Add terminal (plain + ANSI), JSON, and LSP snapshots for warnings at the
       catalog widths, matching what §7 of the proof-ergonomics design already
-      requires of errors. Warnings currently have no such fixtures.
+      requires of errors. `warning_snapshot_test.exs` pins W000/W001 with exact
+      source-bearing terminal output and machine ranges, and W002/W003 as
+      deliberately global diagnostics with no invented LSP range.
 
-- [ ] Fix the emission point that interleaves W001 with Mix's progress output
-      (`uppercase type variable will be lowercased` printed mid-build, directly
-      above `74 compiled, 0 up-to-date, 0 removed`) — warnings should flush as
-      whole blocks like errors do.
+- [x] Fix the emission point that interleaves W001 with Mix's progress output.
+      Compiler entrypoints now accept an optional migration-diagnostic collector;
+      the default still renders immediately, while the incremental stdlib driver
+      collects complete diagnostics with their source registries and flushes them
+      after module progress. A public compiler-path regression proves collection
+      leaves stderr empty and preserves source evidence for later rendering.
 
 ---
 
@@ -293,86 +292,53 @@ is fine (`1 + 1` → `2`, `type Nat3 = ...` → `defined type Nat3`), but **no
 multi-line definition survives the input loop**, which means none of the new
 proof vocabulary is reachable from the REPL at all.
 
-- [ ] **Teach `incomplete?/2` about indentation-structured blocks.** This is the
-      blocker everything else in this section sits behind.
-      `Cure.Repl.classify_input/1` (`lib/cure/repl.ex:1491`) only continues when
-      a line *ends with* `do -> = | then else , (`, and
-      `lone_opening_keyword?/1` (`:1513`) only fires for a line that is exactly
-      one word from `@opening_keywords` (`:1511` — `match if case cond try fn do
-      let mod rec type proto impl proof actor fsm`). The two AST-based
-      fallbacks don't save it: `parse_indicates_continuation?/1` needs an
-      EOF/dedent-rooted parse error, and `ast_is_open_block?/1` only recognises
-      a *top-level* stub like a bare `match` with no arms. So this submits early:
-
-      ```
-      cure(1)> fn add3(x: Nat3, y: Nat3) -> Nat3 = match x
-      -- PATTERN MATCH IS MISSING `Z3` [E118] --
-      cure(2)>   Z3()  -> y
-      -- I GOT STUCK WHILE PARSING THIS [E094] --
-      ```
-
-      The buffer `fn ... = match x` parses as a *complete* function, so the
-      indented arms that follow are each submitted as their own top-level input.
-      `;;` doesn't help — the buffer is already gone by the time you type it.
-      The fix is a real indentation check (a line indented deeper than the
-      submission's first line continues it), not more suffix cases.
-- [ ] **Blank lines must not force-submit inside a block.** `proof chain`
+- [x] **Teach `incomplete?/2` about indentation-structured blocks.** This is the
+      blocker everything else in this section sat behind. Fixed with recursive
+      open-AST detection plus indentation-aware buffering. The REPL suite now
+      installs a real multi-clause function entered line by line.
+- [x] **Blank lines must not force-submit inside a block.** `proof chain`
       separates its steps with blank lines (see
-      `lib/std/proof_linear_arithmetic_semantics.cure:45-150`), but the REPL
-      treats a blank line as an unconditional submit — the documented behaviour
-      in `docs/REPL.md:74`. Under the current rules a chain can never be typed
-      in. Blank lines should only submit when the buffer is at indent level 0.
-- [ ] **Add the new proof keywords as continuation cues** once the indentation
+      `lib/std/proof_linear_arithmetic_semantics.cure:45-150`). Blank lines are
+      now retained while an indented block is open; `;;` explicitly submits it.
+- [x] **Add the new proof keywords as continuation cues** once the indentation
       rule is in: `induction`, `have`, `because`, `rewrite`, `simplify`, and the
-      two-word `proof chain` (`lone_opening_keyword?/1` requires a *single*
-      token, so `proof chain` doesn't match today even though `proof` alone
-      does). `case C(field, ih) =>` arms need the same treatment `->` arms get.
-- [ ] **Make `:holes` actually work — it is currently dead code.**
-      `state.holes` is initialised to `[]` at `lib/cure/repl.ex:55` and `:742`
-      and **never assigned anywhere**, so `:holes` always prints
-      `(no holes recorded)` (`:760-766`). The data it wants already exists:
-      `Cure.Elab.Program.hole_goals/1` (`lib/cure/elab/program.ex:1862`) returns
-      `[%{function:, goal:, context:}]`, exactly the `{label, goal, ctx}` shape
-      the renderer expects. Two things to bridge: the REPL compiles with
-      `emit_events: false` (`:663`, `:780`, `:856`, `:1222`), and nothing
-      threads the elaborated env back out of `compile_and_load/2`.
-      A hole in a REPL expression currently reports `E014 HOLE NEEDS A TYPE
-      ANNOTATION` because the synthesized wrapper is `fn main() =` with no
-      declared result type — consider giving the wrapper an inferred or
-      `Any` return so `??` reports a goal instead of an error. Interacts with
-      the `?_` rename in §1.
-- [ ] **REPL diagnostics quote an empty line and point the caret at nothing.**
-      Every error above rendered as `at nofile:3:7` / `3 | ` with a bare caret —
-      the span is in the *synthesized wrapper module* (`mod Repl.M<n>` built in
-      `evaluate/2`, `:657-661`), and the REPL registers no `%SourceRegistry{}`
-      for it, so `Renderer.evidence_doc/3` has coordinates but no text. Register
-      the wrapper source and offset spans back to the user's input line/column,
-      or the carets work from §5 will land in the REPL as blank output.
-- [ ] **Check session-def inlining survives proof definitions.**
-      `inline_session_defs/2` (`:686`) re-emits every prior definition as an
-      indented local function of each new eval module, with the comment at
-      `:648-654` explaining that cross-module `use` can't recover function
-      *types* from a loaded BEAM. Confirm this still holds for `@lemma`-decorated
-      theorems (does the lemma registry survive re-inlining, and does it
-      register N times after N inputs?), for `@erased`/`@linear`/`@affine`
-      decorators, and for generated defining equations (`f.Ctor`) — which
-      currently crash the compiler outright, see §4.
+      two-word `proof chain`. `case C(field, ih) =>` is covered as well.
+- [x] **Make `:holes` actually work.**
+      Session definitions are elaborated before emission and retain the typed
+      `%{function:, goal:, context:}` reports from `Program.hole_goals/1`.
+      Replacing the incomplete definition clears the retained goals.
+- [x] **REPL diagnostics retain source evidence.** Expression evaluation now
+      gives each synthesized module a stable `repl/Repl.M<n>.cure` identity and
+      passes that exact wrapper source to the diagnostic registry on failure.
+      The terminal renderer therefore prints the failing input and caret rather
+      than an empty numbered line; an eval-path regression asserts this.
+- [x] **Session-def inlining survives proof definitions and defining equations.**
+      A REPL regression installs a recursive ADT function, then an
+      `@lemma`-decorated theorem whose body is its generated `f.Ctor` equation,
+      and finally evaluates the function through the next synthesized module.
+      This also exposed and fixed multi-declaration submissions: each entry now
+      slices its own parser span instead of storing/re-emitting the entire input
+      once per sibling declaration.
 - [ ] **Version banner.** The REPL prints `Cure REPL v0.33.1`; covered by the
       `mix.exs` bump in §7 but worth confirming it reads the bumped version.
-- [ ] **First launch pays a silent multi-minute stdlib build.** A cold
+- [x] **First launch pays a silent multi-minute stdlib build.** A cold
       `mix cure.repl` took ~6 minutes here (74-module stdlib compile + 7.5 MB
-      escript) behind a single `Compiling Cure standard library (74 modules)`
-      line, and emits the §5 `W001` warning mid-build. Warm launch is ~9 s.
-      Either show progress or pre-build in the release artifact.
-- [ ] **Add eval-path test coverage.** `test/cure/repl/` has eleven files
-      (completer, config, docs, highlight, history, line_editor, markdown,
-      options, render, session, terminal) and **none** covers `incomplete?/2`
-      against real multi-line source or the evaluate/compile path. Add cases
-      for a multi-clause `fn`, an `induction` block, a blank-line-separated
-      `proof chain`, and a hole reporting through `:holes`.
-- [ ] Update `docs/REPL.md` once the above lands — its `;;` (`:74`) and
-      `:holes` (`:95`) entries both describe behaviour that doesn't match the
-      tree, and it says nothing about proof syntax.
+      escript). The delay belongs to the project's `compile` alias, not REPL
+      preload, and release artifacts already bundle the generated stdlib BEAMs.
+      The incremental compiler now accepts a safe progress callback and
+      `cure.compile_stdlib` reports `[n/74] Module` for each distinct dirty
+      module, plus an honest `[recheck] Module` when interface-cycle
+      stabilization revisits one; warm builds emit no fake per-module progress.
+      A forced 74-module rebuild and a focused fresh/no-change regression verify
+      both paths. W001 batches are collected until progress completes (§5).
+- [x] **Add eval-path test coverage.** `repl_test.exs` now drives real line-by-line
+      multiline input through buffering and session compilation, covers nested
+      match arms, indentation-preserved blank lines, explicit `;;` submission,
+      proof continuation cues, and live hole reporting/clearing. The complete
+      REPL/session gate is 71 tests green.
+- [x] Update `docs/REPL.md`: submission semantics, indentation-owned blank
+      lines, proof cues, `:holes`, and the Idris-style inspection commands now
+      describe the implemented behaviour.
 
 ---
 
@@ -380,18 +346,31 @@ proof vocabulary is reachable from the REPL at all.
 
 - [ ] Bump `@version` in `mix.exs` to `0.34.0` (also drives `source_ref:
       "v#{@version}"` for docs links).
-- [ ] `cure migrate` rule coverage for every 0.34 rename, with
-      `cure migrate --check` clean over `lib/std/` and `examples/`.
+- [x] `cure migrate` rule coverage for every 0.34 rename. Strict check mode is
+      clean with zero output over both `lib/std/` and `examples/`. The final
+      pass also fixed source-path propagation, canonical resolution of
+      underscored stdlib modules such as `Std.ExitReason`, optional syntax-family
+      printing, and grammar-alternative selection so the gate cannot silently
+      corrupt nominal types or payload-free FSM productions.
 - [ ] Full gate pass: suite, canonical stdlib compilation, TCB/termination
       checks, Antigen, Dialyzer, `mix cure.diagnostics --coverage`.
 - [ ] `mix cure.compile` clean on the downstream consumers — at minimum the
       `cure-otp` package (`lib/` + `metatheory/src`, 59 proof modules) and the
-      `esp32-beam` phase dirs on generic-unix AtomVM.
-- [ ] Resolve the `W001` migration warning ("uppercase type variable will be
-      lowercased") currently emitted during stdlib compilation — a clean build
-      shouldn't warn on its own stdlib. Distinct from §5, which is about how
-      that warning *renders*; this is about the stdlib source still tripping it.
-- [ ] Tag, and check `RELEASE.md` steps are still accurate.
+      `esp32-beam` phase dirs on generic-unix AtomVM. `cure-otp` has now been
+      run against this exact checkout: 252 tests pass. Its only two migration
+      warnings were real uppercase implicit binders in
+      `otp_branch_merge.cure`; those were ported, strict migration is clean over
+      `lib` + `metatheory/src`, and a fresh metatheory preload completes without
+      warnings. The AtomVM phase-dir gate remains.
+- [x] Resolve the stdlib's spurious `W001` migration warning. The uppercase
+      type-variable rule was descending into qualified type paths and treating
+      the `Std` in `Std.Bool.Bool` as a free type variable. Qualified
+      `attribute_access` types are now atomic to detection and rewriting. The
+      migration suite is green and a clean 74-module stdlib build emits no W001.
+- [ ] Tag v0.34.0 after the remaining gates. `RELEASE.md` has been replaced
+      with an operational 0.34 procedure covering metadata, repository and
+      downstream gates, package inspection, CLI/REPL smoke checks, signed tag,
+      Hex/HexDocs/site publication, and the post-publication rollback boundary.
 
 ---
 

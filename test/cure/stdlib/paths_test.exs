@@ -50,6 +50,21 @@ defmodule Cure.Stdlib.PathsTest do
   end
 
   describe "beam_dirs/0" do
+    test "resolves an immutable artifact container to its published generation" do
+      root = Path.join(System.tmp_dir!(), "cure_stdlib_generation_#{System.unique_integer([:positive])}")
+      generation = String.duplicate("a", 64)
+      published = Path.join([root, ".cure_generations", generation])
+      File.mkdir_p!(published)
+      File.write!(Path.join(root, "current"), generation <> "\n")
+
+      try do
+        Application.put_env(:cure, :stdlib_beam_dir, root)
+        assert hd(Paths.beam_dirs()) == published
+      after
+        File.rm_rf!(root)
+      end
+    end
+
     test "prepends the configured override when it exists" do
       tmp = make_tmp!()
 

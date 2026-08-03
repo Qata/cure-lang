@@ -64,17 +64,17 @@ defmodule Cure.Migrate.Rules.RemovedModule do
   # ── AST walk: collect the line of every reference to a removed module ─────────
 
   defp collect_lines({:import, meta, ch}, acc) do
-    acc = if Map.has_key?(@removed, Keyword.get(meta, :source)), do: [line(meta) | acc], else: acc
+    acc = if Map.has_key?(@removed, Keyword.get(meta, :source)), do: [location(meta, :name) | acc], else: acc
     collect_lines(ch, acc)
   end
 
   defp collect_lines({:function_call, meta, ch}, acc) do
-    acc = if removed_qualified?(Keyword.get(meta, :name)), do: [line(meta) | acc], else: acc
+    acc = if removed_qualified?(Keyword.get(meta, :name)), do: [location(meta, :callee) | acc], else: acc
     collect_lines(ch, acc)
   end
 
   defp collect_lines({:variable, meta, name}, acc) when is_binary(name) do
-    if removed_qualified?(name), do: [line(meta) | acc], else: acc
+    if removed_qualified?(name), do: [location(meta, :name) | acc], else: acc
   end
 
   defp collect_lines({_k, _meta, ch}, acc) when is_list(ch), do: collect_lines(ch, acc)
@@ -91,10 +91,5 @@ defmodule Cure.Migrate.Rules.RemovedModule do
 
   defp removed_qualified?(_), do: false
 
-  defp line(meta) do
-    case Cure.MetaAST.Metadata.source_info(meta) do
-      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{start_line: line}} -> line
-      _ -> Keyword.get(meta, :line)
-    end
-  end
+  defp location(meta, role), do: Rule.source_span(meta, role) || Rule.source_line(meta)
 end

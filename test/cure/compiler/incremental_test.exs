@@ -148,6 +148,25 @@ defmodule Cure.Compiler.IncrementalTest do
     assert s.errors == []
   end
 
+  test "progress callback reports each module that actually starts compiling", %{src: src, out: out} do
+    owner = self()
+    progress = fn event -> send(owner, {:progress, event}) end
+
+    assert {:ok, _summary} = compile(src, out, progress: progress)
+
+    events =
+      for _ <- 1..4 do
+        assert_receive {:progress, {:compile_started, module, path}}
+        assert Path.extname(path) == ".cure"
+        module
+      end
+
+    assert Enum.sort(events) == ["Amb", "Leaf", "Mid", "Top"]
+
+    assert {:ok, _summary} = compile(src, out, progress: progress)
+    refute_receive {:progress, {:compile_started, _, _}}, 50
+  end
+
   test "no-change rebuild compiles nothing", %{src: src, out: out} do
     assert {:ok, _} = compile(src, out)
     assert {:ok, s} = compile(src, out)
@@ -201,10 +220,9 @@ defmodule Cure.Compiler.IncrementalTest do
 
     assert Enum.all?(results, &match?({:ok, %{errors: []}}, &1))
     assert {:ok, _set} = Cure.Compiler.Artifacts.open_verified_set(out)
-    refute File.exists?(Path.join(out, ".cure_artifact.lock"))
   end
 
-  test "a stale writer lock is recovered before the sweep", %{src: src, out: out} do
+  test "stale lock metadata does not prevent a kernel lock", %{src: src, out: out} do
     lock = Path.join(out, ".cure_artifact.lock")
 
     {:ok, host} = :inet.gethostname()
@@ -228,11 +246,10 @@ defmodule Cure.Compiler.IncrementalTest do
     File.touch!(lock, System.os_time(:second) - 3_601)
 
     assert {:ok, %{errors: []}} = compile(src, out)
-    refute File.exists?(lock)
     assert {:ok, _set} = Cure.Compiler.Artifacts.open_verified_set(out)
   end
 
-  test "a fresh lock owned by a dead local process is recovered immediately", %{src: src, out: out} do
+  test "lock metadata is not mistaken for kernel lock ownership", %{src: src, out: out} do
     lock = Path.join(out, ".cure_artifact.lock")
     {:ok, host} = :inet.gethostname()
 
@@ -253,7 +270,6 @@ defmodule Cure.Compiler.IncrementalTest do
     )
 
     assert {:ok, %{errors: []}} = compile(src, out)
-    refute File.exists?(lock)
     assert {:ok, _set} = Cure.Compiler.Artifacts.open_verified_set(out)
   end
 

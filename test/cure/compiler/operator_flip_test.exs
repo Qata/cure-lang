@@ -176,10 +176,10 @@ defmodule Cure.Compiler.OperatorFlipTest do
     assert_error_tag(src, :conflicting_operator_fixity)
   end
 
-  test "redeclaring the Melquiades envelope operator is rejected" do
+  test "redeclaring an imported Melquiades fixity is rejected" do
     src = """
     mod M
-      use Std.Operators
+      use Std.Otp
       infix `✉` : Additive
     end
     """

@@ -210,6 +210,7 @@ Under a supervisor, use `start_link/1` instead:
 ```cure
 mod Gate
   use Std.Fsm
+  use Std.Otp
 
   fsm Machine with Int
     terminal Closed

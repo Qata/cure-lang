@@ -1,3 +1,6 @@
 ## Transparent application example.
 
-app Cure.CureForge root Cure.Forge.Root
+use Std.App
+
+app CureForge
+  root Forge.Root

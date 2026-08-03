@@ -71,7 +71,7 @@ defmodule Cure.Migrate.Rules.ModuleRename do
     {ch, lines} = walk(ch, lines)
 
     case Map.fetch(@renames, Keyword.get(meta, :source)) do
-      {:ok, new} -> {{:import, Keyword.put(meta, :source, new), ch}, [line(meta) | lines]}
+      {:ok, new} -> {{:import, Keyword.put(meta, :source, new), ch}, [location(meta, :name) | lines]}
       :error -> {{:import, meta, ch}, lines}
     end
   end
@@ -81,7 +81,7 @@ defmodule Cure.Migrate.Rules.ModuleRename do
     {ch, lines} = walk(ch, lines)
 
     case rename_qualified(Keyword.get(meta, :name)) do
-      {:ok, new} -> {{:function_call, Keyword.put(meta, :name, new), ch}, [line(meta) | lines]}
+      {:ok, new} -> {{:function_call, Keyword.put(meta, :name, new), ch}, [location(meta, :callee) | lines]}
       :error -> {{:function_call, meta, ch}, lines}
     end
   end
@@ -89,7 +89,7 @@ defmodule Cure.Migrate.Rules.ModuleRename do
   # Bare qualified value reference `<Module>.<name>` (defensive).
   defp walk({:variable, meta, name}, lines) when is_binary(name) do
     case rename_qualified(name) do
-      {:ok, new} -> {{:variable, meta, new}, [line(meta) | lines]}
+      {:ok, new} -> {{:variable, meta, new}, [location(meta, :name) | lines]}
       :error -> {{:variable, meta, name}, lines}
     end
   end
@@ -128,5 +128,5 @@ defmodule Cure.Migrate.Rules.ModuleRename do
 
   defp rename_qualified(_), do: :error
 
-  defp line(meta), do: Keyword.get(meta, :line)
+  defp location(meta, role), do: Rule.source_span(meta, role) || Rule.source_line(meta)
 end

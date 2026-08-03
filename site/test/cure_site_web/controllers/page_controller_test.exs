@@ -5,9 +5,9 @@ defmodule CureSiteWeb.PageControllerTest do
     conn = get(conn, ~p"/")
     body = html_response(conn, 200)
 
-    # No assertion on hero copy. `html_response/2` already proves the page
-    # rendered; pinning marketing prose only breaks the test every time the
-    # landing page is reworded, which is exactly how this one went stale.
+    assert body =~ "one dependent compiler pipeline"
+    assert body =~ "kernel checking"
+    refute body =~ "refinements"
 
     # Version is injected from the top-level mix.exs at compile time and
     # rendered in the navbar badge.

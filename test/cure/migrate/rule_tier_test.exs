@@ -28,20 +28,41 @@ defmodule Cure.Migrate.RuleTierTest do
     ast = parse!("mod M\nfn f(x: Int) -> Int = 1\n")
     {new_ast, warns} = Migrate.run(ast, rules: [marker_rule(:machine)], apply: :safe_only)
     assert new_ast != ast
-    assert Enum.any?(warns, &(&1.rule == :W_test_tier))
+    assert [warning] = warns
+    assert warning.tier == :machine
+    assert warning.preview =~ ~s/"M"/
+    assert warning.message =~ "semantics-preserving"
+    assert warning.message =~ "applied automatically"
   end
 
   test "in :safe_only mode, a :review rewrite warns but is NOT normalized" do
     ast = parse!("mod M\nfn f(x: Int) -> Int = 1\n")
     {new_ast, warns} = Migrate.run(ast, rules: [marker_rule(:review)], apply: :safe_only)
     assert new_ast == ast
-    assert Enum.any?(warns, &(&1.rule == :W_test_tier))
+    assert [warning] = warns
+    assert warning.tier == :review
+    assert warning.preview =~ ~s/"M"/
+    assert warning.message =~ "Review the proposed result"
   end
 
   test "in :all (migrate) mode, every tier's rewrite is applied" do
     ast = parse!("mod M\nfn f(x: Int) -> Int = 1\n")
     {new_ast, _} = Migrate.run(ast, rules: [marker_rule(:review)], apply: :all)
     assert new_ast != ast
+  end
+
+  test "a proposed whole-file preview retains source comments" do
+    source = "mod M\n  # keep this explanation\n  use Std.Eq\n"
+    {:ok, tokens, trivia} = Cure.Compiler.Lexer.tokenize(source, trivia: true, emit_events: false)
+    {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
+    ast = Cure.Compiler.Trivia.attach(ast, trivia)
+
+    {_new_ast, warnings} = Migrate.run(ast, apply: :safe_only)
+    warning = Enum.find(warnings, &(&1.rule == :W_module_rename))
+
+    assert warning.tier == :machine
+    assert warning.preview =~ "# keep this explanation"
+    assert warning.preview =~ "use Std.Equatable"
   end
 
   describe "registry rule tags (spec §5.3)" do

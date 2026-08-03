@@ -90,7 +90,8 @@ defmodule Cure.Diagnostic.HostTest do
 
     assert registry != nil
     assert diagnostic.primary.span.start_line == 2
-    assert Cure.Diagnostic.Renderer.plain(diagnostic, registry) =~ "2 | line two"
+    assert diagnostic.primary.span.end_column == 9
+    assert Cure.Diagnostic.Renderer.plain(diagnostic, registry) =~ "^^^^^^^^ rule legacy applies here"
   end
 
   test "Host attaches source carets to line-based compiler warnings" do
@@ -104,10 +105,18 @@ defmodule Cure.Diagnostic.HostTest do
       )
 
     assert diagnostic.primary.span.start_line == 3
+    assert diagnostic.primary.span.end_column == 11
     assert diagnostic.primary.message == "warning applies here"
     rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry)
     assert rendered =~ "3 | line three"
-    assert rendered =~ "warning applies here"
+    assert rendered =~ "^^^^^^^^^^ warning applies here"
+
+    assert Jason.decode!(Cure.Diagnostic.Renderer.json(diagnostic))["primary"]["span"]["start_line"] == 3
+
+    assert Cure.Diagnostic.Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 2, "character" => 0},
+             "end" => %{"line" => 2, "character" => 10}
+           }
   end
 
   test "renders macro syntax failures as contextual syntax diagnostics" do
@@ -750,7 +759,7 @@ defmodule Cure.Diagnostic.HostTest do
     alias_error = Host.render({:typealias_not_a_type, :value}, "forms.cure")
     effect = Host.render({:effect_arity, :send, 2, 1}, "forms.cure")
 
-    assert expression =~ "EXPRESSION IS NOT SUPPORTED"
+    assert expression =~ "UNSUPPORTED EXPRESSION"
     assert annotation =~ "BINDING NEEDS AN ANNOTATION"
     assert pattern =~ "[E119]"
     assert pattern =~ "PATTERN BINDS `X` MORE THAN ONCE"

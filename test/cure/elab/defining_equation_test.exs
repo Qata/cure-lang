@@ -77,6 +77,31 @@ defmodule Cure.Elab.DefiningEquationTest do
     assert %{body: {:global, :"EquationFixture#identity$equation$Z"}} = Env.get_def(env, :expose_zero_equation)
   end
 
+  test "generated defining equations can be applied at the authored friendly name" do
+    source = """
+    mod AppliedEquation
+      use Std.Equivalent
+      type Nat3 = Z3 | S3(Nat3)
+      fn add3(x: Nat3, y: Nat3) -> Nat3 = match x
+        Z3() -> y
+        S3(k) -> S3(add3(k, y))
+      fn add3_succ_eq(k: Nat3, y: Nat3) -> Equivalent(Nat3, add3(S3(k), y), S3(add3(k, y))) =
+        add3.S3(k, y)
+    end
+    """
+
+    assert {:ok, env} = Program.elaborate(source)
+
+    definition = Env.get_def(env, :add3_succ_eq)
+
+    assert Enum.any?(Validator.nodes(definition.body), fn
+             {:global, theorem} -> Atom.to_string(theorem) =~ "add3$equation$S3"
+             _ -> false
+           end)
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "equation metadata and theorem identities survive deterministic recompilation" do
     assert {:ok, first} = Program.elaborate(@source)
     assert {:ok, second} = Program.elaborate(@source)
@@ -277,7 +302,8 @@ defmodule Cure.Elab.DefiningEquationTest do
     {:ok, tokens} = Cure.Compiler.Lexer.tokenize(@source, emit_events: false)
     {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
     assert {:ok, _env, locals} = Program.check_ast_with_locals(ast)
-    refute Enum.any?(locals, &(Atom.to_string(&1) =~ "$equation$"))
+    assert :"EquationFixture#identity$equation$Z" in locals
+    refute :"EquationFixture#identity$equation$S" in locals
   end
 
   test "the kernel rejects a forged defining equation body" do

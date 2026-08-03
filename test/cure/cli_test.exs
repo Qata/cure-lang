@@ -51,6 +51,8 @@ defmodule Cure.CLITest do
       assert output =~ "run"
       assert output =~ "check"
       assert output =~ "lsp"
+      assert output =~ "migrate [path|dir]"
+      assert output =~ "--edition YYYY"
     end
 
     test "no args shows help" do
@@ -147,6 +149,28 @@ defmodule Cure.CLITest do
       assert output =~ "->"
       artifact_root = Cure.Compiler.Artifacts.Writer.resolve(output_dir)
       assert File.exists?(Path.join(artifact_root, "Cure.CureCliDirectory.beam"))
+    end
+
+    @tag :tmp_dir
+    test "escript compile preloads explicit stdlib providers from a published generation", %{tmp_dir: tmp} do
+      source = Path.join(tmp, "uses_result.cure")
+      output_dir = Path.join(tmp, "ebin")
+
+      File.write!(source, """
+      mod UsesResult
+        use Std.Result
+        fn value() -> Result(Int, Atom) = Ok(42)
+      """)
+
+      assert {output, 0} =
+               System.cmd(Path.expand("cure"), ["compile", source, "-o", output_dir],
+                 cd: tmp,
+                 stderr_to_stdout: true
+               )
+
+      refute output =~ "STDLIB MODULE RESOLUTION FAILED"
+      artifact_root = Cure.Compiler.Artifacts.Writer.resolve(output_dir)
+      assert File.exists?(Path.join(artifact_root, "Cure.UsesResult.beam"))
     end
 
     @tag :tmp_dir
@@ -353,6 +377,22 @@ defmodule Cure.CLITest do
       assert output =~ path
       refute output =~ "[E098]"
       refute output =~ "1 |"
+    end
+
+    test "validates lifted module requests before reporting OK" do
+      path = Path.join(System.tmp_dir!(), "cure_cli_check_bad_lift_#{System.unique_integer([:positive])}.cure")
+      File.write!(path, "lift module Elixir.Bad\n  behaviour custom_behavior\n")
+      on_exit(fn -> File.rm(path) end)
+
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["check", path])) == {:shutdown, 1}
+        end)
+
+      assert output =~ "LIFTED MODULE NAME IS INVALID"
+      assert output =~ "Cure.Generated.Worker"
+      refute output =~ "[E101]"
+      refute output =~ ": OK"
     end
   end
 

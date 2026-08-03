@@ -56,6 +56,14 @@ defmodule Cure.LSP.ServerV17Test do
     assert hover["contents"]["value"] =~ "src: Int"
   end
 
+  test "keyword completion exposes the canonical 0.34 surface" do
+    items = Server.keyword_completions()
+    assert Enum.any?(items, &(&1["label"] == "interface"))
+    assert Enum.any?(items, &(&1["label"] == "pickup"))
+
+    refute Enum.any?(items, &(&1["label"] in ["proto", "impl", "if", "elif"]))
+  end
+
   describe "compute_formatting_edits/1" do
     # LSP formatting delegates to `Cure.Compiler.Formatter`, a
     # source-preserving formatter whose output is round-trip-validated
@@ -117,6 +125,13 @@ defmodule Cure.LSP.ServerV17Test do
     test "classifies proof-chain vocabulary as keywords" do
       data = Server.compute_semantic_tokens("proof chain\n  x == x because evidence")
       assert Enum.chunk_every(data, 5) |> Enum.count(fn [_dl, _dc, length, 0, 0] -> length in [5, 7] end) >= 2
+    end
+
+    test "classifies canonical interface and pickup vocabulary as keywords" do
+      data = Server.compute_semantic_tokens("interface Show(a)\npickup\n  else -> true")
+      keyword_lengths = for [_dl, _dc, length, 0, 0] <- Enum.chunk_every(data, 5), do: length
+      assert 9 in keyword_lengths
+      assert 6 in keyword_lengths
     end
 
     test "produces an LSP token integer stream" do

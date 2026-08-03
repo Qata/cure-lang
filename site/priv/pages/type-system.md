@@ -210,7 +210,7 @@ remains opaque during conversion. `@total true` requires certification.
 
 ## Holes and proof authoring
 
-`?name` and `??` create typed holes and report the goal plus local context.
+`?name` and `?_` create typed holes and report the goal plus local context.
 `have`, `proof chain`, and `because` blocks elaborate to ordinary proof terms;
 they do not add unchecked Core constructs.
 

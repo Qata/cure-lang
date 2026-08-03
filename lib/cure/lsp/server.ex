@@ -146,8 +146,7 @@ defmodule Cure.LSP.Server do
       },
       "serverInfo" => %{
         "name" => "cure-lsp",
-        "version" => "0.2.0"
-        # bumped for v0.17.0
+        "version" => Cure.version()
       }
     }
 
@@ -740,7 +739,7 @@ defmodule Cure.LSP.Server do
           # Try to suggest similar names
           case Regex.run(~r/'([^']+)'/, message) do
             [_, name] ->
-              candidates = ~w(fn mod let if match type proto impl use)
+              candidates = ~w(fn mod let pickup match type interface implementation use)
 
               case Cure.Compiler.Errors.suggest(name, candidates) do
                 nil ->
@@ -800,9 +799,10 @@ defmodule Cure.LSP.Server do
 
   # -- Completions -------------------------------------------------------------
 
-  defp keyword_completions do
+  @doc false
+  def keyword_completions do
     keywords =
-      ~w(fn mod rec actor fsm sup app proto impl type let have proof because simplify induction case if then else elif match return throw try catch finally use local when requires where)
+      ~w(fn mod rec actor fsm sup app interface implementation type typealias primitive let have proof because rewrite simplify induction case pickup else match return throw try catch finally use local when requires where deriving quote unsafe)
 
     Enum.map(keywords, fn kw ->
       %{
@@ -1630,7 +1630,7 @@ defmodule Cure.LSP.Server do
   @doc false
   def compute_semantic_tokens(text) do
     keywords =
-      ~w(fn mod rec fsm proto impl type let have proof because simplify induction case if then else elif match return throw try catch finally use local when requires where)
+      ~w(fn mod rec actor fsm sup app interface implementation type typealias primitive let have proof because rewrite simplify induction case pickup else match return throw try catch finally use local when requires where deriving quote unsafe)
 
     lines = String.split(text, "\n")
 

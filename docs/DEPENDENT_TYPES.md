@@ -106,7 +106,7 @@ lowered.
 
 ## Holes
 
-`?name` and `??` create typed holes. Tooling reports the expected type and local
+`?name` and `?_` create typed holes. Tooling reports the expected type and local
 context, but final emission rejects any reachable definition that still
 contains a hole.
 

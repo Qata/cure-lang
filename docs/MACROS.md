@@ -221,7 +221,8 @@ captured by, identifiers at the use site.
 
 - `<fresh Name>` mints a readable unique name, identical at every mention within
   one rule — this is how `fsm <fresh Tick>` gets a stable-ish generated module
-  atom. See §13 for a position where `<fresh …>` currently crashes the compiler.
+  atom. It is valid in binding positions too, including lambda parameters:
+  `fn(<fresh tmp>) -> <fresh tmp>` binds both occurrences to one gensym.
 - `<capture it>` is the marked, greppable escape for deliberate anaphora. It is
   never silent.
 
@@ -593,9 +594,9 @@ Each of these was reproduced against the current tree.
   source. A name that is already qualified is left alone, and an `Elixir.`-prefixed
   or lowercase name is treated as a foreign module and kept verbatim. Building a
   name yourself inside `derive_*` bypasses this — hand `lift_module` a
-  fully-qualified string, or it fails as
-  `CODE GENERATION FAILED [E101] … invalid_module_name`, an *internal* failure at
-  `cure compile`, after `cure check` has already reported OK.
+  fully-qualified `Cure.` string. Invalid generated names are rejected during
+  lifted-request validation by both `cure check` and `cure compile`, before
+  code generation.
 - **A bare `ModuleName` is scoped to the enclosing `mod`, but its members are
   still out of reach.** `table Books` inside `mod Demo` generates `Demo.Books`,
   so two modules can each declare a `Books`. What it does *not* give you is
@@ -612,9 +613,6 @@ Each of these was reproduced against the current tree.
   module" behaviour, so a generated data module emits
   `COMPILER WARNING [W000] behaviour none undefined` unless it names a real OTP
   behaviour.
-- **`<fresh …>` in a lambda parameter position crashes the compiler.**
-  `becomes (fn(<fresh tmp>) -> <fresh tmp>)(n)` raises a `CaseClauseError` in
-  `Parser.parse_explicit_param/1` rather than producing a diagnostic.
 
 ## 14. Where to look in the tree
 

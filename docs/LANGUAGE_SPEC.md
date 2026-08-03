@@ -45,7 +45,7 @@ convention):
 
 ```text
 fn even?(n: Int) -> Bool = n % 2 == 0
-fn is_empty?(xs: List(T)) -> Bool = ...
+fn is_empty?(xs: List(t)) -> Bool = ...
 ```
 
 The `!` suffix is reserved for effect annotations and FSM hard
@@ -181,13 +181,10 @@ patterns).
 
 ### Primitive types
 
-`Int`, `Float`, `String`, `Bool`, `Atom`, `Char`, `Pid`, `Pid(Inbox)`
-(v0.25.0), `Ref` (v0.25.0).
-
-`Pid` alone elaborates to `{:pid, :any}`, the top of the covariant `Pid`
-family; `Pid(Inbox)` attaches an inbox protocol (an ADT or record
-type) against which the Melquiades Operator type-checks every send.
-`Ref` is the monitor reference returned by `Std.Process.monitor/1`.
+`Int`, `Float`, `String`, `Bool`, `Atom`, and `Char` are foundational surface
+types. The formal OTP library defines indexed `Pid(message)` handles and
+distinct `MonitorRef` and `TimerRef` types; the old unindexed `Pid` and `Ref`
+spellings are retired.
 
 ### Composite types
 
@@ -205,8 +202,8 @@ rewrite can be applied mechanically. A grouped type `(A)` and a function domain
 ### ADT (sum types)
 
 ```cure
-type Option(T) = Some(T) | None
-type Result(T, E) = Ok(T) | Error(E)
+type Option(t) = Some(t) | None
+type Result(t, e) = Ok(t) | Error(e)
 ```
 
 **Multi-line layout (v0.21.0).** ADT declarations may span multiple
@@ -243,7 +240,7 @@ kernel, not evidence for a dependent type.
 ### Sigma types (dependent pairs)
 
 ```text
-type Sized(T) = Sigma(n: Nat, Vector(T, n))
+type Sized(t) = Sigma(n: Nat, Vector(t, n))
 ```
 
 A Sigma type pairs a value with a type that may depend on it.
@@ -253,7 +250,7 @@ The surface forms `Sigma(T1, T2)`, `Sigma(name: T1, T2)`, and
 ### Pi types (dependent function types)
 
 ```text
-fn append(xs: Vector(T, m), ys: Vector(T, n)) -> Vector(T, m + n)
+fn append({t: Type}, xs: Vector(t, m), ys: Vector(t, n)) -> Vector(t, m + n)
 ```
 
 Return types may freely reference parameter names. The type checker
@@ -263,7 +260,7 @@ normalization and definitional equality.
 ### Equality types
 
 ```text
-reflexive : Equivalent(T, x, x)
+reflexive : Equivalent(t, x, x)
 ```
 
 `Std.Equivalent` declares the kernel-recognised inductive identity family
@@ -275,24 +272,30 @@ type is distinct from `Std.Equatable`, whose `==` method computes a runtime
 
 ### Proof authoring
 
-The proof surface is implemented as ordinary, kernel-checked Cure terms. Use
-`have name = expression` for a checked local fact, `proof chain` for readable
-equality composition, and an indented `because` block for directed rewrites,
-`simplify`, and `induction` commands. Proof commands are elaboration-only and
-never appear in runtime Core or BEAM output.
+The proof surface is implemented as ordinary, kernel-checked Cure terms. It
+includes `have name [: Proposition] = expression`, `proof chain` with
+`because`, `rewrite [backwards] using proof [at n] [in hypothesis]`,
+`simplify [using rules-or-proof]`, and structural `induction` with
+`case Constructor(fields, induction_hypotheses) =>`. Proof commands are
+elaboration-only and never appear in runtime Core or BEAM output. The complete
+worked authoring guide is [PROOFS.md](PROOFS.md); this section and that guide
+define the same surface rather than separate proof languages.
 
 Generated defining equations are certified theorem members and can be found
 after `function.` in completion and hover. Named arguments may be written in
 any order after a positional prefix (`label: value`); the compiler aligns them
 to the declaration telescope before dependent solving. Unknown, duplicate,
 missing, misplaced, and ambiguous labels use E115 with authored ranges and
-machine-safe code actions. Proof-language diagnostics E109–E114 follow the
-same terminal, JSON, and LSP structured-diagnostic path.
+machine-safe code actions. Named implicit constructor patterns (`{n = .k}`)
+expose and force erased indices during dependent branch refinement. Automatic
+congruence lets directed rewriting descend through a unique function context.
+Proof-language diagnostics E109–E114 follow the same terminal, JSON, and LSP
+structured-diagnostic path.
 
 ### Implicit arguments
 
 ```cure
-fn id({T: Type}, x: T) -> T = x
+fn id({t: Type}, x: t) -> t = x
 ```
 
 Parameters in `{...}` braces are solved by dependent elaboration from
@@ -301,10 +304,10 @@ explicit-argument types at each call site. They cost nothing at runtime.
 ### Holes
 
 ```text
-fn safe_head(xs: List(T)) -> T = ?body
+fn safe_head({t: Type}, xs: List(t)) -> t = ?body
 ```
 
-A `?name` or `??` placeholder triggers a `:hole_goal` pipeline event
+A `?name` or `?_` placeholder triggers a `:hole_goal` pipeline event
 that reports the goal type and the local context at the hole position.
 
 ### Totality
@@ -418,9 +421,9 @@ rec Rectangle
 Type parameters are supported for generic records:
 
 ```cure
-rec Pair(A, B)
-  first: A
-  second: B
+rec Pair(a, b)
+  first: a
+  second: b
 ```
 
 Type parameters are erased at runtime but are tracked by the type checker.
@@ -511,8 +514,9 @@ callbacks are written in Cure using the checked BEAM algebra. The
 compiler does not recognize an FSM as a special object class.
 
 `Std.Fsm` declares two `fsm` macros over one callback floor. Both require
-`use Std.Fsm`, and both name the emitted module exactly, so the name must
-carry its `Cure.` prefix.
+`use Std.Fsm`. A bare lifted-module name is relative to its lexical owner
+(`Main` at top level), while a dotted name is absolute within the Cure source
+namespace. Source never needs to spell the emitter-owned `Cure.` prefix.
 
 The structured surface declares the callback state type with `state` and
 maps event constructors to `FsmAction` values under `events`:
@@ -584,16 +588,16 @@ classes.
 
 ### The Melquiades Operator `<-|` / `✉`
 
-`pid <-| message` sends `message` to `pid` and returns the message. The
-unicode envelope `✉` is an interchangeable alias. Both forms lower to
-Erlang's `!` operator; non-blocking, never raises for a dead receiver.
-The keyword form `send target, msg` is preserved and desugars to the
-same `{:send, ...}` MetaAST node. Binding power is one notch below `|>`,
-non-associative.
+`pid <-| message` is ordinary operator sugar for
+`Std.Otp.tell(pid, message)`. The Unicode envelope `✉` is an interchangeable
+alias. Both meanings are defined by `Std.Otp`, use its indexed
+`RawPid(message, reply, kind)` checking, and return `Effect(Unit)`. They do not
+restore the retired raw-process send node or expose Erlang's returned message.
+Binding power is one notch below `|>` and is non-associative.
 
 ```text
-pid <-| :ping
-pid ✉  :ping
+pid <-| Ping()
+pid ✉  Ping()
 request
 |> encode()
 |> worker_pid <-| _

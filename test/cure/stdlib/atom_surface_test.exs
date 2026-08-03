@@ -46,22 +46,32 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
              """)
   end
 
-  test "process exit requires ExitReason rather than a raw atom" do
+  test "typed OTP exit requires ExitReason rather than a raw atom" do
     assert {:ok, _} =
              Program.elaborate("""
              mod GoodExitReason
-               use Std.Process
+               use Std.Otp
                use Std.ExitReason
-               fn stop(pid: Pid) -> Unit = exit(pid, Shutdown())
+               fn stop(pid: Pid(Atom)) -> Effect(Unit) = exit(pid, Shutdown())
              """)
 
     assert {:error, _} =
              Program.elaborate("""
              mod BadExitReason
-               use Std.Process
+               use Std.Otp
                use Std.ExitReason
-               fn stop(pid: Pid) -> Unit = exit(pid, :shutdown)
+               fn stop(pid: Pid(Atom)) -> Effect(Unit) = exit(pid, :shutdown)
              """)
+  end
+
+  test "retired unindexed process types fail in the signature that names them" do
+    assert {:error, {:retired_process_type, %{name: :Pid, span: span}}} =
+             Program.elaborate("""
+             mod LegacyPid
+               fn stale(pid: Pid) -> Pid = pid
+             """)
+
+    assert %Cure.Diagnostic.Span{start_line: 2, start_column: 17} = span
   end
 
   test "typed OTP monitoring rejects the raw BEAM kind atom" do
@@ -119,7 +129,7 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
     assert_raise ArgumentError, fn -> String.to_existing_atom(unknown) end
   end
 
-  test "effect-only convenience operations discard BEAM success atoms as Unit" do
+  test "effect-typed process compatibility operations discard BEAM success atoms as Unit" do
     assert :unit = :"Cure.Std.Process".link(self())
     assert :unit = :"Cure.Std.Process".unlink(self())
   end

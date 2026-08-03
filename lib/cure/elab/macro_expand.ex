@@ -379,29 +379,60 @@ defmodule Cure.Elab.MacroExpand do
          true <- stdlib_macro_home?(home),
          {:ok, module} <- declared_runtime_module(home),
          true <- current_compiled_module?(module, home),
-         function = String.to_atom(name),
-         true <- function_exported?(module, function, 1) do
-      input =
+         function = String.to_atom(name) do
+      input_repr =
         input_ast
         |> MacroSyntax.to_syntax()
         |> MacroSyntax.with_context(Keyword.get(meta, :expansion_context))
-        |> MacroSyntax.to_runtime()
 
-      result = apply(module, function, [input])
+      argument_sets =
+        if Keyword.get(meta, :direct_inputs, false) do
+          direct =
+            MacroSyntax.to_runtime_direct_inputs(
+              input_repr,
+              Keyword.get(meta, :syntax_fields, []),
+              Keyword.get(meta, :syntax_field_types, %{})
+            )
 
-      case MacroSyntax.from_runtime_macro_result(result) do
-        {:expanded, repr} ->
-          with {:ok, ast} <- validate_expansion(repr),
-               {ast, next_counter} <- Parser.freshen_generated(ast, fresh_counter) do
-            {:ok, ast, next_counter}
-          end
+          [direct, [MacroSyntax.to_runtime(input_repr)]]
+        else
+          [[MacroSyntax.to_runtime(input_repr)]]
+        end
 
-        {:rejected, diagnostics} ->
-          {:error,
-           {:computed_macro_error, meta, {:author_diagnostics, Enum.map(diagnostics, &MacroSyntax.from_syntax/1)}}}
+      with args when is_list(args) <-
+             Enum.find(argument_sets, &function_exported?(module, function, length(&1))) do
+        result = apply(module, function, args)
 
-        :not_macro_result ->
-          :unavailable
+        case MacroSyntax.from_runtime_macro_result(result) do
+          {:expanded, repr} ->
+            with {:ok, ast} <- validate_expansion(repr),
+                 {ast, next_counter} <- Parser.freshen_generated(ast, fresh_counter) do
+              {:ok, ast, next_counter}
+            end
+
+          {:rejected, diagnostics} ->
+            {:error,
+             {:computed_macro_error, meta, {:author_diagnostics, Enum.map(diagnostics, &MacroSyntax.from_syntax/1)}}}
+
+          :not_macro_result ->
+            case MacroSyntax.from_runtime(result) do
+              {:error, _reason} ->
+                :unavailable
+
+              {:syn_failure, failure, values} ->
+                {:error,
+                 {:computed_macro_error, meta,
+                  {:author_failure, Atom.to_string(failure), Enum.map(values, &MacroSyntax.from_syntax/1)}}}
+
+              repr ->
+                with {:ok, ast} <- validate_expansion(repr),
+                     {ast, next_counter} <- Parser.freshen_generated(ast, fresh_counter) do
+                  {:ok, ast, next_counter}
+                end
+            end
+        end
+      else
+        nil -> :unavailable
       end
     else
       _ -> :unavailable

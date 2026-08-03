@@ -225,7 +225,8 @@ defmodule Cure.Migrate.Rules.IfElifToPickup do
   defp structural(l) when is_list(l), do: Enum.map(l, &structural/1)
   defp structural(other), do: other
 
-  defp line_of({:conditional, meta, _}), do: Keyword.get(meta, :line)
+  defp line_of({:conditional, meta, _}),
+    do: Rule.source_span(meta, :opener) || Rule.source_line(meta)
 
   defp skipped?(meta), do: Keyword.get(meta, @skip_key, false)
 

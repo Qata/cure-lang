@@ -53,6 +53,26 @@ defmodule Cure.Elab.SemigroupConcatTest do
     assert eval(src, :go, :"Cure.SgStr") == ~c"abcd"
   end
 
+  test "a nested concat without Semigroup names the missing provider at the operator" do
+    src = "mod T\n  fn go() -> String = \"a\" <> \"b\" <> \"c\"\n"
+
+    assert {:error,
+            {:source_context,
+             {:operator_provider_not_in_scope, %{operator: :<>, method: :combine, provider: "Std.Semigroup"}}, context} =
+              reason} = Program.elaborate(src, file: "missing_semigroup.cure")
+
+    assert %Cure.Diagnostic.Span{start_line: 2, start_column: 27, end_column: 29} = context.span
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic(reason, "missing_semigroup.cure", src)
+
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry)
+    assert rendered =~ "OPERATOR PROVIDER IS NOT IN SCOPE"
+    assert rendered =~ "`<>` operator dispatches through `Std.Semigroup.combine/2`"
+    assert rendered =~ "add `use Std.Semigroup` to this module"
+    assert rendered =~ ~r/2 \|   fn go\(\) -> String = "a" <> "b" <> "c"\n\s+\|\s+\^\^/
+  end
+
   test "numeric `+` and `<` are untouched by the overload" do
     assert eval("mod T\n  fn go() -> Int = 2 + 3\nend\n", :go, :"Cure.SgNumAdd") == 5
     assert eval("mod T\n  fn go() -> Bool = 2 < 3\nend\n", :go, :"Cure.SgNumLt") == true

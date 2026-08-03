@@ -377,8 +377,55 @@ defmodule Cure.Compiler.ArtifactsTest do
                assert owner.output_root == root
                :ok
              end)
+  end
 
-    refute File.exists?(lock_path)
+  test "the kernel releases an artifact lock when its BEAM owner dies", %{root: root} do
+    parent = self()
+
+    owner =
+      Task.async(fn ->
+        Lock.with_lock(root, fn ->
+          send(parent, :artifact_lock_held)
+          Process.sleep(:infinity)
+        end)
+      end)
+
+    assert_receive :artifact_lock_held, 2_000
+    Task.shutdown(owner, :brutal_kill)
+
+    assert :recovered = Lock.with_lock(root, fn -> :recovered end)
+  end
+
+  @tag timeout: 20_000
+  test "a contender reports the owner and waits beyond the former ten-second cutoff", %{root: root} do
+    parent = self()
+
+    owner =
+      Task.async(fn ->
+        Lock.with_lock(root, fn ->
+          :ok = Lock.set_intended_generation(<<1, 2, 3>>)
+          send(parent, :artifact_lock_held)
+
+          receive do
+            :release_artifact_lock -> :released
+          end
+        end)
+      end)
+
+    assert_receive :artifact_lock_held, 2_000
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        contender = Task.async(fn -> Lock.with_lock(root, fn -> :acquired end) end)
+
+        assert Task.yield(contender, 10_500) == nil
+        send(owner.pid, :release_artifact_lock)
+        assert Task.await(owner, 2_000) == :released
+        assert Task.await(contender, 2_000) == :acquired
+      end)
+
+    assert log =~ "another Cure compiler (OS PID #{System.pid()})"
+    assert log =~ "waiting for generation <<1, 2, 3>> to finish"
   end
 
   defp entry(artifact) do

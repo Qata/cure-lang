@@ -539,6 +539,7 @@ defmodule Cure.Stdlib.Preload do
       nil -> {:error, {:stdlib_sources_unavailable, verification_error}}
       [] -> {:error, {:stdlib_sources_empty, verification_error}}
       {:ok, %{errors: errors}} -> {:error, {:stdlib_repair_failed, errors}}
+      errors when is_list(errors) -> {:error, {:stdlib_repair_failed, errors}}
       {:error, reason} -> {:error, {:stdlib_repair_failed, reason}}
     end
   end

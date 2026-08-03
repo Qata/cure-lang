@@ -336,7 +336,7 @@ defmodule Cure.Diagnostic.Registry do
     "E014" => """
     E014: Unfilled Hole
 
-    The compiler reached a `?name`, `??`, or generated `???` placeholder that
+    The compiler reached a `?name`, `?_`, or generated `???` placeholder that
     must not cross the emission boundary. If the surrounding expression has no
     expected type, Cure cannot report a useful goal until one is declared.
 

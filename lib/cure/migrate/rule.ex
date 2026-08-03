@@ -25,9 +25,10 @@ defmodule Cure.Migrate.Rule do
       the file context, one of:
         * `{:rewrite, new_ast}` — rewrote; `run/2` records ONE warning from
           `warning_template` (with no line).
-        * `{:rewrite, new_ast, lines}` — rewrote and knows the exact source
-          line(s) it fired on; `run/2` records one warning per line.
-        * `{:warn, lines}` — detected legacy shape(s) it could NOT rewrite (e.g.
+        * `{:rewrite, new_ast, locations}` — rewrote and knows the exact source
+          span(s) it fired on (or a legacy line fallback); `run/2` records one
+          warning per location.
+        * `{:warn, locations}` — detected legacy shape(s) it could NOT rewrite (e.g.
           the paren-context skip in spec §5.5), so warn but leave the AST as-is.
         * `:no_change` — nothing found; transparent.
     * `:warning_template` — the message body emitted when the rule fires.
@@ -68,8 +69,8 @@ defmodule Cure.Migrate.Rule do
   @typedoc "Per-file context: the set of type names in scope (spec §4)."
   @type ctx :: MapSet.t()
 
-  @typedoc "A source line a warning points at (`nil` when the rule has none)."
-  @type warning_loc :: pos_integer() | nil
+  @typedoc "The exact authored range a warning points at; integer lines are a compatibility fallback."
+  @type warning_loc :: Cure.Diagnostic.Span.t() | pos_integer() | nil
 
   @typedoc "A rule's decision for one file."
   @type result ::
@@ -89,4 +90,38 @@ defmodule Cure.Migrate.Rule do
           enforced_in: Cure.Edition.t() | nil,
           retires_keywords: [String.t()]
         }
+
+  @doc false
+  @spec source_span(keyword(), atom()) :: Cure.Diagnostic.Span.t() | nil
+  def source_span(meta, role \\ :name)
+
+  def source_span(meta, role) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{} = info ->
+        case Map.get(info, role) do
+          %Cure.Diagnostic.Span{} = span -> span
+          _ -> fallback_span(info)
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  def source_span(_meta, _role), do: nil
+
+  defp fallback_span(%Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span}), do: span
+  defp fallback_span(%Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span}), do: span
+  defp fallback_span(_), do: nil
+
+  @doc false
+  @spec source_line(keyword()) :: pos_integer() | nil
+  def source_line(meta) when is_list(meta) do
+    case source_span(meta, :whole) do
+      %Cure.Diagnostic.Span{start_line: line} -> line
+      _ -> Keyword.get(meta, :line)
+    end
+  end
+
+  def source_line(_meta), do: nil
 end

@@ -3043,8 +3043,21 @@ defmodule Cure.Elab.Declarations do
 
           true ->
             case resolve_index_name(name, env) do
-              {:ambiguous_name, atom, mods} -> {:error, {:ambiguous_name, atom, mods}}
-              node -> {:ok, node}
+              {:ambiguous_name, atom, mods} ->
+                {:error, {:ambiguous_name, atom, mods}}
+
+              {:retired_process_type, legacy} ->
+                info = Cure.MetaAST.Metadata.source_info(elem(node, 1))
+
+                {:error,
+                 {:retired_process_type,
+                  %{
+                    name: legacy,
+                    span: info && (info.name || info.whole)
+                  }}}
+
+              node ->
+                {:ok, node}
             end
         end
     end
@@ -3738,6 +3751,9 @@ defmodule Cure.Elab.Declarations do
       # is ambiguous (R7). The caller turns this marker into an error.
       length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
         {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}
+
+      name in ["Pid", "Ref"] ->
+        {:retired_process_type, atom}
 
       true ->
         {:global, atom}

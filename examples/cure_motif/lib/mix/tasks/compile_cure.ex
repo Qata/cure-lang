@@ -46,16 +46,7 @@ defmodule Mix.Tasks.CompileCure do
       end
 
       Application.ensure_all_started(:cure)
-
-      # The Cure standard library is compiled by the root `:cure`
-      # project into `<cure_root>/_build/cure/ebin`, not into the
-      # consumer's `_build/cure/ebin`. Add it to the code path so
-      # modules like `:"Cure.Std.Vector"` resolve at runtime.
-      stdlib_ebin = Path.expand("../../_build/cure/ebin")
-
-      if File.dir?(stdlib_ebin) and stdlib_ebin not in :code.get_path() do
-        :code.add_patha(~c"#{stdlib_ebin}")
-      end
+      preload_stdlib!()
 
       Enum.each(cure_files, fn path ->
         case Cure.Compiler.compile_file(path,
@@ -66,10 +57,20 @@ defmodule Mix.Tasks.CompileCure do
           {:ok, module, _warnings} ->
             Mix.shell().info("Compiled #{path} -> #{module}")
 
+          {:error, {:computed_macro_error, _metadata, detail}} ->
+            Mix.raise("Failed to expand #{path}: #{inspect(detail)}")
+
           {:error, reason} ->
-            Mix.shell().error("Failed to compile #{path}: #{inspect(reason)}")
+            Mix.raise("Failed to compile #{path}: #{inspect(reason)}")
         end
       end)
+    end
+  end
+
+  defp preload_stdlib! do
+    case Cure.Stdlib.Preload.preload(kind: :all) do
+      :ok -> :ok
+      {:error, reason} -> Mix.raise("Failed to load Cure stdlib: #{inspect(reason)}")
     end
   end
 

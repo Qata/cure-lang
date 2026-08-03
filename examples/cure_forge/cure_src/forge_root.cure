@@ -1,3 +1,10 @@
 ## Transparent supervisor example.
 
-sup Cure.Forge.Root children [child_spec Cure.Metrics :metrics, child_spec Cure.Logger :logger, child_spec Cure.Queue :queue, child_spec Cure.Pool :pool]
+use Std.Supervisor
+
+sup Forge.Root
+  children
+    worker Main.Metrics as metrics
+    worker Main.Logger as logger
+    worker Main.Queue as queue
+    worker Main.Pool as pool

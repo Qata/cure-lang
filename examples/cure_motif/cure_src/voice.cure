@@ -1,8 +1,14 @@
 ## Transparent voice actor with a typed tuple payload.
 
-actor Cure.Voice state Tuple(Atom, Int, Int) initial %[:silent, 0, 0] messages Tuple(Atom, Int, Int) handle_cast
-  let tag = message.1
-  pickup
-    tag == :play -> %[:noreply, %[:playing, message.2, message.3]]
-    tag == :stop -> %[:noreply, %[:released, state.2, state.3]]
-    else -> %[:noreply, state]
+use Std.Actor
+
+actor Voice
+  state Tuple(Atom, Int, Int)
+  initial %[:silent, 0, 0]
+  messages Tuple(Atom, Int, Int)
+  handle_cast
+    let tag = message.1
+    pickup
+      tag == :play -> %[:noreply, %[:playing, message.2, message.3]]
+      tag == :stop -> %[:noreply, %[:released, state.2, state.3]]
+      else -> %[:noreply, state]

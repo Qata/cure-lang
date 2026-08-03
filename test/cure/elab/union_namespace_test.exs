@@ -11,50 +11,9 @@ defmodule Cure.Elab.UnionNamespaceTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Elab.Program
 
   defp elaborate(src), do: Program.elaborate(src)
-
-  defp dependent?(src) do
-    {:ok, toks} = Lexer.tokenize(src, emit_events: false)
-    {:ok, ast} = Parser.parse(toks, emit_events: false)
-    Program.dependent?(ast)
-  end
-
-  describe "the union feature must not reroute a NON-union program to another pipeline" do
-    test "an ADT constructor named `Equivalent` does not make a program dependent" do
-      # `dependent?/1` decides WHICH COMPILER PIPELINE builds a module — and the two erase
-      # constructors differently. Recursing it into a match arm's PATTERN (which lives in
-      # meta, and was never visited before unions) exposed constructor patterns to the
-      # pre-existing name-based "Equivalent"/"reflexive" heuristic, silently rerouting a
-      # program that contains no `|` at all.
-      src = """
-      mod NR
-        type Relation = Equivalent(Int, Int) | Different
-        fn classify(r: Relation) -> Int = match r
-          Equivalent(a, b) -> a
-          Different -> 0
-      end
-      """
-
-      refute dependent?(src)
-    end
-
-    test "a union in a match-arm pattern DOES still make a program dependent" do
-      # The reason the :match_arm clause exists at all — do not regress it while fixing the
-      # above.
-      src = """
-      mod DR
-        fn f(x: Int | Bool) -> Int = match x
-          n: Int -> n
-          b: Bool -> 0
-      end
-      """
-
-      assert dependent?(src)
-    end
-  end
 
   describe "the generated namespace is reserved against user-declared names" do
     test "an interface may not take a generated family name" do

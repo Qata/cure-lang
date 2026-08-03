@@ -20,7 +20,7 @@ defmodule CureMotif.Application do
   require Logger
 
   @cure_sup :"Cure.Motif.Orchestra"
-  @cure_app :"Cure.CureMotif"
+  @cure_app :"Cure.Main.CureMotif"
   @compile {:no_warn_undefined, @cure_sup}
   @compile {:no_warn_undefined, @cure_app}
 
@@ -32,7 +32,7 @@ defmodule CureMotif.Application do
       CureMotif.MidiOut,
       %{
         id: @cure_sup,
-        start: {@cure_sup, :start_link, [[]]},
+        start: {@cure_sup, :start_link, []},
         type: :supervisor,
         restart: :permanent
       }

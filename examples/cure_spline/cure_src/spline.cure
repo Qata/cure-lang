@@ -1,4 +1,6 @@
 mod Spline
+  use Std.Result
+
   ## Natural cubic spline interpolation, written in Cure.
   # 
   # Given a list of (x, y) knots with strictly increasing x, `fit` builds
@@ -261,20 +263,20 @@ mod Spline
       b + 2.0 * c * t + 3.0 * d * t * t
   ## Sample the spline at `n` evenly spaced points between `x_min` and
   ## `x_max`. Returns a list of `{x, y}` tuples suitable for plotting.
-  fn sample(spline: Spline, n: Int) -> List(Tuple) = match spline.segments
+  fn sample(spline: Spline, n: Int) -> List(Tuple(Float, Float)) = match spline.segments
     [] ->
       []
     [Segment{a: y0} | _] ->
       pickup
         n <= 1 -> [%[spline.x_min, y0]]
         else   -> sample_many(spline, n)
-  local fn sample_many(spline: Spline, n: Int) -> List(Tuple) = 
+  local fn sample_many(spline: Spline, n: Int) -> List(Tuple(Float, Float)) =
     let step = fdiv(spline.x_max - spline.x_min, int_to_float(n - 1))
     sample_loop(spline, 0, n, step)
-  local fn sample_loop(spline: Spline, i: Int, n: Int, step: Float) -> List(Tuple) = pickup
+  local fn sample_loop(spline: Spline, i: Int, n: Int, step: Float) -> List(Tuple(Float, Float)) = pickup
     i >= n -> []
     else   -> sample_cons(spline, i, n, step)
-  local fn sample_cons(spline: Spline, i: Int, n: Int, step: Float) -> List(Tuple) = 
+  local fn sample_cons(spline: Spline, i: Int, n: Int, step: Float) -> List(Tuple(Float, Float)) =
     let xi = spline.x_min + int_to_float(i) * step
     let yi = evaluate_clamped(spline, xi)
     [%[xi, yi] | sample_loop(spline, i + 1, n, step)]

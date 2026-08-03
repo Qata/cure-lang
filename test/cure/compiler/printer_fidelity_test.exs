@@ -188,6 +188,21 @@ defmodule Cure.Compiler.PrinterFidelityTest do
     assert length(transition.productions) == 1
   end
 
+  test "absent optional holes in family productions print and reparse" do
+    source = """
+    fsm Door with Int
+      initial Closed
+      transitions
+        Closed --Open--> Opened
+        Opened --Close(code: Int)--> Closed
+    """
+
+    out = assert_roundtrips(source)
+    assert out =~ "Closed --Open--> Opened"
+    assert out =~ "Opened --Close ( code: Int ) --> Closed"
+    refute out =~ "family_option"
+  end
+
   test "a `computed by <fn>` rule with a `Code until` hole round-trips (not dropped)" do
     # A Tier-3 `computed by derive_actor` rule (ActorContainers in actor.cure)
     # stores its expander in `:elab`, not `:template`, so the printer's

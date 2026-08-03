@@ -49,5 +49,11 @@ defmodule Cure.Doc.StdlibSourceDocsTest do
     assert File.regular?(Path.join(output, "index.html"))
     assert File.regular?(Path.join(output, "std_core.html"))
     assert File.read!(Path.join(output, "std_core.html")) =~ "Identity, composition"
+
+    assert File.read!(Path.join(output, "std_proof_lineararithmetic.html")) =~
+             "Executable affine syntax"
+
+    assert File.read!(Path.join(output, "std_decision.html")) =~ "Decidable propositions"
+    assert File.read!(Path.join(output, "std_equivalent.html")) =~ "Propositional equality"
   end
 end

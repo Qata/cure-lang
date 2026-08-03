@@ -44,6 +44,11 @@
 # BEAM. That identity intentionally changes with the compiler fingerprint, so
 # this gate hashes the disassembled generated program with only the provenance
 # attribute removed rather than hashing the complete artifact bytes.
+#
+# Cast-only actors now emit a total fallback `handle_call/3`, completing the
+# advertised `gen_server` behaviour and preserving state for raw BEAM callers.
+# GLifecycle is the cast-only fixture, so this intentional generated-program
+# addition changes only its semantic hash.
 defmodule Cure.Compiler.ActorQuoteGoldenTest do
   use ExUnit.Case, async: false
 
@@ -89,7 +94,7 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
            Inc -> state + 1
          terminate :shutdown
          code_change %[:ok, state + 1]
-     """, "ab87696397ac569e01c029d10b39d50b7fe5f6f1bcf5001e71efdc79d4bcd9ef"}
+     """, "09e776c7b3122e0f0ba6cb1922a2d3515a0f40f892ad8537db3893c21e642b19"}
   ]
 
   defp beam_sha256(name, src) do

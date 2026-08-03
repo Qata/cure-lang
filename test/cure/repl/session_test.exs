@@ -42,9 +42,10 @@ defmodule Cure.REPL.SessionTest do
     test "multi-line function with indented body" do
       src = """
       fn clamp(x: Int, lo: Int, hi: Int) -> Int =
-        if x < lo then lo
-        else if x > hi then hi
-        else x
+        pickup
+          x < lo -> lo
+          x > hi -> hi
+          else -> x
       """
 
       assert {:definitions, [entry]} = Session.classify(src)
@@ -81,6 +82,24 @@ defmodule Cure.REPL.SessionTest do
       assert entry.label == "rec Point"
     end
 
+    test "canonical interface and implementation declarations" do
+      src = """
+      interface Marker(a)
+        fn mark(value: a) -> Bool
+      implementation Marker for Int
+        fn mark(value: Int) -> Bool = true
+      """
+
+      assert {:definitions, [interface, implementation]} = Session.classify(src)
+      assert interface.key == {:interface, "Marker"}
+      assert interface.kind == :interface
+      assert interface.label == "interface Marker"
+      assert implementation.key == {:implementation, "Marker", "Int"}
+      assert implementation.kind == :implementation
+      assert implementation.label == "implementation Marker for Int"
+      assert {:ok, _module} = Session.compile([interface, implementation])
+    end
+
     test "lambda is an expression, not a definition" do
       assert :expression = Session.classify("fn(x) -> x + 1 end")
     end
@@ -100,6 +119,10 @@ defmodule Cure.REPL.SessionTest do
       assert {:definitions, [inc, dec]} = Session.classify(src)
       assert inc.key == {:fn, "inc", 1, :public}
       assert dec.key == {:fn, "dec", 1, :public}
+      assert inc.source == "fn inc(x: Int) -> Int = x + 1"
+      assert dec.source == "fn dec(x: Int) -> Int = x - 1"
+      refute inc.source =~ "fn dec"
+      refute dec.source =~ "fn inc"
     end
 
     test "declaration followed by expression falls back to expression" do

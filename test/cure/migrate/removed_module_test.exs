@@ -16,11 +16,12 @@ defmodule Cure.Migrate.RemovedModuleTest do
   end
 
   test "warns (does not rewrite) on a `use` of a removed module" do
-    assert {:warn, [2]} = apply_rule("mod M\n  use Std.Refine\n  fn f(x: Int) -> Int = x\n", "a.cure")
+    assert {:warn, [%Cure.Diagnostic.Span{start_line: 2, start_column: 7, end_column: 17}]} =
+             apply_rule("mod M\n  use Std.Refine\n  fn f(x: Int) -> Int = x\n", "a.cure")
   end
 
   test "warns on a qualified reference to a removed module" do
-    assert {:warn, [2]} =
+    assert {:warn, [%Cure.Diagnostic.Span{start_line: 2, start_column: 25, end_column: 40}]} =
              apply_rule("mod M\n  fn f(x: Int) -> Int = Std.Equal.equal(x, x)\n", "b.cure")
   end
 
@@ -29,7 +30,10 @@ defmodule Cure.Migrate.RemovedModuleTest do
     {new_ast, warns} = Migrate.run(ast, file: "c.cure")
 
     assert new_ast == ast
-    assert Enum.any?(warns, &(&1.rule == :W_removed_module))
+    warning = Enum.find(warns, &(&1.rule == :W_removed_module))
+    assert warning.tier == :manual
+    assert warning.preview == nil
+    assert warning.message =~ "completed by hand"
   end
 
   test "a live module (still present) does not warn" do

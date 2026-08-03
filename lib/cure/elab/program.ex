@@ -1681,12 +1681,6 @@ defmodule Cure.Elab.Program do
         # its type-level references entirely.
         seen
 
-      match?(%{generated_equation: true}, Map.get(defs, name)) ->
-        # Certified defining equations are proof artifacts. Surface functions
-        # may mention them while constructing evidence, but the theorem itself
-        # has no runtime definition and must not enter the BEAM closure.
-        seen
-
       true ->
         case Map.get(defs, name) do
           nil ->
@@ -1735,134 +1729,6 @@ defmodule Cure.Elab.Program do
 
   defp global_refs(terms) when is_list(terms), do: Enum.flat_map(terms, &global_refs/1)
   defp global_refs(_leaf), do: []
-
-  @doc """
-  Does a parsed program/AST use dependent constructs the kernel must check?
-
-  This is intentionally a surface-feature router, not a semantic checker. Forms
-  that already have a trusted Core elaboration must take the dependent compiler
-  path even when a module does not declare an indexed family. Legacy proof
-  containers are not routed here until proof containers elaborate into Core.
-  """
-  @spec dependent?(term()) :: boolean()
-  def dependent?({:indexed_type, _meta, _body}), do: true
-  def dependent?({:sigma_type, _meta, _body}), do: true
-  def dependent?({:refinement_type, _meta, _body}), do: true
-  def dependent?({:rewrite_expr, _meta, _body}), do: true
-  def dependent?({:proof_chain, _meta, _body}), do: true
-
-  # An anonymous union (`Int | String`) and its elimination form (`n: Int -> …`) are
-  # DEPENDENT-pipeline constructs: they elaborate to a generated inductive family whose
-  # constructors carry the member tag.
-  #
-  # Without these two clauses a module using only unions is judged non-dependent and
-  # compiled by the CLASSIC pipeline, where `Type.resolve/1` maps the union to `:any`
-  # and the value is emitted UNTAGGED — silently giving the erasure the design
-  # explicitly rejected as unsound (`String` is `List(Char)`, so members are not
-  # runtime-distinguishable). The feature would type-check correctly and then never be
-  # used at codegen.
-  def dependent?({:union_type, _meta, _members}), do: true
-  def dependent?({:typed_pattern, _meta, _children}), do: true
-
-  # The generic fallback below only recurses into a node's CHILDREN, never its
-  # META — which is why `:param`'s type needed its own dedicated clause further
-  # down. A union can ALSO appear in two other meta-only positions:
-  #
-  #   * a `let`'s type ascription (`type_annotation:` in `:assignment`'s meta —
-  #     parser.ex `let_ascribed`), and
-  #   * a match arm's OWN PATTERN (`pattern:` in `:match_arm`'s meta — parser.ex
-  #     `parse_match_arm/1`, `{:match_arm, [pattern: p], [body]}`).
-  #
-  # Left unhandled, a module using a union ONLY in one of these two positions
-  # (no function param/return type ever names the union) is silently routed to
-  # the classic pipeline, which has no union machinery — not a clean
-  # `:unsupported_container`-style rejection but a confusing, unrelated error
-  # out of classic's ordinary (non-union-aware) pattern handling.
-  # A union can hide in META, which the generic fallback (children-only) never visits: a
-  # `let`'s `:type_annotation`, and a match arm's `:pattern` (typed patterns live there).
-  #
-  # These scan the meta for UNION SYNTAX ONLY — deliberately NOT the full `dependent?/1`
-  # walk. `dependent?/1` decides which COMPILER PIPELINE builds a module, and the two erase
-  # constructors differently. Running the full predicate over a match arm's pattern exposes
-  # ordinary constructor patterns to the pre-existing name-based `"Equivalent"`/`"reflexive"`
-  # heuristic below — so a program with an ADT constructor merely NAMED `Equivalent`, and no
-  # `|` anywhere, was silently rerouted to the dependent pipeline.
-  def dependent?({:assignment, meta, children}) when is_list(meta) do
-    union_syntax?(Keyword.get(meta, :type_annotation)) or dependent?(children)
-  end
-
-  def dependent?({:match_arm, meta, children}) when is_list(meta) do
-    union_syntax?(Keyword.get(meta, :pattern)) or dependent?(children)
-  end
-
-  def dependent?({:function_call, meta, children}) when is_list(meta) do
-    Keyword.get(meta, :name) in ["Equivalent", "reflexive"] or Enum.any?(children, &dependent?/1)
-  end
-
-  def dependent?({:container, meta, body}) when is_list(meta) do
-    case Keyword.get(meta, :container_type) do
-      # A proof container inhabits propositional-equality types — inherently
-      # dependent, and now elaborated into Core (routed like a module below).
-      :proof ->
-        true
-
-      container_type when container_type in [:enum, :struct, :opaque] ->
-        # A user-declared family whose name COLLIDES with the generated-union
-        # namespace (`Cure.Elab.Union.union_family?/1` — reachable only via a
-        # backtick-quoted identifier, e.g. `` `Union<Bool|Int>` ``) must be
-        # routed to the DEPENDENT pipeline even when nothing else in the module
-        # is dependent, so `Cure.Elab.Declarations`'s reserved-name rejection
-        # actually runs. The classic pipeline never calls into
-        # `Cure.Elab.Union` at all, so left classic-routed, such a name would
-        # sail through unrejected and remain indistinguishable from a real
-        # generated family to any OTHER dependent-routed module compiled into
-        # the same program.
-        reserved_family_name?(meta) or dependent?(body)
-
-      _other ->
-        dependent?(body)
-    end
-  end
-
-  def dependent?({:attribute_access, meta, children}) when is_list(meta) do
-    Keyword.get(meta, :attribute) in ["1", "2"] or Enum.any?(children, &dependent?/1)
-  end
-
-  def dependent?({:function_def, meta, body}) when is_list(meta) do
-    dependent_params?(Keyword.get(meta, :params, [])) or
-      dependent?(Keyword.get(meta, :return_type)) or
-      dependent?(body)
-  end
-
-  def dependent?({:param, meta, _name}) when is_list(meta) do
-    Keyword.get(meta, :implicit) == true or dependent?(Keyword.get(meta, :type))
-  end
-
-  def dependent?({_tag, _meta, children}) when is_list(children),
-    do: Enum.any?(children, &dependent?/1)
-
-  def dependent?(list) when is_list(list), do: Enum.any?(list, &dependent?/1)
-  def dependent?(_other), do: false
-
-  # Union syntax, and nothing else. Kept deliberately narrow — see the meta clauses above.
-  defp union_syntax?({:union_type, _meta, _members}), do: true
-  defp union_syntax?({:typed_pattern, _meta, _children}), do: true
-
-  defp union_syntax?(node) when is_tuple(node),
-    do: node |> Tuple.to_list() |> Enum.any?(&union_syntax?/1)
-
-  defp union_syntax?(list) when is_list(list), do: Enum.any?(list, &union_syntax?/1)
-  defp union_syntax?(_other), do: false
-
-  defp dependent_params?(params) when is_list(params), do: Enum.any?(params, &dependent?/1)
-  defp dependent_params?(_other), do: false
-
-  defp reserved_family_name?(meta) do
-    case Keyword.get(meta, :name) do
-      name when is_binary(name) -> name |> String.to_atom() |> Cure.Elab.Union.union_family?()
-      _ -> false
-    end
-  end
 
   @doc """
   Extract the `Cure.<Name>` module atom from a parsed `mod … end` program,
@@ -2911,7 +2777,7 @@ defmodule Cure.Elab.Program do
   end
 
   defp checked_prelude_env(ast, :bootstrap_safe), do: module_prelude_env(ast)
-  defp checked_prelude_env(ast, :ordinary), do: prelude_slice_env(ast)
+  defp checked_prelude_env(ast, :ordinary), do: module_prelude_env(ast)
 
   defp prelude_sources_for(ast) do
     if prelude_bootstrap?(find_module_name(ast)),
@@ -4379,6 +4245,32 @@ defmodule Cure.Elab.Program do
           instance_owned_by?(ref, owner),
           do: {iface, head}
 
+    # Auto-derived instances can also arrive back through a module's own stale
+    # prelude/interface slice during an incremental stdlib repair.  They have no
+    # authored `implementation` node for the comprehension above to find.  If
+    # this module is declaring the head locally and the ambient method globals
+    # are owned by this same module, discard that self-import so the post-pass
+    # derives and registers a fresh definition body in the current environment.
+    local_heads =
+      items
+      |> Enum.flat_map(fn
+        {:container, meta, _body} when is_list(meta) -> [Keyword.get(meta, :name)]
+        {:indexed_type, meta, _body} when is_list(meta) -> [Keyword.get(meta, :name)]
+        _ -> []
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(fn name ->
+        name = if is_atom(name), do: name, else: String.to_atom(name)
+        if owner, do: Cure.Elab.Name.qualify(owner, name), else: name
+      end)
+      |> MapSet.new()
+
+    self_derived_heads =
+      for {{_iface, head} = key, ref} <- coherence.anon,
+          MapSet.member?(local_heads, head),
+          instance_owned_by?(ref, owner),
+          do: key
+
     # (2) Interface shadowing: a module that REDECLARES an `interface I` defines a
     # fresh, locally-scoped typeclass that merely shares the name `I` with the
     # ambient prelude interface (per the E-layer bare-atom shadowing decision).
@@ -4395,6 +4287,7 @@ defmodule Cure.Elab.Program do
 
     keys_to_drop =
       self_heads ++
+        self_derived_heads ++
         for {{iface, _head} = key, _ref} <- coherence.anon,
             MapSet.member?(redeclared, iface),
             do: key

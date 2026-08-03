@@ -18,16 +18,47 @@ mix test
 
 The source files use standard-library syntax directly:
 
-```text
-fsm Cure.Envelope state Int initial :silent events Atom transition
-  else -> %[:next_state, state, data]
+```cure
+use Std.Fsm
 
-actor Cure.Voice state Tuple(Atom, Int, Int) initial %[:silent, 0, 0] messages Tuple(Atom, Int, Int) handle_cast
-  %[:noreply, state]
+fsm Envelope with Int
+  Silent --note_on--> Attack
+  Attack --on_timer--> Sustain
+  Sustain --note_off--> Release
+  Release --on_timer--> Silent
+  * --kill--> Silent
+```
 
-sup Cure.Motif.Orchestra children [child_spec Cure.Clock :clock, child_spec Cure.Sequencer :sequencer, child_spec Cure.Voice :voice]
+```cure
+use Std.Actor
 
-app Cure.CureMotif root Cure.Motif.Orchestra
+actor Voice
+  state Tuple(Atom, Int, Int)
+  initial %[:silent, 0, 0]
+  messages Tuple(Atom, Int, Int)
+  handle_cast
+    let tag = message.1
+    pickup
+      tag == :play -> %[:noreply, %[:playing, message.2, message.3]]
+      tag == :stop -> %[:noreply, %[:released, state.2, state.3]]
+      else -> %[:noreply, state]
+```
+
+```cure
+use Std.Supervisor
+
+sup Motif.Orchestra
+  children
+    worker Main.Clock as clock
+    worker Main.Sequencer as sequencer
+    worker Main.Voice as voice
+```
+
+```cure
+use Std.App
+
+app CureMotif
+  root Motif.Orchestra
 ```
 
 Each form expands recursively to a checked `lift module`. `beam_ops` and the
@@ -40,9 +71,6 @@ ordinary parsed Cure declarations and a generic lifted-module request.
 functions over typed runtime lists. The Elixir piano-roll renderer and
 application harness are conventional interop code around the generated modules.
 
-## Current boundary
-
-The transparent floor does not silently recreate the retired transition,
-lifecycle, or decorator parser. Add those capabilities as Cure macros over the
-checked transition and BEAM algebra when the corresponding source vocabulary is
-needed.
+Bare process names are qualified by their lexical owner. Dotted names such as
+`Motif.Orchestra` are absolute within the Cure source namespace; neither form
+authors the BEAM-only `Cure.` prefix.

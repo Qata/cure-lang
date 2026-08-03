@@ -99,4 +99,31 @@ defmodule Cure.Compiler.SelectiveImportDiagnosticTest do
       assert {:ok, _ast} = Parser.parse(tokens, emit_events: false)
     end
   end
+
+  test "selective imports may span indented lines" do
+    source = """
+    use Std.Otp.{
+      Pid,
+      RawPid,
+      MonitorRef
+    }
+    """
+
+    {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:import, meta, []}} = Parser.parse(tokens, emit_events: false)
+    assert Keyword.fetch!(meta, :items) == ["Pid", "RawPid", "MonitorRef"]
+  end
+
+  test "multiline selective imports allow a trailing comma" do
+    source = """
+    use Std.Otp.{
+      Pid,
+      RawPid,
+    }
+    """
+
+    {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:import, meta, []}} = Parser.parse(tokens, emit_events: false)
+    assert Keyword.fetch!(meta, :items) == ["Pid", "RawPid"]
+  end
 end

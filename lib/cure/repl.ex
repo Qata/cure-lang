@@ -14,7 +14,7 @@ defmodule Cure.REPL do
   * Multi-line input is detected automatically: a line ending with
     a continuation token (`do`, `->`, `=`, `|`, `then`, `else`,
     `,`, `(`), an unbalanced bracket, an open block-opener
-    (`match`, `if`, `case`, `try`, `fn`, ...), or a buffer that
+    (`match`, `pickup`, `case`, `try`, `fn`, ...), or a buffer that
     parses with an EOF-rooted error keeps the prompt in
     continuation mode. Press `Alt+Enter` (or `Shift+Enter` /
     `Ctrl+Enter` on terminals that send CSI-u modifier sequences)
@@ -469,7 +469,13 @@ defmodule Cure.REPL do
       line == "" and state.input_buffer == [] ->
         state
 
-      line == "" or line == ";;" ->
+      line == ";;" ->
+        dispatch_buffer(state)
+
+      line == "" and indentation_block_open?(state.input_buffer) ->
+        %{state | input_buffer: state.input_buffer ++ [""]}
+
+      line == "" ->
         dispatch_buffer(state)
 
       state.input_buffer == [] and starts_with_colon?(line) ->
@@ -498,7 +504,7 @@ defmodule Cure.REPL do
         new_state = %{state | input_buffer: state.input_buffer ++ [line]}
         joined = Enum.join(new_state.input_buffer, "\n")
 
-        if incomplete?(line, joined) do
+        if indented_continuation?(state.input_buffer, line) or incomplete?(line, joined) do
           new_state
         else
           dispatch_buffer(new_state)
@@ -572,6 +578,25 @@ defmodule Cure.REPL do
   defp add_definitions(state, entries) do
     {candidate_defs, annotated} = Session.merge(state.defs, entries)
 
+    case Session.hole_goals(candidate_defs) do
+      {:ok, [_ | _] = holes} ->
+        Enum.each(annotated, fn
+          {:new, entry} -> render_info(state, "defined #{entry.label} (with holes)")
+          {:redefined, entry} -> render_info(state, "redefined #{entry.label} (with holes)")
+        end)
+
+        %{state | defs: candidate_defs, holes: holes}
+
+      {:ok, []} ->
+        compile_definitions(state, candidate_defs, annotated)
+
+      {:error, reason} ->
+        render_reason_error(state, reason)
+        state
+    end
+  end
+
+  defp compile_definitions(state, candidate_defs, annotated) do
     case Session.compile(candidate_defs) do
       {:ok, _module} ->
         Enum.each(annotated, fn
@@ -579,7 +604,7 @@ defmodule Cure.REPL do
           {:redefined, entry} -> render_info(state, "redefined #{entry.label}")
         end)
 
-        %{state | defs: candidate_defs}
+        %{state | defs: candidate_defs, holes: []}
 
       :empty ->
         %{state | defs: candidate_defs}
@@ -657,7 +682,9 @@ defmodule Cure.REPL do
     #{indent_body(src)}
     """
 
-    case Cure.Compiler.compile_and_load(source, emit_events: false) do
+    file = "repl/#{mod_name}.cure"
+
+    case Cure.Compiler.compile_and_load(source, file: file, emit_events: false) do
       {:ok, module} ->
         try do
           result = module.main()
@@ -670,7 +697,7 @@ defmodule Cure.REPL do
         state
 
       {:error, reason} ->
-        render_reason_error(state, reason)
+        render_reason_diagnostic(state, reason, file, source)
         state
     end
   end
@@ -760,8 +787,14 @@ defmodule Cure.REPL do
         render_info(state, "(no holes recorded)")
 
       holes ->
-        Enum.each(holes, fn {label, goal, _ctx} ->
-          render_info(state, "#{label} : #{inspect(goal)}")
+        Enum.each(holes, fn %{function: label, goal: goal, context: context} ->
+          rendered_context =
+            case context do
+              [] -> ""
+              values -> " (context: " <> Enum.map_join(values, ", ", &Cure.Core.Printer.print/1) <> ")"
+            end
+
+          render_info(state, "#{label} : #{Cure.Core.Printer.print(goal)}#{rendered_context}")
         end)
     end
 
@@ -816,6 +849,15 @@ defmodule Cure.REPL do
   defp handle_meta(state, ":john"), do: cmd_john(state)
   defp handle_meta(state, ":john " <> _), do: cmd_john(state)
 
+  defp handle_meta(state, ":t " <> expr), do: cmd_type(state, expr)
+  defp handle_meta(state, ":type " <> expr), do: cmd_type(state, expr)
+  defp handle_meta(state, ":printdef " <> name), do: cmd_printdef(state, String.trim(name))
+  defp handle_meta(state, ":total " <> name), do: cmd_total(state, String.trim(name))
+  defp handle_meta(state, ":browse " <> name), do: cmd_browse(state, String.trim(name))
+  defp handle_meta(state, ":apropos " <> query), do: cmd_apropos(state, String.trim(query))
+  defp handle_meta(state, ":effects " <> expr), do: cmd_effects(state, expr)
+  defp handle_meta(state, ":imports"), do: handle_meta(state, ":env")
+  defp handle_meta(state, ":stdlib"), do: cmd_stdlib(state)
   defp handle_meta(state, ":doc " <> name), do: cmd_doc(state, name)
   defp handle_meta(state, ":load " <> path), do: cmd_load(state, String.trim(path))
   defp handle_meta(state, ":use " <> mod), do: cmd_use(state, String.trim(mod))
@@ -825,7 +867,7 @@ defmodule Cure.REPL do
 
   defp handle_meta(state, other) do
     known_commands = ~w(
-      :t :type :doc :effects :load :use :fmt :let :ast :time :bench
+      :t :type :printdef :total :browse :apropos :doc :effects :load :use :fmt :let :ast :time :bench
       :theme :mode :color :history :search :save :edit :holes :john
       :defs :reset :reload :help :imports :stdlib :quit :exit :snap
     )
@@ -844,6 +886,104 @@ defmodule Cure.REPL do
 
   defp cmd_doc(state, name) do
     Docs.render(name, state)
+    state
+  end
+
+  defp cmd_browse(state, name) do
+    Docs.render(name, state)
+    state
+  end
+
+  defp cmd_apropos(state, query) do
+    Docs.apropos(query, state)
+    state
+  end
+
+  defp cmd_printdef(state, name) do
+    matches =
+      Enum.filter(state.defs, fn entry ->
+        entry_name = entry.key |> elem(1) |> to_string()
+        entry_name == name or entry.label == name
+      end)
+
+    case matches do
+      [] -> render_info(state, "(no session definition `#{name}`)")
+      entries -> Enum.each(entries, fn entry -> Render.write_line(entry.source) end)
+    end
+
+    state
+  end
+
+  defp cmd_total(state, name) do
+    entry =
+      Enum.find(state.defs, fn entry ->
+        entry.kind == :fn and (to_string(elem(entry.key, 1)) == name or entry.label == name)
+      end)
+
+    case entry do
+      nil ->
+        render_info(state, "(no session function `#{name}`)")
+
+      _ ->
+        source = session_inspection_source(state, "Totality#{state.n}")
+
+        case Cure.Elab.Program.elaborate(source) do
+          {:ok, env} ->
+            key = Cure.Core.Env.resolve_key(env, env.defs, String.to_atom(name))
+            verdict = if MapSet.member?(env.certified, key), do: "total", else: "not total"
+            render_info(state, "#{entry.label} is #{verdict}")
+
+          {:error, reason} ->
+            render_reason_error(state, reason)
+        end
+    end
+
+    state
+  end
+
+  defp cmd_type(state, expr) do
+    case infer_expression_type(state, expr) do
+      {:ok, type} -> render_info(state, String.trim(expr) <> " : " <> Cure.Core.Printer.print(type))
+      {:error, reason} -> render_reason_error(state, reason)
+    end
+
+    state
+  end
+
+  defp cmd_effects(state, expr) do
+    case infer_expression_type(state, expr) do
+      {:ok, {:effect_type, _payload}} -> render_info(state, String.trim(expr) <> " : effectful")
+      {:ok, _type} -> render_info(state, String.trim(expr) <> " : pure")
+      {:error, reason} -> render_reason_error(state, reason)
+    end
+
+    state
+  end
+
+  defp infer_expression_type(state, expr) do
+    probe = "repl_probe_#{state.n}"
+    source = session_inspection_source(state, "Inspect#{state.n}", "fn #{probe}() =\n#{indent_body(String.trim(expr))}")
+
+    with {:ok, env} <- Cure.Elab.Program.elaborate(source),
+         %{type: type} <- Cure.Core.Env.get_def(env, String.to_atom(probe)) do
+      {:ok, type}
+    else
+      nil -> {:error, {:unknown_global, String.to_atom(probe)}}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp session_inspection_source(state, suffix, extra \\ "") do
+    uses = state.uses |> Enum.map(&"  use #{&1}\n") |> Enum.join()
+    defs = inline_session_defs(state)
+    tail = if extra == "", do: "", else: "  " <> extra <> "\n"
+    "mod Repl.#{suffix}\n#{uses}#{defs}#{tail}"
+  end
+
+  defp cmd_stdlib(state) do
+    modules = stdlib_module_names() |> Enum.sort()
+    render_info(state, "stdlib modules (#{length(modules)}):")
+    Enum.each(modules, &render_info(state, "  " <> &1))
     state
   end
 
@@ -1328,6 +1468,10 @@ defmodule Cure.REPL do
     ## Meta-commands
 
     - `:t` / `:type expr` - show the inferred type of `expr`
+    - `:printdef name` - print a definition entered in this session
+    - `:total name` - report whether a session function is totality-certified
+    - `:browse Mod` - browse a module's public API
+    - `:apropos term` - search module, function, type, and protocol names
     - `:doc name` - show the docstring of `name`
     - `:effects expr` - show the inferred effects of `expr`
     - `:load path` - compile a `.cure` file and bring its bindings in
@@ -1383,7 +1527,8 @@ defmodule Cure.REPL do
 
     ## Top-level declarations
     Submitting `fn name(...) = ...`, `type Name = ...`, `rec Name ...`,
-    `proto Name ...`, `impl Proto for Type ...`, or `proof Name ...`
+    `interface Name ...`, `implementation Interface for Type ...`, or
+    `proof Name ...`
     installs the declaration into the REPL's synthesised
     `Repl.Session` module. Subsequent expressions can call/use those
     names unqualified. Redefining a declaration with the same name &
@@ -1497,15 +1642,24 @@ defmodule Cure.REPL do
       String.ends_with?(trimmed, "else") -> :continue
       String.ends_with?(trimmed, ",") -> :continue
       String.ends_with?(trimmed, "(") -> :continue
+      String.ends_with?(trimmed, "=>") -> :continue
+      proof_continuation_cue?(trimmed) -> :continue
       lone_opening_keyword?(trimmed) -> :continue
       true -> :complete
     end
   end
 
   # Single-token block-opening keywords with no operand on the same
-  # line. Typing `match` / `if` / `try` / `fn` / `case` / `cond` /
+  # line. Typing `match` / `pickup` / `try` / `fn` / `case` / `cond` /
   # `do` and pressing Enter clearly signals an unfinished expression.
-  @opening_keywords ~w(match if case cond try fn do let mod rec type proto impl proof actor fsm)
+  @opening_keywords ~w(match pickup if case cond try fn do let mod rec type interface implementation proto impl proof actor fsm)
+
+  @proof_continuation_keywords ~w(induction have because rewrite simplify)
+
+  defp proof_continuation_cue?(line) do
+    words = String.split(String.trim(line), ~r/\s+/, trim: true)
+    words == ["proof", "chain"] or List.first(words) in @proof_continuation_keywords
+  end
 
   defp lone_opening_keyword?(line) do
     case String.split(String.trim(line), ~r/\s+/, trim: true) do
@@ -1545,7 +1699,7 @@ defmodule Cure.REPL do
   #
   #   1. The just-typed line ends with a continuation token (`do`, `->`,
   #      `=`, `|`, `then`, `else`, `,`, `(`) or is a lone block-opener
-  #      (`match`, `if`, `fn`, ...). This is the cheap fast path.
+  #      (`match`, `pickup`, `fn`, ...). This is the cheap fast path.
   #   2. Brackets are unbalanced.
   #   3. The full joined buffer fails to parse and at least one parser
   #      error is rooted at the synthetic EOF / dedent token, meaning
@@ -1561,6 +1715,38 @@ defmodule Cure.REPL do
       not balanced?(joined) or
       parse_indicates_continuation?(joined) or
       ast_is_open_block?(joined)
+  end
+
+  # Once a block header has opened a buffer, lines deeper than its authored
+  # indentation belong to that submission even if the parser could accept the
+  # prefix as a smaller complete program. `;;` (or a later dedented line) ends
+  # the block explicitly.
+  defp indented_continuation?([], _line), do: false
+
+  defp indented_continuation?(buffer, line) do
+    first = Enum.find(buffer, &(String.trim(&1) != "")) || ""
+    String.trim(line) != "" and leading_width(line) > leading_width(first)
+  end
+
+  defp indentation_block_open?([]), do: false
+
+  defp indentation_block_open?(buffer) do
+    nonblank = Enum.reject(buffer, &(String.trim(&1) == ""))
+
+    case nonblank do
+      [] -> false
+      [first | rest] -> Enum.any?(rest, &(leading_width(&1) > leading_width(first)))
+    end
+  end
+
+  defp leading_width(line) do
+    line
+    |> String.to_charlist()
+    |> Enum.reduce_while(0, fn
+      ?\s, count -> {:cont, count + 1}
+      ?\t, count -> {:cont, count + 2}
+      _char, count -> {:halt, count}
+    end)
   end
 
   defp parse_indicates_continuation?(src) do
@@ -1611,6 +1797,15 @@ defmodule Cure.REPL do
 
   # `match scrutinee` without arms.
   defp open_ast?({:pattern_match, _meta, [_scrutinee]}), do: true
+
+  # Open constructs can be nested under a function/proof/container node. The
+  # old top-level-only check saw `match x` but missed `fn f() = match x`, which
+  # made the REPL submit a definition before its first indented arm arrived.
+  defp open_ast?(tuple) when is_tuple(tuple) do
+    tuple |> Tuple.to_list() |> Enum.any?(&open_ast?/1)
+  end
+
+  defp open_ast?(list) when is_list(list), do: Enum.any?(list, &open_ast?/1)
 
   defp open_ast?(_), do: false
 

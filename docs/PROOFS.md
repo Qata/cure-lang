@@ -271,6 +271,11 @@ Rewriting searches the goal recursively, including beneath ordinary function
 applications, and succeeds automatically **only when exactly one occurrence
 matches**. The other two cases are diagnostics, not silent choices:
 
+That recursive search is automatic congruence: if evidence proves `a == b`, a
+rewrite beneath `S(a)`, `wrap(a)`, or one argument of `combine(prefix, a)`
+constructs the required equality-elimination term automatically. There is no
+separate congruence tactic, and no untrusted shortcut in Core.
+
 - Zero occurrences reports the left side it searched for and the current goal.
 - Multiple occurrences reports `REWRITE MATCHES MORE THAN ONCE [E111]` and
   labels *every* candidate, with a `Rewrite occurrence 1` / `Rewrite occurrence 2`
@@ -370,9 +375,10 @@ Two practical points:
 
 - **`cure check` passes a file containing holes.** Only `cure compile` reports
   `UNFILLED HOLE [E014]`. Do not read a green `check` as "finished".
-- **`??` is the older spelling of `?_`** and still lexes and behaves
-  identically. New code should use `?_`; `?_` is a hole named `_`, so the two
-  are indistinguishable in behaviour today.
+- **`??` is obsolete as of Cure 0.34.** It is rejected with a diagnostic that
+  points to `?_`; this prevents old source from silently surviving the breaking
+  surface change. Bare `?` remains a proof-search hole, and generated `???`
+  placeholders remain reserved for tooling.
 
 ### 3.8 Named arguments
 
@@ -408,35 +414,67 @@ complete paths through its pattern matching, named from source constructor
 paths (`dot.Empty`, `succ_int.NegativeSuccessor.Zero`) rather than decision-tree
 ordinals like `eq_1`.
 
-**This does not work today.** Referring to one fails to resolve at check time
-and crashes the compiler at compile time:
+An equation member takes the variables needed to reconstruct that branch. For
+the successor branch below, `add3.S3(k, y)` certifies the complete authored
+equation, including reconstruction of the scrutinised `S3(k)` argument:
 
+```cure
+mod DefiningEquations
+  use Std.Equivalent
+
+  type Nat3 = Z3 | S3(Nat3)
+
+  fn add3(x: Nat3, y: Nat3) -> Nat3 = match x
+    Z3() -> y
+    S3(k) -> S3(add3(k, y))
+
+  @lemma
+  fn add3_succ_eq(
+    k: Nat3,
+    y: Nat3
+  ) -> Equivalent(Nat3, add3(S3(k), y), S3(add3(k, y))) = add3.S3(k, y)
+end
 ```
-$ cure check p13.cure
--- UNKNOWN VALUE [E091] --
-`plus.Z` is not available in this value namespace.
 
-$ cure compile p13.cure
--- INTERNAL COMPILER ERROR [E101] --
-The compiler reached an impossible state. Please report fingerprint `18c19b09f80e`.
+Friendly equation calls are resolved during elaboration and emitted only when
+reachable from runtime code. Unknown members use `E114`; unused certified
+equations remain compile-time-only and do not bloat the BEAM module.
+
+### 4.1 Dependent refinement and named implicit patterns
+
+Pattern matching refines indices before checking a branch. A named implicit
+pattern makes an erased constructor index explicit: `{n = .k}` asserts that the
+constructor's hidden `n` is definitionally equal to `k`. The dot is a forced
+value, not a new binder:
+
+```cure
+mod RefinedPatterns
+  type Nat = Z | S(Nat)
+  type Vec(a: Type) indices (n: Nat)
+    vnil : Vec(a, Z)
+    vcons : a -> Vec(a, n) -> Vec(a, S(n))
+
+  fn keep({a: Type}, {k: Nat}, value: Vec(a, S(k))) -> Vec(a, S(k)) = match value
+    vcons({n = .k}, head, tail) -> value
+end
 ```
 
-Related fingerprints for the applied-equation shape are `b0471f7fba6c` and
-`1426dd796cde`. Until this is fixed, name your equations yourself with `have`,
-or pass the hypothesis explicitly to `simplify using [...]` as in §3.4. This is
-tracked in §4 of the 0.34 launch checklist.
+The forced equality is checked against branch unification. A wrong value is a
+type error; erased indices cannot be smuggled into relevant runtime code.
 
 ## 5. Diagnostics
 
 | Code | Title | Raised when |
 |---|---|---|
 | `E014` | Unfilled hole | a hole survives to `cure compile` (§3.7) |
-| `E091` | Unknown value | a multi-step chain without `use Std.Equivalent`; a generated equation name (§4) |
-| `E109`–`E114` | Proof-language diagnostics | see below |
-| `E110` | Proof justification is unfinished | a `because` block ended with its goal open (§3.3) |
-| `E111` | Rewrite matches more than once / occurrence does not exist | ambiguous or out-of-range `rewrite` (§3.5) |
-| `E112` | Simplification left a residual goal / simplified proof does not match | `simplify` could not close the goal (§3.4) |
-| `E115` | Unknown named argument | a label that is not a parameter (§3.8) |
+| `E091` | Unknown value | a proof helper is not imported or an ordinary value name cannot resolve |
+| `E109` | Proof chain syntax error | an empty/malformed chain, missing relation/right side/`because`, or a statement after closure |
+| `E110` | Proof chain mismatch | adjacent carriers disagree, evidence proves the wrong equality, or a `because` block ends open |
+| `E111` | Directed rewrite failed | no match, multiple matches, invalid `at`, unavailable target, or reverse-only match |
+| `E112` | Simplification failed | inadmissible rule, residual goal, supplied-proof mismatch, or resource guard |
+| `E113` | Induction failed | non-inductive subject, bad case coverage/shape, or unavailable/mistyped hypothesis |
+| `E114` | Defining equation unavailable | unknown, inaccessible, uncertified, or ambiguous friendly equation member |
+| `E115` | Named argument mismatch | unknown/duplicate/misplaced/missing label or label-ambiguous overload |
 
 Every one of these carries the authored range, and the `E109`–`E115` family
 follows the same terminal, JSON, and LSP structured-diagnostic path as the rest

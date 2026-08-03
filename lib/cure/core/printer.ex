@@ -35,6 +35,7 @@ defmodule Cure.Core.Printer do
   def print({:int_lit, n}, _names), do: Integer.to_string(n)
   def print({:nat_lit, n}, _names), do: Integer.to_string(n)
   def print({:bounded_lit, n}, _names), do: Integer.to_string(n)
+  def print({:effect_type, type}, names), do: "Effect(" <> print(type, names) <> ")"
   def print({:float_type}, _names), do: "Float"
   def print({:float_lit, f}, _names), do: Float.to_string(f)
   def print({:binary_type}, _names), do: "Binary"

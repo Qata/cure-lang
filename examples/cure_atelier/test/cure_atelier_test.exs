@@ -54,7 +54,7 @@ defmodule CureAtelierTest do
       {:ok, a} = :cure_std_time.parse_iso8601("2026-05-01T09:00:00Z")
       {:ok, b} = :cure_std_time.parse_iso8601("2026-05-01T09:05:00Z")
       d = :cure_std_time.diff(b, a)
-      assert d.micros == 300_000_000
+      assert {:Duration, 300_000_000} = d
 
       back = :cure_std_time.add(a, d)
       assert back == b
@@ -62,19 +62,14 @@ defmodule CureAtelierTest do
   end
 
   describe "Std.Regex title validation" do
-    test "compile + run capture groups for the title pattern" do
-      {:ok, r} = :cure_std_regex.compile("^([A-Z][\\w ]+)\\s\\((\\d{4})\\)$")
-
-      assert {:some, %{whole: whole, groups: [title, year]}} =
-               :cure_std_regex.run(r, "Starry Night (1889)")
-
-      assert whole == "Starry Night (1889)"
-      assert title == "Starry Night"
-      assert year == "1889"
+    test "the Curator runs its compile-time typed title pattern" do
+      assert :"Cure.Main.Curator".valid_title(~c"Starry Night (1889)")
+      refute :"Cure.Main.Curator".valid_title(~c"starry night (1889)")
     end
 
-    test "malformed regex is flagged at compile time" do
-      assert {:error, {:invalid_pattern, _}} = :cure_std_regex.compile("(")
+    test "the title pattern requires a four-digit parenthesized year" do
+      refute :"Cure.Main.Curator".valid_title(~c"Starry Night (89)")
+      refute :"Cure.Main.Curator".valid_title(~c"Starry Night 1889")
     end
   end
 

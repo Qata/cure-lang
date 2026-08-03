@@ -33,7 +33,7 @@ Recognised constructs:
   soft/hard event suffixes (`event?`, `event!`).
 - Decorators / attributes: `@record`, `@derive(Json)`,
   `@deprecated`, etc.
-- Typed holes: `?name` and the anonymous `??`.
+- Typed holes: `?name` and the anonymous `?_`.
 - Comments: plain `# line`, `## doc line`, and fenced
   `### multi-line ###` doc regions (with `@doctag` highlighting).
 - Strings with `#{...}` interpolation and `\uXXXX` escapes.
@@ -164,7 +164,7 @@ mod Showcase
 
   ## Named and anonymous typed holes.
   fn sketch(x: Int) -> Int = ?todo
-  fn another() -> Int      = ??
+  fn another() -> Int      = ?_
 
   ## Regex and char literals.
   fn is_digit?(c: Char) -> Bool =

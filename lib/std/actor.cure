@@ -434,6 +434,15 @@ mod Std.Actor
       false -> emit_actor_parts_aliased(module_name, module_expr, state_type, init_spec, message_type, message_declarations, cast_body, info_body, terminate_body, code_change_body, extra_declarations, raw_body)
     false -> emit_actor_parts_poly(module_name, module_expr, state_type, init_spec, message_declarations, cast_body, info_body, terminate_body, code_change_body, extra_declarations, raw_body)
 
+  ## A cast-only actor still claims the complete `gen_server` behaviour. Keep
+  ## that claim honest with an unreachable-through-the-typed-API call floor:
+  ## its request is polymorphic and its reply is Unit, while the actor state is
+  ## preserved. Raw BEAM callers therefore receive a total reply instead of
+  ## crashing the server, and the generated module carries no missing-callback
+  ## warning.
+  fn default_actor_handle_call(state_type: Syntax) -> Syntax =
+    function("handle_call", [parameter("request", variable("r")), parameter("from", variable("f")), parameter("state", state_type)], call("Effect", [tuple_type([variable("Atom"), variable("Unit"), state_type])]), tuple([atom_literal(:reply), unit_literal(), variable("state")]))
+
   fn emit_actor_parts_aliased(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, extra_declarations: List(Syntax), raw_body: Bool) -> Syntax =
         let result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
@@ -450,6 +459,7 @@ mod Std.Actor
           gen_server_module(module_name, state_type, append([
             alias_node("Message", message_type),
             function("init", [init_spec.parameter], init_type, init_spec.body),
+            default_actor_handle_call(variable("State")),
             quote (fn handle_cast(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(handler_body)),
             quote (fn handle_info(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(info_handler)),
             quote (fn terminate(reason: Atom, state: State) -> Effect(Atom) = $(terminate_handler)),
@@ -468,6 +478,7 @@ mod Std.Actor
           gen_server_module(module_name, state_type, append([
             alias_node("Message", message_type),
             function("init", [init_spec.parameter], init_type, init_spec.body),
+            default_actor_handle_call(variable("State")),
             quote (fn handle_cast(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(cast_body)),
             quote (fn handle_info(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(info_handler)),
             quote (fn terminate(reason: Atom, state: State) -> Effect(Atom) = $(terminate_handler)),
@@ -487,6 +498,7 @@ mod Std.Actor
         block(append(message_declarations, [
           gen_server_module(module_name, state_type, append([
             function("init", [init_spec.parameter], init_type, init_spec.body),
+            default_actor_handle_call(variable("State")),
             function("handle_cast", [parameter("message", variable("m")), parameter("state", variable("State"))], result_type, handler_body),
             function("handle_info", [parameter("message", variable("i")), parameter("state", variable("State"))], result_type, info_handler),
             quote (fn terminate(reason: Atom, state: State) -> Effect(Atom) = $(terminate_handler)),
@@ -512,6 +524,7 @@ mod Std.Actor
         block(append(message_declarations, [
           gen_server_module_raw(module_name, append([
             function("init", [init_spec.parameter], init_type, init_spec.body),
+            default_actor_handle_call(variable("p")),
             function("handle_cast", [parameter("message", variable("m")), parameter("state", variable("p"))], result_type, handler_body),
             function("handle_info", [parameter("message", variable("i")), parameter("state", variable("p"))], result_type, info_handler),
             function("terminate", [parameter("reason", variable("Atom")), parameter("state", variable("p"))], call("Effect", [variable("Atom")]), terminate_handler),

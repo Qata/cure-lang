@@ -8,15 +8,15 @@ defmodule CureColony do
     * `cure_src/echo.cure`   -- `actor Echo`
     * `cure_src/colony.cure` -- `sup Colony`
 
-  The compiled modules are, respectively, `Cure.Worker`, `Cure.Echo`,
-  and `Cure.Colony`. `CureColony.Application`
-  starts `Cure.Colony` under its own top-level `Supervisor`, which
+  The compiled modules are, respectively, `Cure.Main.Worker`, `Cure.Main.Echo`,
+  and `Cure.Main.Colony`. `CureColony.Application`
+  starts `Cure.Main.Colony` under its own top-level `Supervisor`, which
   in turn starts two `Worker` instances and one `Echo` instance.
 
   ## Quick Start
 
       # The application starts the tree automatically:
-      iex> is_pid(Process.whereis(:"Cure.Colony"))
+      iex> is_pid(Process.whereis(:"Cure.Main.Colony"))
       true
 
       # Each child can be addressed by its supervisor id:
@@ -32,9 +32,9 @@ defmodule CureColony do
       :ping
   """
 
-  @sup_module :"Cure.Colony"
-  @worker_module :"Cure.Worker"
-  @echo_module :"Cure.Echo"
+  @sup_module :"Cure.Main.Colony"
+  @worker_module :"Cure.Main.Worker"
+  @echo_module :"Cure.Main.Echo"
 
   @doc "Atom of the compiled supervisor module."
   @spec sup_module() :: module()

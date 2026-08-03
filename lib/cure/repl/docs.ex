@@ -51,6 +51,41 @@ defmodule Cure.REPL.Docs do
     end
   end
 
+  @doc "Search documentation names available to the current REPL session."
+  @spec apropos(String.t(), map()) :: :ok
+  def apropos(query, state) when is_binary(query) do
+    needle = query |> String.trim() |> String.downcase()
+
+    hits =
+      search_roots(state)
+      |> Enum.flat_map(&Path.wildcard(Path.join(&1, "**/*.cure")))
+      |> Enum.uniq()
+      |> Enum.flat_map(fn path ->
+        case cached_docs(path) do
+          {:ok, docs} -> apropos_entries(docs)
+          {:error, _} -> []
+        end
+      end)
+      |> Enum.filter(&(needle != "" and String.contains?(String.downcase(&1), needle)))
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    case hits do
+      [] -> info(state, "(no declarations matching `#{query}`)")
+      _ -> Enum.each(hits, &Render.write_line("  " <> &1))
+    end
+
+    :ok
+  end
+
+  defp apropos_entries(docs) do
+    module = heading_name(docs, "Unknown")
+    functions = Enum.map(docs.functions || [], &"#{module}.#{&1.name}/#{length(&1.params)}")
+    types = Enum.map(docs.types || [], &"#{module}.#{&1.name}")
+    protocols = Enum.map(docs.protocols || [], &"#{module}.#{&1.name}")
+    [module | functions ++ types ++ protocols]
+  end
+
   @doc false
   # Exposed for tests: parse a raw user string into a resolved target.
   @spec parse_target(String.t()) :: {:ok, target()} | {:error, String.t()}
@@ -197,7 +232,7 @@ defmodule Cure.REPL.Docs do
 
   defp render_protocol_index(%{protocols: protos}, state) when is_list(protos) and protos != [] do
     Render.write_line("")
-    Render.write_line(with_style(state, :info, "Protocols"))
+    Render.write_line(with_style(state, :info, "Interfaces"))
 
     Enum.each(protos, fn proto ->
       Render.write_line("  " <> with_style(state, :match, proto.name))

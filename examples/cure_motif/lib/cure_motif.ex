@@ -7,13 +7,13 @@ defmodule CureMotif do
     * `motif.cure`      -- pure core: domain aliases, ADTs, Pattern
       helpers, rendering (compiled to `:"Cure.Motif"`)
     * `envelope.cure`   -- transparent FSM
-      (compiled to `:"Cure.Envelope"`)
+      (compiled to `:"Cure.Main.Envelope"`)
     * `voice.cure`, `sequencer.cure`, `clock.cure` -- transparent actors
       (compiled to `:"Cure.<Name>"`)
-    * `orchestra.cure`  -- transparent `sup Cure.Motif.Orchestra`
+    * `orchestra.cure`  -- transparent `sup Motif.Orchestra`
       (compiled to `:"Cure.Motif.Orchestra"`)
-    * `motif_app.cure`  -- transparent `app Cure.CureMotif`
-      (compiled to `:"Cure.CureMotif"`)
+    * `motif_app.cure`  -- transparent `app CureMotif`
+      (compiled to `:"Cure.Main.CureMotif"`)
 
   This module wraps the compiled BEAM surface so it reads naturally
   from Elixir.
@@ -35,20 +35,20 @@ defmodule CureMotif do
       true
 
       iex> # Spawn a fresh FSM and drive the lifecycle manually:
-      iex> {:ok, pid} = :"Cure.Envelope".start_link(0)
+      iex> {:ok, pid} = :"Cure.Main.Envelope".start_link(0)
       iex> :gen_statem.cast(pid, :note_on)
       iex> Process.sleep(60)
-      iex> elem(:sys.get_state(pid), 0) in [:sustain, :release, :silent]
+      iex> elem(:sys.get_state(pid), 0) in [:Sustain, :Release, :Silent]
       true
   """
 
   @motif :"Cure.Motif"
-  @envelope :"Cure.Envelope"
+  @envelope :"Cure.Main.Envelope"
   @sup_module :"Cure.Motif.Orchestra"
-  @app_module :"Cure.CureMotif"
-  @clock_module :"Cure.Clock"
-  @sequencer_module :"Cure.Sequencer"
-  @voice_module :"Cure.Voice"
+  @app_module :"Cure.Main.CureMotif"
+  @clock_module :"Cure.Main.Clock"
+  @sequencer_module :"Cure.Main.Sequencer"
+  @voice_module :"Cure.Main.Voice"
   @sequencer_callers :cure_motif_sequencer_callers
 
   @compile {:no_warn_undefined, @motif}

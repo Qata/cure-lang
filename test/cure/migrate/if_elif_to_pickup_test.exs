@@ -25,9 +25,12 @@ defmodule Cure.Migrate.IfElifToPickupTest do
   end
 
   test "top-level if/else rewrites to pickup and reparses" do
-    {out, _} = migrate("mod M\nfn f(x: Int) -> Int = if x > 0 then 1 else 2\n", "a.cure")
+    {out, warns} = migrate("mod M\nfn f(x: Int) -> Int = if x > 0 then 1 else 2\n", "a.cure")
     assert out =~ "pickup"
     assert reparses?(out, "a.cure")
+
+    warning = Enum.find(warns, &(&1.rule == :W_if_elif_pickup))
+    assert %Cure.Diagnostic.Span{start_line: 2, start_column: 23, end_column: 25} = warning.span
   end
 
   test "a comment on the rewritten conditional survives the restructuring rewrite" do

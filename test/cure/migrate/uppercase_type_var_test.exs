@@ -25,7 +25,18 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     assert out =~ "x: t"
     assert out =~ "-> t"
     refute out =~ "T"
-    assert Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+    warning = Enum.find(warns, &(&1.rule == :W_uppercase_type_var))
+    assert warning.line == 2
+    assert %Cure.Diagnostic.Span{start_column: 10, end_column: 11} = warning.span
+  end
+
+  test "a protocol head reports the authored type-parameter span" do
+    source = "mod M\nproto Label(T)\n  fn label(x: T) -> String\n"
+    {_out, warns} = migrate(source, "protocol_head.cure")
+
+    warning = Enum.find(warns, &(&1.rule == :W_uppercase_type_var))
+    assert warning.line == 2
+    assert %Cure.Diagnostic.Span{start_line: 2, start_column: 13, end_column: 14} = warning.span
   end
 
   test "an uppercase name that resolves to a declared type is left alone" do
@@ -42,6 +53,15 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     {out, warns} = migrate("mod M\nfn f(x: Int) -> Int = x\n", "e.cure")
     assert out =~ "x: Int"
     assert out =~ "-> Int"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "a qualified type's module path is not treated as a free type variable" do
+    source = "mod M\nfn same(x: Std.Bool.Bool) -> Std.Bool.Bool = x\n"
+    {out, warns} = migrate(source, "qualified.cure")
+
+    assert out =~ "Std.Bool.Bool"
+    refute out =~ "std.Bool.Bool"
     refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
   end
 

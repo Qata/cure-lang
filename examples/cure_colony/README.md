@@ -10,9 +10,9 @@ Cure modules. There is no actor or supervisor compiler class in the example.
 ## Layout
 
 ```text
-cure_src/worker.cure        actor Cure.Worker
-cure_src/echo.cure          actor Cure.Echo
-cure_src/colony.cure        sup Cure.Colony
+cure_src/worker.cure        actor Worker
+cure_src/echo.cure          actor Echo
+cure_src/colony.cure        sup Colony
 lib/cure_colony.ex          Elixir facade
 lib/cure_colony/application.ex  Mix application bridge
 ```

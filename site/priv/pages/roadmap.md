@@ -1163,7 +1163,7 @@ ecosystem groundwork.
 - **`Cure.Types.Unify`** -- first-order unification with occurs check
   for implicit-argument inference; `:unification_trace` pipeline event
   rendered in LSP hover and CLI error output.
-- **`Cure.Types.Holes`** -- `?name` and `??` placeholders with goal-type
+- **`Cure.Types.Holes`** -- `?name` and `?_` placeholders with goal-type
   and local-context reporting via `:hole_goal`.
 - **`Cure.Types.Totality`** -- coverage + structural-recursion analysis;
   `:total | :partial | :unknown` classification; `@total true` decorator.

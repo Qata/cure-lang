@@ -46,10 +46,6 @@ mod Std.System
   ## Current microsecond timestamp since the Unix epoch.
   fn timestamp_us() -> Int = system_time(Microsecond())
 
-  ## Pid of the calling process.
-  @extern(:erlang, :self, 0)
-  fn self() -> Pid
-
   ## Atom name of the local node.
   @extern(:erlang, :node, 0)
   fn node() -> Atom

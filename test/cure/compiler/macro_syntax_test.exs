@@ -217,6 +217,58 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:rejected, [^repr]} = MacroSyntax.from_core_macro_result(error)
   end
 
+  test "structured direct inputs encode as erased compiled-expander arguments" do
+    leaf = fn name -> {:syn_leaf, :variable, [], {:s_str, name}} end
+
+    edge =
+      {:syn_node, :family_input, [],
+       [
+         {:syn_node, :option_some, [], [leaf.("Idle")]},
+         leaf.("Start")
+       ]}
+
+    definition =
+      {:syn_node, :family_input, [],
+       [
+         {:syn_node, :option_some, [], [leaf.("Idle")]},
+         {:syn_raw, {:s_list, [{:s_list, [{:s_syntax, edge}]}]}}
+       ]}
+
+    input = {:syn_node, :macro_input, [], [leaf.("Machine"), definition]}
+
+    fields = [
+      %{name: "initial", shape: "Name", cardinality: :optional},
+      %{
+        name: "transitions",
+        shape: "Edge",
+        cardinality: :one_or_more,
+        grammar: %{
+          name: "EdgeSyntax",
+          fields: [
+            %{name: "from", shape: "Name", cardinality: :optional},
+            %{name: "event", shape: "Name", cardinality: :required}
+          ]
+        }
+      }
+    ]
+
+    assert [name, encoded_definition] =
+             MacroSyntax.to_runtime_direct_inputs(
+               input,
+               ["name", "definition"],
+               %{"definition" => {:record, "DefinitionSyntax", fields}}
+             )
+
+    assert name == {:Leaf, :variable, [], {:SStr, ~c"Machine"}}
+
+    assert encoded_definition ==
+             {:DefinitionSyntax, {:some, {:Leaf, :variable, [], {:SStr, ~c"Idle"}}},
+              [
+                {:EdgeSyntax, {:some, {:Leaf, :variable, [], {:SStr, ~c"Idle"}}},
+                 {:Leaf, :variable, [], {:SStr, ~c"Start"}}}
+              ]}
+  end
+
   test "malformed macro rejection values preserve their schema verdict" do
     rejected = {:ctor, :"Std.Syntax#Rejected", [:not_a_diagnostic_list]}
     assert {:error, :invalid_macro_diagnostics} = MacroSyntax.from_core_macro_result(rejected)

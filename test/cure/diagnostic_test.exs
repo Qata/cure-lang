@@ -1,5 +1,6 @@
 defmodule Cure.DiagnosticTest do
   use ExUnit.Case, async: true
+  import ExUnit.CaptureIO
 
   alias Cure.Diagnostic
   alias Cure.Diagnostic.{Adapter, Label, ProvenanceFrame, Renderer, SourceRegistry, Suggestion, TextEdit}
@@ -201,6 +202,18 @@ defmodule Cure.DiagnosticTest do
     assert diagnostic.title == "Tabs are not valid indentation"
     assert Renderer.plain(diagnostic, registry) =~ "indentation uses spaces"
     refute Renderer.plain(diagnostic, registry) =~ "{:tab_not_allowed"
+  end
+
+  test "obsolete anonymous holes point to the 0.34 spelling" do
+    source = "mod Demo\n  fn unfinished() -> Int = ??\n"
+    error = {:lex_error, {:obsolete_anonymous_hole, 2, 28}}
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E094"
+    assert diagnostic.title == "Anonymous hole spelling changed"
+    assert rendered =~ "replace `??` with `?_`"
+    refute rendered =~ "{:obsolete_anonymous_hole"
   end
 
   test "structured parser producer details retain source coordinates" do
@@ -920,19 +933,81 @@ defmodule Cure.DiagnosticTest do
   end
 
   test "migration warnings render as rich diagnostics" do
+    source = "mod Demo\n\n  fn id(x: T) -> T = x\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register("demo.cure", source, "demo.cure")
+    {:ok, span} = SourceRegistry.span_at(registry, "demo.cure", 3, 3, 20)
+
     warning =
       Cure.Diagnostic.Operational.migration_warning(%{
         rule: :legacy,
         file: "demo.cure",
         line: 3,
-        message: "use the modern form"
+        message: "use the modern form",
+        span: span
       })
 
     assert warning.severity == :warning
     assert warning.code == "W001"
-    assert warning.primary == nil
-    assert Cure.Diagnostic.Renderer.plain(warning) =~ "W001"
-    assert Cure.Diagnostic.Renderer.plain(warning) =~ "use the modern form"
+    assert %Label{span: ^span, style: :primary} = warning.primary
+
+    plain = Renderer.plain(warning, registry)
+    assert plain =~ "W001"
+    assert plain =~ "3 |   fn id(x: T) -> T = x"
+    assert plain =~ "^^^^^^^^^^^^^^^^^^^^ deprecated syntax appears here"
+
+    ansi = Renderer.terminal(warning, registry, color: :always)
+    assert ansi =~ IO.ANSI.yellow()
+
+    assert Jason.decode!(Renderer.json(warning))["primary"]["span"]["start_line"] == 3
+    assert Renderer.lsp(warning, registry)["range"]["start"] == %{"line" => 2, "character" => 2}
+  end
+
+  test "the compiler's migration warning path attaches source evidence" do
+    root = Path.join(System.tmp_dir!(), "cure-warning-span-#{System.unique_integer([:positive])}")
+    file = Path.join(root, "warning.cure")
+    output = Path.join(root, "ebin")
+    File.mkdir_p!(root)
+    File.write!(file, "mod WarningSpan\n  fn id(x: T) -> T = x\n")
+    on_exit(fn -> File.rm_rf(root) end)
+
+    rendered =
+      capture_io(:stderr, fn ->
+        assert {:ok, :"Cure.WarningSpan", []} =
+                 Cure.Compiler.compile_file(file, output_dir: output, emit_events: false)
+      end)
+
+    assert rendered =~ "MIGRATION WARNING [W001]"
+    assert rendered =~ "can be lowercased"
+    assert rendered =~ ~r/Review the proposed result before\s+applying it/
+    assert rendered =~ "2 |   fn id(x: T) -> T = x"
+    assert rendered =~ "|            ^ deprecated syntax appears here"
+    assert rendered =~ "Hint: Review and apply the proposed migration."
+  end
+
+  test "a host driver can collect migration diagnostics without stderr interleaving" do
+    root = Path.join(System.tmp_dir!(), "cure-warning-collector-#{System.unique_integer([:positive])}")
+    file = Path.join(root, "warning_collector.cure")
+    output = Path.join(root, "ebin")
+    File.mkdir_p!(root)
+    File.write!(file, "mod WarningCollector\n  fn id(x: T) -> T = x\n")
+    on_exit(fn -> File.rm_rf(root) end)
+    owner = self()
+    collector = fn diagnostics, registry -> send(owner, {:migration_diagnostics, diagnostics, registry}) end
+
+    stderr =
+      capture_io(:stderr, fn ->
+        assert {:ok, :"Cure.WarningCollector", []} =
+                 Cure.Compiler.compile_file(file,
+                   output_dir: output,
+                   emit_events: false,
+                   migration_diagnostic_sink: collector
+                 )
+      end)
+
+    assert stderr == ""
+    assert_receive {:migration_diagnostics, [diagnostic], registry}
+    assert diagnostic.code == "W001"
+    assert Cure.Diagnostic.Renderer.plain(diagnostic, registry) =~ "fn id(x: T)"
   end
 
   test "migration failures preserve their variant data and render actionable messages" do

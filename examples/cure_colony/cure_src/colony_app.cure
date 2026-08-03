@@ -1,3 +1,6 @@
 ## Transparent application example. Lifecycle callbacks are ordinary Cure.
 
-app Cure.CureColony root Cure.Colony
+use Std.App
+
+app CureColony
+  root Main.Colony

@@ -12,6 +12,15 @@ defmodule Cure.Compiler.DepGraphTest do
   end
 
   describe "scan/2 + order/1" do
+    test "indexes a declaration-only source under the implicit Main module", %{tmp_dir: dir} do
+      path = write!(dir, "main.cure", "fn answer() -> Int = 42\n")
+
+      assert {:ok, graph} = DepGraph.scan([path])
+      assert graph.modules["Main"] == path
+      assert graph.module_index.entries["Main"].provided_modules == ["Main"]
+      assert {:ok, [^path], []} = DepGraph.order(graph)
+    end
+
     test "orders use-dependencies before their dependents", %{tmp_dir: dir} do
       a = write!(dir, "zz_lib.cure", "mod LibA\n  fn ping() -> Int = 41\n")
       b = write!(dir, "aa_user.cure", "mod UserB\n  use LibA\n  fn start() -> Int = ping()\n")

@@ -70,7 +70,8 @@ ANSI-highlighted `=>` arrow.
 
 ### Flow
 
-- `Enter`                        - submit (auto-continues on unbalanced brackets)
+- `Enter`                        - submit, or continue an open/indented block
+- blank line                     - preserved inside an indented block; otherwise submit
 - `;;` on its own line           - force-submit a multi-line buffer
 - `Tab`                          - completion (meta-commands, paths, modules, keywords)
 - `Ctrl+L`                       - clear screen
@@ -92,7 +93,9 @@ You can also start directly in vi mode via `CURE_REPL_MODE=vi cure repl`.
 
 - `:t expr` (also `:type expr`)  - infer the type of `expr`
 - `:effects expr`                - infer the effect set
-- `:holes`                       - list holes from the last evaluation
+- `:holes`                       - list typed goals retained from session definitions
+- `:total name`                  - report whether a session function is kernel-certified total
+- `:printdef name`               - print an authored session definition
 - `:ast expr`                    - dump the parsed AST
 - `:fmt expr`                    - pretty-print `expr`
 - `:bless path` (v0.28.0)        - run the interactive type-error fix
@@ -106,6 +109,13 @@ You can also start directly in vi mode via `CURE_REPL_MODE=vi cure repl`.
   (v0.28.0: warns and suggests the nearest stdlib module when unknown)
 - `:env`                         - list all imports
 - `:doc name`                    - show the docstring of `name`
+- `:browse Mod`                  - browse a module's public API
+- `:apropos term`                - search module, function, type, and protocol names
+
+Indented function, match, induction, and proof blocks remain in the input
+buffer while their body is deeper than the first line. `proof chain`, `have`,
+`because`, `rewrite`, `simplify`, `induction`, and `case ... =>` are recognised
+as continuation cues. Use `;;` to submit after the final indented line.
 
 ### Session
 

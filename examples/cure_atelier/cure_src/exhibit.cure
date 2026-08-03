@@ -1,4 +1,7 @@
 ## Transparent FSM example. Transition lowering belongs in the Cure macro.
 
-fsm Cure.Exhibit
-  fn initial_state() -> Atom = :closed
+use Std.Fsm
+
+fsm Exhibit with Int
+  Closed --open--> Open
+  Open --close--> Closed

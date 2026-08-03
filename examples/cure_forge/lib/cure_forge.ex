@@ -12,9 +12,9 @@ defmodule CureForge do
     * `queue.cure`       -- `actor Queue`
     * `pool.cure`        -- `actor Pool`
 
-  The compiled modules are, respectively, `Cure.CureForge`,
-  `Cure.Forge.Root`, `Cure.Metrics`, `Cure.Logger`, `Cure.Queue`,
-  and `Cure.Pool`. `CureForge.Application`
+  The compiled modules are, respectively, `Cure.Main.CureForge`,
+  `Cure.Forge.Root`, `Cure.Main.Metrics`, `Cure.Main.Logger`, `Cure.Main.Queue`,
+  and `Cure.Main.Pool`. `CureForge.Application`
   starts `Cure.Forge.Root` under its own top-level `Supervisor`,
   which in turn starts the four actors under the `:one_for_one`
   strategy declared in `forge_root.cure`.
@@ -47,13 +47,11 @@ defmodule CureForge do
       "forge ready"
   """
 
-  require Logger
-
   @sup_module :"Cure.Forge.Root"
-  @metrics_module :"Cure.Metrics"
-  @logger_module :"Cure.Logger"
-  @queue_module :"Cure.Queue"
-  @pool_module :"Cure.Pool"
+  @metrics_module :"Cure.Main.Metrics"
+  @logger_module :"Cure.Main.Logger"
+  @queue_module :"Cure.Main.Queue"
+  @pool_module :"Cure.Main.Pool"
 
   # -- Module accessors ------------------------------------------------------
 

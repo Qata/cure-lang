@@ -305,13 +305,20 @@ mod Std.Fsm
       _ -> atom_literal(:generated_fsm)
     let action_type = call("FsmAction", [variable("State"), variable("Data")])
     let handle_type = call("Std.Otp.FsmPid", [variable("Event"), variable("State"), variable("Data")])
-    let decision = transition_decision_explicit(transitions, transition_decision_wildcard(transitions))
+    let decision = transition_decision(transitions)
+    let responds = transition_response_decision(transitions)
     let encoded = call("Std.Fsm.action_to_beam", [call("decide", [variable("event"), variable("state"), variable("data")])])
     Std.ActorBehavior.state_machine_module(module_name, [
       enum_type("State", syntax_variants(states)),
       enum_type("Event", event_variants(events)),
+      enum_type("TransitionInfo", [
+        enum_variant_payload("Explicit", [variable("Atom"), variable("Atom"), variable("Atom")]),
+        enum_variant_payload("Wildcard", [variable("Atom"), variable("Atom")])
+      ]),
       alias_node("Data", data),
       alias_node("Handle", handle_type),
+      function("transitions", [], call("List", [variable("TransitionInfo")]), list(transition_metadata(transitions))),
+      function("responds?", [parameter("state", variable("State")), parameter("event", variable("Event"))], variable("Bool"), responds),
       function("callback_mode", [], variable("Atom"), quote :handle_event_function),
       function("init", [parameter("initial", variable("Data"))], call("Effect", [tuple_type([variable("Atom"), variable("State"), variable("Data")])]), tuple([atom_literal(:ok), syntax_constructor(initial), variable("initial")])),
       function("decide", [parameter("event", variable("Event")), parameter("state", variable("State")), parameter("data", variable("Data"))], action_type, decision),
@@ -321,39 +328,86 @@ mod Std.Fsm
       function("send", [parameter("machine", variable("Handle")), parameter("event", variable("Event"))], call("Effect", [variable("Unit")]), call("Std.Otp.fsm_send", [variable("machine"), variable("event")]))
     ])
 
-  fn transition_decision_explicit(transitions: List(TransitionDefinitionSyntax), wildcard: Syntax) -> Syntax = match transitions
-    [] -> wildcard
-    [edge | rest] ->
-      let fallback = transition_decision_explicit(rest, wildcard)
-      match edge.from
-        None() -> fallback
-        Some(from) ->
-          let event_match = Node(:pattern_match, [], [variable("event"),
-            transition_match_arm(edge, fallback),
-            match_arm(variable("_"), fallback)
-          ])
-          Node(:pattern_match, [], [variable("state"),
-            match_arm(syntax_constructor(from), event_match),
-            match_arm(variable("_"), fallback)
-          ])
+  ## Emit the graph as ordinary generated data. Tooling and tests can inspect
+  ## exactly the rows which drive `decide/3`, without keeping a second table in
+  ## host code. Wildcard rows have a distinct constructor so callers cannot
+  ## accidentally mistake them for a concrete source state.
+  fn transition_metadata(transitions: List(TransitionDefinitionSyntax)) -> List(Syntax) = match transitions
+    [] -> []
+    [edge | rest] -> match syntax_name_atom(edge.event)
+      None() -> transition_metadata(rest)
+      Some(event) -> match syntax_name_atom(edge.to)
+        None() -> transition_metadata(rest)
+        Some(to) -> match edge.from
+          None() -> [call("Wildcard", [atom_literal(event), atom_literal(to)]) | transition_metadata(rest)]
+          Some(from) -> match syntax_name_atom(from)
+            None() -> transition_metadata(rest)
+            Some(source) -> [call("Explicit", [atom_literal(source), atom_literal(event), atom_literal(to)]) | transition_metadata(rest)]
 
-  fn transition_decision_wildcard(transitions: List(TransitionDefinitionSyntax)) -> Syntax = match transitions
-    [] -> call("Keep", [variable("data")])
+  ## Constructor keys include arity (`:Opened/0`) for duplicate checking.
+  ## Public graph metadata instead preserves the identifier the author wrote.
+  fn syntax_name_atom(value: Syntax) -> Option(Atom) = match syntax_name(value)
+    None() -> None()
+    Some(name) -> Some(Std.String.unsafe_to_atom(name))
+
+  ## `responds?/2` shares the same ordered patterns as `decide/3`. It answers
+  ## whether the compiled graph has a row for a state/event shape; guards are
+  ## deliberately not evaluated because they may depend on transition data.
+  fn transition_response_decision(transitions: List(TransitionDefinitionSyntax)) -> Syntax =
+    let key = "response_key"
+    let bind_key = let_binding(key, tuple([variable("state"), variable("event")]))
+    let fallback = match_arm(tuple([variable("_"), variable("_")]), bool_literal(false))
+    let arms = append(explicit_response_arms(transitions), wildcard_response_arms(transitions))
+    block([bind_key, Node(:pattern_match, [], [variable(key) | append(arms, [fallback])])])
+
+  fn explicit_response_arms(transitions: List(TransitionDefinitionSyntax)) -> List(Syntax) = match transitions
+    [] -> []
     [edge | rest] -> match edge.from
-      Some(_) -> transition_decision_wildcard(rest)
-      None() ->
-        let fallback = transition_decision_wildcard(rest)
-        Node(:pattern_match, [], [variable("event"),
-          transition_match_arm(edge, fallback),
-          match_arm(variable("_"), fallback)
-        ])
+      None() -> explicit_response_arms(rest)
+      Some(from) -> [response_arm(edge, syntax_constructor(from)) | explicit_response_arms(rest)]
 
-  fn transition_match_arm(edge: TransitionDefinitionSyntax, fallback: Syntax) -> Syntax =
-    let pattern = event_pattern(edge.event, optional_payload(edge.payload))
+  fn wildcard_response_arms(transitions: List(TransitionDefinitionSyntax)) -> List(Syntax) = match transitions
+    [] -> []
+    [edge | rest] -> match edge.from
+      Some(_) -> wildcard_response_arms(rest)
+      None() -> [response_arm(edge, variable("_")) | wildcard_response_arms(rest)]
+
+  fn response_arm(edge: TransitionDefinitionSyntax, state_pattern: Syntax) -> Syntax =
+    let event_match = event_pattern(edge.event, optional_payload(edge.payload))
+    match_arm(tuple([state_pattern, event_match]), bool_literal(true))
+
+  ## Compile the table as one linear tuple match. Explicit rows are emitted
+  ## before wildcard rows, which gives them precedence through ordinary pattern
+  ## ordering. The previous nested state/event decision duplicated its complete
+  ## fallback twice per row; moderately sized FSMs therefore produced an
+  ## exponential Syntax value and exhausted computed-macro normalization.
+  fn transition_decision(transitions: List(TransitionDefinitionSyntax)) -> Syntax =
+    let key = "transition_key"
+    let bind_key = let_binding(key, tuple([variable("state"), variable("event")]))
+    let fallback_pattern = tuple([variable("_"), variable("_")])
+    let fallback = match_arm(fallback_pattern, call("Keep", [variable("data")]))
+    let decision = Node(:pattern_match, [], [variable(key) | append(explicit_transition_arms(transitions), append(wildcard_transition_arms(transitions), [fallback]))])
+    block([bind_key, decision])
+
+  fn explicit_transition_arms(transitions: List(TransitionDefinitionSyntax)) -> List(Syntax) = match transitions
+    [] -> []
+    [edge | rest] -> match edge.from
+      None() -> explicit_transition_arms(rest)
+      Some(from) -> [transition_arm(edge, syntax_constructor(from)) | explicit_transition_arms(rest)]
+
+  fn wildcard_transition_arms(transitions: List(TransitionDefinitionSyntax)) -> List(Syntax) = match transitions
+    [] -> []
+    [edge | rest] -> match edge.from
+      Some(_) -> wildcard_transition_arms(rest)
+      None() -> [transition_arm(edge, variable("_")) | wildcard_transition_arms(rest)]
+
+  fn transition_arm(edge: TransitionDefinitionSyntax, state_pattern: Syntax) -> Syntax =
+    let event_match = event_pattern(edge.event, optional_payload(edge.payload))
+    let pattern = tuple([state_pattern, event_match])
     let body = call("Next", [syntax_constructor(edge.to), transition_update(edge.update)])
     match edge.when
       None() -> match_arm(pattern, body)
-      Some(guard) -> match_arm(pattern, Node(:conditional, [], [guard, body, fallback]))
+      Some(guard) -> guarded_match_arm(pattern, guard, body)
 
   fn event_pattern(event: Syntax, parameters: List(Syntax)) -> Syntax = match identifier_name(event)
     None() -> variable("_")

@@ -128,12 +128,18 @@ defmodule Mix.Tasks.Cure.Compile do
       module = target |> to_string() |> String.split(".") |> List.last()
       stem = module |> Macro.underscore()
 
-      Enum.find(files, target, fn path ->
+      Enum.find(files, fn path ->
         basename = Path.basename(path, ".cure")
         basename == stem or String.ends_with?(basename, "_" <> stem)
-      end)
+      end) || single_source_or_target(files, target)
     end
   end
+
+  # A standalone source without an enclosing `mod` is represented internally
+  # by a synthetic module name which need not resemble its filename. The sweep
+  # still has an unambiguous authored source when exactly one file was requested.
+  defp single_source_or_target([path], _target), do: path
+  defp single_source_or_target(_files, target), do: target
 
   defp render_sweep_error({:artifact_sweep_failed, errors}, files, _default) do
     Enum.each(errors, fn {target, reason} ->

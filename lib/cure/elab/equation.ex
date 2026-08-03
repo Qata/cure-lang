@@ -239,7 +239,11 @@ defmodule Cure.Elab.Equation do
         telescope: theorem_telescope,
         left_core: left,
         right_core: right,
-        visibility: Keyword.get(meta, :visibility, :public)
+        visibility: Keyword.get(meta, :visibility, :public),
+        application_parameter_count: parameter_count,
+        application_field_count: arity,
+        application_replacements: replacements,
+        application_copy_map: copy_map
       }
 
       :ok = SourceMetadata.put_equation(canonical_theorem, source_metadata)

@@ -48,13 +48,52 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
 
         File.mkdir_p!(output_dir)
 
-        case Cure.Compiler.Artifacts.sweep(
-               source_roots: [stdlib_dir],
-               output_dir: output_dir,
-               kind: :stdlib,
-               repair: true,
-               compile_opts: [emit_events: false]
-             ) do
+        progress_key = {__MODULE__, make_ref()}
+        diagnostics_key = {__MODULE__, make_ref()}
+        Process.put(progress_key, %{count: 0, seen: MapSet.new()})
+        Process.put(diagnostics_key, [])
+
+        progress = fn {:compile_started, module, _path} ->
+          %{count: count, seen: seen} = Process.get(progress_key)
+
+          if MapSet.member?(seen, module) do
+            Mix.shell().info("  [recheck] #{module}")
+          else
+            current = count + 1
+            Process.put(progress_key, %{count: current, seen: MapSet.put(seen, module)})
+            Mix.shell().info("  [#{current}/#{length(cure_files)}] #{module}")
+          end
+        end
+
+        collect_diagnostics = fn diagnostics, registry ->
+          Process.put(
+            diagnostics_key,
+            [{diagnostics, registry} | Process.get(diagnostics_key, [])]
+          )
+        end
+
+        {result, diagnostic_batches} =
+          try do
+            result =
+              Cure.Compiler.Artifacts.sweep(
+                source_roots: [stdlib_dir],
+                output_dir: output_dir,
+                kind: :stdlib,
+                repair: true,
+                progress: progress,
+                migration_diagnostic_sink: collect_diagnostics,
+                compile_opts: [emit_events: false]
+              )
+
+            {result, diagnostics_key |> Process.get([]) |> Enum.reverse()}
+          after
+            Process.delete(progress_key)
+            Process.delete(diagnostics_key)
+          end
+
+        flush_migration_diagnostics(diagnostic_batches)
+
+        case result do
           {:ok, result} ->
             Enum.each(result.cycles, fn walk ->
               Mix.shell().error(render_host_diagnostic({:import_cycle, walk}, stdlib_dir))
@@ -78,6 +117,22 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
   defp compiler_available? do
     Code.ensure_loaded?(Cure.Compiler) and
       function_exported?(Cure.Compiler, :compile_file, 2)
+  end
+
+  defp flush_migration_diagnostics(batches) do
+    Enum.each(batches, fn {diagnostics, registry} ->
+      sink =
+        Cure.Diagnostic.Sink.new(
+          registry: registry,
+          format: :plain,
+          output_device: :stderr,
+          width: 80
+        )
+
+      sink
+      |> Cure.Diagnostic.Sink.emit_all(diagnostics)
+      |> Cure.Diagnostic.Sink.flush()
+    end)
   end
 
   defp render_host_diagnostic(reason, path) do

@@ -137,5 +137,6 @@ defmodule Cure.Migrate.Rules.GroupHoist do
   defp group_decorator?({:decorator, meta, _}), do: Keyword.get(meta, :name) == "group"
   defp group_decorator?(_), do: false
 
-  defp decorator_line({:decorator, meta, _}), do: Keyword.get(meta, :line)
+  defp decorator_line({:decorator, meta, _}),
+    do: Rule.source_span(meta, :name) || Rule.source_span(meta, :whole) || Rule.source_line(meta)
 end

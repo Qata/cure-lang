@@ -64,7 +64,7 @@ defmodule CureSiteWeb.Layouts do
           <a
             href={~p"/type-system"}
             class={nav_class(@current_path, ~p"/type-system")}
-            title="Bidirectional checking, refinement types, dependent types (Sigma, Pi, equality), implicit arguments, holes, totality"
+            title="Dependent checking, indexed families, Sigma and Pi types, equality proofs, implicit arguments, holes, and totality"
           >
             Types
           </a>

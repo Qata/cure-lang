@@ -1,7 +1,13 @@
 ## Transparent actor example with a typed integer payload.
 
-actor Cure.Clock state Int initial 0 messages Atom handle_cast
-  pickup
-    message == :tick -> %[:noreply, state + 1]
-    message == :reset -> %[:noreply, 0]
-    else -> %[:noreply, state]
+use Std.Actor
+
+actor Clock
+  state Int
+  initial 0
+  messages Atom
+  handle_cast
+    pickup
+      message == :tick -> %[:noreply, state + 1]
+      message == :reset -> %[:noreply, 0]
+      else -> %[:noreply, state]

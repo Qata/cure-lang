@@ -394,7 +394,9 @@ defmodule Cure.Compiler.Incremental do
       skipped_fresh: [],
       errors: [],
       warnings: %{},
-      rebuild_reasons: rebuild_reasons
+      rebuild_reasons: rebuild_reasons,
+      progress: Keyword.get(opts, :progress),
+      migration_diagnostic_sink: Keyword.get(opts, :migration_diagnostic_sink)
     }
 
     state = Enum.reduce(components, state0, &visit_component/2)
@@ -688,9 +690,14 @@ defmodule Cure.Compiler.Incremental do
   end
 
   defp compile_and_stage(mod, path, state) do
+    notify_progress(state, {:compile_started, mod, path})
+
+    compile_opts =
+      maybe_put_migration_sink(state.compile_opts, state.migration_diagnostic_sink)
+
     case Cure.Compiler.compile_file_with_artifact(
            path,
-           [output_dir: state.output_dir] ++ state.compile_opts
+           [output_dir: state.output_dir] ++ compile_opts
          ) do
       {:ok, _module, warnings, artifact} ->
         {new_hash, dependency_hashes} =
@@ -771,8 +778,26 @@ defmodule Cure.Compiler.Incremental do
     end
   end
 
+  defp notify_progress(%{progress: progress}, event) when is_function(progress, 1) do
+    progress.(event)
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  defp notify_progress(_state, _event), do: :ok
+
+  defp maybe_put_migration_sink(opts, sink) when is_function(sink, 2),
+    do: Keyword.put(opts, :migration_diagnostic_sink, sink)
+
+  defp maybe_put_migration_sink(opts, _sink), do: opts
+
   defp visit_forced(path, state) do
-    case Cure.Compiler.compile_file(path, [output_dir: state.output_dir] ++ state.compile_opts) do
+    compile_opts = maybe_put_migration_sink(state.compile_opts, state.migration_diagnostic_sink)
+
+    case Cure.Compiler.compile_file(path, [output_dir: state.output_dir] ++ compile_opts) do
       {:ok, _module, []} -> state
       {:ok, _module, warnings} -> %{state | warnings: Map.put(state.warnings, path, warnings)}
       {:error, reason} -> %{state | errors: [{path, reason} | state.errors]}

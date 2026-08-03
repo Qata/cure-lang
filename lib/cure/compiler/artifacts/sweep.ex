@@ -39,7 +39,9 @@ defmodule Cure.Compiler.Artifacts.Sweep do
         :verify_stdlib,
         :package_artifact_digests,
         :package_artifact_sets,
-        :compile_opts
+        :compile_opts,
+        :progress,
+        :migration_diagnostic_sink
       ])
       |> Keyword.put(:source_roots, source_roots)
       |> Keyword.put(:artifact_kind, Keyword.get(opts, :kind, :project))

@@ -13,9 +13,12 @@ defmodule Cure.Compiler.BuiltinFixityPreludeTest do
   test "the built-in table still declares the core operators" do
     t = BuiltinFixity.table()
 
-    for op <- ["+", "*", "|>", "==", "✉", "<-|", "."] do
+    for op <- ["+", "*", "|>", "==", "."] do
       assert FixityTable.declares?(t, op), "expected built-in table to declare #{op}"
     end
+
+    refute FixityTable.declares?(t, "✉")
+    refute FixityTable.declares?(t, "<-|")
   end
 
   test "the built-in table is a stable constant (same term on repeat)" do
