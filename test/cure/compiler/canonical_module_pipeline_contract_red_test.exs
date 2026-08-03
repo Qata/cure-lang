@@ -1,7 +1,7 @@
-defmodule Cure.Compiler.InterfaceV2ContractRedTest do
+defmodule Cure.Compiler.CanonicalModulePipelineContractRedTest do
   use ExUnit.Case, async: true
 
-  @moduletag :interface_v2_red
+  @moduletag :canonical_module_pipeline_red
   @moduletag :tmp_dir
 
   test "one immutable manifest owns canonical identity and dependency availability", %{tmp_dir: dir} do
@@ -101,7 +101,7 @@ defmodule Cure.Compiler.InterfaceV2ContractRedTest do
     assert {:ok, checked} =
              pipeline_call(:check, [
                [qualified, provider, lexical],
-               [pipeline: :interface_v2, package: "fixture", source_roots: [dir]]
+               [module_pipeline: :canonical, package: "fixture", source_roots: [dir]]
              ])
 
     assert {:ok, lexical_key} =
@@ -143,7 +143,7 @@ defmodule Cure.Compiler.InterfaceV2ContractRedTest do
     assert {:ok, build} =
              pipeline_call(:check, [
                [provider],
-               [pipeline: :interface_v2, package: "fixture", source_roots: [dir]]
+               [module_pipeline: :canonical, package: "fixture", source_roots: [dir]]
              ])
 
     assert :ok = pipeline_call(:write_interfaces, [build, artifact_dir])
@@ -153,7 +153,7 @@ defmodule Cure.Compiler.InterfaceV2ContractRedTest do
              pipeline_call(:check, [
                [consumer],
                [
-                 pipeline: :interface_v2,
+                 module_pipeline: :canonical,
                  package: "fixture-client",
                  source_roots: [dir],
                  interface_roots: [artifact_dir],

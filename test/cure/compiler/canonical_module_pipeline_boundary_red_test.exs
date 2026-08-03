@@ -1,7 +1,7 @@
-defmodule Cure.Compiler.InterfaceV2LegacyBoundaryRedTest do
+defmodule Cure.Compiler.CanonicalModulePipelineBoundaryRedTest do
   use ExUnit.Case, async: true
 
-  @moduletag :interface_v2_red
+  @moduletag :canonical_module_pipeline_red
 
   @forbidden [
     {"env_with_generated_dependencies", "stamped-AST dependency recovery"},
@@ -14,7 +14,7 @@ defmodule Cure.Compiler.InterfaceV2LegacyBoundaryRedTest do
     "lib/cure/stdlib/preload.ex"
   ]
 
-  test "the interface-v2 semantic pipeline has no legacy resolution backdoors" do
+  test "the canonical module pipeline has no alternate resolution backdoors" do
     offenders =
       for path <- source_files(),
           {needle, reason} <- @forbidden,
@@ -22,7 +22,7 @@ defmodule Cure.Compiler.InterfaceV2LegacyBoundaryRedTest do
           do: %{path: path, line: occurrence.line, call: needle, reason: reason}
 
     assert offenders == [], """
-    interface-v2 must not depend on legacy semantic resolution paths.
+    The canonical module pipeline must not depend on alternate semantic resolution paths.
     Remove these calls while replacing their behavior with manifest/interface contracts:
 
     #{Enum.map_join(offenders, "\n", &"  #{&1.path}:#{&1.line} #{&1.call} — #{&1.reason}")}

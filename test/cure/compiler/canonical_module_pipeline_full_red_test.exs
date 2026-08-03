@@ -1,7 +1,7 @@
-defmodule Cure.Compiler.InterfaceV2FullPipelineRedTest do
+defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
   use ExUnit.Case, async: true
 
-  @moduletag :interface_v2_red
+  @moduletag :canonical_module_pipeline_red
   @moduletag :tmp_dir
 
   describe "prelude and environment laws" do
@@ -388,7 +388,7 @@ defmodule Cure.Compiler.InterfaceV2FullPipelineRedTest do
       paths = Path.wildcard("lib/std/**/*.cure")
 
       assert {:ok, checked} =
-               pipeline(:check, [paths, [pipeline: :interface_v2, package: "stdlib", kind: :stdlib]])
+               pipeline(:check, [paths, [module_pipeline: :canonical, package: "stdlib", kind: :stdlib]])
 
       refute pipeline(:body_elaboration_edge?, [checked, "Std.Bool", "Std.Binary"])
       assert pipeline(:provider_body_elaboration_count, [checked, "Std.Binary", :during_prelude_bootstrap]) == 0
@@ -398,20 +398,20 @@ defmodule Cure.Compiler.InterfaceV2FullPipelineRedTest do
       paths = Path.wildcard("lib/std/**/*.cure") |> Enum.reverse()
 
       assert {:ok, checked} =
-               pipeline(:check, [paths, [pipeline: :interface_v2, package: "stdlib", kind: :stdlib]])
+               pipeline(:check, [paths, [module_pipeline: :canonical, package: "stdlib", kind: :stdlib]])
 
       assert pipeline(:type_representation, [checked, "Std.String", "String"]) == :nominal
       assert pipeline(:checked?, [checked, "Std.Regex.Syntax.Model"])
       assert pipeline(:diagnostics, [checked]) == []
     end
 
-    test "the replacement reports no alternate semantic authorities or fallback paths", %{tmp_dir: dir} do
+    test "the canonical pipeline reports no alternate semantic authorities or fallback paths", %{tmp_dir: dir} do
       source = write!(dir, "authority.cure", "mod Authority.One\n  fn value() -> Int = 1\n")
       assert {:ok, checked} = check([source], dir)
 
       assert pipeline(:semantic_authorities, [checked]) == [:module_manifest, :checked_interfaces]
 
-      assert pipeline(:legacy_path_counts, [checked]) == %{
+      assert pipeline(:alternate_path_counts, [checked]) == %{
                beam_export_probes: 0,
                source_jit_loads: 0,
                stamped_ast_scans: 0,
@@ -424,7 +424,10 @@ defmodule Cure.Compiler.InterfaceV2FullPipelineRedTest do
   end
 
   defp check(paths, dir, extra \\ []) do
-    pipeline(:check, [paths, Keyword.merge([pipeline: :interface_v2, package: "fixture", source_roots: [dir]], extra)])
+    pipeline(:check, [
+      paths,
+      Keyword.merge([module_pipeline: :canonical, package: "fixture", source_roots: [dir]], extra)
+    ])
   end
 
   defp resolve(checked, module, name), do: pipeline(:resolve, [checked, module, :value, name])

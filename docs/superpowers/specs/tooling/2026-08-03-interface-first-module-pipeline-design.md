@@ -603,7 +603,7 @@ dynamic host calls remain an explicit language/FFI choice.
 ## 14. TDD rebuild and cutover
 
 The replacement is not implemented as edits distributed through the legacy
-pipeline. It begins behind one internal `module_pipeline: :interface_v2` switch
+pipeline. It begins behind one internal `module_pipeline: :canonical` switch
 and owns new data structures. Tests call the new boundary directly before any
 production entry point uses it.
 
