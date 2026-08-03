@@ -81,7 +81,7 @@ defmodule Cure.Compiler.CanonicalModulePipelineContractRedTest do
       write!(
         dir,
         "provider.cure",
-        "mod Example.Provider\n  fn exported() -> Int = 1\n  private fn hidden() -> Int = 2\n"
+        "mod Example.Provider\n  fn exported() -> Int = 1\n  local fn hidden() -> Int = 2\n"
       )
 
     lexical =

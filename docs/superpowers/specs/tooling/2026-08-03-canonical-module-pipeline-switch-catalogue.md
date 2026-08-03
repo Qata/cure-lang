@@ -249,7 +249,7 @@ type, its exports, its conformance, or its dependency closure.
 The gate is normalized once at the public facade:
 
 ```text
-nil or :existing -> existing adapter during shadow period
+nil              -> configured default during shadow period
 :canonical       -> canonical request
 anything else    -> invalid compiler option
 ```
