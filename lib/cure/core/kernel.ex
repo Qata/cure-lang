@@ -626,6 +626,21 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  @doc "Kernel-check only a global declaration's published type."
+  @spec check_def_type(Env.t(), atom()) :: :ok | {:error, term()}
+  def check_def_type(env, name) do
+    case Env.get_def(env, name) do
+      nil ->
+        {:error, {:unknown_global, name, %{core_term: {:global, name}, context_size: nil}}}
+
+      %{type: type_term} ->
+        with {:ok, _level} <- infer_sort(Context.empty(env), type_term),
+             :ok <- run_final_core_validator([type_term]) do
+          :ok
+        end
+    end
+  end
+
   # Final-Core grammar-boundary instrumentation (K11a). Scans BOTH the declared
   # type and the body — a legacy node in a signature is as much a checklist hit
   # as one in the body. Emits warnings via the pipeline and rejects only clauses

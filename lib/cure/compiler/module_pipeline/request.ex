@@ -24,7 +24,10 @@ defmodule Cure.Compiler.ModulePipeline.Request do
     :publication,
     :diagnostic_sink,
     :event_sink,
-    :incremental
+    :incremental,
+    :forbid_source_fallback,
+    :forbid_beam_resolution,
+    :fresh_environment
   ]
 
   @allowed_options [:module_pipeline | @fields]
@@ -51,7 +54,10 @@ defmodule Cure.Compiler.ModulePipeline.Request do
             publication: nil,
             diagnostic_sink: nil,
             event_sink: nil,
-            incremental: nil
+            incremental: nil,
+            forbid_source_fallback: false,
+            forbid_beam_resolution: false,
+            fresh_environment: false
 
   @type t :: %__MODULE__{selection: Selection.t()}
 

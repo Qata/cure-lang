@@ -8,6 +8,8 @@ defmodule Cure.Compiler.ModuleManifest.Entry do
             source_hash: nil,
             dependencies: [],
             prelude_provider?: false
+
+  @type t :: %__MODULE__{}
 end
 
 defmodule Cure.Compiler.ModuleManifest do

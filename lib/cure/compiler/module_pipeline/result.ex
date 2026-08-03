@@ -5,7 +5,9 @@ defmodule Cure.Compiler.ModulePipeline.Result do
   defstruct request: nil,
             manifest: nil,
             skeletons: %{},
+            asts: %{},
             interfaces: %{},
+            checked_envs: %{},
             semantic_graph: nil,
             diagnostics: []
 

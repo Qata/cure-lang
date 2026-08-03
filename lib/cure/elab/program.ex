@@ -116,6 +116,55 @@ defmodule Cure.Elab.Program do
     with {:ok, %CheckedModule{env: env}} <- check_ast_artifact(ast, opts), do: {:ok, env}
   end
 
+  @doc false
+  @spec canonical_register_interface(tuple() | list(), Env.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def canonical_register_interface(ast, %Env{} = imported_env, opts \\ []) do
+    owner = Keyword.get(opts, :module_name, find_module_name(ast) || "Main")
+    source_opts = source_context_opts(Keyword.get(opts, :source), Keyword.get(opts, :file))
+
+    with :ok <- check_declarations(ast),
+         seeded = Env.with_owner(seed_with_telescope_support(ast), owner),
+         {:ok, merged} <- merge_env(seeded, without_incoming_owner(imported_env, owner)),
+         env0 = install_canonical_module_visibility(merged, ast, opts),
+         {:ok, lifted} <- Cure.Elab.Induction.lift_declarations(declarations(ast)),
+         items = lifted |> expand_where_declarations() |> annotate_overload_ordinals(),
+         {:ok, interface_env, function_declarations} <- register_pass(items, env0, false),
+         :ok <- check_overload_legality(interface_env) do
+      {:ok,
+       %{
+         ast: ast,
+         owner: owner,
+         items: items,
+         interface_env: interface_env,
+         function_declarations: function_declarations,
+         source_opts: source_opts
+       }}
+    end
+  end
+
+  @doc false
+  @spec canonical_check_bodies(map()) :: {:ok, Env.t()} | {:error, term()}
+  def canonical_check_bodies(%{
+        ast: ast,
+        owner: owner,
+        interface_env: %Env{} = interface_env,
+        function_declarations: function_declarations,
+        source_opts: source_opts
+      }) do
+    with {:ok, checked} <- body_pass_strict(function_declarations, interface_env),
+         checked = TotalityClosure.certify_deferred(checked),
+         :ok <- MacroValidate.check_program(ast, checked),
+         {:ok, certified} <- certify_type_level_with_source(ast, checked, source_opts),
+         {:ok, certified} <- Cure.Elab.Equation.generate_all(certified, ast) do
+      {:ok, mark_inline_hints(certified, owner)}
+    end
+  end
+
+  @doc false
+  @spec merge_canonical_environments(Env.t(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
+  def merge_canonical_environments(%Env{} = left, %Env{} = right), do: merge_env(left, right)
+
   @doc """
   Elaborate and certify `ast` once, returning every semantic projection needed
   by later compiler stages.
@@ -3180,6 +3229,36 @@ defmodule Cure.Elab.Program do
     |> Map.put(:bare_bindings, visible_bare_bindings(env, ast, explicit))
   end
 
+  # The canonical pipeline has already classified every dependency edge while
+  # constructing its immutable manifest.  Consume that classification here;
+  # do not turn an authored `use` back into a source-path lookup merely to
+  # rediscover the same module identity.
+  defp install_canonical_module_visibility(%Env{} = env, ast, opts) do
+    case Keyword.fetch(opts, :module_visibility) do
+      :error ->
+        install_module_visibility(env, ast)
+
+      {:ok, %{lexical: lexical, qualified: qualified}}
+      when is_struct(lexical, MapSet) and is_struct(qualified, MapSet) ->
+        ambient =
+          if prelude_bootstrap?(find_module_name(ast)),
+            do: MapSet.new(),
+            else: MapSet.new(prelude_manifest(), & &1.source)
+
+        bare = MapSet.union(lexical, ambient)
+        qualified = MapSet.union(qualified, ambient)
+
+        env
+        |> Map.put(:import_modules, lexical)
+        |> Env.with_module_visibility(bare, qualified)
+        |> Map.put(:bare_bindings, visible_bare_bindings(env, ast, lexical))
+
+      {:ok, visibility} ->
+        raise ArgumentError,
+              "expected :module_visibility to contain MapSet :lexical and :qualified projections, got: #{inspect(visibility)}"
+    end
+  end
+
   defp visible_bare_bindings(%Env{} = env, ast, explicit_modules) do
     owner = find_module_name(ast)
 
@@ -4709,6 +4788,20 @@ defmodule Cure.Elab.Program do
 
         {:error, _reason} = err ->
           {:halt, contextualize_body_pass_error(err, decl)}
+      end
+    end)
+  end
+
+  # Canonical module compilation receives its complete checked interface table
+  # from the phase planner. A missing qualified global is therefore a real
+  # resolver error: it must never invoke the source loader and retry.
+  defp body_pass_strict(fn_decls, env) do
+    {plain, computed} = Enum.split_with(fn_decls, &(not MacroExpand.contains_computed_use?(&1)))
+
+    Enum.reduce_while(plain ++ computed, {:ok, env}, fn decl, {:ok, acc} ->
+      case Declarations.elaborate_function_body(decl, acc) do
+        {:ok, checked} -> {:cont, {:ok, checked}}
+        {:error, _} = error -> {:halt, contextualize_body_pass_error(error, decl)}
       end
     end)
   end
