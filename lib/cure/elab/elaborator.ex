@@ -11963,8 +11963,28 @@ defmodule Cure.Elab.Elaborator do
   # *inferred* and its type unified against the domain to solve the metavariables.
   # `finish_global_app` assembles and the caller's kernel re-check gates the result,
   # so nothing unsound rests on the inference order.
+  #
+  # `name` is NOT guaranteed to be a def here. Several callers reach this
+  # function speculatively: `elaborate_global_app_expected/6` routes any
+  # placeholder-bearing call through it, and
+  # `Cure.Elab.Resolve.method_call_checked_candidates/7` walks EVERY anonymous
+  # instance registered for an interface and elaborates each candidate's mangled
+  # method global, discarding the ones that error. A candidate whose global is
+  # absent from this environment is an ordinary miss for those callers, so it
+  # must be reported as `:unknown_global` — an unmatched `Env.get_def/2` would
+  # raise `MatchError` out of a fold that is written to tolerate failure, taking
+  # down the whole compilation and hiding every later diagnostic in the run.
   defp elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx, expected \\ nil) do
-    %{type: pi_type, quantities: quantities} = Env.get_def(env, name)
+    case Env.get_def(env, name) do
+      %{type: pi_type, quantities: quantities} ->
+        elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx, expected, pi_type, quantities)
+
+      nil ->
+        {:error, {:unknown_global, name}}
+    end
+  end
+
+  defp elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx, expected, pi_type, quantities) do
     {domains, codomain} = peel_pi(pi_type, length(quantities))
 
     # Transparent aliases in an expected result must be unfolded before the
