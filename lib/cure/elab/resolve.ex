@@ -21,7 +21,24 @@ defmodule Cure.Elab.Resolve do
 
   @doc "Is `atom` the name of a method declared by some in-scope interface?"
   @spec method?(Env.t(), atom()) :: boolean()
-  def method?(env, atom), do: Interface.for_method(env, atom) != nil
+  def method?(env, atom), do: Interface.for_method(env, atom) != nil and not owned_definition?(env, atom)
+
+  # A module that defines `fn combine` of its own means THAT function, even when
+  # an ambient interface happens to declare a method by the same name. Method
+  # dispatch is tried BEFORE the ordinary global path, so without this guard an
+  # unrelated local definition is silently reinterpreted as a method call and
+  # then fails on its head argument's type — `Std.Proof.LinearArithmetic.combine/3`
+  # reporting `{:no_instance, :Semigroup, :"Std.Nat#Nat"}` for a function that has
+  # nothing to do with semigroups.
+  #
+  # This mirrors `Env.resolve_key/3`'s owned-first order rather than inventing a
+  # second precedence rule. An interface's own declaration is not a definition,
+  # and an implementation's methods are registered under mangled names, so a
+  # method still dispatches inside its declaring module and in every instance.
+  defp owned_definition?(%Env{module_owner: nil}, _atom), do: false
+
+  defp owned_definition?(%Env{module_owner: owner} = env, atom),
+    do: Map.has_key?(env.defs, Cure.Elab.Name.qualify(owner, atom))
 
   @doc "Does this interface method determine its instance head only from its result?"
   def result_dispatched_method?(env, method) do

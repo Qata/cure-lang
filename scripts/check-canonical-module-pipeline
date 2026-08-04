@@ -1,0 +1,59 @@
+#!/bin/sh
+# Focused loop for the interface-first module pipeline.
+#
+#   scripts/check-canonical-module-pipeline            # the canonical red/green suites
+#   scripts/check-canonical-module-pipeline --full     # add the full + boundary red suites
+#   scripts/check-canonical-module-pipeline <args...>  # raw `elixir` args (ad-hoc scripts)
+#
+# `mix compile` is NOT used: its alias chain runs the stdlib bundler, which is
+# the legacy pipeline this work replaces and currently fails. `compile.elixir`
+# builds the compiler itself, which is what these suites exercise.
+set -eu
+
+repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repository_root"
+
+formatted_sources="
+lib/cure/core/kernel.ex
+lib/cure/elab/program.ex
+lib/cure/compiler/parser/fixity_scan.ex
+lib/cure/compiler/module_pipeline/selection.ex
+lib/cure/compiler/module_pipeline/request.ex
+lib/cure/compiler/module_pipeline/semantic_graph.ex
+lib/cure/compiler/module_manifest.ex
+lib/cure/compiler/module_skeleton.ex
+lib/cure/compiler/module_pipeline/result.ex
+lib/cure/compiler/module_pipeline/interface.ex
+lib/cure/compiler/module_pipeline.ex
+test/cure/compiler/fixity_scan_test.exs
+test/cure/compiler/canonical_module_pipeline_gate_test.exs
+test/cure/compiler/canonical_module_pipeline_contract_red_test.exs
+test/cure/compiler/canonical_module_pipeline_full_red_test.exs
+test/cure/compiler/canonical_module_pipeline_boundary_red_test.exs
+"
+
+# shellcheck disable=SC2086
+mix format $formatted_sources
+
+MIX_ENV=test mix compile.elixir
+
+if [ "$#" -gt 0 ] && [ "$1" != "--full" ]; then
+  MIX_ENV=test elixir -pa _build/test/lib/cure/ebin "$@"
+  exit $?
+fi
+
+suites='
+    Code.require_file("test/cure/compiler/fixity_scan_test.exs")
+    Code.require_file("test/cure/compiler/canonical_module_pipeline_gate_test.exs")
+    Code.require_file("test/cure/compiler/canonical_module_pipeline_contract_red_test.exs")
+'
+
+if [ "${1:-}" = "--full" ]; then
+  suites="$suites
+    Code.require_file(\"test/cure/compiler/canonical_module_pipeline_full_red_test.exs\")
+    Code.require_file(\"test/cure/compiler/canonical_module_pipeline_boundary_red_test.exs\")
+"
+fi
+
+MIX_ENV=test elixir -pa _build/test/lib/cure/ebin -e "ExUnit.start()
+$suites"

@@ -362,6 +362,23 @@ defmodule Cure.Elab.Declarations do
   @spec declare_header(term(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
   def declare_header({:container, meta, _variants}, env) when is_list(meta) do
     cond do
+      # An OPAQUE carrier is checked before the `@builtin` skip below. That skip is
+      # for families the kernel seeds from `Cure.Core.Builtins`, where the source
+      # declaration only names an identity that already exists. A constructor-less
+      # carrier is the opposite case: the source is its sole definition, and a
+      # builtin key merely says which kernel rule may introduce its values
+      # (`@builtin(:char) opaque type Char`). Skipping it here left `Char` invisible
+      # to `Std.Literal` — its own SCC peer, which types `CharacterLiteral`'s field
+      # by it — so the field resolved to a bare unknown global.
+      Keyword.get(meta, :container_type) == :opaque ->
+        # Opaque carriers participate in interface SCCs exactly like ordinary
+        # families: peer signatures must be able to mention the nominal type
+        # before either module's bodies are elaborated. Register the complete
+        # constructor-less family here (including its declared erasure class).
+        # The ordinary declaration pass installs the same canonical family
+        # again, so this is an idempotent header rather than a second identity.
+        elaborate({:container, meta, []}, env)
+
       attached_decorator_name(Keyword.get(meta, :decorator)) == :builtin ->
         {:ok, env}
 
@@ -372,15 +389,6 @@ defmodule Cure.Elab.Declarations do
           params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
           register_header(name, params, [], env)
         end
-
-      Keyword.get(meta, :container_type) == :opaque ->
-        # Opaque carriers participate in interface SCCs exactly like ordinary
-        # families: peer signatures must be able to mention the nominal type
-        # before either module's bodies are elaborated. Register the complete
-        # constructor-less family here (including its declared erasure class).
-        # The ordinary declaration pass installs the same canonical family
-        # again, so this is an idempotent header rather than a second identity.
-        elaborate({:container, meta, []}, env)
 
       true ->
         {:ok, env}
@@ -418,6 +426,12 @@ defmodule Cure.Elab.Declarations do
         {:ok, env}
     end
   end
+
+  # An `interface` header must exist before any sibling declaration that mentions
+  # it — a `requires` clause, a constrained signature, or an `implementation` — so
+  # it is registered in the header pre-pass rather than waiting for source order.
+  def declare_header({:interface, meta, _methods} = decl, env) when is_list(meta),
+    do: Cure.Elab.Interface.elaborate(decl, env)
 
   def declare_header(_decl, env), do: {:ok, env}
 
@@ -950,6 +964,7 @@ defmodule Cure.Elab.Declarations do
           env
           |> Env.add_def(sig.name, final_pi, lambda, quantities, sig.plicities)
           |> maybe_register_unsafe(sig.name, meta)
+          |> maybe_register_reducible(sig.name, meta)
           |> Env.put_source_holes(sig.name, collect_source_holes(body_expr, def_env, sig.return_span))
           |> Env.put_labels(sig.name, param_label_vector(sig.params))
           |> register_parameter_spans(sig.name, sig.params)
@@ -970,6 +985,21 @@ defmodule Cure.Elab.Declarations do
     case Keyword.get(meta, :decorator) do
       {:decorator, decorator_meta, _args} when is_list(decorator_meta) ->
         Env.put_unsafe(env, name, Keyword.get(decorator_meta, :name) == :unsafe)
+
+      _ ->
+        env
+    end
+  end
+
+  # `@reducible` publishes this body in the module's canonical interface, so a
+  # consumer may δ-unfold it. Marking is the author's call because the provider
+  # cannot see who will reason about it: `Std.Proof.LinearArithmetic.Semantics`
+  # states `evaluate_atom(normalize_atom(a), v) == evaluate_atom(a, v)`, and that
+  # theorem is unprovable unless both functions compute one module away.
+  defp maybe_register_reducible(env, name, meta) do
+    case Keyword.get(meta, :decorator) do
+      {:decorator, decorator_meta, _args} when is_list(decorator_meta) ->
+        Env.put_reducible(env, name, Keyword.get(decorator_meta, :name) == :reducible)
 
       _ ->
         env
@@ -3822,14 +3852,27 @@ defmodule Cure.Elab.Declarations do
   defp erasure_class(meta, name) do
     case Keyword.get(meta, :decorator) do
       {:decorator, dm, args} when is_list(dm) ->
-        if Keyword.get(dm, :name) == :erases,
-          do: erases_class(args, name),
-          else: {:ok, nil}
+        case Keyword.get(dm, :name) do
+          :erases -> erases_class(args, name)
+          :builtin -> {:ok, builtin_erasure_class(args)}
+          _ -> {:ok, nil}
+        end
 
       _ ->
         {:ok, nil}
     end
   end
+
+  # A declaration meta holds ONE decorator slot, so a carrier that must announce a
+  # builtin key cannot also spell `@erases(...)`. It does not need to: a builtin key
+  # already fixes the runtime shape, because the kernel — not the source — supplies
+  # that family's values. `@builtin(:char) opaque type Char` therefore erases to an
+  # integer for the same reason its literals are `{:bounded_lit, k}`: a code point is
+  # one machine integer. Keys with no constructor-less carrier are unaffected (nil,
+  # i.e. undeclared), since erasure for those is inferred from their constructors.
+  defp builtin_erasure_class([{:literal, _meta, :char}]), do: :integer
+  defp builtin_erasure_class([:char]), do: :integer
+  defp builtin_erasure_class(_args), do: nil
 
   # The class argument of an `@erases(<class>)` decorator, validated against the
   # admissible set. Any other argument shape — zero args, more than one arg, or an

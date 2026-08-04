@@ -29,7 +29,15 @@ defmodule Cure.Core.Builtins do
     # 1-ary (each field is a Nat), so — unlike Nat's Z/S — arity cannot
     # disambiguate them; every literal/erasure hook that keys off Int is
     # NAME-keyed, not arity-keyed. FromNat(n) = n; NegativeSuccessor(n) = -(n+1).
-    int: [{:FromNat, 1}, {:NegativeSuccessor, 1}]
+    int: [{:FromNat, 1}, {:NegativeSuccessor, 1}],
+    # `Char` is a NOMINAL carrier with no constructors — Agda's `BUILTIN CHAR`,
+    # not a `Bounded(0x110000)` synonym. Its canonical values are the compact
+    # `{:bounded_lit, k}` code points admitted by the kernel's checking rule, so
+    # a character literal is still a compile-time value a pattern can match; the
+    # empty schema is what says "no ctor may introduce one". Registering the key
+    # is how the kernel and the elaborator agree on WHICH family that rule names,
+    # since the carrier lives in `Std.Char` and the kernel seeds no `Char`.
+    char: []
   }
 
   # Builtin arithmetic/comparison op globals (K2 wave, spec 2026-07-09). Each is
@@ -121,6 +129,26 @@ defmodule Cure.Core.Builtins do
             "@builtin(#{inspect(key)}) on #{inspect(family_id)}: expected constructors " <>
               "#{inspect(expected)} (name and arity), got #{inspect(actual)}"
     end
+  end
+
+  @doc """
+  The modules the kernel itself provides.
+
+  These have no source file and never appear in a manifest, but a module may
+  name them: they are owners of seeded globals, not of anything compiled. The
+  set is derived from what `seed/2` actually installs rather than listed, so a
+  builtin cannot become referable without also becoming provided.
+  """
+  @spec provided_modules() :: [String.t()]
+  def provided_modules do
+    Env.empty()
+    |> seed(MapSet.new())
+    |> Map.fetch!(:defs)
+    |> Map.keys()
+    |> Enum.map(&Cure.Elab.Name.owner/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.sort()
   end
 
   @doc """

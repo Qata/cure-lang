@@ -30,7 +30,7 @@ mod Std.Regex.Syntax.Flags
 
   fn literal_extended_space(char: Char) -> Bool =
     char == ' ' or char == '\t' or char == '\n' or char == '\r' or
-      char == 12 or char == 11
+      char == '\f' or char == '\v'
 
   fn strip_extended_escaped(input: List(Char)) -> List(Char) = match input
     [] -> []

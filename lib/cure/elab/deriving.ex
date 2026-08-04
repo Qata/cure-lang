@@ -25,6 +25,7 @@ defmodule Cure.Elab.Deriving do
   """
 
   alias Cure.Core.{Env, Inductive}
+  alias Cure.Elab.Name
 
   @doc """
   Build the `{:implementation, …}` AST deriving `iface` for the ADT described by
@@ -189,7 +190,7 @@ defmodule Cure.Elab.Deriving do
 
             for_type = for_type_ast(generated_type_name, type_params)
             impl_meta = [interface: "Equatable", for: type_name, for_type: for_type, as: nil]
-            method = struct_eq_method_def(method_name, for_type, type_params)
+            method = struct_eq_method_def(method_name, for_type, type_params, env)
             {:ok, {:implementation, impl_meta, [method]}}
         end
     end
@@ -426,20 +427,34 @@ defmodule Cure.Elab.Deriving do
   # sole field is a function type — to a type argument (`cannot_unify Pi Type0`).
   # Inferring the type from the operand sidesteps the clash entirely; the operand's
   # type is exactly `for_type`, so the erased `struct_eq` call is unchanged.
-  defp struct_eq_method_def(method_name, for_type, type_params) do
+  defp struct_eq_method_def(method_name, for_type, type_params, env) do
     {left, right} = operand_names(type_params)
     params = [{:param, [type: for_type], left}, {:param, [type: for_type], right}]
 
+    # `Bool` and `struct_eq` are spelled by the COMPILER, not by the module this
+    # instance is derived into. That module never imported `Std.Bool` or
+    # `Std.Builtin` and should not have to: marking the clause generated is what
+    # lets the checker lower these names in checking scope rather than holding the
+    # author responsible for syntax they did not write.
     meta = [
       name: method_name,
       params: params,
-      return_type: ambient_bool(),
+      return_type: ambient_bool(env),
       visibility: :public,
-      arity: 2
+      arity: 2,
+      compiler_generated: true
     ]
 
+    # Same reasoning as `ambient_bool/1`: emit the canonical global key rather
+    # than the qualified surface spelling. `Std.Builtin.struct_eq` as *syntax*
+    # has to survive module-availability lookup in a module that never made
+    # `Std.Builtin` qualified-available, and it does not — it falls through to a
+    # verbatim `{:global, :"Std.Builtin.struct_eq"}` that closure validation then
+    # rightly reports as unresolved. The key `Std.Builtin#struct_eq` is the
+    # definition `Builtins.seed_struct_ops/2` actually registered.
     body =
-      {:function_call, [name: "Std.Builtin.struct_eq"], [for_type, var(left), var(right)]}
+      {:function_call, [name: Atom.to_string(Name.qualify("Std.Builtin", :struct_eq))],
+       [for_type, var(left), var(right)]}
 
     {:function_def, meta, [body]}
   end
@@ -832,7 +847,19 @@ defmodule Cure.Elab.Deriving do
   # (`struct_eq : … -> Std.Bool#Bool` vs declared local `Bool`). The qualified
   # spelling routes through `Resolution.resolve_qualified/3`, which is immune to
   # local shadowing and lands on the canonical family in every module.
-  defp ambient_bool(),
+  # Preferred spelling: the canonical family key itself, which is what
+  # `Inductive.builtin(env, :bool)` records. Generated AST may carry a canonical
+  # key directly (same reasoning as `canonical_type_name/2`), and doing so keeps
+  # the derived signature out of module-availability lookup entirely — the host
+  # module never imported `Std.Bool` and need not, since it did not write this.
+  defp ambient_bool(%Env{} = env) do
+    case Inductive.builtin(env, :bool) do
+      nil -> ambient_bool(nil)
+      key -> var(Atom.to_string(key))
+    end
+  end
+
+  defp ambient_bool(_env),
     do:
       {:attribute_access, [attribute: "Bool"],
        [{:attribute_access, [attribute: "Bool"], [{:variable, [scope: :local], "Std"}]}]}

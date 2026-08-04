@@ -214,6 +214,27 @@ defmodule Cure.Core.Env do
     end
   end
 
+  @doc """
+  Mark a registered definition as reducible across the module boundary — its body
+  is published in the canonical interface so consumers may δ-unfold it.
+
+  Signature visibility and reducibility are separate decisions (Idris 2's
+  `export` vs `public export`). A consumer that states a theorem *about* a
+  provider's function needs that function to compute, and no provider-local
+  analysis can predict which of its definitions some future consumer will
+  reason about — so the author says. Unmarked bodies stay opaque, which is what
+  keeps a module's interface hash insensitive to ordinary body edits.
+  """
+  @spec put_reducible(t(), atom(), boolean()) :: t()
+  def put_reducible(%__MODULE__{} = env, name, reducible \\ true) when is_boolean(reducible) do
+    key = resolve_key(env, env.defs, name)
+
+    case Map.fetch(env.defs, key) do
+      {:ok, definition} -> %{env | defs: Map.put(env.defs, key, Map.put(definition, :reducible, reducible))}
+      :error -> env
+    end
+  end
+
   @doc "Attach inert authored-hole metadata to a definition for release-boundary diagnostics."
   @spec put_source_holes(t(), atom(), map()) :: t()
   def put_source_holes(%__MODULE__{} = env, name, source_holes) when is_map(source_holes) do

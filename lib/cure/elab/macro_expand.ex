@@ -22,6 +22,34 @@ defmodule Cure.Elab.MacroExpand do
   # tests may still supply defensive finite limits explicitly.
   @default_limits [max_expansions: :infinity, max_nodes: :infinity]
 
+  # Which of the two compile-time execution strategies a run may use. `:compiled`
+  # is the default and prefers the already-checked BEAM implementation of a
+  # stdlib expander; `:core_fallback` forbids it and evaluates every expander in
+  # Core. Both must produce the same expansion — that is the whole claim — so the
+  # policy exists to make the claim testable by pinning a run to one side.
+  #
+  # It is process-scoped rather than an argument because expansion is reached
+  # from elaboration, declaration checking, reflection, and validation alike; a
+  # parameter would have to be threaded through every one of them, and a strategy
+  # that only some call sites honour is not a policy.
+  @policy_key {__MODULE__, :execution}
+
+  @spec with_execution(:compiled | :core_fallback | nil, (-> result)) :: result when result: term()
+  def with_execution(nil, fun), do: fun.()
+
+  def with_execution(policy, fun) when policy in [:compiled, :core_fallback] do
+    previous = Process.put(@policy_key, policy)
+
+    try do
+      fun.()
+    after
+      if is_nil(previous), do: Process.delete(@policy_key), else: Process.put(@policy_key, previous)
+    end
+  end
+
+  @spec execution_policy() :: :compiled | :core_fallback
+  def execution_policy, do: Process.get(@policy_key, :compiled)
+
   @spec expand(term(), Cure.Core.Env.t()) :: {:ok, term()} | {:error, term()}
   def expand(ast, env), do: expand(ast, env, [])
 
@@ -330,9 +358,13 @@ defmodule Cure.Elab.MacroExpand do
   end
 
   defp execute_after_obligations(meta, elab_ast, input_ast, env, fresh_counter) do
-    case execute_compiled_stdlib_macro(meta, elab_ast, input_ast, fresh_counter) do
-      :unavailable -> execute_after_obligations_core(meta, elab_ast, input_ast, env, fresh_counter)
-      result -> result
+    if execution_policy() == :core_fallback do
+      execute_after_obligations_core(meta, elab_ast, input_ast, env, fresh_counter)
+    else
+      case execute_compiled_stdlib_macro(meta, elab_ast, input_ast, fresh_counter) do
+        :unavailable -> execute_after_obligations_core(meta, elab_ast, input_ast, env, fresh_counter)
+        result -> result
+      end
     end
   end
 

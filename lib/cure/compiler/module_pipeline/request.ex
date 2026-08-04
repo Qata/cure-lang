@@ -5,6 +5,7 @@ defmodule Cure.Compiler.ModulePipeline.Request do
 
   @fields [
     :entry_point,
+    :kind,
     :package,
     :package_dependencies,
     :sources,
@@ -21,10 +22,15 @@ defmodule Cure.Compiler.ModulePipeline.Request do
     :requested_roots,
     :products,
     :output_root,
+    :output,
+    :generation,
     :publication,
     :diagnostic_sink,
     :event_sink,
     :incremental,
+    :cache,
+    :collect_diagnostics,
+    :discovery_concurrency,
     :forbid_source_fallback,
     :forbid_beam_resolution,
     :fresh_environment
@@ -35,6 +41,7 @@ defmodule Cure.Compiler.ModulePipeline.Request do
   @enforce_keys [:selection]
   defstruct selection: nil,
             entry_point: nil,
+            kind: nil,
             package: nil,
             package_dependencies: [],
             sources: [],
@@ -51,10 +58,15 @@ defmodule Cure.Compiler.ModulePipeline.Request do
             requested_roots: [],
             products: [],
             output_root: nil,
+            output: nil,
+            generation: nil,
             publication: nil,
             diagnostic_sink: nil,
             event_sink: nil,
             incremental: nil,
+            cache: nil,
+            collect_diagnostics: false,
+            discovery_concurrency: 1,
             forbid_source_fallback: false,
             forbid_beam_resolution: false,
             fresh_environment: false

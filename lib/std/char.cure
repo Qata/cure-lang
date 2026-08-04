@@ -5,9 +5,11 @@ mod Std.Char
   ## A `Char` is a Unicode scalar, represented by its code point. It is a
   ## nominal opaque carrier rather than an alias for `Bounded(0x110000)`, so
   ## APIs cannot accidentally accept arbitrary bounded values as characters.
-  ## `@erases(:integer)` keeps the runtime representation to one machine integer.
-  ## Character literals (`'a'`,
-  ## `'\n'`) elaborate to `Char` values, and a `String` is a `List(Char)`. This
+  ## `@builtin(:char)` names the kernel rule that introduces its values: a
+  ## character literal is a compact code point, so the runtime representation is
+  ## one machine integer and no constructor is needed (or allowed). Character
+  ## literals (`'a'`, `'\n'`) elaborate to `Char` values, and a `String` is a
+  ## `List(Char)`. This
   ## module gives the type its visible, documented home, mirroring
   ## `Std.Int`/`Std.Float`/`Std.Binary`/`Std.Atom`.
   ##
@@ -22,7 +24,7 @@ mod Std.Char
   ## `@prelude`: `Char` is ambient like `String` (which is `List(Char)`), so a
   ## bare `Char` return/field type and character literals resolve with no `use`.
   @prelude
-  @erases(:integer)
+  @builtin(:char)
   opaque type Char
 
   implementation Equatable for Char

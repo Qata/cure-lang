@@ -191,6 +191,24 @@ defmodule Cure.Compiler.Parser.FixityScan do
   defp collect_qualified_targets(nodes, inherited_line, acc) when is_list(nodes),
     do: Enum.reduce(nodes, acc, &collect_qualified_targets(&1, inherited_line, &2))
 
+  # A macro rule is a MAP, and its `template` field holds ordinary AST. A walker
+  # that descends only tuples and lists therefore cannot see inside any macro
+  # definition — so `macro M / syntax k becomes Other.Mod.f()` produced a module
+  # with no recorded dependency on `Other.Mod`, its interface was never loaded,
+  # and the expansion's qualified call resolved as a local name that does not
+  # exist. The call is a real dependency the moment the rule is used, so the
+  # scan has to see it; structs are skipped because they are leaves (spans,
+  # source info), not AST.
+  defp collect_qualified_targets(%_{}, _inherited_line, acc), do: acc
+
+  defp collect_qualified_targets(node, inherited_line, acc) when is_map(node) do
+    line = if is_integer(node[:line]), do: node[:line], else: inherited_line
+
+    node
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.reduce(acc, fn {_key, value}, acc -> collect_qualified_targets(value, line, acc) end)
+  end
+
   defp collect_qualified_targets(_leaf, _inherited_line, acc), do: acc
 
   @doc "Collect qualified targets and canonicalize applied-type owners against explicit imports."
@@ -264,12 +282,34 @@ defmodule Cure.Compiler.Parser.FixityScan do
     end)
   end
 
+  # `@prelude` reaches the AST in three shapes, and this scan has to accept all
+  # three because the MANIFEST decides prelude-provider status from it while the
+  # ELABORATOR decides prelude EXPORTS from the same source text: any shape one
+  # accepts and the other rejects publishes ambient names from a module nobody
+  # depends on, and the name resolves in whichever modules happened to be checked
+  # after it — an order-dependent `unknown_global`, not a clean error.
+  #
+  #   * a standalone `{:property, name: "prelude"}` — what `@prelude` becomes when
+  #     ANOTHER decorator follows it, since a declaration meta holds one decorator
+  #     slot (`@prelude` + `@builtin(:char)` on `Std.Char`);
+  #   * an attached `{:decorator, [name: :prelude], []}` — the ordinary case, when
+  #     `@prelude` is the only decorator on the declaration;
+  #   * a bare `{:prelude, _}` slot, the module-level spelling.
   @spec prelude?(term()) :: boolean()
   def prelude?(ast) do
     deep_reduce(ast, false, fn
-      {:property, meta, _}, false when is_list(meta) -> Keyword.get(meta, :name) == "prelude"
-      {_t, meta, _}, false when is_list(meta) -> match?({:prelude, _}, Keyword.get(meta, :decorator))
-      _, acc -> acc
+      {:property, meta, _}, false when is_list(meta) ->
+        Keyword.get(meta, :name) == "prelude"
+
+      {_t, meta, _}, false when is_list(meta) ->
+        case Keyword.get(meta, :decorator) do
+          {:prelude, _} -> true
+          {:decorator, dm, _args} when is_list(dm) -> Keyword.get(dm, :name) == :prelude
+          _ -> false
+        end
+
+      _, acc ->
+        acc
     end)
   end
 

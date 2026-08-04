@@ -114,7 +114,7 @@ mod Std.Decimal
   implementation ExpressibleByDecimalLiteral for Decimal
     fn from_decimal_literal(literal: DecimalLiteral) -> LiteralResult(Decimal) =
       match parse_numeric(literal.spelling, Std.String.from_characters(literal.spelling))
-        Ok(pair) -> match pair.2
+        Ok(pair) -> match Std.String.characters(pair.2)
           [] -> LiteralValue(pair.1)
           _ -> InvalidLiteral()
         Error(_) -> InvalidLiteral()
@@ -159,16 +159,16 @@ mod Std.Decimal
   fn parse(input: String) -> Result(Tuple(Decimal, String), String) =
     let lower = Std.String.downcase(input)
     pickup
-      string_equal(lower, "infinity") -> Ok(%[infinity(), []])
-      string_equal(lower, "+infinity") -> Ok(%[infinity(), []])
-      string_equal(lower, "inf") -> Ok(%[infinity(), []])
-      string_equal(lower, "+inf") -> Ok(%[infinity(), []])
-      string_equal(lower, "-infinity") -> Ok(%[neg_infinity(), []])
-      string_equal(lower, "-inf") -> Ok(%[neg_infinity(), []])
-      string_equal(lower, "nan") -> Ok(%[nan(), []])
-      string_equal(lower, "+nan") -> Ok(%[nan(), []])
-      string_equal(lower, "-nan") -> Ok(%[nan(), []])
-      else -> parse_numeric(input, input)
+      string_equal(lower, "infinity") -> Ok(%[infinity(), ""])
+      string_equal(lower, "+infinity") -> Ok(%[infinity(), ""])
+      string_equal(lower, "inf") -> Ok(%[infinity(), ""])
+      string_equal(lower, "+inf") -> Ok(%[infinity(), ""])
+      string_equal(lower, "-infinity") -> Ok(%[neg_infinity(), ""])
+      string_equal(lower, "-inf") -> Ok(%[neg_infinity(), ""])
+      string_equal(lower, "nan") -> Ok(%[nan(), ""])
+      string_equal(lower, "+nan") -> Ok(%[nan(), ""])
+      string_equal(lower, "-nan") -> Ok(%[nan(), ""])
+      else -> parse_numeric(Std.String.characters(input), input)
 
   local fn parse_numeric(chars: List(Char), original: String) -> Result(Tuple(Decimal, String), String) =
     let signed = parse_sign(chars)
@@ -196,14 +196,14 @@ mod Std.Decimal
       [head | rest] -> pickup
         head == 'e' -> finish_exponent(s, digits.coefficient, base_exponent, rest, digits.rest, original)
         head == 'E' -> finish_exponent(s, digits.coefficient, base_exponent, rest, digits.rest, original)
-        else -> Ok(%[finite(s, digits.coefficient, base_exponent), remaining])
-      [] -> Ok(%[finite(s, digits.coefficient, base_exponent), []])
+        else -> Ok(%[finite(s, digits.coefficient, base_exponent), Std.String.from_characters(remaining)])
+      [] -> Ok(%[finite(s, digits.coefficient, base_exponent), ""])
 
   local fn finish_exponent(s: Sign, coefficient: Int, base_exponent: Int, chars: List(Char), unparsed: List(Char), original: String) -> Result(Tuple(Decimal, String), String) =
     let scanned = scan_exponent(chars)
     pickup
-      scanned.valid -> Ok(%[finite(s, coefficient, base_exponent + scanned.exponent), scanned.rest])
-      else -> Ok(%[finite(s, coefficient, base_exponent), unparsed])
+      scanned.valid -> Ok(%[finite(s, coefficient, base_exponent + scanned.exponent), Std.String.from_characters(scanned.rest)])
+      else -> Ok(%[finite(s, coefficient, base_exponent), Std.String.from_characters(unparsed)])
 
   local fn parse_sign(chars: List(Char)) -> Tuple(Sign, List(Char)) =
     match chars
@@ -583,22 +583,23 @@ mod Std.Decimal
     pickup
       exp == 0 -> concat(prefix, "0")
       exp < 0 -> concat(concat(prefix, "0."), Std.String.repeat("0", -exp))
-      else -> concat(concat(concat(prefix, "0E+"), Std.String.from_int(exp)), [])
+      else -> concat(concat(prefix, "0E+"), Std.String.from_int(exp))
 
   local fn format_decimal(prefix: String, digits: String, position: Int) -> String =
     pickup
       position <= 0 -> concat(concat(concat(prefix, "0."), Std.String.repeat("0", -position)), digits)
       position >= Std.String.length(digits) -> concat(concat(prefix, digits), Std.String.repeat("0", position - Std.String.length(digits)))
       else ->
-        let parts = split_chars(digits, position, [])
+        let parts = split_chars(Std.String.characters(digits), position, [])
         concat(concat(concat(prefix, parts.1), "."), parts.2)
 
-  local fn format_scientific(prefix: String, digits: List(Char), adjusted: Int) -> String =
-    match digits
+  local fn format_scientific(prefix: String, digits: String, adjusted: Int) -> String =
+    match Std.String.characters(digits)
       [head | rest] ->
+        let leading = Std.String.from_characters([head])
         let mantissa = pickup
-          Std.String.is_empty(rest) -> [head]
-          else -> concat(concat([head], "."), rest)
+          Std.List.is_empty(rest) -> leading
+          else -> concat(concat(leading, "."), Std.String.from_characters(rest))
         concat(concat(concat(prefix, mantissa), exponent_marker(adjusted)), Std.String.from_int(adjusted))
       [] -> concat(prefix, "0E+0")
 
@@ -608,11 +609,11 @@ mod Std.Decimal
 
   local fn split_chars(chars: List(Char), count: Int, reversed: List(Char)) -> Tuple(String, String) =
     pickup
-      count <= 0 -> %[Std.String.reverse(reversed), chars]
+      count <= 0 -> %[Std.String.reverse(Std.String.from_characters(reversed)), Std.String.from_characters(chars)]
       else ->
         match chars
           [head | rest] -> split_chars(rest, count - 1, [head | reversed])
-          [] -> %[Std.String.reverse(reversed), []]
+          [] -> %[Std.String.reverse(Std.String.from_characters(reversed)), ""]
 
   fn to_int(d: Decimal) -> Result(Int, DecimalError) =
     match d

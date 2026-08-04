@@ -24,7 +24,7 @@ defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
     end
 
     test "loading and merging interfaces is idempotent and permutation invariant", %{tmp_dir: dir} do
-      a = write!(dir, "a.cure", "mod Merge.A\n  type Letter = Char\n")
+      a = write!(dir, "a.cure", "mod Merge.A\n  typealias Letter = Int\n")
       b = write!(dir, "b.cure", "mod Merge.B\n  use Merge.A\n  fn id(x: Letter) -> Letter = x\n")
       assert {:ok, checked} = check([b, a], dir)
 
@@ -38,7 +38,7 @@ defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
                pipeline(:semantic_environment_dump, [twice])
 
       assert pipeline(:canonical_identities, [once]) == pipeline(:canonical_identities, [reversed])
-      assert pipeline(:definitionally_equal?, [once, "Merge.A.Letter", "Char"])
+      assert pipeline(:definitionally_equal?, [once, "Merge.A.Letter", "Int"])
     end
 
     test "direct imports win no preference from transitive or ambient availability", %{tmp_dir: dir} do
@@ -74,11 +74,15 @@ defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
         write!(
           dir,
           "owner.cure",
-          "mod Law.Owner\n  use Law.Protocol\n  type Box = Box(Int)\n  conformance Same(Box)\n    fn same(Box(x), Box(y)) -> Bool = x == y\n"
+          "mod Law.Owner\n  use Law.Protocol\n  type Box = Box(Int)\n  implementation Same for Box\n    fn same(x: Box, y: Box) -> Bool = true\n"
         )
 
       consumer =
-        write!(dir, "consumer.cure", "mod Law.Consumer\n  fn eq(x: Law.Owner.Box) -> Bool = x == x\n")
+        write!(
+          dir,
+          "consumer.cure",
+          "mod Law.Consumer\n  use Law.Protocol\n  use Law.Owner\n  fn eq(x: Box) -> Bool = same(x, x)\n"
+        )
 
       assert {:ok, checked} = check([consumer, protocol, owner], dir)
       assert pipeline(:conformance_owner, [checked, "Same", "Law.Owner.Box"]) == "Law.Owner"
@@ -148,26 +152,57 @@ defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
         write!(
           dir,
           "generated.cure",
-          "mod Macro.Generated\n  macro provider_value!() = `Macro.Provider.value()`\n  fn run() -> Int = provider_value!()\n"
+          """
+          mod Macro.Generated
+            macro ProviderValue
+              syntax provider_value becomes Macro.Provider.value()
+
+            fn run() -> Int = provider_value
+          """
         )
 
       assert {:ok, checked} = check([generated, authored, provider], dir)
 
-      assert pipeline(:normalized_core, [checked, "Macro.Authored", "run"]) ==
-               pipeline(:normalized_core, [checked, "Macro.Generated", "run"])
+      # Everything but the defining key: the two functions are in different
+      # modules, so their own keys differ by construction. What must agree is the
+      # call each one elaborated to — a generated qualified call has to reach the
+      # same canonical global as the authored one, at the same type.
+      assert {:ok, authored_core} = pipeline(:normalized_core, [checked, "Macro.Authored", "run"])
+      assert {:ok, generated_core} = pipeline(:normalized_core, [checked, "Macro.Generated", "run"])
+      assert Map.delete(authored_core, :key) == Map.delete(generated_core, :key)
+      assert authored_core.body == {:global, :"Macro.Provider#value"}
     end
 
     test "generated references and declarations extend the graph until stable", %{tmp_dir: dir} do
       provider = write!(dir, "provider.cure", "mod Macro.Dependency\n  fn value() -> Int = 1\n")
 
+      # The rule lives in another module on purpose. Only then is the reference
+      # its template introduces invisible to the publisher's own header scan, so
+      # resolving it is something expansion had to discover rather than something
+      # the first scan already knew.
+      rules =
+        write!(
+          dir,
+          "rules.cure",
+          """
+          mod Macro.Rules
+            macro Publish
+              syntax publish becomes fn made() -> Int = Macro.Dependency.value()
+          """
+        )
+
       generated =
         write!(
           dir,
           "generated.cure",
-          "mod Macro.Publisher\n  macro publish!() = `fn made() -> Int = Macro.Dependency.value()`\n  publish!()\n"
+          """
+          mod Macro.Publisher
+            use Macro.Rules
+            publish
+          """
         )
 
-      assert {:ok, checked} = check([generated, provider], dir)
+      assert {:ok, checked} = check([generated, rules, provider], dir)
       assert semantic_edge?(checked, "Macro.Publisher", "Macro.Dependency", :macro_generated_reference)
 
       assert pipeline(:canonical_definition, [checked, "Macro.Publisher", :value, "made"]) ==
@@ -179,11 +214,21 @@ defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
     test "compiled and fallback macro execution have identical expansion and isolated fresh state", %{
       tmp_dir: dir
     } do
+      # Two sibling uses of one rule, each of which mints a binder. Whatever
+      # freshening does, it has to do it per use-site: a single shared name here
+      # would let one expansion's binder capture the other's.
       source =
         write!(
           dir,
           "macro.cure",
-          "mod Macro.Parity\n  macro identity!(x) = `fn fresh() -> Int = ~x`\n  identity!(1)\n  identity!(2)\n"
+          """
+          mod Macro.Parity
+            macro Doubled
+              syntax doubled <x: Code> becomes let <fresh h> = x in h + h
+
+            fn first() -> Int = doubled 1
+            fn second() -> Int = doubled 2
+          """
         )
 
       assert {:ok, compiled} = check([source], dir, macro_execution: :compiled)
@@ -315,7 +360,10 @@ defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
       assert {:ok, body_only} = check([provider, consumer], dir, cache: cache)
       assert pipeline(:rebuilt_modules, [body_only]) == ["Inc.Provider"]
 
-      File.write!(provider, "mod Inc.Provider\n  fn value() -> Nat = 2\n")
+      # An added declaration changes the provider's interface without breaking
+      # the consumer: the consumer must rebuild because the interface it was
+      # checked against is gone, not because it stopped type-checking.
+      File.write!(provider, "mod Inc.Provider\n  fn value() -> Int = 2\n  fn extra() -> Int = 3\n")
       assert {:ok, interface_change} = check([consumer, provider], dir, cache: cache)
       assert pipeline(:rebuilt_modules, [interface_change]) == ["Inc.Consumer", "Inc.Provider"]
     end
@@ -344,7 +392,7 @@ defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
     test "parse and print metadata do not alter semantic identity", %{tmp_dir: dir} do
       source = write!(dir, "metadata.cure", "mod Metadata.Stable\n  fn value() -> Int = 1\n")
       assert {:ok, original} = check([source], dir)
-      assert {:ok, printed} = pipeline(:parse_print_recheck, [original, metadata: :fresh])
+      assert {:ok, printed} = pipeline(:parse_print_recheck, [original, [metadata: :fresh]])
       assert pipeline(:manifest_dump, [original]) == pipeline(:manifest_dump, [printed])
       assert pipeline(:interface_hashes, [original]) == pipeline(:interface_hashes, [printed])
     end
@@ -384,6 +432,8 @@ defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
       assert results |> Enum.uniq() |> length() == 1
     end
 
+    # Checking every stdlib module from cold is minutes of real work, not a hang.
+    @tag timeout: :timer.minutes(10)
     test "the real stdlib universe never elaborates unrelated provider bodies to construct ambient scope" do
       paths = Path.wildcard("lib/std/**/*.cure")
 
@@ -394,6 +444,8 @@ defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
       assert pipeline(:provider_body_elaboration_count, [checked, "Std.Binary", :during_prelude_bootstrap]) == 0
     end
 
+    # Checking every stdlib module from cold is minutes of real work, not a hang.
+    @tag timeout: :timer.minutes(10)
     test "nominal String and reversed regex filenames compile without ordering-only uses" do
       paths = Path.wildcard("lib/std/**/*.cure") |> Enum.reverse()
 

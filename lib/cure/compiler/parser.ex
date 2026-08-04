@@ -257,6 +257,22 @@ defmodule Cure.Compiler.Parser do
             true -> %{}
           end
 
+        # Rules the caller harvested from the modules this one `use`s. A macro is
+        # only usable where its grammar is active, so a module that imports a
+        # macro provider cannot be parsed correctly on its own: without these its
+        # use-sites are silently not macro uses at all.
+        #
+        # They join the module's OWN macros rather than the ambient built-in set,
+        # because that is what they are — grammar this module brought into scope
+        # by naming its provider. The two seats are not interchangeable: the
+        # built-in seat assumes a prelude macro always takes an argument, so a
+        # nullary rule parked there could never fire. An imported macro must parse
+        # exactly as the same macro defined locally would, and this is what makes
+        # that true. A local rule still wins on a keyword collision.
+        imported = Keyword.get(opts, :imported_macros, %{})
+        active = merge_imported_rules(active, syntax_macro_rules(imported))
+        computed = merge_imported_rules(computed, computed_macro_rules(imported))
+
         state = %__MODULE__{
           file: file,
           emit_events: emit?,
@@ -434,6 +450,19 @@ defmodule Cure.Compiler.Parser do
       end)
     end)
   end
+
+  @doc """
+  The `syntax`/`computed` rules a parsed module publishes, keyed by leading
+  keyword and stamped with the module's source path.
+
+  Callers that compile a whole universe pass these back in as `:imported_macros`
+  when parsing the modules that `use` this one.
+  """
+  @spec macro_rules(ast() | [ast()], Path.t() | nil) :: %{String.t() => [map()]}
+  def macro_rules(ast, source_path \\ nil), do: collect_macro_rules(ast, %{}, source_path)
+
+  defp merge_imported_rules(own, imported),
+    do: Map.merge(imported, own, fn _keyword, _imported, own -> own end)
 
   defp syntax_macro_rules(rules) when is_map(rules), do: filter_macro_rules(rules, :syntax)
   defp syntax_macro_rules(_rules), do: %{}
@@ -3457,6 +3486,18 @@ defmodule Cure.Compiler.Parser do
             case peek_at(state, 1) do
               %Token{type: :identifier, value: "module"} ->
                 parse_lift_module(state, token)
+
+              _ ->
+                {variable(token), advance(state)}
+            end
+
+          # Soft keyword: `public use M` is an explicit reexport — the only
+          # way a provider's exports cross a second module boundary. `public`
+          # anywhere else stays an ordinary identifier.
+          "public" ->
+            case peek_at(state, 1) do
+              %Token{type: :keyword, value: :use} ->
+                parse_use(advance(state), public?: true)
 
               _ ->
                 {variable(token), advance(state)}
@@ -10840,8 +10881,23 @@ defmodule Cure.Compiler.Parser do
   defp parse_type_variant(state) do
     name_token = peek(state)
     name = to_string(name_token.value)
-    state = advance(state)
 
+    # A DOTTED name in variant position is never a constructor being declared —
+    # a declaration introduces an unqualified name into this module. It is a
+    # qualified reference to someone else's type, so `type T = Other.Mod.F(T)`
+    # is an alias RHS and belongs to the type-expression parser. Reading only the
+    # first segment here left `.Mod.F(T)` behind, and the declaration was
+    # discarded entirely: the module's dependency on `Other.Mod` disappeared, and
+    # the manifest reported a missing module named after the middle segment
+    # instead of the compile-time cycle that is actually there.
+    if match?(%Token{type: :dot}, peek_at(state, 1)) do
+      parse_type_expr(state)
+    else
+      parse_type_variant_named(advance(state), name_token, name)
+    end
+  end
+
+  defp parse_type_variant_named(state, name_token, name) do
     case peek(state) do
       %Token{type: :lparen} ->
         # Constructor with params: Some(T)
@@ -11283,7 +11339,7 @@ defmodule Cure.Compiler.Parser do
 
   # -- Import  use Path.{items} [as Alias] -----------------------------------
 
-  defp parse_use(state) do
+  defp parse_use(state, opts \\ []) do
     token = peek(state)
     state = advance(state)
 
@@ -11331,6 +11387,7 @@ defmodule Cure.Compiler.Parser do
       end
 
     meta = [source: path, import_type: :use, language: :cure, line: token.line, col: token.col]
+    meta = if Keyword.get(opts, :public?, false), do: Keyword.put(meta, :public, true), else: meta
     meta = if items != [], do: Keyword.put(meta, :items, items), else: meta
     meta = if alias_name, do: Keyword.put(meta, :alias, alias_name), else: meta
     terminal_span = (alias_token && alias_token.span) || selection_span || path_end.span

@@ -435,9 +435,22 @@ defmodule Cure.Core.Kernel do
   def check(ctx, {:bounded_lit, k}, expected) when is_integer(k) and k >= 0 do
     sig = Context.signature(ctx)
     bounded_fid = Inductive.builtin(sig, :bounded)
+    char_fid = Inductive.builtin(sig, :char)
     depth = Context.length(ctx)
 
     case Normalise.whnf_value(expected, sig) do
+      # `Char` is a constructor-less nominal carrier, so this rule is the ONLY
+      # introduction form for it — the kernel re-derives the Unicode scalar
+      # ceiling itself rather than trusting the elaborator, exactly as it does
+      # for a declared `Bounded` bound below. `Char`'s own
+      # `ExpressibleByCharacterLiteral` instance cannot serve instead: its
+      # descriptor field is already a `Char`, so it presupposes what it would
+      # construct.
+      {:vdata, ^char_fid, []} when not is_nil(char_fid) ->
+        if k < 0x110000,
+          do: :ok,
+          else: {:error, {:bounded_lit_out_of_range, k, 0x110000}}
+
       {:vdata, ^bounded_fid, [bound_val]} when not is_nil(bounded_fid) ->
         case concrete_nat(Normalise.whnf_value(bound_val, sig)) do
           {:ok, n} when k < n -> :ok
@@ -931,6 +944,7 @@ defmodule Cure.Core.Kernel do
   # an index disagreement (the kernel-level backstop; the elaborator surfaces the
   # user-facing :index_unification earlier — see plan M3.4/M8.4).
   defp remap_index_error(_err, {:vdata, _name, _args}), do: {:error, :index_mismatch}
+
   defp remap_index_error(err, _expected), do: err
 
   # Assemble a constructor's RESULT type value by evaluating its result params and

@@ -129,7 +129,15 @@ defmodule Cure.Elab.Program do
          env0 = install_canonical_module_visibility(merged, ast, opts),
          {:ok, lifted} <- Cure.Elab.Induction.lift_declarations(declarations(ast)),
          items = lifted |> expand_where_declarations() |> annotate_overload_ordinals(),
-         {:ok, interface_env, function_declarations} <- register_pass(items, env0, false),
+         # Whether a module may register a `@builtin(:key)` family is a property of
+         # the SOURCE, not of the pipeline compiling it: `Std.Sigma` is the
+         # designated provider of `:sigma` however it is scheduled. Passing a flat
+         # `false` here silently dropped every builtin binding in the canonical
+         # pipeline, and the loss was invisible until a provider referred to its own
+         # family through compiler-owned syntax — `Sigma(x: a, b(x))` lowers via
+         # `Inductive.builtin(env, :sigma)`, whose `|| :Sigma` fallback produced a
+         # bare family name that matched no constructor's real owner.
+         {:ok, interface_env, function_declarations} <- register_pass(items, env0, prelude_source?(ast)),
          :ok <- check_overload_legality(interface_env) do
       {:ok,
        %{
@@ -138,7 +146,8 @@ defmodule Cure.Elab.Program do
          items: items,
          interface_env: interface_env,
          function_declarations: function_declarations,
-         source_opts: source_opts
+         source_opts: source_opts,
+         module_visibility: Keyword.get(opts, :module_visibility)
        }}
     end
   end
@@ -194,8 +203,21 @@ defmodule Cure.Elab.Program do
         current_def: nil
     }
 
-    Map.put(prepared, :interface_env, env)
+    Map.put(prepared, :interface_env, %Env{env | bare_bindings: component_bare_bindings(prepared, env)})
   end
+
+  # What a module can name without qualification is decided by the SAME rule at
+  # both points it is asked; only the table it is asked about differs. A module's
+  # own registration pass sees its peers as type HEADERS — families with an empty
+  # constructor list — so a peer's constructors are not yet keys and cannot enter
+  # the binding set. The component environment is the first place every member's
+  # real declarations exist together, so the rule is applied once more there.
+  # This widens nothing: `lexical`/`ambient` are the same manifest projections,
+  # and a module that imported nothing gains nothing.
+  defp component_bare_bindings(%{ast: ast, module_visibility: %{lexical: lexical} = visibility}, %Env{} = env),
+    do: canonical_bare_bindings(env, ast, lexical, Map.get(visibility, :ambient, MapSet.new()))
+
+  defp component_bare_bindings(_prepared, %Env{bare_bindings: bindings}), do: bindings
 
   @doc false
   @spec merge_canonical_environments(Env.t(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
@@ -1172,19 +1194,36 @@ defmodule Cure.Elab.Program do
     end)
   end
 
-  # The seeded base env plus telescope support. `Unit` (the empty telescope `%[]`
-  # / `Tuple()`, the terminator of the unit-terminated Σ chain a flat `Tuple(…)`
-  # unfolds to — spec 2026-07-09-unified-tuple §3.4) is declared here in the
-  # E-LAYER via the ordinary `Inductive.declare/3` that `type`/`rec` use, NOT in
-  # the trusted `Core.Builtins` seed: it needs no `@builtin` schema and carries no
-  # kernel-judgement change, so it stays out of the TCB. A module declaring its own
-  # `Unit` shadows this (the local declaration overwrites the same key), same as any
-  # seeded builtin. `unit : Unit` is a plain nullary inductive.
+  # The base floor, owned by the module being elaborated.
   defp seed_with_telescope_support(ast) do
     owner = find_module_name(ast) || "Main"
-    seeded = Cure.Core.Builtins.seed(Env.with_owner(Env.empty(), owner), declared_type_names(ast))
+    %Env{} = base = canonical_base_environment(declared_type_names(ast))
+    %Env{base | module_owner: owner}
+  end
 
-    if MapSet.member?(declared_type_names(ast), :Unit) do
+  @doc """
+  The floor every module is elaborated against: the kernel seed plus the
+  telescope terminator `Std.Unit`.
+
+  This is public because elaboration is not the only thing that needs it.
+  Verifying a frozen interface re-checks the same terms, so it has to start from
+  the same floor — a smaller one would reject a module for mentioning something
+  the compiler itself provided.
+
+  `Unit` (the empty telescope `%[]` / `Tuple()`, the terminator of the
+  unit-terminated Σ chain a flat `Tuple(…)` unfolds to — spec
+  2026-07-09-unified-tuple §3.4) is declared here in the E-LAYER via the ordinary
+  `Inductive.declare/3` that `type`/`rec` use, NOT in the trusted
+  `Core.Builtins` seed: it needs no `@builtin` schema and carries no kernel-
+  judgement change, so it stays out of the TCB. A module declaring its own `Unit`
+  shadows this (the local declaration overwrites the same key), same as any
+  seeded builtin. `unit : Unit` is a plain nullary inductive.
+  """
+  @spec canonical_base_environment(MapSet.t()) :: Env.t()
+  def canonical_base_environment(shadowed \\ MapSet.new()) do
+    seeded = Cure.Core.Builtins.seed(Env.empty(), shadowed)
+
+    if MapSet.member?(shadowed, :Unit) do
       seeded
     else
       unit_env = Env.with_owner(seeded, "Std.Unit")
@@ -2976,18 +3015,107 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp owned_declarations(%Env{} = env, owner) do
+  @doc """
+  Split an environment into the part `owner` declares and the extensions it
+  publishes.
+
+  Both the elaborator and `Cure.Compiler.ModulePipeline.Interface` need to know
+  which half of an environment a module owns. There is one answer, and this is
+  it: two spellings of "owned by" are how a declared interface silently
+  disappears one module boundary away.
+  """
+  @spec canonical_owned_partition(Env.t(), String.t()) :: %{
+          declarations: map(),
+          externs: map(),
+          extensions: map()
+        }
+  def canonical_owned_partition(%Env{} = env, owner) when is_binary(owner) do
     %{
-      defs: take_owned(env.defs, owner),
-      families: take_owned(env.families, owner),
-      ctors: take_owned(env.ctors, owner),
-      ctor_to_family:
-        Map.filter(env.ctor_to_family, fn {ctor, _family} ->
-          Cure.Elab.Name.owner(ctor) == owner
-        end),
+      declarations: owned_declarations(env, owner),
+      externs: owned_externs(env, owner),
+      extensions: interface_extensions(env, owner)
+    }
+  end
+
+  defp owned_declarations(%Env{} = env, owner) do
+    defs = take_owned(env.defs, owner)
+    families = take_owned(env.families, owner)
+    ctors = take_owned(env.ctors, owner)
+
+    ctor_to_family =
+      Map.filter(env.ctor_to_family, fn {ctor, _family} ->
+        Cure.Elab.Name.owner(ctor) == owner
+      end)
+
+    generated = MapSet.to_list(reachable_generated_keys(env, [defs, families, ctors]))
+
+    %{
+      defs: defs,
+      families: Map.merge(families, Map.take(env.families, generated)),
+      ctors: Map.merge(ctors, Map.take(env.ctors, generated)),
+      ctor_to_family: Map.merge(ctor_to_family, Map.take(env.ctor_to_family, generated)),
       equations: take_owned(env.equations, owner)
     }
   end
+
+  # An anonymous-ADT family (`Bool | Int`) has NO owner: its key is derived from
+  # its members (`Union<Std.Bool#Bool|Std.Int#Int>`), so every module that writes
+  # that type generates the identical family rather than importing someone's. That
+  # is why `take_owned/2` cannot find it, and why publishing it is not a
+  # duplicate-provider violation — two copies are byte-identical by construction.
+  #
+  # It must nonetheless travel: a published signature mentioning the union is
+  # unverifiable in a consumer whose environment has never seen the family
+  # (`{:unknown_family, :"Union<…>"}` at freeze time). Reachability, not "every
+  # generated family in the environment": one inherited from a dependency and
+  # never mentioned here is that dependency's to carry.
+  defp reachable_generated_keys(%Env{} = env, roots) do
+    close_generated_keys(env, collect_generated_keys(roots, MapSet.new()))
+  end
+
+  # Close under two relations:
+  #
+  #   * a family DRAGS ITS CONSTRUCTORS. A family record holds only its
+  #     parameter/index telescope, so nothing in it mentions
+  #     `Union<…>$Std.Int#Int` — yet a consumer matching on the union needs that
+  #     constructor by name, and without it the match fails as
+  #     `{:unknown_pattern_constructor, …}` while the type itself resolves fine.
+  #     `ctor_to_family` is the only place the link is written down.
+  #
+  #   * an entry MENTIONS another generated key (`(Bool | Int) | String`).
+  defp close_generated_keys(%Env{} = env, keys) do
+    with_ctors =
+      Enum.reduce(env.ctor_to_family, keys, fn {ctor, family}, acc ->
+        if MapSet.member?(keys, family), do: MapSet.put(acc, ctor), else: acc
+      end)
+
+    key_list = MapSet.to_list(with_ctors)
+    entries = [Map.take(env.families, key_list), Map.take(env.ctors, key_list)]
+    next = collect_generated_keys(entries, with_ctors)
+
+    if MapSet.equal?(next, keys), do: keys, else: close_generated_keys(env, next)
+  end
+
+  # Generated keys are recognised by their reserved prefix, so a single walk over
+  # any Core shape finds both families (`Union<…>`) and their constructors
+  # (`Union<…>$Std.Int#Int`) without knowing which node types carry them.
+  defp collect_generated_keys(term, acc) when is_atom(term) do
+    if Cure.Elab.Union.union_family?(term), do: MapSet.put(acc, term), else: acc
+  end
+
+  defp collect_generated_keys(term, acc) when is_tuple(term),
+    do: term |> Tuple.to_list() |> collect_generated_keys(acc)
+
+  defp collect_generated_keys(term, acc) when is_list(term),
+    do: Enum.reduce(term, acc, &collect_generated_keys/2)
+
+  defp collect_generated_keys(%_{} = term, acc),
+    do: term |> Map.from_struct() |> collect_generated_keys(acc)
+
+  defp collect_generated_keys(%{} = term, acc),
+    do: term |> Map.to_list() |> collect_generated_keys(acc)
+
+  defp collect_generated_keys(_term, acc), do: acc
 
   defp owned_externs(%Env{} = env, owner) do
     env.defs
@@ -3002,9 +3130,48 @@ defmodule Cure.Elab.Program do
           Map.has_key?(env.families, Cure.Elab.Name.qualify(owner, name))
         end),
       coherence: owned_coherence(env.coherence, owner),
-      primitives: env.primitives
+      primitives: env.primitives,
+      builtins: owned_builtins(env.builtins, owner),
+      constrained: take_owned(env.constrained, owner),
+      lemmas: owned_lemmas(env.lemmas, owner)
     }
   end
+
+  # `requires Iface(a)` is part of a function's CALLING CONVENTION, not a private
+  # note: the dictionary a constrained global expects is appended at each concrete
+  # call site by `Cure.Elab.Resolve`, which asks `Env.constrained/2` whether the
+  # callee wants one. Dropped from the interface, a consumer sees a telescope with
+  # a dictionary slot it does not know to fill, and the call fails as
+  # `:too_few_arguments` — `Std.Equatable`'s derived `` `!=` `` on any type whose
+  # `==` is not a primitive (`a != b` on a user ADT) is the standing example.
+  #
+  # `lemmas` for the same reason on the proof-search side: an `@lemma` is filed
+  # under its conclusion head so `Cure.Elab.ProofSearch` can find it, and the
+  # entry's `name` is already owner-qualified, so the assembled `{:global, …}`
+  # matches ordinary elaboration in the consumer.
+  defp owned_lemmas(lemmas, owner) do
+    lemmas
+    |> Enum.map(fn {head, entries} ->
+      {head, Enum.filter(entries, &(Cure.Elab.Name.owner(&1.name) == owner))}
+    end)
+    |> Enum.reject(fn {_head, entries} -> entries == [] end)
+    |> Map.new()
+  end
+
+  # `@builtin(:key)` bindings are part of a module's exported meaning, not a
+  # private note to itself: they are how a CONSUMER's compiler-owned syntax finds
+  # the family it lowers to. `Std.Bounded` is the only module that may say which
+  # family `:bounded` names, and every module elaborating a character literal has
+  # to be able to ask. Dropping them from the interface left the family reachable
+  # by name while the key that selects it was gone, so `Inductive.builtin/2`
+  # returned `nil` in a module that could see `Std.Bounded#Bounded` perfectly well.
+  #
+  # Only the keys this module actually owns travel. The seeded kernel builtins are
+  # re-seeded into every environment from the same source, so re-exporting them
+  # would add nothing, and a family owned by someone else is that module's to
+  # publish.
+  defp owned_builtins(builtins, owner),
+    do: Map.filter(builtins, fn {_key, family} -> Cure.Elab.Name.owner(family) == owner end)
 
   defp owned_coherence(nil, _owner), do: nil
 
@@ -3274,25 +3441,107 @@ defmodule Cure.Elab.Program do
       :error ->
         install_module_visibility(env, ast)
 
-      {:ok, %{lexical: lexical, qualified: qualified}}
+      {:ok, %{lexical: lexical, qualified: qualified} = visibility}
       when is_struct(lexical, MapSet) and is_struct(qualified, MapSet) ->
-        ambient =
-          if prelude_bootstrap?(find_module_name(ast)),
-            do: MapSet.new(),
-            else: MapSet.new(prelude_manifest(), & &1.source)
+        ambient = Map.get(visibility, :ambient, MapSet.new())
 
-        bare = MapSet.union(lexical, ambient)
-        qualified = MapSet.union(qualified, ambient)
+        bare = lexical
 
         env
         |> Map.put(:import_modules, lexical)
         |> Env.with_module_visibility(bare, qualified)
-        |> Map.put(:bare_bindings, visible_bare_bindings(env, ast, lexical))
+        |> Map.put(:bare_bindings, canonical_bare_bindings(env, ast, lexical, ambient))
 
       {:ok, visibility} ->
         raise ArgumentError,
               "expected :module_visibility to contain MapSet :lexical and :qualified projections, got: #{inspect(visibility)}"
     end
+  end
+
+  defp canonical_bare_bindings(env, ast, lexical, ambient) do
+    bindings = visible_bare_bindings(env, ast, lexical)
+    owner = find_module_name(ast)
+    explicit = canonical_explicit_modules(ast, lexical, ambient)
+    preferred = preferred_bases_by_namespace(env, owner, explicit)
+
+    MapSet.reject(bindings, fn key ->
+      MapSet.member?(ambient, Cure.Elab.Name.owner(key)) and shadowed?(env, preferred, key)
+    end)
+  end
+
+  # A module that *authored* `use Std.String` has imported it explicitly, even
+  # though `Std.String` is also a prelude provider and therefore reaches every
+  # module ambiently.  Deriving "explicit" as `lexical - ambient` alone silently
+  # demotes such an import to ambient standing, so its names lose to any
+  # same-base name the module happens to own.  Take the authored `use` list as
+  # what it says it is, and keep the manifest-derived difference for the
+  # re-exported modules that reach this module through an explicit import chain
+  # without being named here.
+  defp canonical_explicit_modules(ast, lexical, ambient) do
+    ast
+    |> imports()
+    |> direct_import_ids()
+    |> MapSet.intersection(lexical)
+    |> MapSet.union(MapSet.difference(lexical, ambient))
+  end
+
+  # The tables a bare name can resolve through.  `Env.resolve_key/3` is asked
+  # for ONE of them at a time — a type position looks in `families`, a pattern
+  # in `ctors` — so shadowing is a per-table question too.
+  @global_namespaces [:defs, :families, :ctors]
+
+  # base -> the owners that provide it, per table.  Owners are kept rather than
+  # collapsed to a set of bases because an explicitly imported module that is
+  # ALSO a prelude provider would otherwise make its own names preferred and
+  # then shadow them with that preference — `use Std.Nat` evicting `Nat`.
+  defp preferred_bases_by_namespace(%Env{} = env, owner, explicit) do
+    Map.new(@global_namespaces, fn table ->
+      owners_by_base =
+        env
+        |> Map.fetch!(table)
+        |> Map.keys()
+        |> Enum.filter(fn key ->
+          key_owner = Cure.Elab.Name.owner(key)
+          key_owner == owner or MapSet.member?(explicit, key_owner)
+        end)
+        |> Enum.group_by(&Cure.Elab.Name.base/1, &Cure.Elab.Name.owner/1)
+        |> Map.new(fn {base, owners} -> {base, MapSet.new(owners)} end)
+
+      {table, owners_by_base}
+    end)
+  end
+
+  # Whether a locally-owned or explicitly-imported name shadows this ambient one.
+  #
+  # Shadowing is judged per table, and an ambient key is dropped only when EVERY
+  # table it occupies is shadowed.  A module that declares `type V = … |
+  # String(…)` owns a *constructor* named `String`; that must not evict the
+  # ambient *type* `Std.String#String`, because a type position asks `families`
+  # and finds nothing local competing there.  A namespace-blind rule drops the
+  # binding outright, `Env.bare_key_available?/2` then reports the type as
+  # invisible, and `resolve_index_name/2` falls through to the constructor
+  # branch — a *type* annotation resolving to a *value* constructor, surfaced as
+  # a downstream `{:cannot_unify, {:data, …}, {:ctor, …}}` far from its cause.
+  #
+  # `Std.String#String` occupies `families` AND `ctors`, so keeping it leaves
+  # the bare constructor `String` genuinely ambiguous — and that is fine:
+  # `Env.resolve_key/3` tries `Owner#name` before any bare binding, so the
+  # module's own constructor still wins.  This set is the fallback that decides
+  # what an *unowned* bare name may reach, not the resolution order itself.
+  defp shadowed?(%Env{} = env, preferred, key) do
+    base = Cure.Elab.Name.base(key)
+    key_owner = Cure.Elab.Name.owner(key)
+
+    occupied = Enum.filter(@global_namespaces, &Map.has_key?(Map.fetch!(env, &1), key))
+
+    occupied != [] and
+      Enum.all?(occupied, fn table ->
+        preferred
+        |> Map.fetch!(table)
+        |> Map.get(base, MapSet.new())
+        |> MapSet.delete(key_owner)
+        |> Enum.any?()
+      end)
   end
 
   defp visible_bare_bindings(%Env{} = env, ast, explicit_modules) do
@@ -4803,7 +5052,16 @@ defmodule Cure.Elab.Program do
     if attached_decorator_name(dec) == :builtin do
       {:decorator, _dm, args} = dec
       key = builtin_key(args)
-      fid = meta |> Keyword.fetch!(:name) |> String.to_atom()
+
+      # The declaration meta still carries the AUTHORED name; `Declarations.elaborate`
+      # has just registered the family under its canonical `Owner#Name` key. Bind the
+      # builtin key to that canonical id, not to the bare spelling: everything that
+      # later asks `Inductive.builtin(env, key)` compares the answer against a real
+      # family id — a ctor's owner, a `{:vdata, fid, _}` head — and a bare name
+      # matches none of them, so the key would resolve to a family that does not
+      # exist while the module's own type checked out fine.
+      fid = Env.resolve_key(env, env.families, meta |> Keyword.fetch!(:name) |> String.to_atom())
+
       :ok = Cure.Core.Builtins.validate!(env, key, fid)
       {:ok, Cure.Core.Inductive.register_builtin(env, key, fid)}
     else

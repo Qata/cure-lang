@@ -203,9 +203,9 @@ mod Std.Json
       Std.Char.same(char, '\\') -> ['\\', '\\' | output]
       Std.Char.same(char, '\b') -> ['b', '\\' | output]
       Std.Char.same(char, '\f') -> ['f', '\\' | output]
-      Std.Char.same(char, 10) -> ['n', '\\' | output]
-      Std.Char.same(char, 13) -> ['r', '\\' | output]
-      Std.Char.same(char, 9) -> ['t', '\\' | output]
+      Std.Char.same(char, '\n') -> ['n', '\\' | output]
+      Std.Char.same(char, '\r') -> ['r', '\\' | output]
+      Std.Char.same(char, '\t') -> ['t', '\\' | output]
       Std.Char.code_point(char) < 32 -> prepend_unicode_control(Std.Char.code_point(char), output)
       else -> [char | output]
 

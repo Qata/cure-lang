@@ -656,8 +656,11 @@ defmodule Cure.Elab.Elaborator do
 
           {:error, _} = orig ->
             case elaborate_bidirectional_app(name, args, names, ctx, env) do
-              {:ok, _, _} = ok -> ok
-              {:error, _} -> orig
+              {:ok, _, _} = ok ->
+                ok
+
+              {:error, _rr} ->
+                orig
             end
         end
     end
@@ -1340,7 +1343,9 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+  def elaborate_expr_typed(other, _names, _ctx, _env) do
+    {:error, {:unsupported_expression, other}}
+  end
 
   # A do block is commonly supplied as an argument to `run`, where ordinary
   # application elaboration initially asks for an inferred argument type. Its
@@ -3009,7 +3014,7 @@ defmodule Cure.Elab.Elaborator do
         elaborate_scalar_literal_protocol(
           :from_string_literal,
           "StringLiteral",
-          {:literal, [subtype: :string, literal_protocol: :string_argument], value},
+          literal_spelling(value),
           value,
           expected_core,
           names,
@@ -3682,9 +3687,7 @@ defmodule Cure.Elab.Elaborator do
     do: Cure.Elab.Resolve.method?(env, method)
 
   defp elaborate_contextual_decimal_literal(exact, expected_core, names, ctx, env) do
-    descriptor =
-      {:function_call, [name: "DecimalLiteral"],
-       [{:literal, [subtype: :string, literal_protocol: :string_argument], exact}]}
+    descriptor = {:function_call, [name: "DecimalLiteral"], [literal_spelling(exact)]}
 
     elaborate_literal_protocol(
       :from_decimal_literal,
@@ -3808,7 +3811,7 @@ defmodule Cure.Elab.Elaborator do
   defp literal_protocol_argument({:natural_argument, spelling}, value) do
     {:function_call, [name: "NaturalLiteral"],
      [
-       {:literal, [subtype: :string, literal_protocol: :string_argument], spelling},
+       literal_spelling(spelling),
        {:literal, [subtype: :integer, literal_protocol: :natural_argument], value}
      ]}
   end
@@ -3816,13 +3819,23 @@ defmodule Cure.Elab.Elaborator do
   defp literal_protocol_argument({:integer_argument, spelling}, value) do
     {:function_call, [name: "IntegerLiteral"],
      [
-       {:literal, [subtype: :string, literal_protocol: :string_argument], spelling},
+       literal_spelling(spelling),
        {:literal, [subtype: :integer, literal_protocol: :integer_argument], value}
      ]}
   end
 
   defp literal_protocol_argument(argument_kind, value),
     do: {:literal, [subtype: :integer, literal_protocol: argument_kind], value}
+
+  # The `spelling`/`value` text a literal descriptor carries is declared `List(Char)`
+  # — the decoded code points, deliberately independent of however `Std.String`
+  # stores its characters, so a user's `from_natural_literal` can read digits
+  # without depending on that record. Emit the character list itself rather than a
+  # string literal: a bare string literal constructs the nominal `String`, and it
+  # did so here whenever the descriptor's field was elaborated in inference mode,
+  # which is a `String` where a `List(Char)` was declared. Tagging the literal to
+  # steer the checking path only worked while every field happened to be checked.
+  defp literal_spelling(text) when is_binary(text), do: desugar_string_characters(text, [])
 
   defp nat_expected?(expected_core, ctx) do
     sig = Context.signature(ctx)
@@ -3845,14 +3858,27 @@ defmodule Cure.Elab.Elaborator do
       match?({:vfloat_type}, Eval.eval(expected_core, Context.env(ctx)))
   end
 
-  # The type of every character literal: Char = Bounded(0x110000). A char literal
-  # is a codepoint value; the bound 0x110000 (= 1_114_112) is intrinsic, not from
-  # context. `:no_bounded` when the Bounded family is unregistered (needs
-  # `use Std.Bounded`), so the caller reports a fix-naming error, not a crash.
+  # The type of every character literal. `Std.Char` declares `Char` as a nominal
+  # carrier — no longer a `Bounded(0x110000)` synonym — so where that module is in
+  # scope a character literal IS a `Char` and nothing else; an arbitrary bounded
+  # value can no longer pass for one. The kernel admits the same compact
+  # `{:bounded_lit, k}` value at either family, so this only decides which type the
+  # literal announces, not how it is represented.
+  #
+  # `Bounded(0x110000)` remains the fallback for a universe compiled without
+  # `Std.Char` (the bound 0x110000 = 1_114_112 is intrinsic to a code point, not
+  # read from context). `:no_bounded` when neither family is registered, so the
+  # caller reports a fix-naming error rather than crashing.
   defp char_type_value(sig) do
-    case Inductive.builtin(sig, :bounded) do
-      nil -> :no_bounded
-      fid -> {:ok, {:vdata, fid, [{:vnat, 0x110000}]}}
+    case Inductive.builtin(sig, :char) do
+      nil ->
+        case Inductive.builtin(sig, :bounded) do
+          nil -> :no_bounded
+          fid -> {:ok, {:vdata, fid, [{:vnat, 0x110000}]}}
+        end
+
+      fid ->
+        {:ok, {:vdata, fid, []}}
     end
   end
 
@@ -7932,6 +7958,15 @@ defmodule Cure.Elab.Elaborator do
     cond do
       fid == Inductive.builtin(sig, :bool) -> {:ok, :bool}
       fid == Inductive.builtin(sig, :int) -> {:ok, :int}
+      # `Char` is its own nullary builtin carrier, no longer a typealias for
+      # `Bounded(0x110000)`, so it never reaches the applied-`Bounded` clause
+      # below. It behaves identically for pattern purposes: its values are
+      # compact `{:bounded_lit, k}` (the kernel's sole introduction rule for
+      # `Char`), compared with the polymorphic `struct_eq`. Without this clause
+      # every char-literal pattern — `['"' | rest]`, the whole of the pure-Cure
+      # regex parser — falls out of the literal chain into the constructor
+      # matrix, which reports the arm as `{:unsupported_pattern, :literal}`.
+      fid == Inductive.builtin(sig, :char) -> {:ok, :bounded}
       true -> :error
     end
   end
@@ -9675,8 +9710,11 @@ defmodule Cure.Elab.Elaborator do
 
         {:error, _} = orig ->
           case elaborate_expr_checked(expr, expected, names, ctx, env) do
-            {:ok, _} = ok -> ok
-            {:error, _} -> orig
+            {:ok, _} = ok ->
+              ok
+
+            {:error, _cr} ->
+              orig
           end
       end
     end
@@ -9817,8 +9855,11 @@ defmodule Cure.Elab.Elaborator do
           # original inference error rather than the (likely less informative) one.
           {:error, _} = err ->
             case elaborate_expr_checked(final, r_reified, names, ctx, env) do
-              {:ok, r_core} -> {:ok, effect_pure_for_bind(r_core, r_reified, ctx)}
-              {:error, _} -> err
+              {:ok, r_core} ->
+                {:ok, effect_pure_for_bind(r_core, r_reified, ctx)}
+
+              {:error, _e2} ->
+                err
             end
         end
 
@@ -10942,11 +10983,19 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A source string constructs the nominal `Std.String.String` around its
-  # decoded character list. The qualified constructor identity avoids collision
-  # with user constructors such as `Std.Json.String`.
+  # A source string constructs the nominal `Std.String` record around its decoded
+  # character list. The constructor is named by its CANONICAL KEY, not by the
+  # qualified surface spelling `Std.String.String`: this call is written by the
+  # compiler, not by the module the literal appears in, and that module never
+  # imported `Std.String`. A surface spelling has to survive qualified-module
+  # availability lookup, which it cannot in a module that made no such import —
+  # it falls through to a verbatim `{:global, :"Std.String.String"}` that no
+  # environment defines. The key still carries the owner, so it keeps the
+  # collision-avoidance the qualified spelling was chosen for (a user's
+  # `Std.Json.String` is a different key).
   defp desugar_string(value, meta) when is_binary(value) do
-    {:function_call, [name: "Std.String.String"] ++ generated_meta(meta), [desugar_string_characters(value, meta)]}
+    name = Atom.to_string(Cure.Elab.Name.qualify("Std.String", :String))
+    {:function_call, [name: name] ++ generated_meta(meta), [desugar_string_characters(value, meta)]}
   end
 
   defp desugar_string_characters(value, meta) when is_binary(value) do
@@ -13252,7 +13301,9 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr({tag, meta, _}, _scope, _env) when tag in [:splice, :splice_group],
     do: {:error, splice_outside_quote_error(tag, meta)}
 
-  def elaborate_expr(other, _scope, _env), do: {:error, {:unsupported_expression, other}}
+  def elaborate_expr(other, _scope, _env) do
+    {:error, {:unsupported_expression, other}}
+  end
 
   defp unsupported_async_error(meta) do
     {:unsupported_async,

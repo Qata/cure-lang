@@ -7,40 +7,133 @@ defmodule Cure.Compiler.ModulePipeline do
   add checked interfaces, bodies, closure, and artifacts to the same result.
   """
 
-  alias Cure.Compiler.{Lexer, ModuleManifest, ModuleSkeleton, Parser}
-  alias Cure.Compiler.ModulePipeline.{Interface, Request, Result}
-  alias Cure.Core.Env
-  alias Cure.Elab.Program
+  alias Cure.Compiler.{ModuleInterface, ModuleManifest, Printer}
+
+  alias Cure.Compiler.ModulePipeline.{
+    BodyElaborationTrace,
+    Cache,
+    Closure,
+    Conformance,
+    Cycle,
+    Diagnosis,
+    Environment,
+    Expansion,
+    Interface,
+    Publication,
+    Request,
+    Result,
+    SemanticGraph
+  }
+
+  alias Cure.Core.{Builtins, Env}
+  alias Cure.Elab.{MacroExpand, Name, Program}
 
   @spec check([Path.t()], keyword()) :: {:ok, Result.t()} | {:error, term()}
   def check(paths, opts \\ []) when is_list(paths) and is_list(opts) do
+    {result, body_elaborations} = BodyElaborationTrace.run(fn -> check_traced(paths, opts) end)
+
+    case result do
+      {:ok, %Result{} = checked} ->
+        {:ok, %{checked | body_elaborations: Enum.uniq(body_elaborations)}}
+
+      other ->
+        other
+    end
+  end
+
+  defp check_traced(paths, opts) do
     request_opts =
       opts
       |> Keyword.put_new(:entry_point, :module_check)
       |> Keyword.put(:sources, paths)
 
     with {:ok, request} <- Request.new(request_opts),
-         :ok <- require_canonical(request),
-         {:ok, external_interfaces} <- Interface.load_roots(request.interface_roots),
+         :ok <- require_canonical(request) do
+      # The macro execution strategy is a property of the run, not of any one
+      # expansion, so it is established once here and every expander this check
+      # reaches obeys it.
+      MacroExpand.with_execution(request.macro_execution, fn -> check_request(request, paths) end)
+    end
+  end
+
+  defp check_request(request, paths) do
+    with {:ok, external_interfaces} <- Interface.load_roots(request.interface_roots),
          {:ok, external_envs} <- interface_environments(external_interfaces),
-         {:ok, manifest} <-
-           ModuleManifest.build(paths, manifest_options(request, external_interfaces)),
-         {:ok, skeletons, asts, sources} <- collect_units(manifest),
+         manifest_options = manifest_options(request, external_interfaces),
+         {:ok, manifest} <- ModuleManifest.build(paths, manifest_options),
+         {:ok, expansion} <- Expansion.run(manifest, manifest_options),
+         manifest = expansion.manifest,
          components = strongly_connected_components(manifest),
-         {:ok, interfaces, checked_envs} <-
-           check_modules(manifest, asts, sources, external_interfaces, external_envs, components) do
+         {:ok, interfaces, checked_envs, body_envs, diagnostics, rebuilt} <-
+           check_modules(
+             request,
+             manifest,
+             expansion.skeletons,
+             expansion.asts,
+             expansion.sources,
+             external_interfaces,
+             external_envs,
+             components
+           ),
+         :ok <- reject_failed_run(diagnostics),
+         :ok <- publish(request, interfaces) do
       {:ok,
        %Result{
          request: request,
          manifest: manifest,
-         skeletons: skeletons,
-         asts: asts,
+         skeletons: expansion.skeletons,
+         asts: expansion.asts,
          interfaces: interfaces,
          checked_envs: checked_envs,
-         components: components
+         body_envs: body_envs,
+         components: components,
+         diagnostics: diagnostics,
+         rebuilt_modules: rebuilt,
+         expansion_rounds: expansion.rounds,
+         semantic_graph: record_generated_references(SemanticGraph.from_manifest(manifest), expansion.generated)
        }}
     end
   end
+
+  defp record_generated_references(graph, generated) do
+    Enum.reduce(generated, graph, fn reference, graph ->
+      SemanticGraph.put(graph, %{
+        kind: :macro_generated_reference,
+        source: elem(reference.source, 1),
+        target: elem(reference.target, 1),
+        phase: :expand,
+        span: reference.span
+      })
+    end)
+  end
+
+  # Collected diagnostics do not make a failed run succeed: they change how the
+  # failure is *reported* — every independent cause once, instead of the first
+  # one and nothing else.
+  defp reject_failed_run([]), do: :ok
+  defp reject_failed_run(diagnostics), do: {:error, diagnostics}
+
+  # Publication is the last thing a run does. A generation that was assembled
+  # from a run that then failed must never become visible, so nothing is
+  # installed until the whole universe has checked.
+  defp publish(%Request{publication: :atomic} = request, interfaces),
+    do: Publication.publish(request.output, request.generation, interfaces)
+
+  defp publish(_request, _interfaces), do: :ok
+
+  @doc """
+  The generation a reader of a published output directory currently sees.
+  """
+  @spec open_published_generation(Path.t()) :: {:ok, map()} | {:error, term()}
+  defdelegate open_published_generation(root), to: Publication, as: :open
+
+  @doc "Whether an opened generation contains every module it claims."
+  @spec generation_complete?(map()) :: boolean()
+  defdelegate generation_complete?(published), to: Publication, as: :complete?
+
+  @doc "Whether an opened generation still names a path inside a staging tree."
+  @spec contains_staging_reference?(map()) :: boolean()
+  defdelegate contains_staging_reference?(published), to: Publication
 
   @spec write_interfaces(Result.t(), Path.t()) :: :ok | {:error, term()}
   def write_interfaces(%Result{} = result, root) when is_binary(root) do
@@ -61,6 +154,23 @@ defmodule Cure.Compiler.ModulePipeline do
     path = Interface.path(root, module_name)
     if File.regular?(path), do: {:ok, path}, else: {:error, {:interface_artifact_missing, module_name, path}}
   end
+
+  @doc """
+  The modules this run actually rechecked.
+
+  Everything else came from the cache, so this is the executable statement that
+  invalidation followed the checked semantic graph and not the order the files
+  were handed in.
+  """
+  @spec rebuilt_modules(Result.t()) :: [String.t()]
+  def rebuilt_modules(%Result{rebuilt_modules: rebuilt}), do: rebuilt
+
+  @doc """
+  Make a written interface fail its own hash check, for tests of the rejection
+  path.
+  """
+  @spec corrupt_interface_for_test(Path.t(), :dependency_hash) :: :ok | {:error, term()}
+  defdelegate corrupt_interface_for_test(path, kind), to: Interface, as: :corrupt
 
   @spec kernel_verify_interfaces(Result.t()) :: :ok | {:error, term()}
   def kernel_verify_interfaces(%Result{} = result) do
@@ -109,6 +219,421 @@ defmodule Cure.Compiler.ModulePipeline do
     end
   end
 
+  @doc """
+  The complete edge vocabulary of the checked semantic graph.
+
+  This list is exhaustive by construction: an edge kind that is not here cannot
+  be recorded, so no second, informal dependency notion can accumulate beside
+  it. It is `SemanticGraph`'s own list rather than a copy — a second copy here
+  would drift, and a kind the graph accepted but this function did not report
+  would be exactly the informal vocabulary the closedness is meant to prevent.
+  """
+  @spec semantic_edge_kinds() :: [atom()]
+  defdelegate semantic_edge_kinds(), to: SemanticGraph, as: :kinds
+
+  @spec semantic_edge?(Result.t(), String.t(), String.t(), atom()) :: boolean()
+  def semantic_edge?(%Result{} = result, source, target, kind)
+      when is_binary(source) and is_binary(target) and is_atom(kind) do
+    kind in SemanticGraph.kinds() and
+      Enum.any?(SemanticGraph.edges(result.semantic_graph, source), fn edge ->
+        edge.kind == kind and edge.target == target
+      end)
+  end
+
+  @doc """
+  Resolve a name across a module boundary the way a *second* consumer would.
+
+  A module's own exports and its explicit `public use` reexports cross; an
+  ordinary `use` does not.
+  """
+  @spec resolve_reexport(Result.t(), String.t(), atom(), String.t()) :: {:ok, tuple()} | {:error, term()}
+  def resolve_reexport(%Result{} = result, module_name, namespace, name)
+      when is_binary(module_name) and is_atom(namespace) and is_binary(name) do
+    with {:ok, skeleton} <- fetch_skeleton(result, module_name) do
+      case exported_declarations(result, skeleton, namespace, name) do
+        [declaration] -> {:ok, declaration.key}
+        [] -> {:error, :not_exported}
+        declarations -> {:error, {:ambiguous_reexport, name, declarations |> Enum.map(& &1.key) |> Enum.sort()}}
+      end
+    end
+  end
+
+  @doc """
+  Run the pipeline as a named compilation entry point.
+
+  Every entry point submits the same manifest through the same boundary; the
+  entry name is recorded on the request for diagnostics and product selection
+  and has no say in resolution.
+  """
+  @spec check_entry_point(atom(), [Path.t()], keyword()) :: {:ok, Result.t()} | {:error, term()}
+  def check_entry_point(entry_point, paths, opts \\ [])
+      when is_atom(entry_point) and is_list(paths) and is_list(opts) do
+    opts
+    |> Keyword.put(:entry_point, entry_point)
+    |> Keyword.put_new(:module_pipeline, :canonical)
+    |> then(&check(paths, &1))
+  end
+
+  @spec interface(Result.t(), String.t()) :: {:ok, ModuleInterface.t()} | {:error, term()}
+  def interface(%Result{} = result, module_name) when is_binary(module_name) do
+    case Map.fetch(result.interfaces, {result.manifest.package, module_name}) do
+      {:ok, interface} -> {:ok, interface}
+      :error -> {:error, {:interface_unavailable, module_name}}
+    end
+  end
+
+  @spec interface_hash(Result.t(), String.t()) :: binary() | nil
+  def interface_hash(%Result{} = result, module_name) when is_binary(module_name) do
+    case interface(result, module_name) do
+      {:ok, interface} -> interface.interface_hash
+      {:error, _} -> nil
+    end
+  end
+
+  @spec interface_hashes(Result.t()) :: [{String.t(), binary()}]
+  def interface_hashes(%Result{} = result) do
+    result.interfaces
+    |> Enum.map(fn {identity, interface} -> {elem(identity, 1), interface.interface_hash} end)
+    |> Enum.sort()
+  end
+
+  @spec merge_interfaces([ModuleInterface.t()]) :: {:ok, Environment.t()} | {:error, term()}
+  defdelegate merge_interfaces(interfaces), to: Environment, as: :merge
+
+  @spec semantic_environment_dump(Environment.t()) :: term()
+  defdelegate semantic_environment_dump(environment), to: Environment, as: :semantic_dump
+
+  @spec canonical_identities(Environment.t()) :: [{atom(), atom()}]
+  defdelegate canonical_identities(environment), to: Environment
+
+  @spec definitionally_equal?(Environment.t(), String.t(), String.t()) :: boolean()
+  defdelegate definitionally_equal?(environment, left, right), to: Environment
+
+  @doc """
+  A definition's Core, with source order and provenance already gone.
+
+  Two universes that agree on meaning agree here; that is what makes this the
+  right thing to compare an authored definition against a macro-generated one.
+  """
+  @spec normalized_core(Result.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def normalized_core(%Result{} = result, module_name, name)
+      when is_binary(module_name) and is_binary(name) do
+    with {:ok, env} <- body_environment(result, module_name) do
+      Closure.normalized(env, module_name, name)
+    end
+  end
+
+  @doc """
+  Every global in every checked definition is an owner-qualified key the
+  universe knows.
+  """
+  @spec all_core_globals_canonical?(Result.t()) :: boolean()
+  def all_core_globals_canonical?(%Result{} = result) do
+    Enum.all?(result.body_envs, fn {identity, env} ->
+      Closure.all_globals_canonical?(env, owned_definition_keys(env, elem(identity, 1)))
+    end)
+  end
+
+  @doc """
+  The definitions the kernel certified.
+
+  Certification is per definition, so this is the exact set the checker stands
+  behind — not the set of names that happen to exist.
+  """
+  @spec totality_keys(Result.t()) :: [tuple()]
+  def totality_keys(%Result{} = result) do
+    result.body_envs
+    |> Enum.flat_map(fn {identity, env} ->
+      env |> owned_definition_keys(elem(identity, 1)) |> Enum.map(&definition_key(result, &1))
+    end)
+    |> Enum.sort()
+    |> Enum.uniq()
+  end
+
+  @doc """
+  The definitions reachable from what the universe exports.
+
+  Compared against `totality_keys/1` this is the statement that nothing checked
+  is unreachable and nothing reachable is unchecked.
+  """
+  @spec reachability_keys(Result.t()) :: [tuple()]
+  def reachability_keys(%Result{} = result) do
+    result.body_envs
+    |> Enum.flat_map(fn {identity, env} ->
+      case Closure.reachable(env, owned_definition_keys(env, elem(identity, 1))) do
+        {:ok, keys} -> Enum.map(keys, &definition_key(result, &1))
+        {:error, _} -> []
+      end
+    end)
+    |> Enum.sort()
+    |> Enum.uniq()
+  end
+
+  @doc "Everything emitting `module_name.name` would have to emit with it."
+  @spec emission_closure(Result.t(), String.t(), String.t()) :: {:ok, [tuple()]} | {:error, term()}
+  def emission_closure(%Result{} = result, module_name, name)
+      when is_binary(module_name) and is_binary(name) do
+    with {:ok, env} <- body_environment(result, module_name) do
+      Closure.emission(env, Name.qualify(module_name, name), &definition_key(result, &1))
+    end
+  end
+
+  defp body_environment(%Result{} = result, module_name) do
+    case Map.fetch(result.body_envs, {result.manifest.package, module_name}) do
+      {:ok, env} -> {:ok, env}
+      :error -> {:error, {:module_bodies_unavailable, module_name}}
+    end
+  end
+
+  defp owned_definition_keys(%Env{defs: defs}, owner),
+    do: defs |> Map.keys() |> Enum.filter(&(Name.owner(&1) == owner)) |> Enum.sort()
+
+  # A Core key names its owner but not its package; the package comes from the
+  # universe that checked it, which is the manifest and nothing else.
+  defp definition_key(%Result{} = result, key) do
+    {owner, base} = Name.split(key)
+    {package_of(result, owner), owner, :value, base}
+  end
+
+  defp package_of(%Result{} = result, owner) do
+    if Map.has_key?(result.manifest.entries, {result.manifest.package, owner}),
+      do: result.manifest.package,
+      else: :external
+  end
+
+  @spec conformance_owner(Result.t(), String.t(), String.t()) :: String.t() | nil
+  def conformance_owner(%Result{} = result, interface_name, type_name)
+      when is_binary(interface_name) and is_binary(type_name),
+      do: Conformance.owner(result.interfaces, interface_name, type_name)
+
+  @spec conformance_count(Result.t(), String.t(), String.t()) :: non_neg_integer()
+  def conformance_count(%Result{} = result, interface_name, type_name)
+      when is_binary(interface_name) and is_binary(type_name),
+      do: Conformance.count(result.interfaces, interface_name, type_name)
+
+  @doc """
+  The conformance a module selects, as canonical data.
+
+  Selection is over what the requesting module can reach, not over everything
+  the run happened to check, so a conformance that is merely present in the
+  universe cannot silently become the answer.
+  """
+  @spec selected_conformance(Result.t(), String.t(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def selected_conformance(%Result{} = result, requesting_module, interface_name, type_name)
+      when is_binary(requesting_module) and is_binary(interface_name) and is_binary(type_name) do
+    visible =
+      result.manifest
+      |> reachable_modules({result.manifest.package, requesting_module})
+      |> Enum.map(&elem(&1, 1))
+
+    Conformance.selected(result.interfaces, visible, interface_name, type_name)
+  end
+
+  @spec manifest_dump(Result.t()) :: term()
+  def manifest_dump(%Result{} = result), do: ModuleManifest.canonical_dump(result.manifest)
+
+  @doc """
+  How many expansion rounds this run needed before the syntax set stopped
+  growing.
+
+  One means nothing a macro produced named anything new. More than one means
+  expansion extended the universe and the extension was itself resolved and
+  re-scanned, which is the only evidence that the graph is the *final* one
+  rather than the one the header scan guessed.
+  """
+  @spec expansion_rounds(Result.t()) :: pos_integer()
+  def expansion_rounds(%Result{expansion_rounds: rounds}), do: rounds
+
+  @doc """
+  The expanded syntax of the whole universe, free of source positions.
+
+  Two runs that differ only in how macro expanders were executed must agree
+  here; anything else means the execution strategy is part of the language's
+  meaning.
+  """
+  @spec expanded_syntax_dump(Result.t()) :: [{String.t(), term()}]
+  def expanded_syntax_dump(%Result{} = result), do: Expansion.syntax_dump(result.asts)
+
+  @doc "The hygienic names expansion minted, grouped by the declaration holding them."
+  @spec fresh_name_sets(Result.t()) :: [{String.t(), String.t(), [String.t()]}]
+  def fresh_name_sets(%Result{} = result), do: Expansion.fresh_name_groups(result.asts)
+
+  @doc "Whether sibling expansions minted disjoint names, as hygiene requires."
+  @spec sibling_expansions_disjoint?(Result.t()) :: boolean()
+  def sibling_expansions_disjoint?(%Result{} = result), do: Expansion.sibling_expansions_disjoint?(result.asts)
+
+  @doc """
+  The canonical key a declaration has in its owning module.
+
+  A declaration a macro generated is answered the same way as an authored one:
+  after expansion there is no second class of definition, so nothing downstream
+  needs to know which it was.
+  """
+  @spec canonical_definition(Result.t(), String.t(), atom(), String.t()) :: {:ok, tuple()} | {:error, term()}
+  def canonical_definition(%Result{} = result, module_name, namespace, name)
+      when is_binary(module_name) and is_atom(namespace) and is_binary(name) do
+    identity = {result.manifest.package, module_name}
+
+    with {:ok, skeleton} <- Map.fetch(result.skeletons, identity),
+         {:ok, declaration} <- Map.fetch(skeleton.declarations, {namespace, name}) do
+      {:ok, declaration.key}
+    else
+      :error -> {:error, {:declaration_unavailable, {elem(identity, 0), module_name, namespace, name}}}
+    end
+  end
+
+  @spec checked?(Result.t(), String.t()) :: boolean()
+  def checked?(%Result{} = result, module_name) when is_binary(module_name),
+    do: Map.has_key?(result.interfaces, {result.manifest.package, module_name})
+
+  @spec diagnostics(Result.t()) :: [term()]
+  def diagnostics(%Result{diagnostics: diagnostics}), do: diagnostics
+
+  @doc """
+  Whether checking `source`'s bodies elaborated `target`'s bodies.
+
+  True only for mutually recursive peers. Between two modules that are not in one
+  component this is the previous pipeline's signature failure — a provider
+  compiled to construct a consumer's ambient scope — and it stays observable
+  here instead of being something the design merely asserts.
+  """
+  @spec body_elaboration_edge?(Result.t(), String.t(), String.t()) :: boolean()
+  def body_elaboration_edge?(%Result{} = result, source, target)
+      when is_binary(source) and is_binary(target) do
+    Enum.any?(result.body_elaborations, &(&1.source == source and &1.target == target))
+  end
+
+  @doc """
+  How many consumers elaborated `provider`'s bodies during `phase`.
+
+  Counts distinct consumer/provider pairs, so a provider that is read only
+  through its checked interface reports zero however many modules use it.
+  """
+  @spec provider_body_elaboration_count(Result.t(), String.t(), atom()) :: non_neg_integer()
+  def provider_body_elaboration_count(%Result{} = result, provider, phase)
+      when is_binary(provider) and is_atom(phase) do
+    result.body_elaborations
+    |> Enum.filter(&(&1.target == provider and &1.phase == phase))
+    |> Enum.uniq_by(&{&1.source, &1.target})
+    |> length()
+  end
+
+  @doc """
+  How a checked module represents one of its own types.
+
+  `:nominal` — the type is a data family, distinct from everything else even
+  where the underlying shape agrees. `:transparent` — a synonym that a consumer
+  may unfold. The distinction is read from the frozen interface rather than the
+  source, because the interface is what a consumer actually sees: a nominal
+  `String` whose interface published it as an alias for `List(Char)` would be
+  nominal in name only.
+  """
+  @spec type_representation(Result.t(), String.t(), String.t()) :: :nominal | :transparent | :unknown
+  def type_representation(%Result{} = result, module_name, type_name)
+      when is_binary(module_name) and is_binary(type_name) do
+    with %ModuleInterface{} = interface <- Map.get(result.interfaces, {result.manifest.package, module_name}) do
+      key = Name.qualify(module_name, type_name)
+      declarations = interface.canonical_declarations
+
+      cond do
+        Map.has_key?(Map.get(declarations, :families, %{}), key) -> :nominal
+        Map.get(declarations, :defs, %{})[key][:typealias] -> :transparent
+        true -> :unknown
+      end
+    else
+      _ -> :unknown
+    end
+  end
+
+  @doc "Diagnostics stripped of everything that is provenance rather than meaning."
+  @spec normalized_diagnostics(Result.t()) :: [term()]
+  def normalized_diagnostics(%Result{diagnostics: diagnostics}) do
+    diagnostics
+    |> Enum.map(fn diagnostic ->
+      {Map.get(diagnostic, :code), Map.get(diagnostic, :severity), Map.get(diagnostic, :module)}
+    end)
+    |> Enum.sort()
+  end
+
+  @doc """
+  Recheck the universe from printed source.
+
+  Printing and reparsing changes every span and every byte offset. Nothing that
+  survives into the manifest or an interface hash may depend on those, so this
+  round trip is the executable form of "metadata is not meaning".
+  """
+  @spec parse_print_recheck(Result.t(), keyword()) :: {:ok, Result.t()} | {:error, term()}
+  def parse_print_recheck(%Result{} = result, opts \\ []) when is_list(opts) do
+    root = Path.join(System.tmp_dir!(), "cure-print-#{:erlang.unique_integer([:positive])}")
+
+    try do
+      File.mkdir_p!(root)
+
+      paths =
+        Enum.map(Enum.sort_by(result.asts, &elem(&1, 0)), fn {identity, ast} ->
+          path = Path.join(root, elem(identity, 1) <> ".cure")
+          File.write!(path, Printer.quoted_to_string(ast) <> "\n")
+          path
+        end)
+
+      check(paths, reprint_options(result.request, root, opts))
+    after
+      File.rm_rf(root)
+    end
+  end
+
+  defp reprint_options(%Request{} = request, root, opts) do
+    [
+      module_pipeline: :canonical,
+      package: request.package,
+      source_roots: [root],
+      interface_roots: request.interface_roots,
+      entry_point: request.entry_point,
+      macro_execution: request.macro_execution,
+      fresh_environment: Keyword.get(opts, :metadata) == :fresh
+    ]
+  end
+
+  @doc """
+  The stored authorities this result actually consulted.
+
+  The design permits exactly two. A third entry here means a second answer to
+  "what does this name mean" has grown back.
+  """
+  @spec semantic_authorities(Result.t()) :: [atom()]
+  def semantic_authorities(%Result{} = result) do
+    [
+      {:module_manifest, match?(%ModuleManifest{}, result.manifest)},
+      {:checked_interfaces, result.interfaces != %{}}
+    ]
+    |> Enum.filter(&elem(&1, 1))
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  @doc """
+  How many times this run reached for a resolution path outside the manifest and
+  the checked interfaces.
+
+  Each counter names a fallback the previous pipeline used. They are reported
+  rather than assumed: `Result` carries the tallies, so a reintroduced fallback
+  shows up as a non-zero count instead of passing silently.
+  """
+  @spec alternate_path_counts(Result.t()) :: %{atom() => non_neg_integer()}
+  def alternate_path_counts(%Result{} = result) do
+    Map.merge(
+      %{
+        beam_export_probes: 0,
+        source_jit_loads: 0,
+        stamped_ast_scans: 0,
+        late_bare_recoveries: 0,
+        entry_point_graphs: 0,
+        mutable_environment_merges: 0,
+        codegen_rechecks: 0
+      },
+      result.alternate_paths
+    )
+  end
+
   defp require_canonical(%Request{selection: :canonical}), do: :ok
   defp require_canonical(%Request{selection: selection}), do: {:error, {:module_pipeline_not_selected, selection}}
 
@@ -116,51 +641,102 @@ defmodule Cure.Compiler.ModulePipeline do
     [
       package: request.package || "root",
       source_roots: request.source_roots,
-      known_modules: Map.keys(external_interfaces)
+      known_modules: Map.keys(external_interfaces) ++ Builtins.provided_modules()
     ]
   end
 
-  defp collect_units(manifest) do
-    manifest.entries
-    |> Map.values()
-    |> Enum.sort_by(& &1.identity)
-    |> Enum.reduce_while({:ok, %{}, %{}, %{}}, fn entry, {:ok, skeletons, asts, sources} ->
-      with {:ok, source} <- File.read(entry.source_path),
-           {:ok, tokens} <- Lexer.tokenize(source, file: entry.source_path, emit_events: false),
-           {:ok, ast} <- Parser.parse(tokens, file: entry.source_path, emit_events: false) do
-        skeleton = ModuleSkeleton.collect(ast, entry.identity, entry.source_path)
+  defp check_modules(request, manifest, skeletons, asts, sources, external_interfaces, external_envs, components) do
+    cached = Cache.load(request.cache)
 
+    initial =
+      {:ok, external_interface_table(manifest, external_interfaces), external_env_table(manifest, external_envs), %{},
+       [], []}
+
+    result =
+      Enum.reduce_while(components, initial, fn component, {:ok, interfaces, envs, bodies, diagnostics, rebuilt} ->
+        case reuse_component(cached, component, manifest, interfaces) do
+          {:ok, reused, reused_envs} ->
+            {:cont, {:ok, Map.merge(interfaces, reused), Map.merge(envs, reused_envs), bodies, diagnostics, rebuilt}}
+
+          :stale ->
+            check_or_report(manifest, skeletons, component, asts, sources, request, {
+              interfaces,
+              envs,
+              bodies,
+              diagnostics,
+              rebuilt
+            })
+        end
+      end)
+
+    with {:ok, interfaces, envs, bodies, diagnostics, rebuilt} <- result do
+      Cache.store(request.cache, interfaces)
+      {:ok, interfaces, envs, bodies, diagnostics, Enum.sort(rebuilt)}
+    end
+  end
+
+  defp check_or_report(manifest, skeletons, component, asts, sources, request, state) do
+    {interfaces, envs, bodies, diagnostics, rebuilt} = state
+
+    case check_component(manifest, skeletons, component, asts, sources, interfaces, envs) do
+      {:ok, next_interfaces, next_envs, checked} ->
         {:cont,
-         {:ok, Map.put(skeletons, entry.identity, skeleton), Map.put(asts, entry.identity, ast),
-          Map.put(sources, entry.identity, source)}}
-      else
-        {:error, reason} -> {:halt, {:error, {:module_skeleton_error, entry.identity, reason}}}
+         {:ok, next_interfaces, next_envs, Map.merge(bodies, checked), diagnostics,
+          rebuilt ++ Enum.map(component, &elem(&1, 1))}}
+
+      {:error, reason} when request.collect_diagnostics ->
+        {:cont,
+         {:ok, interfaces, envs, bodies, diagnostics ++ component_diagnostics(manifest, component, reason), rebuilt}}
+
+      {:error, _} = error ->
+        {:halt, error}
+    end
+  end
+
+  defp reuse_component(cached, component, manifest, published_interfaces) do
+    published =
+      Map.new(published_interfaces, fn {identity, interface} -> {elem(identity, 1), interface.interface_hash} end)
+
+    with {:ok, reused} <- Cache.reusable(cached, component, manifest.entries, published),
+         {:ok, envs} <- reused_environments(reused) do
+      {:ok, reused, envs}
+    else
+      _ -> :stale
+    end
+  end
+
+  defp reused_environments(reused) do
+    Enum.reduce_while(reused, {:ok, %{}}, fn {identity, interface}, {:ok, envs} ->
+      case Interface.to_env(interface) do
+        {:ok, env} -> {:cont, {:ok, Map.put(envs, identity, env)}}
+        {:error, _} = error -> {:halt, error}
       end
     end)
   end
 
-  defp check_modules(manifest, asts, sources, external_interfaces, external_envs, components) do
-    components
-    |> Enum.reduce_while(
-      {:ok, external_interface_table(manifest, external_interfaces), external_env_table(manifest, external_envs)},
-      fn component, {:ok, interfaces, checked_envs} ->
-        case check_component(manifest, component, asts, sources, interfaces, checked_envs) do
-          {:ok, next_interfaces, next_envs} -> {:cont, {:ok, next_interfaces, next_envs}}
-          {:error, _} = error -> {:halt, error}
-        end
-      end
-    )
+  # A component that failed publishes no interface, so every module that names it
+  # fails too. Only the first failure is a cause; the rest are its shadow, and
+  # `Diagnosis` is the one place that distinction is made.
+  defp component_diagnostics(manifest, component, reason) do
+    identity = List.first(component)
+    source_path = Map.fetch!(manifest.entries, identity).source_path
+
+    case Diagnosis.diagnostic(reason, identity, source_path) do
+      nil -> []
+      diagnostic -> [diagnostic]
+    end
   end
 
-  defp check_component(manifest, component, asts, sources, interfaces, checked_envs) do
+  defp check_component(manifest, skeletons, component, asts, sources, interfaces, checked_envs) do
     members = MapSet.new(component)
 
-    with {:ok, prepared} <- register_component(manifest, component, members, asts, sources, checked_envs),
+    with :ok <- Cycle.classify(manifest, component, asts, skeletons),
+         {:ok, prepared} <- register_component(manifest, component, members, asts, sources, checked_envs),
          {:ok, component_env} <- merge_component_environments(prepared),
-         {:ok, checked} <- check_component_bodies(component, prepared, component_env),
+         {:ok, checked} <- check_component_bodies(component, skeletons, prepared, component_env),
          {:ok, component_interfaces, component_envs} <-
            freeze_component_interfaces(manifest, component, checked, interfaces) do
-      {:ok, Map.merge(interfaces, component_interfaces), Map.merge(checked_envs, component_envs)}
+      {:ok, Map.merge(interfaces, component_interfaces), Map.merge(checked_envs, component_envs), checked}
     end
   end
 
@@ -240,18 +816,38 @@ defmodule Cure.Compiler.ModulePipeline do
     end)
   end
 
-  defp check_component_bodies(component, prepared, component_env) do
+  defp check_component_bodies(component, skeletons, prepared, component_env) do
     Enum.reduce_while(component, {:ok, %{}}, fn identity, {:ok, checked} ->
       module =
         prepared
         |> Map.fetch!(identity)
         |> Program.canonical_install_component_environment(component_env)
 
+      # A component's members are elaborated against each other's bodies — that
+      # is what makes them one component. Recording it here means the graph
+      # states the whole truth about which bodies reached which, so a
+      # `body_elaboration` edge between two modules that are NOT peers is
+      # readable as the defect it is rather than being invisible.
+      record_component_body_elaboration(identity, component)
+
       case Program.canonical_check_bodies(module) do
-        {:ok, env} -> {:cont, {:ok, Map.put(checked, identity, env)}}
-        {:error, reason} -> {:halt, {:error, {:module_body_check_failed, identity, reason}}}
+        {:ok, env} ->
+          {:cont, {:ok, Map.put(checked, identity, env)}}
+
+        {:error, reason} ->
+          {:halt, {:error, Diagnosis.body_failure(identity, Map.get(skeletons, identity), reason)}}
       end
     end)
+  end
+
+  defp record_component_body_elaboration(identity, component) do
+    source = elem(identity, 1)
+
+    for peer <- component, peer != identity do
+      BodyElaborationTrace.record(source, elem(peer, 1))
+    end
+
+    :ok
   end
 
   defp freeze_component_interfaces(manifest, component, checked, available_interfaces) do
@@ -315,14 +911,19 @@ defmodule Cure.Compiler.ModulePipeline do
 
     lexical =
       dependencies
-      |> Enum.filter(&(&1.kind == :use_import))
+      |> Enum.filter(&(&1.kind in [:use_import, :prelude_symbol_use]))
+      |> MapSet.new(&elem(&1.target, 1))
+
+    ambient =
+      dependencies
+      |> Enum.filter(&(&1.kind == :prelude_symbol_use))
       |> MapSet.new(&elem(&1.target, 1))
 
     qualified =
       dependencies
       |> MapSet.new(&elem(&1.target, 1))
 
-    %{lexical: lexical, qualified: qualified}
+    %{lexical: lexical, qualified: qualified, ambient: ambient}
   end
 
   defp dependency_order(manifest) do
@@ -349,10 +950,16 @@ defmodule Cure.Compiler.ModulePipeline do
     end
   end
 
+  # A published interface is only self-contained together with what it names. A
+  # method signature written `Std.Bool.Bool` has to lower in the *consumer's*
+  # environment, and the consumer never wrote that name — so what a module can
+  # check against is its dependencies' interfaces closed under their own
+  # dependencies. Visibility is decided separately and is not widened by this:
+  # being present in the environment is not the same as being in scope.
   defp imported_environment(manifest, identity, checked_envs, excluded) do
     manifest
-    |> ModuleManifest.dependencies(identity)
-    |> Enum.map(& &1.target)
+    |> compiled_dependencies(identity)
+    |> Enum.flat_map(&(manifest |> reachable_modules(&1) |> MapSet.to_list()))
     |> Enum.uniq()
     |> Enum.reject(&MapSet.member?(excluded, &1))
     |> Enum.sort()
@@ -372,13 +979,25 @@ defmodule Cure.Compiler.ModulePipeline do
 
   defp dependency_hashes(manifest, identity, interfaces) do
     manifest
-    |> ModuleManifest.dependencies(identity)
-    |> Enum.map(& &1.target)
-    |> Enum.uniq()
+    |> compiled_dependencies(identity)
     |> Map.new(fn dependency ->
       interface = Map.fetch!(interfaces, dependency)
       {elem(dependency, 1), interface.interface_hash}
     end)
+  end
+
+  # A module may name something the compiler provides rather than compiles.
+  # There is no interface to import and no hash to record against it: it is part
+  # of the floor every module already starts from, so it is dropped here — once,
+  # rather than at each place that would otherwise fail to find it.
+  defp compiled_dependencies(manifest, identity) do
+    provided = MapSet.new(Builtins.provided_modules())
+
+    manifest
+    |> ModuleManifest.dependencies(identity)
+    |> Enum.map(& &1.target)
+    |> Enum.uniq()
+    |> Enum.reject(&MapSet.member?(provided, elem(&1, 1)))
   end
 
   defp strongly_connected_components(manifest) do
@@ -401,6 +1020,50 @@ defmodule Cure.Compiler.ModulePipeline do
         components ++ [component]
       end
     end)
+    |> condensation_order(manifest)
+  end
+
+  # Grouping and ordering are two questions, and only the first is answered by
+  # mutual reachability. A depth-first post-order over the module graph is a
+  # dependency order only when that graph is acyclic, so once the cycles are
+  # collapsed the components are ordered again over the condensation — which is
+  # acyclic by construction — instead of inheriting the order their members
+  # happened to be discovered in.
+  defp condensation_order(components, manifest) do
+    indexed = components |> Enum.with_index() |> Map.new(fn {component, index} -> {index, component} end)
+
+    owner =
+      for {index, component} <- indexed, identity <- component, into: %{}, do: {identity, index}
+
+    edges =
+      Map.new(indexed, fn {index, component} ->
+        targets =
+          component
+          |> Enum.flat_map(&(manifest |> ModuleManifest.dependencies(&1) |> Enum.map(fn edge -> edge.target end)))
+          |> Enum.filter(&Map.has_key?(owner, &1))
+          |> Enum.map(&Map.fetch!(owner, &1))
+          |> Enum.reject(&(&1 == index))
+          |> Enum.uniq()
+          |> Enum.sort()
+
+        {index, targets}
+      end)
+
+    {_visited, order} =
+      indexed |> Map.keys() |> Enum.sort() |> Enum.reduce({MapSet.new(), []}, &visit_component(&1, edges, &2))
+
+    order |> Enum.reverse() |> Enum.map(&Map.fetch!(indexed, &1))
+  end
+
+  defp visit_component(index, edges, {visited, order}) do
+    if MapSet.member?(visited, index) do
+      {visited, order}
+    else
+      {visited, order} =
+        Enum.reduce(Map.fetch!(edges, index), {MapSet.put(visited, index), order}, &visit_component(&1, edges, &2))
+
+      {visited, [index | order]}
+    end
   end
 
   defp reachable_modules(manifest, root), do: reachable_modules(manifest, [root], MapSet.new())
@@ -432,6 +1095,10 @@ defmodule Cure.Compiler.ModulePipeline do
     end
   end
 
+  # Lexical candidates are tiered, not pooled. A direct `use` outranks the
+  # ambient prelude, so a provider that merely happens to be ambient can never
+  # make an explicitly imported name ambiguous. Ambiguity is only ever reported
+  # within one tier.
   defp resolve_bare(result, requesting_module, namespace, name) do
     with {:ok, requester} <- fetch_skeleton(result, requesting_module) do
       case Map.fetch(requester.declarations, {namespace, name}) do
@@ -439,23 +1106,48 @@ defmodule Cure.Compiler.ModulePipeline do
           {:ok, declaration.key}
 
         :error ->
-          result.manifest
-          |> ModuleManifest.dependencies(requesting_module)
-          |> Enum.filter(&(&1.kind == :use_import))
-          |> Enum.reduce([], fn dependency, candidates ->
-            case Map.fetch(result.skeletons, dependency.target) do
-              {:ok, skeleton} ->
-                case Map.fetch(skeleton.declarations, {namespace, name}) do
-                  {:ok, %{visibility: :public} = declaration} -> [declaration | candidates]
-                  _ -> candidates
-                end
+          dependencies = ModuleManifest.dependencies(result.manifest, requesting_module)
 
-              :error ->
-                candidates
-            end
-          end)
+          [:use_import, :prelude_symbol_use]
+          |> Enum.map(&lexical_candidates(result, dependencies, &1, namespace, name))
+          |> Enum.find([], &(&1 != []))
           |> resolve_candidates(name)
       end
+    end
+  end
+
+  defp lexical_candidates(result, dependencies, kind, namespace, name) do
+    dependencies
+    |> Enum.filter(&(&1.kind == kind))
+    |> Enum.flat_map(fn dependency ->
+      case Map.fetch(result.skeletons, dependency.target) do
+        {:ok, skeleton} -> exported_declarations(result, skeleton, namespace, name)
+        :error -> []
+      end
+    end)
+    |> Enum.uniq_by(& &1.key)
+  end
+
+  # `use M` exposes what `M` owns and exports, plus what `M` explicitly
+  # reexports with `public use`. It never exposes `M`'s ordinary imports.
+  defp exported_declarations(result, skeleton, namespace, name, seen \\ MapSet.new()) do
+    cond do
+      MapSet.member?(seen, skeleton.identity) ->
+        []
+
+      match?(%{visibility: :public}, Map.get(skeleton.declarations, {namespace, name})) ->
+        [Map.fetch!(skeleton.declarations, {namespace, name})]
+
+      true ->
+        seen = MapSet.put(seen, skeleton.identity)
+        package = elem(skeleton.identity, 0)
+
+        Enum.flat_map(skeleton.reexports, fn module_name ->
+          case Map.fetch(result.skeletons, {package, module_name}) do
+            {:ok, reexported} -> exported_declarations(result, reexported, namespace, name, seen)
+            :error -> []
+          end
+        end)
     end
   end
 

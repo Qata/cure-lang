@@ -29,7 +29,7 @@ defmodule Cure.Compiler.ModuleManifest do
 
   @type identity :: {String.t(), String.t()}
   @type dependency :: %{
-          required(:kind) => :use_import | :qualified_reference,
+          required(:kind) => :use_import | :qualified_reference | :prelude_symbol_use,
           required(:source) => identity(),
           required(:target) => identity(),
           required(:span) => map()
@@ -54,6 +54,39 @@ defmodule Cure.Compiler.ModuleManifest do
          :ok <- validate_dependencies(manifest, opts) do
       {:ok, manifest}
     end
+  end
+
+  @doc """
+  Add dependencies that only became visible after macro expansion.
+
+  The header scan reads a module's own text, so it cannot see a reference that
+  an imported macro's template introduces — that template lives in the
+  provider's file. Expansion therefore extends the universe, and the manifest
+  has to grow with it or the newly named module is never scheduled. Rebuilding
+  through `assemble/2` keeps prelude ambience, ranks, and closures derived from
+  one place instead of being patched in two.
+  """
+  @spec extend(t(), [dependency()], keyword()) :: {:ok, t()} | {:error, term()}
+  def extend(%__MODULE__{} = manifest, [], _opts), do: {:ok, manifest}
+
+  def extend(%__MODULE__{} = manifest, references, opts) when is_list(references) do
+    entries =
+      Enum.reduce(references, manifest.entries, fn reference, entries ->
+        case Map.fetch(entries, reference.source) do
+          {:ok, entry} ->
+            Map.put(entries, reference.source, %{
+              entry
+              | dependencies: normalize_dependencies([reference | entry.dependencies])
+            })
+
+          :error ->
+            entries
+        end
+      end)
+
+    extended = assemble(manifest.package, Map.values(entries))
+
+    with :ok <- validate_dependencies(extended, opts), do: {:ok, extended}
   end
 
   @spec module_names(t()) :: [String.t()]
@@ -96,6 +129,36 @@ defmodule Cure.Compiler.ModuleManifest do
           end)
       }
     end)
+  end
+
+  @doc """
+  A location-free projection of the manifest.
+
+  Spans, filesystem paths, and source hashes are diagnostic provenance, not
+  identity: two universes with the same canonical dump schedule and resolve
+  identically, whatever order the files arrived in and however the text was
+  formatted.
+  """
+  @spec canonical_dump(t()) :: term()
+  def canonical_dump(%__MODULE__{} = manifest) do
+    %{
+      package: manifest.package,
+      modules:
+        manifest.entries
+        |> Map.values()
+        |> Enum.sort_by(& &1.identity)
+        |> Enum.map(fn entry ->
+          %{
+            identity: entry.identity,
+            prelude_provider?: entry.prelude_provider?,
+            dependencies:
+              entry.dependencies
+              |> Enum.map(&{&1.kind, &1.target})
+              |> Enum.uniq()
+              |> Enum.sort()
+          }
+        end)
+    }
   end
 
   defp validate_package(package) when is_binary(package) and package != "", do: :ok
@@ -175,12 +238,100 @@ defmodule Cure.Compiler.ModuleManifest do
   defp assemble(package, entries) do
     entries = Map.new(entries, &{&1.identity, &1})
 
+    prelude_providers =
+      entries
+      |> Enum.filter(fn {_identity, entry} -> entry.prelude_provider? end)
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.sort()
+
+    closures = Map.new(Map.keys(entries), &{&1, dependency_closure(entries, [&1])})
+
+    bootstrap =
+      prelude_providers
+      |> Enum.map(&Map.fetch!(closures, &1))
+      |> Enum.reduce(MapSet.new(), &MapSet.union/2)
+
+    ranks = Map.new(closures, fn {identity, closure} -> {identity, {MapSet.size(closure), elem(identity, 1)}} end)
+
+    entries =
+      Map.new(entries, fn {identity, entry} ->
+        ambient =
+          prelude_providers
+          |> Enum.filter(&ambient_provider?(bootstrap, ranks, &1, identity))
+          |> Enum.map(fn provider ->
+            %{
+              kind: :prelude_symbol_use,
+              source: identity,
+              target: provider,
+              span: %{path: entry.source_path, line: 1}
+            }
+          end)
+
+        entry = %{entry | dependencies: normalize_dependencies(entry.dependencies ++ ambient)}
+        {identity, entry}
+      end)
+
     %__MODULE__{
       package: package,
       entries: entries,
       paths: Map.new(entries, fn {identity, entry} -> {entry.source_path, identity} end),
       dependencies: Map.new(entries, fn {identity, entry} -> {identity, entry.dependencies} end)
     }
+  end
+
+  # Which prelude providers become ambient in `identity`.
+  #
+  # Outside the bootstrap set — the union of every provider's dependency closure
+  # — a module is reachable from no provider, so handing it every provider can
+  # never close a cycle. That is the ordinary case and it keeps the full prelude.
+  #
+  # Inside the bootstrap set the providers are being compiled too, so ambient
+  # edges must run one way only. The rule this replaces gave bootstrap modules NO
+  # ambient prelude at all, which is far stronger than acyclicity needs:
+  # `Std.Binary` is itself a provider, so it was denied ambient `Std.Bounded`
+  # even though `Std.Bounded` reaches only `Std.Nat` and could never reach back.
+  # That mattered because the elaborator's own generated syntax asks for more than
+  # the module authored — a contextual integer literal builds
+  # `NaturalLiteral(spelling, value)`, whose spelling is a string, whose
+  # characters are char literals, whose inferred type is `Bounded(0x110000)`.
+  #
+  # A pairwise "can the provider reach me?" test is NOT enough: `Std.Int` and
+  # `Std.Equatable` reach each other through neither's authored imports, so each
+  # would become ambient in the other and the two would fuse into one component.
+  # Ordering by dependency-closure SIZE (name breaking ties) is a strict total
+  # order that every original dependency edge already respects: A ∈ closure(B)
+  # gives closure(A) ⊆ closure(B), and equal sizes would force closure(A) =
+  # closure(B), i.e. a dependency cycle rejected elsewhere. Ambient edges pointing
+  # strictly down that order therefore cannot create one either, and "depends on
+  # less" is exactly the sense in which a module is more foundational.
+  defp ambient_provider?(bootstrap, ranks, provider, identity) do
+    if MapSet.member?(bootstrap, identity) do
+      Map.fetch!(ranks, provider) < Map.fetch!(ranks, identity)
+    else
+      true
+    end
+  end
+
+  defp dependency_closure(entries, roots), do: dependency_closure(entries, roots, MapSet.new())
+  defp dependency_closure(_entries, [], seen), do: seen
+
+  defp dependency_closure(entries, [identity | rest], seen) do
+    if MapSet.member?(seen, identity) do
+      dependency_closure(entries, rest, seen)
+    else
+      dependencies =
+        case Map.fetch(entries, identity) do
+          {:ok, entry} ->
+            entry.dependencies
+            |> Enum.map(& &1.target)
+            |> Enum.filter(&Map.has_key?(entries, &1))
+
+          :error ->
+            []
+        end
+
+      dependency_closure(entries, dependencies ++ rest, MapSet.put(seen, identity))
+    end
   end
 
   defp validate_dependencies(manifest, opts) do

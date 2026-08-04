@@ -27,10 +27,10 @@ mod Std.Regex.Syntax.Class
     ['\\', 'H' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotHorizontalKind, kinds), fuel)
     ['\\', 'v' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(VerticalKind, kinds), fuel)
     ['\\', 'V' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotVerticalKind, kinds), fuel)
-    ['\\', 'b' | rest] -> parse_literal_class_items_fuel(rest, [8 | chars], ranges, kinds, fuel)
-    ['\\', 'a' | rest] -> parse_literal_class_items_fuel(rest, [7 | chars], ranges, kinds, fuel)
-    ['\\', 'e' | rest] -> parse_literal_class_items_fuel(rest, [27 | chars], ranges, kinds, fuel)
-    ['\\', 'f' | rest] -> parse_literal_class_items_fuel(rest, [12 | chars], ranges, kinds, fuel)
+    ['\\', 'b' | rest] -> parse_literal_class_items_fuel(rest, ['\b' | chars], ranges, kinds, fuel)
+    ['\\', 'a' | rest] -> parse_literal_class_items_fuel(rest, ['\a' | chars], ranges, kinds, fuel)
+    ['\\', 'e' | rest] -> parse_literal_class_items_fuel(rest, ['\e' | chars], ranges, kinds, fuel)
+    ['\\', 'f' | rest] -> parse_literal_class_items_fuel(rest, ['\f' | chars], ranges, kinds, fuel)
     ['\\', 'n' | rest] -> parse_literal_class_items_fuel(rest, ['\n' | chars], ranges, kinds, fuel)
     ['\\', 'r' | rest] -> parse_literal_class_items_fuel(rest, ['\r' | chars], ranges, kinds, fuel)
     ['\\', 't' | rest] -> parse_literal_class_items_fuel(rest, ['\t' | chars], ranges, kinds, fuel)
@@ -53,7 +53,7 @@ mod Std.Regex.Syntax.Class
     [] -> parse_literal_class_items_fuel(original_rest, [first | chars], ranges, kinds, fuel)
     [last | tail] -> pickup
       last == ']' -> LiteralClassParsed(prepend_literal_dash(first, chars), ranges, kinds, tail)
-      literal_bounded_less(last, first) -> LiteralClassInvalid(:ReversedRegexRange)
+      Std.Char.less_than(last, first) -> LiteralClassInvalid(:ReversedRegexRange)
       else -> parse_literal_class_items_fuel(tail, chars, [LiteralCharacterRange(first, last) | ranges], kinds, fuel)
 
   fn prepend_literal_dash(first: Char, chars: List(Char)) -> List(Char) =

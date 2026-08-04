@@ -23,6 +23,7 @@ mod Std.Proof.LinearArithmetic
   typealias FarkasWitness = List(Nat)
   typealias Valuation = List(Int)
 
+  @reducible
   fn linear_atom(
     coefficients: List(Int), constant: Int, relation: Relation
   ) -> LinearAtom = LinearAtom{
@@ -52,6 +53,7 @@ mod Std.Proof.LinearArithmetic
         coefficients_match_dimension(atom.coefficients, dimension),
         atoms_match_dimension(rest, dimension))
 
+  @reducible
   fn dot(coefficients: List(Int), valuation: List(Int)) -> Int =
     match coefficients
       [] -> int_zero()
@@ -90,6 +92,7 @@ mod Std.Proof.LinearArithmetic
       LessOrEqual() -> reflexive(le_int(left, right))
       LessThan() -> sym(lt_int_is_le_predecessor(left, right))
 
+  @reducible
   fn evaluate_atom(atom: LinearAtom, valuation: Valuation) -> Bool =
     evaluate_relation(atom.relation, dot(atom.coefficients, valuation), atom.constant)
 
@@ -110,6 +113,7 @@ mod Std.Proof.LinearArithmetic
       LessThan() -> LinearAtom{coefficients: negate_coefficients(atom.coefficients), constant: negate(atom.constant), relation: LessOrEqual()}
 
   ## Discrete-integer normalization: lhs<c iff lhs<=pred(c).
+  @reducible
   fn normalize_atom(atom: LinearAtom) -> LinearAtom =
     match atom.relation
       LessOrEqual() -> atom

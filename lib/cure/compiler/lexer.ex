@@ -1160,6 +1160,22 @@ defmodule Cure.Compiler.Lexer do
               ?f ->
                 {?\f, advance(state, 1)}
 
+              # Bell, escape, vertical tab. `Char` is a nominal builtin whose only
+              # introduction form is a literal, so a control character with no
+              # escape here has no spelling at all — `char == 11` cannot stand in
+              # for it, because the natural-literal instance for `Char` bottoms out
+              # in the extern `from_code_point` and so never reduces at compile
+              # time. These three complete the set a regex engine has to name
+              # (`\a \b \e \f \n \r \t \v`), and match Elixir's own codes.
+              ?a ->
+                {?\a, advance(state, 1)}
+
+              ?e ->
+                {?\e, advance(state, 1)}
+
+              ?v ->
+                {?\v, advance(state, 1)}
+
               ?\\ ->
                 {?\\, advance(state, 1)}
 

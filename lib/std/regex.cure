@@ -939,6 +939,14 @@ mod Std.Regex
   type RegexProgram indices (result: Type)
     BuiltRegex : (shape: ShapeCode) -> Pattern(shape) -> Conversion(Sem(shape), result) -> RegexProgram(result)
 
+  ## `Option` is a `Type`-level family, so it cannot hold a `RegexProgram(result)`:
+  ## a family INDEXED by `Type` lives one universe up (`level: 1`), exactly as an
+  ## Agda `data … : Set → Set₁` does. Cure has no universe polymorphism, so the
+  ## large case needs its own carrier rather than a `Type`-level `Option`.
+  type CompiledRegex indices (result: Type)
+    NoProgram : CompiledRegex(result)
+    SomeProgram : RegexProgram(result) -> CompiledRegex(result)
+
   fn execute_left_choice_conversion({left_raw: Type}, {left_result: Type}, {right_raw: Type}, {right_result: Type}, left: Conversion(left_raw, left_result), _right: Conversion(right_raw, right_result), value: left_raw) -> Choice(left_result, right_result) =
     assert_type ChoseLeft(execute_conversion(left, value)) : Choice(left_result, right_result)
 
@@ -974,92 +982,92 @@ mod Std.Regex
     BuiltRegex(raw_shape, pattern, conversion) ->
       BuiltRegex(raw_shape, pattern, ComposedConversion(conversion, SimplifyConversion(shape)))
 
-  fn simplify_compiled(shape: ShapeCode, program: Option(RegexProgram(Sem(shape)))) -> Option(RegexProgram(Sem(Simplify(shape)))) = match program
-    None() -> None()
-    Some(compiled) -> Some(simplify_program(shape, compiled))
+  fn simplify_compiled(shape: ShapeCode, program: CompiledRegex(Sem(shape))) -> CompiledRegex(Sem(Simplify(shape))) = match program
+    NoProgram() -> NoProgram()
+    SomeProgram(compiled) -> SomeProgram(simplify_program(shape, compiled))
 
   fn sem_identity_conversion(shape: ShapeCode) -> Conversion(Sem(shape), Sem(shape)) = IdentityConversion()
   fn string_identity_conversion() -> Conversion(String, String) = IdentityConversion()
   fn unit_identity_conversion() -> Conversion(Unit, Unit) = IdentityConversion()
 
-  fn compile_regex({result: Type}, regex: Regex(result)) -> Option(RegexProgram(result)) = match regex
-    FromPattern(shape, pattern) -> Some(BuiltRegex(shape, pattern, sem_identity_conversion(shape)))
+  fn compile_regex({result: Type}, regex: Regex(result)) -> CompiledRegex(result) = match regex
+    FromPattern(shape, pattern) -> SomeProgram(BuiltRegex(shape, pattern, sem_identity_conversion(shape)))
     Mapped(transform, inner) -> match compile_regex(inner)
-      None() -> None()
-      Some(BuiltRegex(shape, pattern, convert)) -> Some(BuiltRegex(shape, pattern, ComposedConversion(convert, ApplyConversion(transform))))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(shape, pattern, convert)) -> SomeProgram(BuiltRegex(shape, pattern, ComposedConversion(convert, ApplyConversion(transform))))
     Concatenated(left, right) -> match compile_regex(left)
-      None() -> None()
-      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
-        None() -> None()
-        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
-          Some(BuiltRegex(PairC(left_shape, right_shape), PatternConcat(left_pattern, right_pattern), PairConversion(left_convert, right_convert)))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        NoProgram() -> NoProgram()
+        SomeProgram(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          SomeProgram(BuiltRegex(PairC(left_shape, right_shape), PatternConcat(left_pattern, right_pattern), PairConversion(left_convert, right_convert)))
     Alternated(left, right) -> match compile_regex(left)
-      None() -> None()
-      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
-        None() -> None()
-        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
-          Some(BuiltRegex(ChoiceC(left_shape, right_shape), PatternAlternate(left_pattern, right_pattern), ChoiceConversion(left_convert, right_convert)))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        NoProgram() -> NoProgram()
+        SomeProgram(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          SomeProgram(BuiltRegex(ChoiceC(left_shape, right_shape), PatternAlternate(left_pattern, right_pattern), ChoiceConversion(left_convert, right_convert)))
     Repeated(inner) -> match compile_regex(inner)
-      None() -> None()
-      Some(BuiltRegex(shape, pattern, convert)) -> Some(BuiltRegex(ListC(shape), PatternRepeat(pattern), ListConversion(convert)))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(shape, pattern, convert)) -> SomeProgram(BuiltRegex(ListC(shape), PatternRepeat(pattern), ListConversion(convert)))
     MatchedText(inner) -> match compile_regex(inner)
-      None() -> None()
-      Some(BuiltRegex(_shape, pattern, _convert)) -> Some(BuiltRegex(StringC, PatternGroup(pattern), string_identity_conversion()))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(_shape, pattern, _convert)) -> SomeProgram(BuiltRegex(StringC, PatternGroup(pattern), string_identity_conversion()))
     KeptRight(left, right) -> match compile_regex(left)
-      None() -> None()
-      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
-        None() -> None()
-        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
-          Some(BuiltRegex(PairC(left_shape, right_shape), PatternConcat(left_pattern, right_pattern), RightPairConversion(left_convert, right_convert)))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        NoProgram() -> NoProgram()
+        SomeProgram(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          SomeProgram(BuiltRegex(PairC(left_shape, right_shape), PatternConcat(left_pattern, right_pattern), RightPairConversion(left_convert, right_convert)))
     KeptLeft(left, right) -> match compile_regex(left)
-      None() -> None()
-      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
-        None() -> None()
-        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
-          Some(BuiltRegex(PairC(left_shape, right_shape), PatternConcat(left_pattern, right_pattern), LeftPairConversion(left_convert, right_convert)))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        NoProgram() -> NoProgram()
+        SomeProgram(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          SomeProgram(BuiltRegex(PairC(left_shape, right_shape), PatternConcat(left_pattern, right_pattern), LeftPairConversion(left_convert, right_convert)))
     SameAlternative(left, right) -> match compile_regex(left)
-      None() -> None()
-      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
-        None() -> None()
-        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
-          Some(BuiltRegex(ChoiceC(left_shape, right_shape), PatternAlternate(left_pattern, right_pattern), SameChoiceConversion(left_convert, right_convert)))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        NoProgram() -> NoProgram()
+        SomeProgram(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          SomeProgram(BuiltRegex(ChoiceC(left_shape, right_shape), PatternAlternate(left_pattern, right_pattern), SameChoiceConversion(left_convert, right_convert)))
     OptionalRegex(inner) -> match compile_regex(inner)
-      None() -> None()
-      Some(BuiltRegex(shape, pattern, convert)) ->
-        Some(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternate(pattern, PatternEmpty()), OptionalConversion(convert)))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(shape, pattern, convert)) ->
+        SomeProgram(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternate(pattern, PatternEmpty()), OptionalConversion(convert)))
     OneOrMoreRegex(inner) -> match compile_regex(inner)
-      None() -> None()
-      Some(BuiltRegex(shape, pattern, convert)) ->
-        Some(BuiltRegex(PairC(shape, ListC(shape)), PatternConcat(pattern, PatternRepeat(pattern)), OneOrMoreConversion(convert)))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(shape, pattern, convert)) ->
+        SomeProgram(BuiltRegex(PairC(shape, ListC(shape)), PatternConcat(pattern, PatternRepeat(pattern)), OneOrMoreConversion(convert)))
     SimplifiedRegex(shape, inner) -> simplify_compiled(shape, compile_regex(inner))
     OptionalPattern(inner) -> match compile_regex(inner)
-      None() -> None()
-      Some(BuiltRegex(shape, pattern, convert)) ->
-        Some(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternate(pattern, PatternEmpty()), ChoiceConversion(convert, unit_identity_conversion())))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(shape, pattern, convert)) ->
+        SomeProgram(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternate(pattern, PatternEmpty()), ChoiceConversion(convert, unit_identity_conversion())))
     PlusPattern(inner) -> match compile_regex(inner)
-      None() -> None()
-      Some(BuiltRegex(shape, pattern, convert)) ->
-        Some(BuiltRegex(PairC(shape, ListC(shape)), PatternConcat(pattern, PatternRepeat(pattern)), PrependConversion(convert)))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(shape, pattern, convert)) ->
+        SomeProgram(BuiltRegex(PairC(shape, ListC(shape)), PatternConcat(pattern, PatternRepeat(pattern)), PrependConversion(convert)))
     RepeatedPattern(inner, lazy) -> match compile_regex(inner)
-      None() -> None()
-      Some(BuiltRegex(shape, pattern, convert)) ->
-        Some(BuiltRegex(ListC(shape), PatternRepeatMode(pattern, lazy), ListConversion(convert)))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(shape, pattern, convert)) ->
+        SomeProgram(BuiltRegex(ListC(shape), PatternRepeatMode(pattern, lazy), ListConversion(convert)))
     OneOrMorePattern(inner, lazy) -> match compile_regex(inner)
-      None() -> None()
-      Some(BuiltRegex(shape, pattern, convert)) ->
-        Some(BuiltRegex(PairC(shape, ListC(shape)), PatternConcat(pattern, PatternRepeatMode(pattern, lazy)), PrependConversion(convert)))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(shape, pattern, convert)) ->
+        SomeProgram(BuiltRegex(PairC(shape, ListC(shape)), PatternConcat(pattern, PatternRepeatMode(pattern, lazy)), PrependConversion(convert)))
     OptionalLiteral(inner, lazy) -> match compile_regex(inner)
-      None() -> None()
-      Some(BuiltRegex(shape, pattern, convert)) ->
-        Some(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternateMode(pattern, PatternEmpty(), lazy), ChoiceConversion(convert, unit_identity_conversion())))
+      NoProgram() -> NoProgram()
+      SomeProgram(BuiltRegex(shape, pattern, convert)) ->
+        SomeProgram(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternateMode(pattern, PatternEmpty(), lazy), ChoiceConversion(convert, unit_identity_conversion())))
     ConfiguredRegex(_options, inner) -> compile_regex(inner)
     StartAnchor(multiline) -> pickup
-      multiline -> Some(BuiltRegex(UnitC, PatternBoundary(line_start_constraint()), unit_identity_conversion()))
-      else -> Some(BuiltRegex(UnitC, PatternBoundary(subject_start_constraint()), unit_identity_conversion()))
+      multiline -> SomeProgram(BuiltRegex(UnitC, PatternBoundary(line_start_constraint()), unit_identity_conversion()))
+      else -> SomeProgram(BuiltRegex(UnitC, PatternBoundary(subject_start_constraint()), unit_identity_conversion()))
     EndAnchor(multiline) -> pickup
-      multiline -> Some(BuiltRegex(UnitC, PatternBoundary(line_end_constraint()), unit_identity_conversion()))
-      else -> Some(BuiltRegex(UnitC, PatternBoundary(subject_end_constraint()), unit_identity_conversion()))
-    StrictEndAnchor() -> Some(BuiltRegex(UnitC, PatternBoundary(strict_end_constraint()), unit_identity_conversion()))
+      multiline -> SomeProgram(BuiltRegex(UnitC, PatternBoundary(line_end_constraint()), unit_identity_conversion()))
+      else -> SomeProgram(BuiltRegex(UnitC, PatternBoundary(subject_end_constraint()), unit_identity_conversion()))
+    StrictEndAnchor() -> SomeProgram(BuiltRegex(UnitC, PatternBoundary(strict_end_constraint()), unit_identity_conversion()))
 
   fn convert_complete_extraction({shape: ShapeCode}, {result: Type}, pattern: Pattern(shape), conversion: Conversion(Sem(shape), result), evidence: List(Evidence)) -> Option(result) = match extract_complete_encoding(decode_pattern_encoding(pattern, evidence))
     None() -> None()
@@ -1071,8 +1079,8 @@ mod Std.Regex
       Some(evidence) -> convert_complete_extraction(pattern, conversion, evidence)
 
   fn parse_full({result: Type}, regex: Regex(result), input: String) -> Option(result) = match compile_regex(regex)
-    None() -> None()
-    Some(program) -> parse_program_full(program, input)
+    NoProgram() -> None()
+    SomeProgram(program) -> parse_program_full(program, input)
 
   fn convert_prefix_extraction({shape: ShapeCode}, {result: Type}, pattern: Pattern(shape), conversion: Conversion(Sem(shape), result), prefix: EvidencePrefix) -> Option(Tuple(result, String)) = match prefix
     EvidencePrefix(evidence, rest) -> match convert_complete_extraction(pattern, conversion, evidence)
@@ -1080,14 +1088,14 @@ mod Std.Regex
       Some(value) -> Some(%[value, Std.String.from_characters(rest)])
 
   fn parse_prefix_with({result: Type}, regex: Regex(result), input: String, greedy: Bool) -> Option(Tuple(result, String)) = match compile_regex(regex)
-    None() -> None()
-    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence(pattern, Std.String.characters(input), greedy)
+    NoProgram() -> None()
+    SomeProgram(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence(pattern, Std.String.characters(input), greedy)
       None() -> None()
       Some(prefix) -> convert_prefix_extraction(pattern, conversion, prefix)
 
   fn parse_prefix_at({result: Type}, regex: Regex(result), input: String, subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool) -> Option(Tuple(result, String)) = match compile_regex(regex)
-    None() -> None()
-    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence_at(pattern, Std.String.characters(input), true, subject_start, line_start, previous_ascii_word, previous_unicode_word)
+    NoProgram() -> None()
+    SomeProgram(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence_at(pattern, Std.String.characters(input), true, subject_start, line_start, previous_ascii_word, previous_unicode_word)
       None() -> None()
       Some(prefix) -> convert_prefix_extraction(pattern, conversion, prefix)
 
@@ -1117,8 +1125,8 @@ mod Std.Regex
           else -> search_from(regex, rest, [char | reversed_prefix], false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), firstline_only)
 
   fn pattern_prefix_program_at({result: Type}, regex: Regex(result), input: List(Char), subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool) -> Option(Tuple(result, List(Char))) = match compile_regex(regex)
-    None() -> None()
-    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence_at(pattern, input, true, subject_start, line_start, previous_ascii_word, previous_unicode_word)
+    NoProgram() -> None()
+    SomeProgram(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence_at(pattern, input, true, subject_start, line_start, previous_ascii_word, previous_unicode_word)
       None() -> None()
       Some(prefix) -> convert_prefix_chars(pattern, conversion, prefix)
 

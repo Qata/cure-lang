@@ -94,6 +94,45 @@ defmodule Cure.Elab.Implementation do
   @spec head_of(Env.t(), tuple()) :: {:ok, atom()} | {:error, term()}
   def head_of(env, for_type_ast), do: head_key(for_type_ast, env)
 
+  # The interfaces whose method bodies the COMPILER runs, rather than the program.
+  # A contextual literal is elaborated by normalising the selected instance's
+  # conversion to a canonical value, so these bodies are compile-time machinery in
+  # the same sense a type synonym's RHS is.
+  @compile_time_interfaces ~w(
+    ExpressibleByNaturalLiteral
+    ExpressibleByIntegerLiteral
+    ExpressibleByDecimalLiteral
+    ExpressibleByStringLiteral
+    ExpressibleByCharacterLiteral
+    ExpressibleByAtomLiteral
+  )
+
+  @doc """
+  Whether `key` names an instance method the elaborator evaluates at compile time.
+
+  A module interface hides definition bodies by default, which is right for
+  ordinary code: a caller depends on a function's type, not its text. It is wrong
+  for an instance the elaborator must REDUCE — `2` at `Int` is only a value
+  because `from_integer_literal`'s body reduces to one, and an opaque body leaves
+  the elaborator holding a stuck application it can only report as
+  `:literal_initializer_not_compile_time_value`. Interface construction seeds
+  transparency from this predicate, then closes over whatever those bodies mention.
+  """
+  @spec compile_time_method?(atom()) :: boolean()
+  def compile_time_method?(key) when is_atom(key) do
+    # Split on the FIRST `#` only — the qualifier separator. A mangled method
+    # embeds the instance HEAD, which is itself qualified
+    # (`Std.Literal#__impl_ExpressibleByIntegerLiteral_Std.Int#Int_from_integer_literal`),
+    # so taking the last segment would strip the very prefix being matched.
+    base =
+      case key |> Atom.to_string() |> String.split("#", parts: 2) do
+        [_owner, base] -> base
+        [bare] -> bare
+      end
+
+    Enum.any?(@compile_time_interfaces, &String.starts_with?(base, "__impl_" <> &1 <> "_"))
+  end
+
   # The coherence key: elaborate the instance head to a Core type, whnf it, and
   # read the head constructor's canonical name. Transparent synonyms unfold via
   # the kernel's δ-reduction of certified globals, so `MyInt = Int` keys as `:Int`.
@@ -318,17 +357,28 @@ defmodule Cure.Elab.Implementation do
     # than distinct global neutrals; a consistent renaming (`a`↔`x`, `b`↔`y`) then
     # lowers to identical Core terms and passes conversion, while a genuine type
     # mismatch stays distinct.
-    expected_scope = Declarations.free_type_vars([expected_ast], env)
-    actual_scope = Declarations.free_type_vars([actual_ast], env)
+    # The expected signature was authored by the interface's module, not by this
+    # one, so it is lowered in checking scope: a name the provider wrote resolves
+    # because the provider could write it. The instance's own clause keeps the
+    # authored scope, where naming a module this one never imported is still an
+    # error — the asymmetry is the point.
+    expected_env = checking_scope(env)
+    # A derived clause is not authored either: the compiler chose its spelling
+    # (`Std.Bool.Bool`, `Std.Builtin.struct_eq`), so it is held to the same scope
+    # as the interface signature it was synthesised from, not to the module's.
+    actual_env = if Keyword.get(m, :compiler_generated, false), do: expected_env, else: env
 
-    with {:ok, expected_core} <- Declarations.lower_type(expected_ast, expected_scope, env),
-         {:ok, actual_core} <- Declarations.lower_type(actual_ast, actual_scope, env),
+    expected_scope = Declarations.free_type_vars([expected_ast], expected_env)
+    actual_scope = Declarations.free_type_vars([actual_ast], actual_env)
+
+    with {:ok, expected_core} <- Declarations.lower_type(expected_ast, expected_scope, expected_env),
+         {:ok, actual_core} <- Declarations.lower_type(actual_ast, actual_scope, actual_env),
          true <- Cure.Core.Conv.conv?(expected_core, actual_core, [], 0, env) do
       :ok
     else
       _ ->
-        expected_core = lower_type_or_nil(expected_ast, expected_scope, env)
-        actual_core = lower_type_or_nil(actual_ast, actual_scope, env)
+        expected_core = lower_type_or_nil(expected_ast, expected_scope, expected_env)
+        actual_core = lower_type_or_nil(actual_ast, actual_scope, actual_env)
 
         {:error,
          {:method_signature_mismatch,
@@ -341,6 +391,11 @@ defmodule Cure.Elab.Implementation do
           }}}
     end
   end
+
+  # Every module present in the environment is nameable, which is what
+  # "loadable for checking canonical references" means. This widens no authored
+  # scope: it is used only to lower syntax the module under check did not write.
+  defp checking_scope(%Env{} = env), do: %Env{env | qualified_modules: nil}
 
   defp lower_type_or_nil(ast, scope, env) do
     case Declarations.lower_type(ast, scope, env) do
