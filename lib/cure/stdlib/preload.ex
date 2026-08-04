@@ -474,7 +474,7 @@ defmodule Cure.Stdlib.Preload do
   # order and load from the first one that has a readable `.beam`.
   # Missing modules are left unloaded; the source-JIT fallback picks
   # them up later.
-  defp load_stdlib(artifact_set, kind, requested_modules \\ nil) do
+  defp load_stdlib(artifact_set, kind, requested_modules) do
     modules =
       case requested_modules do
         nil -> ordered_closure_modules(kind)
@@ -548,31 +548,6 @@ defmodule Cure.Stdlib.Preload do
     Keyword.get(opts, :stdlib_ebin) ||
       List.first(candidate_dirs) ||
       "_build/cure/ebin"
-  end
-
-  # Compile any module in `stdlib_modules(kind)` that is still not
-  # loaded from its `.cure` source. This is the belt-and-braces
-  # fallback for deployments that carry the sources (`priv/std/`) but
-  # not the BEAMs (`priv/ebin/`). A failure on an individual module
-  # is logged at `:debug` and swallowed; the caller will get a
-  # `:undef` at call time, same as before.
-  @doc false
-  @spec compile_missing_from_sources(kind()) :: :ok | {:error, term()}
-  def compile_missing_from_sources(kind), do: compile_missing_from_sources(kind, [])
-
-  @doc false
-  @spec compile_missing_from_sources(kind(), keyword()) :: :ok | {:error, term()}
-  def compile_missing_from_sources(kind, opts) do
-    candidates =
-      case Keyword.get(opts, :stdlib_ebin) do
-        nil -> Paths.beam_dirs()
-        root -> [root]
-      end
-
-    with {:ok, artifact_set} <- open_or_repair_stdlib(candidates, true, opts),
-         :ok <- load_stdlib(artifact_set, kind) do
-      :ok
-    end
   end
 
   defp maybe_load_examples(false, _ebin), do: :ok

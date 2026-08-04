@@ -51,40 +51,32 @@ defmodule Cure.Elab.Program do
   def check_ast(ast), do: check_ast(ast, [])
 
   @doc """
-  Validate that every author-written `use Std.X` import names an available stdlib
-  source whose module is loadable.
+  Validate that every author-written `use Std.X` import names a stdlib module
+  that exists.
 
-  Compiler-injected ambient `@prelude` imports are exempt. They are not
-  `order_deps` edges, so `Incremental.compile_order/1` cannot schedule the
-  provider before its ambient consumers (the prelude closure is cyclic — no such
-  order exists). Requiring a loadable beam for them makes the stdlib unable to
-  bootstrap itself: on a cold `_build`, every module fails with
-  `{:missing_stdlib_module, ...}` because no stdlib beam has been built yet.
-  An explicit `use` keeps the beam requirement — that IS an `order_deps` edge, so
-  its dependency is always compiled first.
+  Existing means the module has a source in the universe. It deliberately does
+  NOT mean a beam for it is loaded in this VM: whether the standard library
+  happens to be built is a fact about the current `_build`, not about the
+  program, and letting it decide whether a name resolves is a second answer to
+  what a name means. That is the loaded-BEAM resolution path the interface-first
+  design removes — the checker reads the interface from source, and having the
+  beam available at run time is the bundler's problem, reported as such.
+
+  Compiler-injected ambient `@prelude` imports are exempt from the check
+  entirely. They are not `order_deps` edges, so `Incremental.compile_order/1`
+  cannot schedule the provider before its ambient consumers (the prelude closure
+  is cyclic — no such order exists).
   """
   @spec validate_stdlib_imports(tuple() | list()) :: :ok | {:error, term()}
-  def validate_stdlib_imports(ast), do: validate_stdlib_imports(ast, [])
-
-  @spec validate_stdlib_imports(tuple() | list(), [{String.t(), Env.t()}]) ::
-          :ok | {:error, term()}
-  def validate_stdlib_imports(ast, available_interfaces) do
-    available = MapSet.new(available_interfaces, fn {module_name, _env} -> module_name end)
-
+  def validate_stdlib_imports(ast) do
     ast
     |> import_entries()
     |> Enum.reject(fn {_sources, meta} -> Keyword.get(meta, :prelude_injected, false) end)
     |> Enum.flat_map(fn {sources, _meta} -> sources end)
     |> Enum.find_value(:ok, fn source ->
       case import_source_path(source) do
-        {:ok, module_name, _path} ->
-          module = String.to_atom("Cure." <> module_name)
-
-          if MapSet.member?(available, module_name) or match?({:file, _}, :code.is_loaded(module)) do
-            nil
-          else
-            missing_stdlib_error(module_name)
-          end
+        {:ok, _module_name, _path} ->
+          nil
 
         {:ok_user, _module_name, _path} ->
           nil

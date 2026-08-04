@@ -614,9 +614,12 @@ defmodule Cure.Compiler.ModulePipeline do
   How many times this run reached for a resolution path outside the manifest and
   the checked interfaces.
 
-  Each counter names a fallback the previous pipeline used. They are reported
-  rather than assumed: `Result` carries the tallies, so a reintroduced fallback
-  shows up as a non-zero count instead of passing silently.
+  Each counter names a fallback the previous pipeline used. All of them are zero
+  because the code implementing them is gone, not because a check found nothing
+  — what keeps them gone is the boundary suite, which reads the sources. This map
+  is the other half: the channel a *reintroduced* path reports itself through, so
+  one that comes back as new code is a non-zero count rather than a silent pass.
+  Be clear about which of the two is doing the work before trusting either.
   """
   @spec alternate_path_counts(Result.t()) :: %{atom() => non_neg_integer()}
   def alternate_path_counts(%Result{} = result) do

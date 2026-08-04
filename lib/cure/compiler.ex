@@ -911,7 +911,7 @@ defmodule Cure.Compiler do
     # Single pipeline: every module is elaborated, checked, erased, and emitted
     # through the dependent Core.
     result =
-      with :ok <- Cure.Elab.Program.validate_stdlib_imports(main_ast, lifted_surfaces) do
+      with :ok <- Cure.Elab.Program.validate_stdlib_imports(main_ast) do
         case dependent_codegen(main_ast, source, file, lifted_surfaces) do
           {:ok, forms, artifact} -> {:ok, forms, [], artifact}
           {:error, {:codegen_error, {:expansion_ill_typed, _} = reason}} -> {:error, reason}
