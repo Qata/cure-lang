@@ -2092,6 +2092,22 @@ defmodule Cure.Elab.Program do
          {:ok, base} <- merge_env(imported, own),
          base = Env.with_owner(base, module_name),
          base = install_module_visibility(base, ast),
+         # A module's own instances can arrive back through its own imports: the
+         # module `use`s a whole-module `@prelude` provider (`Std.Equatable`),
+         # whose slice keeps coherence intact, and that provider's published
+         # interface carries every instance ambient at publication — including
+         # the ones THIS module owns. Re-registering the authored declaration
+         # into that environment reports the module as overlapping with ITSELF,
+         # which is how every warm stdlib build failed on `Std.Char`'s
+         # `Equatable for Char`.
+         #
+         # Drop only the entries whose method globals are owner-qualified with
+         # this module (`instance_owned_by?/2`); a FOREIGN instance for the same
+         # head is left in place, so the authored declaration still collides with
+         # it and global coherence is preserved. This is the conformance-phase
+         # counterpart of `%{signature | coherence: nil}` in the signature phase
+         # and `strip_shadowed_prelude_instances/2` in the body phase.
+         base = Env.put_coherence(base, without_owned_coherence(Env.coherence(base), module_name)),
          {:ok, complete} <-
            Enum.reduce_while(declarations(ast), {:ok, base}, fn
              {:implementation, _, _} = declaration, {:ok, acc} ->
