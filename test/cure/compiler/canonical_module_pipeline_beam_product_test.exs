@@ -92,6 +92,37 @@ defmodule Cure.Compiler.CanonicalModulePipelineBeamProductTest do
     purge(:"Cure.Beam.Many.B")
   end
 
+  # Checking and emitting do not accept the same modules. An unfilled obligation
+  # is a legitimate thing to CHECK — that is what makes holes usable — and an
+  # illegitimate thing to run, so `Emit` refuses it (the #102 firewall). That gap
+  # is the only way a run can fail after every module has checked, which makes it
+  # the executable statement that publication really is all-or-nothing.
+  test "a run whose emission fails publishes no generation at all", %{tmp_dir: dir} do
+    source = write!(dir, "hole.cure", "mod Beam.Unfinished\n  fn f() -> Int = ?\n")
+    output = Path.join(dir, "output")
+
+    assert {:error, {:beam_emission_failed, "Beam.Unfinished", _reason}} =
+             check([source], dir,
+               output: output,
+               generation: 1,
+               publication: :atomic,
+               products: [:beams]
+             )
+
+    refute File.exists?(Path.join(output, "current"))
+    assert {:error, {:no_published_generation, ^output, _}} = pipeline(:open_published_generation, [output])
+  end
+
+  test "the same module checks and publishes when beams are not a product", %{tmp_dir: dir} do
+    source = write!(dir, "hole.cure", "mod Beam.Unfinished.Checked\n  fn f() -> Int = ?\n")
+    output = Path.join(dir, "output")
+
+    assert {:ok, _checked} = check([source], dir, output: output, generation: 1, publication: :atomic)
+    assert {:ok, published} = pipeline(:open_published_generation, [output])
+    assert published.modules == ["Beam.Unfinished.Checked"]
+    assert published.beams == []
+  end
+
   defp check(paths, dir, extra) do
     pipeline(:check, [
       paths,
