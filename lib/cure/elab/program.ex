@@ -3805,7 +3805,7 @@ defmodule Cure.Elab.Program do
          families: Map.merge(left.families, right.families),
          ctors: Map.merge(left.ctors, right.ctors),
          ctor_to_family: Map.merge(left.ctor_to_family, right.ctor_to_family),
-         defs: Map.merge(left.defs, right.defs),
+         defs: merge_defs(left.defs, right.defs),
          certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
          builtins: Map.merge(left.builtins, right.builtins),
          primitives: Map.merge(left.primitives, right.primitives),
@@ -3826,6 +3826,27 @@ defmodule Cure.Elab.Program do
        }}
     end
   end
+
+  # Right normally wins — the importer's own view of a name is the later, more
+  # specific one. The exception is the `{:hole, "__pending__"}` body that
+  # `Declarations` forward-declares a signature with: it means "not elaborated
+  # yet", so it is strictly LESS information than an elaborated body for the same
+  # key and must never displace one. A module's published env can carry that
+  # placeholder for a def it does not own (`Std.String` holds a pending record for
+  # `Std.Char`'s `ExpressibleByCharacterLiteral` method), and letting it win
+  # deleted a body the ambient prelude had already supplied. Nothing observes that
+  # at merge time; it surfaces at the next site that must REDUCE the body, as a
+  # literal initializer that will not normalise.
+  defp merge_defs(left, right) do
+    Map.merge(left, right, fn _key, left_record, right_record ->
+      if pending_body?(right_record) and not pending_body?(left_record),
+        do: left_record,
+        else: right_record
+    end)
+  end
+
+  defp pending_body?(%{body: {:hole, "__pending__"}}), do: true
+  defp pending_body?(_record), do: false
 
   defp merge_module_visibility(nil, nil), do: nil
   defp merge_module_visibility(nil, %MapSet{} = right), do: right
