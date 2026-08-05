@@ -251,7 +251,10 @@ defmodule Cure.Compiler.MacroSyntax do
   defp synlit_to_runtime({:s_int, value}), do: {:SInt, value}
   defp synlit_to_runtime({:s_char, value}), do: {:SChar, value}
   defp synlit_to_runtime({:s_float, value}), do: {:SFloat, value}
-  defp synlit_to_runtime({:s_str, value}) when is_binary(value), do: {:SStr, String.to_charlist(value)}
+  # `{:String, chars}` and not the bare charlist: `List` erases to a native list but
+  # the nominal `String` constructor survives erasure, so this mirrors `to_core_string/1`.
+  defp synlit_to_runtime({:s_str, value}) when is_binary(value),
+    do: {:SStr, {:String, String.to_charlist(value)}}
   defp synlit_to_runtime({:s_bool, value}), do: {:SBool, value}
   defp synlit_to_runtime({:s_atom, value}), do: {:SAtom, value}
   defp synlit_to_runtime({:s_list, values}), do: {:SList, Enum.map(values, &synlit_to_runtime/1)}
@@ -1032,15 +1035,16 @@ defmodule Cure.Compiler.MacroSyntax do
   defp from_runtime_synlit({:SChar, n}) when is_integer(n) and n >= 0 and n <= 0x10FFFF, do: {:ok, {:s_char, n}}
   defp from_runtime_synlit({:SFloat, f}) when is_float(f), do: {:ok, {:s_float, f}}
 
-  defp from_runtime_synlit({:SStr, chars}) when is_list(chars) do
-    if Enum.all?(chars, &(is_integer(&1) and &1 >= 0)) do
+  defp from_runtime_synlit({:SStr, string}) do
+    with {:String, chars} when is_list(chars) <- string,
+         true <- Enum.all?(chars, &(is_integer(&1) and &1 >= 0)) do
       try do
         {:ok, {:s_str, List.to_string(chars)}}
       rescue
         ArgumentError -> {:error, :invalid_runtime_syntax_string}
       end
     else
-      {:error, :invalid_runtime_syntax_string}
+      _ -> {:error, :invalid_runtime_syntax_string}
     end
   end
 
@@ -1328,6 +1332,8 @@ defmodule Cure.Compiler.MacroSyntax do
   defp canonical_ctor(name) when name in [:Nil, :Cons],
     do: Cure.Elab.Name.qualify("Std.List", name)
 
+  defp canonical_ctor(:String), do: Cure.Elab.Name.qualify("Std.String", :String)
+
   defp canonical_ctor(name), do: Cure.Elab.Name.qualify("Std.Syntax", name)
 
   defp canonicalize_core({:ctor, name, args}) when is_atom(name) and is_list(args) do
@@ -1368,7 +1374,8 @@ defmodule Cure.Compiler.MacroSyntax do
         :True,
         :False,
         :Nil,
-        :Cons
+        :Cons,
+        :String
       ]
 
   defp atom(value), do: {:atom_lit, value}
@@ -1378,12 +1385,18 @@ defmodule Cure.Compiler.MacroSyntax do
 
   defp to_core_list(items), do: Enum.reduce(Enum.reverse(items), ctor(:Nil, []), &ctor(:Cons, [&1, &2]))
 
+  # `String` is nominal -- `rec String { characters: List(Char) }` -- so a `String`
+  # value is the constructor wrapping its characters, one layer outside the list.
+  # `SStr` is declared `SStr(String)`, and handing it the bare list instead type-
+  # checks as `List(Char)`, which is a different type.
+  defp to_core_string(s),
+    do: ctor(:String, [to_core_list(Enum.map(String.to_charlist(s), &{:bounded_lit, &1}))])
+
   defp to_core_synlit({:s_int, n}), do: ctor(:SInt, [{:int_lit, n}])
   defp to_core_synlit({:s_char, n}), do: ctor(:SChar, [{:bounded_lit, n}])
   defp to_core_synlit({:s_float, f}), do: ctor(:SFloat, [{:float_lit, f}])
 
-  defp to_core_synlit({:s_str, s}),
-    do: ctor(:SStr, [to_core_list(Enum.map(String.to_charlist(s), &{:bounded_lit, &1}))])
+  defp to_core_synlit({:s_str, s}), do: ctor(:SStr, [to_core_string(s)])
 
   defp to_core_synlit({:s_bool, true}), do: ctor(:SBool, [ctor(:True, [])])
   defp to_core_synlit({:s_bool, false}), do: ctor(:SBool, [ctor(:False, [])])
@@ -1426,8 +1439,12 @@ defmodule Cure.Compiler.MacroSyntax do
   defp from_core_synlit({:ctor, :"Std.Syntax#SChar", [{:bounded_lit, n}]}), do: {:ok, {:s_char, n}}
   defp from_core_synlit({:ctor, :"Std.Syntax#SFloat", [{:float_lit, f}]}), do: {:ok, {:s_float, f}}
 
-  defp from_core_synlit({:ctor, :"Std.Syntax#SStr", [chars]}) do
-    with {:ok, chars} <- from_core_list(chars),
+  # The `String` wrapper is unwrapped in the body rather than the head so that a
+  # malformed payload still reports the specific `:invalid_syntax_string` verdict
+  # instead of falling through to the catch-all `:invalid_syntax_literal`.
+  defp from_core_synlit({:ctor, :"Std.Syntax#SStr", [string]}) do
+    with {:ctor, :"Std.String#String", [chars]} <- string,
+         {:ok, chars} <- from_core_list(chars),
          true <- Enum.all?(chars, &match?({:bounded_lit, n} when is_integer(n), &1)) do
       {:ok, {:s_str, chars |> Enum.map(fn {:bounded_lit, n} -> n end) |> List.to_string()}}
     else

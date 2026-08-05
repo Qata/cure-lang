@@ -191,13 +191,13 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     runtime =
       {:Node, :function_call,
        [
-         {:KV, :name, {:SStr, ~c"same\n\"slash\\λ"}},
+         {:KV, :name, {:SStr, {:String, ~c"same\n\"slash\\λ"}}},
          {:KV, :enabled, {:SBool, true}},
          {:KV, :count, {:SInt, 2}},
          {:KV, :ratio, {:SFloat, 1.5}},
          {:KV, :mode, {:SAtom, :safe}},
          {:KV, :values, {:SList, [{:SInt, 1}, {:SAtom, :two}]}},
-         {:KV, :lookup, {:SMap, [{:SPair, {:SAtom, :key}, {:SStr, ~c"value"}}]}},
+         {:KV, :lookup, {:SMap, [{:SPair, {:SAtom, :key}, {:SStr, {:String, ~c"value"}}}]}},
          {:KV, :nested, {:SSyntax, {:Leaf, :literal, [], {:SInt, 7}}}},
          {:KV, :opaque, :SOpaque}
        ], [{:Raw, {:SAtom, :child}}]}
@@ -259,13 +259,13 @@ defmodule Cure.Compiler.MacroSyntaxTest do
                %{"definition" => {:record, "DefinitionSyntax", fields}}
              )
 
-    assert name == {:Leaf, :variable, [], {:SStr, ~c"Machine"}}
+    assert name == {:Leaf, :variable, [], {:SStr, {:String, ~c"Machine"}}}
 
     assert encoded_definition ==
-             {:DefinitionSyntax, {:some, {:Leaf, :variable, [], {:SStr, ~c"Idle"}}},
+             {:DefinitionSyntax, {:some, {:Leaf, :variable, [], {:SStr, {:String, ~c"Idle"}}}},
               [
-                {:EdgeSyntax, {:some, {:Leaf, :variable, [], {:SStr, ~c"Idle"}}},
-                 {:Leaf, :variable, [], {:SStr, ~c"Start"}}}
+                {:EdgeSyntax, {:some, {:Leaf, :variable, [], {:SStr, {:String, ~c"Idle"}}}},
+                 {:Leaf, :variable, [], {:SStr, {:String, ~c"Start"}}}}
               ]}
   end
 
@@ -601,6 +601,59 @@ defmodule Cure.Compiler.MacroSyntaxTest do
        {:s_list, [{:s_str, "hi"}, :s_opaque]}}
 
     assert MacroSyntax.from_core(MacroSyntax.to_core(repr)) == repr
+  end
+
+  test "an encoded SStr carries a Std.String value, not a bare List(Char)" do
+    # `SStr` is declared `SStr(String)` in `lib/std/syntax.cure`, and `String` is a
+    # nominal record wrapping its characters -- `rec String { characters: List(Char) }`
+    # -- so a `String` VALUE is `String(<the list>)`, one constructor deeper than the
+    # list itself. The bridge used to hand the kernel the bare cons chain, which type-
+    # checks as `List(Char)` and not as `String`, so every macro whose expansion
+    # carried a string literal died in `check_ctor_app` with `{:foreign_ctor, Cons}` --
+    # reported to the author as an opaque `:index_mismatch` from the macro driver.
+    core = MacroSyntax.to_core({:syn_raw, {:s_str, "hi"}})
+
+    assert {:ctor, :"Std.Syntax#Raw",
+            [
+              {:ctor, :"Std.Syntax#SStr",
+               [
+                 {:ctor, :"Std.String#String",
+                  [
+                    {:ctor, :"Std.List#Cons",
+                     [
+                       {:bounded_lit, ?h},
+                       {:ctor, :"Std.List#Cons", [{:bounded_lit, ?i}, {:ctor, :"Std.List#Nil", []}]}
+                     ]}
+                  ]}
+               ]}
+            ]} = core
+
+    assert MacroSyntax.from_core(core) == {:syn_raw, {:s_str, "hi"}}
+  end
+
+  test "a runtime SStr carries the erased Std.String wrapper" do
+    # The erased BEAM shape of `String("hi")` is `{:String, ~c"hi"}` -- `List` erases to
+    # a native list but the nominal `String` constructor survives. The two codecs have
+    # to agree, so the runtime bridge wraps exactly where the Core bridge does.
+    runtime = {:Raw, {:SStr, {:String, ~c"hi"}}}
+
+    assert MacroSyntax.from_runtime(runtime) == {:syn_raw, {:s_str, "hi"}}
+    assert MacroSyntax.to_runtime({:syn_raw, {:s_str, "hi"}}) == runtime
+  end
+
+  test "a macro whose expansion carries a string literal type-checks" do
+    # The end-to-end shape of the bug: `fsm` reflects its module name as an `SStr`, so
+    # the mis-encoded string reached the kernel through every lifted-module macro.
+    source = """
+    use Std.Fsm
+
+    fsm StringInExpansion
+      state Int
+      events
+        Tick -> :keep_state_and_data
+    """
+
+    assert {:ok, _} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
   test "Core bridge preserves an author failure carrying reflected syntax arguments" do

@@ -58,7 +58,7 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
              {:Leaf, :literal, [], {:SInt, 1}}
            ]
 
-    assert apply(module, :find_name, []) == {:Found, {:SStr, String.to_charlist("worker")}}
+    assert apply(module, :find_name, []) == {:Found, {:SStr, {:String, String.to_charlist("worker")}}}
 
     assert apply(module, :context_name, []) == {:Found, {:SAtom, :handle_cast}}
 
@@ -69,36 +69,36 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
              {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :integer}}], {:SInt, 7}},
              {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :float}}], {:SFloat, 2.5}},
              {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :boolean}}], {:SBool, true}},
-             {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :string}}], {:SStr, ~c"ok"}},
+             {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :string}}], {:SStr, {:String, ~c"ok"}}},
              {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :symbol}}], {:SAtom, :ready}}
            ]
 
     assert apply(module, :build_unit, []) == {:Node, :unit_value, [], []}
 
     assert {:Node, :function_def, attrs, [body]} = apply(module, :build_function, [])
-    assert {:KV, :name, {:SStr, ~c"handle"}} in attrs
+    assert {:KV, :name, {:SStr, {:String, ~c"handle"}}} in attrs
     assert Enum.any?(attrs, &match?({:KV, :return_type, {:SSyntax, _}}, &1))
-    assert {:Leaf, :variable, _, {:SStr, ~c"from"}} = body
+    assert {:Leaf, :variable, _, {:SStr, {:String, ~c"from"}}} = body
 
     # `typealias` is load-bearing, not decoration: the elaborator's header
     # pre-pass only gives a flagged alias a forward-referenceable header, and
     # module lifting inlines the enclosing unit's declarations *ahead* of the
     # generated ones -- so an unflagged alias is invisible to them.
     assert {:Node, :type_annotation, alias_attrs, [_]} = apply(module, :build_alias, [])
-    assert {:KV, :name, {:SStr, ~c"State"}} in alias_attrs
+    assert {:KV, :name, {:SStr, {:String, ~c"State"}}} in alias_attrs
     assert {:KV, :typealias, {:SBool, true}} in alias_attrs
 
     assert {:Node, :lift_module, attrs, []} = apply(module, :build_module, [])
-    assert {:KV, :module, {:SStr, ~c"Cure.Generated.Worker"}} in attrs
+    assert {:KV, :module, {:SStr, {:String, ~c"Cure.Generated.Worker"}}} in attrs
     assert {:KV, :behaviour, {:SAtom, :gen_server}} in attrs
 
     assert {:Node, :match_arm, [{:KV, :pattern, {:SSyntax, _}}], [_]} =
              apply(module, :build_arm, [])
 
     assert [
-             {:Leaf, :variable, [{:KV, :scope, {:SAtom, :caller}}], {:SStr, ~c"state"}},
-             {:Leaf, :fresh_name, [], {:SStr, ~c"temporary"}},
-             {:Leaf, :variable, [{:KV, :scope, {:SAtom, :exported}}], {:SStr, ~c"start_link"}}
+             {:Leaf, :variable, [{:KV, :scope, {:SAtom, :caller}}], {:SStr, {:String, ~c"state"}}},
+             {:Leaf, :fresh_name, [], {:SStr, {:String, ~c"temporary"}}},
+             {:Leaf, :variable, [{:KV, :scope, {:SAtom, :exported}}], {:SStr, {:String, ~c"start_link"}}}
            ] = apply(module, :build_name_intents, [])
   end
 
