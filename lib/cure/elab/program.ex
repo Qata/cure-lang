@@ -1370,7 +1370,17 @@ defmodule Cure.Elab.Program do
     # handles a user type that reuses an ambient type name, so a whole type surface is
     # sound. `certified` is a totality whitelist (superset harmless); coherence is the
     # very point of a typeclass prelude and stays whole too.
-    keep_keys = reachable_global_closure(env.defs, owned_def_keys)
+    # Coherence is kept WHOLE (below), so the closure must be seeded with the
+    # method globals those kept instances name, not only with the owned defs. An
+    # instance that reached this provider's env transitively is owned by neither
+    # the provider nor anything its owned bodies call — `Std.Equatable`'s env
+    # carries `ExpressibleByCharacterLiteral for Char`, whose method is owned by
+    # `Std.Char` and reached from no kept body. Seeding only `owned_def_keys` drops
+    # it and leaves the ref dangling: the slice still ANSWERS instance resolution
+    # with a global that is no longer a def, so a module writing `c == '|'` fails
+    # far away with `{:unknown_global, :"Std.Char#__impl_…_from_character_literal"}`,
+    # or — at a literal initializer — with an unsolved `{:hole, "__pending__"}` head.
+    keep_keys = reachable_global_closure(env.defs, owned_def_keys ++ coherence_method_globals(env))
     kept_defs = Map.take(env.defs, keep_keys)
 
     # `import_modules` is the DIRECTNESS set `Resolution.prefer_direct/2` uses to
@@ -1408,6 +1418,21 @@ defmodule Cure.Elab.Program do
         certified: env.certified,
         module_owner: env.module_owner
     }
+  end
+
+  # Every method global named by an instance in `env`'s coherence that is a def in
+  # `env`. Filtering to actual defs keeps this a seed for the closure and nothing
+  # more: a ref that already dangled upstream is not conjured into existence here,
+  # it stays a kernel-re-check failure at the site that uses it.
+  defp coherence_method_globals(%Env{coherence: nil}), do: []
+
+  defp coherence_method_globals(%Env{coherence: coherence, defs: defs}) do
+    for table <- [coherence.anon, coherence.named],
+        {_key, ref} <- table,
+        {_method, global} <- Map.get(ref, :methods) || %{},
+        Map.has_key?(defs, global),
+        uniq: true,
+        do: global
   end
 
   # Is `key` (an owner-qualified `"<Owner>#name"` atom) owned by module `owner`?
