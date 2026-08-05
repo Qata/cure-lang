@@ -1,8 +1,17 @@
 defmodule Cure.Elab.CharLiteralTest do
   # A character literal is sugar for a compact Bounded literal at the full
-  # Unicode bound: `'a'` is `{:bounded_lit, 97}` typed at Char = Bounded(0x110000).
-  # One integer at every stage — never a `Next(...First)` tower. (Char literal
-  # PATTERNS, string literals, Binary, Std.String are separate wave items.)
+  # Unicode bound: `'a'` is `{:bounded_lit, 97}` typed at `Char`. One integer at
+  # every stage — never a `Next(...First)` tower. (Char literal PATTERNS, string
+  # literals, Binary, Std.String are separate wave items.)
+  #
+  # These fixtures say `use Std.Char` rather than aliasing the name to
+  # `Bounded(0x110000)`. `Char` is `@builtin(:char) opaque type Char` — a nominal
+  # carrier, not an alias for its representation — and it is what carries the
+  # `ExpressibleByCharacterLiteral` implementation that makes `'a'` mean anything.
+  # A local `typealias Char = Bounded(1114112)` shadows that away and asks for a
+  # character literal at a type which has no character-literal instance, so what
+  # it tested was the alias, not the char literal. The compact representation
+  # asserted below is unchanged: the real `Char` lowers `'a'` to `{:bounded_lit, 97}`.
   use ExUnit.Case, async: true
 
   alias Cure.Elab.{Program, Elaborator}
@@ -18,8 +27,7 @@ defmodule Cure.Elab.CharLiteralTest do
     test "an ASCII char literal in infer position is {:bounded_lit, cp}" do
       src = """
       mod M
-        use Std.Bounded
-        typealias Char = Bounded(1114112)
+        use Std.Char
         fn a() -> Char = 'a'
       end
       """
@@ -31,8 +39,7 @@ defmodule Cure.Elab.CharLiteralTest do
     test "a full-plane emoji codepoint stays ONE compact node" do
       src = """
       mod M
-        use Std.Bounded
-        typealias Char = Bounded(1114112)
+        use Std.Char
         fn emoji() -> Char = '😀'
       end
       """
@@ -44,8 +51,7 @@ defmodule Cure.Elab.CharLiteralTest do
     test "end-to-end: a char literal compiles and runs as its codepoint integer" do
       src = """
       mod CharRun
-        use Std.Bounded
-        typealias Char = Bounded(1114112)
+        use Std.Char
         fn emoji() -> Char = '😀'
       end
       """
@@ -61,8 +67,7 @@ defmodule Cure.Elab.CharLiteralTest do
     test "a char literal passed as a plain call argument elaborates (locus 3)" do
       src = """
       mod M
-        use Std.Bounded
-        typealias Char = Bounded(1114112)
+        use Std.Char
         fn plain(c: Char) -> Char = c
         fn a() -> Char = plain('a')
       end

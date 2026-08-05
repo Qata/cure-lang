@@ -147,6 +147,80 @@ defmodule Cure.Elab.TypeShadowingTest do
     assert info[:local_family] == :"WrongCtor#Nat"
   end
 
+  describe "a local `typealias` shadows a same-named type reached from another module" do
+    # "Unqualified precedence: local wins" is the whole rule, and it has to hold for
+    # every kind of type declaration — a `typealias` is a declaration of the name
+    # just as `type` is. It did not hold here, because `resolve_index_name/2` orders
+    # its lookup by TABLE (primitive → family → def → ctor) with no notion of who
+    # owns what, while `Env.resolve_key/3` will reach through a cross-module alias
+    # index to answer for a bare name. So an *imported* family named `Char` was
+    # found at the family step and returned before the def step could ever see the
+    # module's own `typealias Char`. Table order is for disambiguating within one
+    # scope; deciding between scopes is a separate question, and answering it with
+    # table order hands imports precedence over the local declaration.
+    #
+    # `Char` is the name that exposed it: `@prelude @builtin(:char) opaque type Char`
+    # is ambient in every module, so any module aliasing that spelling silently got
+    # `Std.Char#Char` in its annotations instead of its own type.
+
+    test "the annotation uses the local alias, not the ambient type of the same name" do
+      src = """
+      mod AliasShadow
+        typealias Char = Int
+        fn a() -> Char = 97
+      end
+      """
+
+      assert {:ok, env} = elaborate(src)
+
+      # `Int`, so an integer literal is an `int_lit`. Had the annotation resolved to
+      # the ambient `Std.Char#Char`, `97` would go through that type's
+      # `ExpressibleByNaturalLiteral` implementation instead.
+      assert Cure.Core.Env.get_def(env, :a).body == {:int_lit, 97}
+    end
+
+    test "the alias's own right-hand side governs the literal protocol" do
+      src = """
+      mod AliasShadowBounded
+        use Std.Bounded
+        typealias Char = Bounded(1114112)
+        fn a() -> Char = 97
+      end
+      """
+
+      assert {:ok, env} = elaborate(src)
+      assert Cure.Core.Env.get_def(env, :a).body == {:bounded_lit, 97}
+    end
+
+    test "the alias's own right-hand side governs the bound check too" do
+      # Not just which protocol, but which *type* — the local bound rejects, and the
+      # error names the local bound rather than the ambient type's.
+      src = """
+      mod AliasShadowRange
+        use Std.Bounded
+        typealias Char = Bounded(10)
+        fn a() -> Char = 500
+      end
+      """
+
+      assert {:error, {:source_context, {:bounded_lit_out_of_range, 500, 10}, _}} = elaborate(src)
+    end
+
+    test "with no local declaration the ambient type still wins the bare name" do
+      # The control: shadowing must be triggered by the local declaration, not by
+      # the spelling. Nothing here declares `Char`, so `Char` is `Std.Char#Char` and
+      # an integer literal is not one of its values.
+      src = """
+      mod NoAliasShadow
+        fn a() -> Char = 97
+      end
+      """
+
+      assert {:error, {:source_context, reason, _}} = elaborate(src)
+      refute match?({:bounded_lit_out_of_range, _, _}, reason)
+    end
+  end
+
   test "R4: `Std.Nat` in a type slot resolves to the imported type (module==typename collapse)" do
     src = """
     mod Collapse

@@ -3802,6 +3802,23 @@ defmodule Cure.Elab.Declarations do
       Env.primitive(env, name) != nil ->
         Env.primitive(env, name)
 
+      # Local wins. The cascade below asks "which table holds this name?", but
+      # `Env.resolve_key/3` will reach through a cross-module alias index to
+      # answer for a bare name, so the family step can be satisfied by a family
+      # this module merely IMPORTED while the module's own declaration of that
+      # name — a typealias, which lives in `env.defs` — sits one step lower.
+      # Table order is for disambiguating declarations within a single scope (a
+      # record's family over its same-named constructor); deciding between scopes
+      # is a separate question, and answering it with table order hands imports
+      # precedence over the local declaration.
+      #
+      # `@prelude @builtin(:char) opaque type Char` made this visible: it is a
+      # family ambient in every module, so a module writing its own
+      # `typealias Char = …` got `Std.Char#Char` in every annotation instead —
+      # silently, since both spellings name a type.
+      owned_typealias(env, atom) != nil ->
+        owned_typealias(env, atom)
+
       Inductive.family?(env, atom) ->
         {:data, Env.resolve_key(env, env.families, atom), [], []}
 
@@ -3842,6 +3859,27 @@ defmodule Cure.Elab.Declarations do
 
       true ->
         {:global, atom}
+    end
+  end
+
+  # An authored `typealias` the CURRENT module owns, looked up under its
+  # owner-qualified key so no alias index can widen the search to another module.
+  #
+  # Only typealiases, and deliberately so. `env.defs` also holds ordinary term
+  # definitions and constructor wrappers, whose place BELOW families in the
+  # cascade is load-bearing: `Std.Dynamic` declares `Int(Int)`, so promoting
+  # everything a module owns would make the field annotation in
+  # `fn of_int(n: Int)` resolve to that constructor and fail in the kernel as
+  # `:ctor_arity` — the same leak the branch below already guards against. A
+  # typealias is the one entry in `env.defs` that *declares a type name*, which is
+  # what makes it a peer of the family it has to win against. `Env.put_typealias/2`
+  # sets this marker for exactly that purpose.
+  defp owned_typealias(env, atom) do
+    owned = Env.owned_name(env, atom)
+
+    case Map.get(env.defs, owned) do
+      %{typealias: true} -> {:global, owned}
+      _ -> nil
     end
   end
 
