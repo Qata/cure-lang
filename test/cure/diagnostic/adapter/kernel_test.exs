@@ -38,6 +38,43 @@ defmodule Cure.Diagnostic.Adapter.KernelTest do
              |> String.trim_trailing()
   end
 
+  test "a rejected constructor field names the type it had to be and why it was not" do
+    # "A dependent index does not agree with the value required by this expression"
+    # is true of every rejection this branch produces and actionable for none of
+    # them. The kernel knows which family the field had to be and what went wrong;
+    # both belong in the message.
+    source = "Wrap(chars)\n"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:field, source, "field.cure")
+    {:ok, span} = SourceRegistry.span(registry, :field, 5, 10)
+
+    error = {:index_mismatch, {:in_field_of, :"Std.String#String", {:foreign_ctor, :"Std.List#Cons"}}}
+
+    assert Renderer.plain(KernelAdapter.from_error(error, span: span), registry, width: 80) ==
+             """
+             -- CONSTRUCTOR ARGUMENT IS NOT A `STRING` [E093] -------------------- field.cure
+
+             This constructor argument must be a `String`, but `Cons` is a constructor of a
+             different type.
+
+             at field.cure:1:6
+             1 | Wrap(chars)
+               |      ^^^^^ this is not a `String`
+
+             Hint: Build this argument with a constructor of `String`, or convert the value first
+             """
+             |> String.trim_trailing()
+  end
+
+  test "a genuine index disagreement still reads as one" do
+    # The remaining shape: both sides ARE the family, their indices differ. The
+    # category is unchanged -- only the discarded cause is new.
+    error = {:index_mismatch, {:in_field_of, :SF, {:cannot_unify, :actual, :expected}}}
+    diagnostic = KernelAdapter.from_error(error)
+
+    assert diagnostic.title == "Dependent index mismatch"
+    assert Adapter.from_error(error) == diagnostic
+  end
+
   test "the kernel family rejects non-kernel variants" do
     assert_raise Cure.Diagnostic.UnhandledError, fn ->
       KernelAdapter.from_error({:unknown_global, :missing})

@@ -21,6 +21,9 @@ defmodule Cure.Diagnostic.Adapter.Kernel do
     positivity_failure(constructor, context, opts)
   end
 
+  def from_error({:index_mismatch, {:in_field_of, family, cause}}, opts),
+    do: rejected_field(family, cause, opts)
+
   def from_error({:index_mismatch, _details}, opts),
     do: type_failure(:index_mismatch, opts)
 
@@ -103,6 +106,56 @@ defmodule Cure.Diagnostic.Adapter.Kernel do
       payload: %{family: family, constructor: constructor, precise_occurrence: precise?}
     )
   end
+
+  # A constructor argument the kernel refused against the family it was declared
+  # at. `field_cause/2` turns the underlying rejection into the sentence that
+  # explains it; when the cause is two indices of the SAME family disagreeing,
+  # there is nothing to add and this stays the plain index-mismatch report.
+  defp rejected_field(family, cause, opts) do
+    name = surface_name(family)
+
+    case field_cause(cause, name) do
+      nil ->
+        type_failure(:index_mismatch, opts)
+
+      {explanation, hint} ->
+        Diagnostic.new(
+          code: "E093",
+          key: :type_mismatch,
+          severity: :error,
+          title: "Constructor argument is not a `#{name}`",
+          body: Doc.paragraph("This constructor argument must be a `#{name}`, but #{explanation}."),
+          primary: primary(opts, "this is not a `#{name}`"),
+          suggestions: [%Suggestion{message: hint, applicability: :manual}],
+          payload: %{kind: :index_mismatch, family: family, cause: cause}
+        )
+    end
+  end
+
+  defp field_cause({:foreign_ctor, constructor}, family),
+    do:
+      {"`#{surface_name(constructor)}` is a constructor of a different type",
+       "Build this argument with a constructor of `#{family}`, or convert the value first"}
+
+  defp field_cause({:unknown_ctor, constructor}, family),
+    do:
+      {"`#{surface_name(constructor)}` is not a constructor of `#{family}`",
+       "Use one of `#{family}`'s own constructors"}
+
+  defp field_cause({:unknown_global, name, _context}, _family),
+    do: {"`#{surface_name(name)}` is not defined here", "Define `#{surface_name(name)}`, or import the module that does"}
+
+  defp field_cause({:unknown_global, name}, _family),
+    do: {"`#{surface_name(name)}` is not defined here", "Define `#{surface_name(name)}`, or import the module that does"}
+
+  defp field_cause(:ctor_arity, family),
+    do:
+      {"the constructor here was given a different number of arguments than it declares",
+       "Supply exactly the arguments `#{family}`'s constructor declares"}
+
+  # `:cannot_unify` and `:conversion_failure` between two values of the family are
+  # exactly what "index mismatch" already says, so they keep the existing report.
+  defp field_cause(_cause, _family), do: nil
 
   defp type_failure(kind, opts) do
     {title, body, message} =

@@ -943,7 +943,15 @@ defmodule Cure.Core.Kernel do
   # A mismatch on a constructor argument whose expected type is a family value is
   # an index disagreement (the kernel-level backstop; the elaborator surfaces the
   # user-facing :index_unification earlier — see plan M3.4/M8.4).
-  defp remap_index_error(_err, {:vdata, _name, _args}), do: {:error, :index_mismatch}
+  #
+  # The category alone is not a diagnosis. This branch fires for every way a field
+  # can fail against a family — a constructor of some other family, an undefined
+  # global, a conversion failure — and reporting them all as a bare
+  # `:index_mismatch` erases the one fact an author needs. For core the elaborator
+  # never checked (a macro expansion goes to the kernel directly), this branch IS
+  # the whole diagnosis, so the family and the underlying rejection travel with it.
+  defp remap_index_error({:error, cause}, {:vdata, name, _args}),
+    do: {:error, {:index_mismatch, {:in_field_of, name, cause}}}
 
   defp remap_index_error(err, _expected), do: err
 

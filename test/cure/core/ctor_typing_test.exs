@@ -70,6 +70,29 @@ defmodule Cure.Core.CtorTypingTest do
     # seq expects r : SF(bs,cs,..) but r' : SF(bs',cs,..); bs(#4) ≠ bs'(#3).
     app = {:ctor, :seq, [{:var, 5}, {:var, 4}, {:var, 2}, @causal, @causal, {:var, 1}, {:var, 0}]}
 
-    assert {:error, :index_mismatch} = Kernel.infer(c, app)
+    # Both sides ARE an `SF`; only the middle index differs. That is what "index
+    # mismatch" already says, so the diagnostic is unchanged -- but the cause now
+    # rides along rather than being discarded at the kernel boundary.
+    assert {:error, {:index_mismatch, {:in_field_of, :SF, {:conversion_failure, _, _}}}} =
+             Kernel.infer(c, app)
+  end
+
+  test "negative: the rejection names the family and keeps the underlying cause" do
+    # A constructor argument whose expected type is a family value used to be
+    # flattened to a bare `:index_mismatch`, discarding why the field failed. That
+    # is the whole diagnosis for core the kernel checks directly -- a macro
+    # expansion, which never passes through the elaborator's checking path -- and
+    # it left authors with "the generated expansion was rejected by the compiler"
+    # and nothing else. The category is kept; the cause now travels with it.
+    e = build_env()
+    c = e |> Context.empty() |> svd() |> svd() |> svd()
+    c = Context.extend(c, sf_val(c, 2, 1))
+    c = Context.extend(c, sf_val(c, 2, 1))
+
+    # `l` must be an `SF`, but `Causal` is a constructor of `Dec`.
+    app = {:ctor, :seq, [{:var, 4}, {:var, 3}, {:var, 2}, @causal, @causal, @causal, {:var, 0}]}
+
+    assert {:error, {:index_mismatch, {:in_field_of, :SF, {:foreign_ctor, :Causal}}}} =
+             Kernel.infer(c, app)
   end
 end
