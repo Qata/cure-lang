@@ -7,6 +7,7 @@ defmodule Cure.Compiler.ModulePipeline.Result do
             skeletons: %{},
             asts: %{},
             interfaces: %{},
+            beams: %{},
             checked_envs: %{},
             body_envs: %{},
             components: [],

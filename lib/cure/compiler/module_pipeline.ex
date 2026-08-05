@@ -16,6 +16,7 @@ defmodule Cure.Compiler.ModulePipeline do
     Conformance,
     Cycle,
     Diagnosis,
+    Emission,
     Environment,
     Expansion,
     Interface,
@@ -76,10 +77,12 @@ defmodule Cure.Compiler.ModulePipeline do
              components
            ),
          :ok <- reject_failed_run(diagnostics),
-         :ok <- publish(request, interfaces) do
+         {:ok, beams} <- emit_beams(request, expansion.asts, body_envs),
+         :ok <- publish(request, interfaces, beams) do
       {:ok,
        %Result{
          request: request,
+         beams: beams,
          manifest: manifest,
          skeletons: expansion.skeletons,
          asts: expansion.asts,
@@ -113,13 +116,25 @@ defmodule Cure.Compiler.ModulePipeline do
   defp reject_failed_run([]), do: :ok
   defp reject_failed_run(diagnostics), do: {:error, diagnostics}
 
+  # Bytecode is a PRODUCT of a checked run, requested per run rather than always
+  # produced: checking is what most entry points want, and emitting the whole
+  # universe costs real time. A run that asks for beams gets them from the envs
+  # the check already produced — see `Emission` — so asking cannot change what
+  # was checked, only what is carried out of the run.
+  defp emit_beams(%Request{products: products}, asts, body_envs) do
+    if :beams in List.wrap(products),
+      do: Emission.run(asts, body_envs),
+      else: {:ok, %{}}
+  end
+
   # Publication is the last thing a run does. A generation that was assembled
   # from a run that then failed must never become visible, so nothing is
-  # installed until the whole universe has checked.
-  defp publish(%Request{publication: :atomic} = request, interfaces),
-    do: Publication.publish(request.output, request.generation, interfaces)
+  # installed until the whole universe has checked — and, when beams were
+  # requested, until every one of them has been emitted.
+  defp publish(%Request{publication: :atomic} = request, interfaces, beams),
+    do: Publication.publish(request.output, request.generation, interfaces, beams)
 
-  defp publish(_request, _interfaces), do: :ok
+  defp publish(_request, _interfaces, _beams), do: :ok
 
   @doc """
   The generation a reader of a published output directory currently sees.
@@ -134,6 +149,10 @@ defmodule Cure.Compiler.ModulePipeline do
   @doc "Whether an opened generation still names a path inside a staging tree."
   @spec contains_staging_reference?(map()) :: boolean()
   defdelegate contains_staging_reference?(published), to: Publication
+
+  @doc "The bytecode an opened generation published for `module`."
+  @spec read_published_beam(map(), module()) :: {:ok, binary()} | {:error, term()}
+  defdelegate read_published_beam(published, module), to: Publication, as: :read_beam
 
   @spec write_interfaces(Result.t(), Path.t()) :: :ok | {:error, term()}
   def write_interfaces(%Result{} = result, root) when is_binary(root) do

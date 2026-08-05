@@ -1684,6 +1684,18 @@ defmodule Cure.Elab.Program do
     end
   end
 
+  @doc """
+  The definitions `ast` owns and must therefore emit, given its checked `env`.
+
+  `check_ast_with_locals/1` and `check_ast_artifact/2` both re-elaborate to
+  compute this. A caller that has ALREADY elaborated the module — the canonical
+  module pipeline holds one checked env per module — needs the answer without
+  paying for a second elaboration, and the answer is a pure function of the two
+  things it already has.
+  """
+  @spec local_defs(tuple() | list(), Env.t()) :: [atom()]
+  def local_defs(ast, %Env{} = env), do: checked_local_defs(ast, env)
+
   defp checked_local_defs(ast, env) do
     local_defs = local_emit_names(ast)
 

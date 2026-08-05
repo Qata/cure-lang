@@ -21,21 +21,33 @@ defmodule Cure.Compiler.ModulePipeline.Publication do
   @index "index.term"
 
   @doc """
-  Assemble `interfaces` as `generation` under `root` and make it current.
+  Assemble `interfaces` and `beams` as `generation` under `root` and make it
+  current.
 
   Returns `:ok` when publication is not requested, so callers do not have to
   know whether this run publishes anything.
-  """
-  @spec publish(Path.t() | nil, term(), %{term() => ModuleInterface.t()}) :: :ok | {:error, term()}
-  def publish(nil, _generation, _interfaces), do: :ok
 
-  def publish(root, generation, interfaces) when is_binary(root) do
+  Beams travel in the SAME generation as the interfaces they were emitted with,
+  installed by the same single rename. Publishing them separately would open a
+  window in which a reader sees interfaces whose bytecode is absent — and
+  `complete?/1` would call that generation complete, because completeness can
+  only mean "everything this generation claims", not "everything some later
+  pass intends to add".
+  """
+  @spec publish(Path.t() | nil, term(), %{term() => ModuleInterface.t()}, %{module() => binary()}) ::
+          :ok | {:error, term()}
+  def publish(root, generation, interfaces, beams \\ %{})
+
+  def publish(nil, _generation, _interfaces, _beams), do: :ok
+
+  def publish(root, generation, interfaces, beams) when is_binary(root) do
     staging = Path.join([root, @staging, "gen-#{generation}-#{System.unique_integer([:positive])}"])
     final = generation_path(root, generation)
 
     with :ok <- File.mkdir_p(staging),
          :ok <- write_interfaces(interfaces, staging),
-         :ok <- write_index(staging, root, generation, interfaces),
+         :ok <- write_beams(beams, staging),
+         :ok <- write_index(staging, root, generation, interfaces, beams),
          :ok <- install(staging, final),
          :ok <- point_at(root, generation) do
       :ok
@@ -59,7 +71,11 @@ defmodule Cure.Compiler.ModulePipeline.Publication do
          path = generation_path(root, generation),
          {:ok, payload} <- File.read(Path.join(path, @index)),
          {:ok, index} <- decode(payload) do
-      {:ok, Map.put(index, :path, path)}
+      # A generation published before beams were a product names none. That is
+      # a complete generation of interfaces, not a damaged one, so it opens as
+      # a generation with an empty beam set rather than a key-less map every
+      # reader would have to guard against.
+      {:ok, index |> Map.put_new(:beams, []) |> Map.put(:path, path)}
     else
       {:error, reason} -> {:error, {:no_published_generation, root, reason}}
     end
@@ -67,19 +83,42 @@ defmodule Cure.Compiler.ModulePipeline.Publication do
 
   @doc """
   Whether every module the opened generation claims is actually there and reads
-  back as a valid interface.
+  back as a valid interface — and every beam it claims is actually there.
 
   A generation that is missing one of its own modules was observed mid-assembly,
   which a rename cannot produce and a copy can.
   """
   @spec complete?(map()) :: boolean()
-  def complete?(%{path: path, modules: modules}) do
+  def complete?(%{path: path, modules: modules} = published) do
     Enum.all?(modules, fn module_name ->
       match?({:ok, %ModuleInterface{}}, Interface.read(Interface.path(path, module_name)))
-    end)
+    end) and
+      Enum.all?(Map.get(published, :beams, []), &File.regular?(beam_path(path, &1)))
   end
 
   def complete?(_published), do: false
+
+  @doc """
+  The bytecode the opened generation published for `module`.
+
+  A module the generation does not claim is distinguished from one it claims
+  but cannot produce: the first is a run that was never asked for beams, the
+  second is a damaged generation.
+  """
+  @spec read_beam(map(), module()) :: {:ok, binary()} | {:error, term()}
+  def read_beam(%{path: path} = published, module) when is_atom(module) do
+    if module in Map.get(published, :beams, []) do
+      case File.read(beam_path(path, module)) do
+        {:ok, binary} -> {:ok, binary}
+        {:error, reason} -> {:error, {:published_beam_unreadable, module, reason}}
+      end
+    else
+      {:error, {:no_published_beam, module}}
+    end
+  end
+
+  def read_beam(_published, module) when is_atom(module),
+    do: {:error, {:no_published_beam, module}}
 
   @doc """
   Whether anything the opened generation names still points into staging.
@@ -93,8 +132,10 @@ defmodule Cure.Compiler.ModulePipeline.Publication do
     published |> paths() |> Enum.any?(&staged?/1)
   end
 
-  defp paths(%{path: path, root: root, modules: modules}) do
-    [path, root | Enum.map(modules, &Interface.path(path, &1))]
+  defp paths(%{path: path, root: root, modules: modules} = published) do
+    [path, root] ++
+      Enum.map(modules, &Interface.path(path, &1)) ++
+      Enum.map(Map.get(published, :beams, []), &beam_path(path, &1))
   end
 
   defp staged?(path) when is_binary(path), do: @staging in Path.split(path)
@@ -112,14 +153,24 @@ defmodule Cure.Compiler.ModulePipeline.Publication do
     end)
   end
 
+  defp write_beams(beams, staging) do
+    Enum.reduce_while(beams, :ok, fn {module, binary}, :ok ->
+      case File.write(beam_path(staging, module), binary, [:binary]) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {:beam_write_failed, module, reason}}}
+      end
+    end)
+  end
+
   # The index records the generation's *final* home, never the staging one it
   # was built in: a reader that opens it must not be handed a path that is about
   # to disappear.
-  defp write_index(staging, root, generation, interfaces) do
+  defp write_index(staging, root, generation, interfaces, beams) do
     index = %{
       generation: generation,
       root: root,
-      modules: interfaces |> Map.values() |> Enum.map(& &1.module_name) |> Enum.uniq() |> Enum.sort()
+      modules: interfaces |> Map.values() |> Enum.map(& &1.module_name) |> Enum.uniq() |> Enum.sort(),
+      beams: beams |> Map.keys() |> Enum.sort()
     }
 
     File.write(Path.join(staging, @index), :erlang.term_to_binary(index, [:deterministic]), [:binary])
@@ -151,6 +202,11 @@ defmodule Cure.Compiler.ModulePipeline.Publication do
   end
 
   defp generation_path(root, generation), do: Path.join(root, "generation-#{generation}")
+
+  # `Cure.Std.List.beam` — the flat, module-atom-named layout every existing
+  # artifact reader already globs for, so a published generation can be handed
+  # to one without translation.
+  defp beam_path(path, module), do: Path.join(path, "#{module}.beam")
 
   defp decode(payload) do
     {:ok, :erlang.binary_to_term(payload, [:safe])}
