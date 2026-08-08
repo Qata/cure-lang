@@ -22,7 +22,10 @@ defmodule Cure.Elab.TypealiasFunctionReferenceTest do
   the second, authoritative `complete_typealiases` pass, which runs against the
   fully-populated environment.
   """
-  use ExUnit.Case, async: true
+  # The end-to-end regression loads a generated actor module into the VM-global
+  # code server. Keep this module out of the async pool so a timed-out compiler
+  # cannot continue code loading underneath later BEAM golden tests.
+  use ExUnit.Case, async: false
 
   alias Cure.Elab.Program
 

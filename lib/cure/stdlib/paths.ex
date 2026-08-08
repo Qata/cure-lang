@@ -70,6 +70,7 @@ defmodule Cure.Stdlib.Paths do
 
   @cure_home_env_var "CURE_HOME"
   @cure_lib_env_var "CURE_LIB"
+  @source_dir_cache_key {__MODULE__, :source_dir}
 
   @doc """
   Return every candidate stdlib source directory that currently exists,
@@ -78,12 +79,7 @@ defmodule Cure.Stdlib.Paths do
   """
   @spec source_dirs() :: [String.t()]
   def source_dirs do
-    ([configured_source_dir()] ++
-       cure_lib_source_dirs() ++
-       [bundled_source_dir()] ++
-       cure_home_source_dirs() ++
-       launcher_home_source_dirs() ++
-       [@checkout_source, @legacy_cwd_source])
+    source_candidates()
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
     |> Enum.filter(&File.dir?/1)
@@ -97,7 +93,35 @@ defmodule Cure.Stdlib.Paths do
   bundle, `:not_found` for `:doc`).
   """
   @spec source_dir() :: String.t() | nil
-  def source_dir, do: List.first(source_dirs())
+  def source_dir do
+    # Module resolution asks this for every imported spelling. Re-probing every
+    # candidate through Erlang's single file server turns parallel elaboration
+    # into a queue and can push otherwise-fast tests past ExUnit's timeout. A
+    # compiler process observes one filesystem snapshot; configuration and cwd
+    # are part of the key, so a caller that changes resolution inputs gets a
+    # fresh snapshot automatically.
+    candidates = source_candidates()
+    key = {File.cwd!(), candidates}
+
+    case Process.get(@source_dir_cache_key) do
+      {^key, source_dir} ->
+        source_dir
+
+      _missing_or_changed ->
+        source_dir = List.first(source_dirs())
+        Process.put(@source_dir_cache_key, {key, source_dir})
+        source_dir
+    end
+  end
+
+  defp source_candidates do
+    [configured_source_dir()] ++
+      cure_lib_source_dirs() ++
+      [bundled_source_dir()] ++
+      cure_home_source_dirs() ++
+      launcher_home_source_dirs() ++
+      [@checkout_source, @legacy_cwd_source]
+  end
 
   @doc """
   Return every candidate stdlib BEAM directory that currently exists,

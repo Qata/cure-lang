@@ -136,6 +136,20 @@ defmodule Cure.Stdlib.PathsTest do
   end
 
   describe "source_dir/0" do
+    test "memoizes directory probing while the candidate configuration is unchanged" do
+      :cprof.start()
+
+      try do
+        assert Paths.source_dir() == Paths.source_dir()
+        :cprof.pause()
+
+        {Paths, _total, entries} = :cprof.analyse(Paths)
+        assert {{Paths, :source_dirs, 0}, 1} in entries
+      after
+        :cprof.stop()
+      end
+    end
+
     test "returns the first element of source_dirs/0" do
       case Paths.source_dirs() do
         [] -> assert Paths.source_dir() == nil

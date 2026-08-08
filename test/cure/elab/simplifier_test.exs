@@ -1,5 +1,8 @@
 defmodule Cure.Elab.SimplifierTest do
-  use ExUnit.Case, async: true
+  # This module contains an explicit wall-clock resource-ceiling assertion.
+  # Running it in the saturated async compiler pool measures scheduler
+  # contention instead of simplifier cost.
+  use ExUnit.Case, async: false
 
   alias Cure.Core.{Env, Kernel}
   alias Cure.Elab.Program
