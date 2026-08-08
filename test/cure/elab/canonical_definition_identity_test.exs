@@ -44,6 +44,47 @@ defmodule Cure.Elab.CanonicalDefinitionIdentityTest do
     end
   end
 
+  # `run` is also the bare spelling of a kernel builtin op (`:effect_run`, seeded
+  # by `Cure.Core.Builtins.seed_run/1` alongside the 32 arithmetic ops). Builtin
+  # ops are body-less and are never emitted as function forms, so if an authored
+  # root spelling resolves to the ambient bare key instead of to this module's own
+  # canonical one, the function silently drops out of the emission set — the
+  # module compiles to a BEAM form that does not contain it.
+  #
+  # A local definition shadows an ambient one everywhere else in the language;
+  # selecting an emission root by authored spelling has to obey the same rule.
+  test "a local definition whose name matches a builtin op still emits" do
+    source = """
+    mod BuiltinNameShadow
+      fn run() -> Int = 41
+      fn start() -> Int = run() + 1
+    end
+    """
+
+    {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    {:ok, ast} = Parser.parse(tokens, emit_events: false)
+    assert {:ok, env, _locals} = Program.check_ast_with_locals(ast)
+
+    # Selected by the colliding spelling itself, which is where the ambient key
+    # wins: a builtin-op def is body-less, so `collect_reachable/4` returns
+    # without recording anything and the root vanishes.
+    assert Program.reachable_def_names(env, [:run]) == [:"BuiltinNameShadow#run"]
+
+    reachable = Program.reachable_def_names(env, [:run, :start])
+
+    assert reachable == [
+             :"BuiltinNameShadow#run",
+             :"BuiltinNameShadow#start"
+           ]
+
+    module = :"Cure.Test.BuiltinNameShadow#{System.unique_integer([:positive])}"
+
+    assert {:ok, ^module} = Emit.compile_and_load(env, module: module, functions: reachable)
+
+    assert apply(module, :start, []) == 42
+    assert apply(module, :run, []) == 41
+  end
+
   test "reachability never guesses a bare Core edge from a matching suffix" do
     env =
       Cure.Core.Env.empty()

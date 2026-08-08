@@ -1879,15 +1879,27 @@ defmodule Cure.Elab.Program do
   # Callers may select a local root by its authored spelling at this public
   # boundary. Convert that spelling once through the current module owner.
   # Recursive closure edges are already Core identities and are never guessed.
+  #
+  # The owner-qualified key is tried FIRST, because the bare namespace is not
+  # exclusively the caller's: `Cure.Core.Builtins.seed_ops/1` seeds every builtin
+  # op under its bare spelling, and one of them — `run`, the `Effect` eliminator —
+  # is an ordinary word a module may well define. Asking the bare namespace first
+  # handed `[:run]` to that body-less builtin, and `collect_reachable/4` records
+  # nothing for a builtin op, so the module's own `run` (and everything only it
+  # reached) silently dropped out of the emission set. A local definition shadows
+  # an ambient one everywhere else in the language; selecting an emission root by
+  # authored spelling obeys the same rule. An already-canonical root is unaffected
+  # — re-qualifying it yields `Owner#Owner#name`, which is not a key, so it falls
+  # through to itself.
   defp reachable_root_key(%Env{module_owner: owner}, defs, root) when is_atom(root) do
     canonical = if is_binary(owner), do: Cure.Elab.Name.qualify(owner, root)
 
     cond do
-      Map.has_key?(defs, root) ->
-        root
-
       not is_nil(canonical) and Map.has_key?(defs, canonical) ->
         canonical
+
+      Map.has_key?(defs, root) ->
+        root
 
       true ->
         nil
@@ -2034,6 +2046,35 @@ defmodule Cure.Elab.Program do
   end
 
   defp declarations(_other), do: []
+
+  @doc """
+  Is `node` a module-level DECLARATION rather than an expression?
+
+  This is classification, and it is a different question from `declarations/1`,
+  which flattens a program into the items a pass must walk. That one answers
+  "what does this contribute", which is legitimately `[]` for a `macro_def`
+  carrying no computed rules — even though the node is unmistakably a
+  declaration, and even though checking it as an expression is nonsense.
+
+  Callers that must route a node to the declaration path or the expression path
+  need this question. `Cure.Compiler.MacroFuzz` asks it of a macro rule's
+  expansion: a `becomes` template is a single expression form, so a rule that
+  generates a definition produces one bare declaration node, not a block of them.
+  """
+  @spec declaration?(term()) :: boolean()
+  def declaration?({:function_def, meta, _body}) when is_list(meta), do: true
+  def declaration?({:macro_def, meta, rules}) when is_list(meta) and is_list(rules), do: true
+  def declaration?({:indexed_type, _meta, _body}), do: true
+
+  def declaration?({tag, meta, _body}) when tag in [:interface, :implementation] and is_list(meta), do: true
+
+  def declaration?({:container, meta, _body}) when is_list(meta), do: true
+
+  def declaration?({:type_annotation, meta, _rhs}) when is_list(meta),
+    do: Keyword.has_key?(meta, :name) and not Keyword.get(meta, :refinement, false)
+
+  def declaration?({:block, _meta, items}) when is_list(items), do: Enum.any?(items, &declaration?/1)
+  def declaration?(_other), do: false
 
   @doc """
   Build the canonical type-family skeleton for one source module.
@@ -4007,6 +4048,25 @@ defmodule Cure.Elab.Program do
     contextualize_trusted_declaration_error(result, items)
   end
 
+  # A context raised by the expression elaborator already names the exact
+  # subexpression that failed, and nothing here improves on it. The one exception
+  # is `contextualize_body_pass_error/2`'s declaration-boundary FLOOR: it fires
+  # for any reason that escapes a body without context, which includes every
+  # trusted-declaration failure below — `usage_violation`, `effect_binder_erased`,
+  # `extern_arity_mismatch` — whose whole purpose is to name the authored binder
+  # and point at its span. Marking the declaration is a last resort, not a claim
+  # on the reason, so look for something more precise and restore the floor when
+  # there is none.
+  defp contextualize_trusted_declaration_error(
+         {:error, {:source_context, reason, %{elaboration_stage: :body_pass}}} = error,
+         items
+       ) do
+    case contextualize_trusted_declaration_error({:error, reason}, items) do
+      {:error, ^reason} -> error
+      refined -> refined
+    end
+  end
+
   defp contextualize_trusted_declaration_error({:error, {:source_context, _, _}} = error, _items), do: error
 
   defp contextualize_trusted_declaration_error({:error, reason} = error, items) do
@@ -4722,7 +4782,15 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp complete_typealiases(order, items, env) do
+  defp typealias?({:type_annotation, meta, [_rhs]}) when is_list(meta),
+    do: Keyword.get(meta, :typealias, false)
+
+  defp typealias?(_), do: false
+
+  # `on_error: :halt` is the authoritative mode: the first alias that fails to
+  # elaborate stops the pass and reports. `:skip` is the *provisional* mode used
+  # by `register_pass/3` — see the ordering note there.
+  defp complete_typealiases(order, items, env, on_error \\ :halt) do
     declarations =
       Map.new(items, fn
         {:type_annotation, meta, [_rhs]} = decl when is_list(meta) ->
@@ -4733,17 +4801,32 @@ defmodule Cure.Elab.Program do
       end)
 
     Enum.reduce_while(order, {:ok, env}, fn name, {:ok, acc} ->
-      case Declarations.elaborate(Map.fetch!(declarations, name), acc) do
-        {:ok, acc2} -> {:cont, {:ok, acc2}}
-        {:error, _} = error -> {:halt, error}
+      case {Declarations.elaborate(Map.fetch!(declarations, name), acc), on_error} do
+        {{:ok, acc2}, _} -> {:cont, {:ok, acc2}}
+        {{:error, _}, :skip} -> {:cont, {:ok, acc}}
+        {{:error, _} = error, :halt} -> {:halt, error}
       end
     end)
   end
 
+  # A module is ONE mutually-recursive block: an alias body may name a
+  # module-level function, and a function signature may name an alias. Concretely
+  # `Std.Otp.DepActorServer(m, q, rep)` takes its reply family as a value
+  # (`rep : (q) -> Type`), so every query-bearing `actor` expands to
+  #
+  #     fn ReplyOf(request: ActorRequest) -> Type = …
+  #     typealias Handle = Std.Otp.DepActorServer(Message, Request, ReplyOf)
+  #
+  # Aliases must still be completed BEFORE `body_register_pass/3`, because a
+  # function signature routinely mentions one. So this pass is provisional
+  # (`:skip`): an alias whose body names a function not yet registered is left
+  # for later rather than failing the module. The authoritative pass runs in
+  # `elaborate_lifted_declarations/3` against the fully-populated environment and
+  # is the one that reports a genuinely unknown name.
   defp register_pass(items, env, prelude?) do
     with {:ok, env_h} <- declare_type_headers(items, env),
          {:ok, alias_order} <- typealias_order(items, env_h),
-         {:ok, env_with_aliases} <- complete_typealiases(alias_order, items, env_h) do
+         {:ok, env_with_aliases} <- complete_typealiases(alias_order, items, env_h, :skip) do
       body_register_pass(items, env_with_aliases, prelude?)
     end
   end
@@ -4824,8 +4907,17 @@ defmodule Cure.Elab.Program do
                 {:ok, acc3} -> {:cont, {:ok, acc3, fns, pending}}
               end
 
+            # A `typealias` reaching this catch-all is being elaborated for the
+            # THIRD time (provisional pass in `register_pass/3`, here, then the
+            # authoritative pass in `elaborate_lifted_declarations/3`). Here it is
+            # walked in SOURCE order, so an alias written above the function its
+            # body names — a module is one mutually-recursive block — would halt
+            # the whole module on a name that is registered a few items later.
+            # Alias completion has one owner, `complete_typealiases/4`; defer to
+            # it rather than reporting from a pass that cannot see the whole
+            # module yet.
             {:error, _} = err ->
-              {:halt, err}
+              if typealias?(decl), do: {:cont, {:ok, acc, fns, pending}}, else: {:halt, err}
           end
       end
     end)
@@ -5176,7 +5268,24 @@ defmodule Cure.Elab.Program do
        ),
        do: error
 
-  defp contextualize_body_pass_error({:error, reason}, {:function_def, meta, _body})
+  # The declaration boundary is a floor, so it applies only when nothing else
+  # locates the failure. A reason that already carries an authored span — an
+  # `extern_arity_mismatch` points at the target-arity literal inside the
+  # decorator — is strictly more precise than the `fn` line containing it, and
+  # wrapping it would demote that literal to a secondary.
+  defp contextualize_body_pass_error({:error, reason} = error, decl) do
+    if located_reason?(reason), do: error, else: contextualize_declaration_boundary(error, decl)
+  end
+
+  defp located_reason?(%Cure.Diagnostic.Span{}), do: true
+  defp located_reason?(%{span: %Cure.Diagnostic.Span{}}), do: true
+
+  defp located_reason?(reason) when is_tuple(reason),
+    do: reason |> Tuple.to_list() |> Enum.any?(&located_reason?/1)
+
+  defp located_reason?(_reason), do: false
+
+  defp contextualize_declaration_boundary({:error, reason}, {:function_def, meta, _body})
        when is_list(meta) do
     source_info = Cure.MetaAST.Metadata.source_info(meta)
 
@@ -5190,7 +5299,7 @@ defmodule Cure.Elab.Program do
       }}}
   end
 
-  defp contextualize_body_pass_error(error, _decl), do: error
+  defp contextualize_declaration_boundary(error, _decl), do: error
 
   # A computed macro can construct `M.f(...)` even when that spelling was not
   # present in the authored AST. Resolve that failure exactly once through the
