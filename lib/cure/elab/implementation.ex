@@ -18,6 +18,7 @@ defmodule Cure.Elab.Implementation do
 
   alias Cure.Core.Env
   alias Cure.Elab.{Coherence, Declarations, Resolve}
+  alias Cure.MetaAST.Metadata
 
   @doc """
   Register an implementation: build its mangled method defs, record the instance
@@ -43,13 +44,22 @@ defmodule Cure.Elab.Implementation do
          :ok <- check_no_stray_clauses(desc, iface, body),
          {:ok, method_map, mangled_fns} <-
            build_methods(desc, iface, head, for_name, for_type, body, implementation_span, constraints, env),
+         # The ref lands in `env.coherence`, which is part of the semantic
+         # environment: envs are compared for equality and published as frozen
+         # module interfaces. `for_type` and `constraints` are raw surface ASTs,
+         # so storing them verbatim carried spans and `source_info` into that
+         # record, and an interface hash would then depend on where in the file
+         # the `implementation` happened to sit — which is exactly the input an
+         # incremental rebuild must not be sensitive to. Their only consumer,
+         # `Cure.Elab.Resolve.bind_instance_type/3`, walks structure and never
+         # reads metadata, so the semantic content is unchanged.
          ref = %{
            iface: iface,
            head: head,
            methods: method_map,
            as: as_name,
-           for_type: for_type,
-           constraints: constraints
+           for_type: Metadata.strip_diagnostics(for_type),
+           constraints: Metadata.strip_diagnostics(constraints)
          },
          {:ok, env1} <-
            register_instance(env, iface, head, as_name, ref, %{

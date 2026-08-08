@@ -91,6 +91,28 @@ defmodule Cure.MetaAST.Metadata do
   @spec diagnostic_key?(term()) :: boolean()
   def diagnostic_key?(key), do: key in @source_keys
 
+  @doc """
+  The effective exact spelling of an integer literal.
+
+  A numeral parsed from source carries the author's own digits in
+  `:exact_integer` (`0x10`, `1_000`, `007`), which the literal protocols hand to
+  `from_natural_literal`/`from_integer_literal` verbatim. A literal built
+  programmatically — a macro assembling `Leaf(:literal, …, SInt(0))`, or any
+  other constructor with no source text behind it — has no spelling at all, and
+  its canonical one is the decimal rendering of the value it already holds.
+
+  Both the elaborator (choosing the protocol payload) and example-pin comparison
+  (deciding whether an expansion matches its pin) need that same resolution: a
+  spelling-less `0` and an authored `0` are the same literal, while an authored
+  `0x10` and a computed `16` are not, because the protocol sees different digits.
+  """
+  @spec integer_spelling(String.t() | nil, integer()) :: String.t()
+  def integer_spelling(spelling, value) when is_binary(spelling) and value < 0,
+    do: "-" <> String.trim_leading(spelling, "-")
+
+  def integer_spelling(spelling, _value) when is_binary(spelling), do: spelling
+  def integer_spelling(_spelling, value), do: Integer.to_string(value)
+
   defp strip_metadata(meta) do
     meta
     |> drop_source_info()

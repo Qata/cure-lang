@@ -18,6 +18,7 @@ defmodule Cure.Elab.Declarations do
 
   alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Quote, Term}
   alias Cure.Elab.{Elaborator, Induction, MacroExpand, Relevance, Subst}
+  alias Cure.MetaAST.Metadata
 
   @ceiling 2
 
@@ -1573,13 +1574,19 @@ defmodule Cure.Elab.Declarations do
           {:param, [type: {:function_call, [name: iface_str], [tyvar_ast]}, constraint_dict: {iface_atom, tyvar}],
            dict_name}
 
+        # These descriptors are stored in `env.constrained`, so they are part of
+        # the semantic environment — envs are compared for equality and frozen
+        # into published module interfaces. `head_arg_type` and `return_type` are
+        # slices of the signature's surface AST, and keeping their spans made an
+        # interface depend on where in the file the function was written.
+        # `Cure.Elab.Resolve.result_head_core/3` reads them structurally.
         {dparam,
          %{
            iface: iface_atom,
            tyvar: tyvar,
            head_arg_index: idx,
-           head_arg_type: head_arg_type,
-           return_type: return_expr,
+           head_arg_type: Metadata.strip_diagnostics(head_arg_type),
+           return_type: Metadata.strip_diagnostics(return_expr),
            dict_name: dict_name
          }}
       end)
@@ -3854,7 +3861,7 @@ defmodule Cure.Elab.Declarations do
       length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
         {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}
 
-      name in ["Pid", "Ref"] ->
+      Cure.Elab.Resolution.retired_type_name?(name) ->
         {:retired_process_type, atom}
 
       true ->

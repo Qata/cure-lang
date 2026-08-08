@@ -831,14 +831,40 @@ defmodule Cure.Compiler.IncrementalTest do
     pos = order |> Enum.with_index() |> Map.new()
     order_deps = DepGraph.order_deps_map(graph)
 
+    # "After its use-deps" is a property of the CONDENSATION, not of the raw
+    # graph: inside a strongly connected component no such order exists, and the
+    # stdlib has one on purpose — `Std.Char` and `Std.String` are mutually
+    # recursive, which the canonical pipeline permits via interface skeletons and
+    # `DepGraph` reports once as W086. Cycle members compile together in a
+    # deterministic order, so the ordering claim applies between components.
+    component_of =
+      order_deps
+      |> DepGraph.components(Map.keys(order_deps))
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {members, index} -> Enum.map(members, &{&1, index}) end)
+      |> Map.new()
+
     violations =
       for m <- order,
           d <- Map.get(order_deps, m, []),
           Map.has_key?(pos, d),
+          component_of[m] != component_of[d],
           pos[d] > pos[m],
           do: {m, d}
 
     assert violations == [], "module compiled before its use-dep: #{inspect(violations)}"
+
+    # And the exemption is not a blanket one: name the cycles it covers, so a new
+    # cycle appearing in the stdlib fails here rather than passing silently.
+    cycles =
+      order_deps
+      |> DepGraph.components(Map.keys(order_deps))
+      |> Enum.reject(&match?([_single], &1))
+
+    # `Std.Char` uses `Std.String` and `Std.Literal`; `Std.String` uses both of
+    # the others; `Std.Literal` uses `Std.Char` to give `Char` its character
+    # literal. One three-member component, and the only one in the stdlib.
+    assert cycles == [["Std.Char", "Std.Literal", "Std.String"]]
     # The exact edge that the buggy closure-ordering got wrong.
     assert pos["Std.Char"] < pos["Std.Binary"]
     # Every named stdlib module is scheduled exactly once.
