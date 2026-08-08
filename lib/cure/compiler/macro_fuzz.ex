@@ -499,8 +499,17 @@ defmodule Cure.Compiler.MacroFuzz do
              {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
         end
 
+      # A `becomes` template is ONE expression form, so a rule that generates a
+      # definition expands to a bare declaration node rather than to a block of
+      # them. Routing that to the expression checker rejected it as
+      # `{:unsupported_expression, {:function_def, …}}` at the DEFINITION site,
+      # before any use-site existed — every single-declaration macro was
+      # unwritable. The declaration itself is still proved, through the same
+      # proof-module path a multi-declaration block takes.
       _ ->
-        check_expression_expansion(keyword, input, expansion, env)
+        if Program.declaration?(expansion),
+          do: check_block_expansion(keyword, input, expansion, env),
+          else: check_expression_expansion(keyword, input, expansion, env)
     end
   end
 
@@ -520,9 +529,45 @@ defmodule Cure.Compiler.MacroFuzz do
       :ok
     else
       {:error, reason} ->
-        {:error, {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
+        if use_site_resolved_reference?(reason) do
+          :ok
+        else
+          {:error,
+           {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
+        end
     end
   end
+
+  # Is the sole obstruction a QUALIFIED name the definition site cannot be
+  # expected to resolve?
+  #
+  # A template may name another module — that is much of the point of a macro.
+  # The defining module need not import it: the reference does not exist until
+  # the rule expands, and it lands in the EXPANDING module, where the canonical
+  # pipeline discovers it as a `:macro_generated_reference` edge and extends the
+  # dependency graph until it closes. Failing the definition-site proof on it
+  # made any template that names another module unwritable, and the error named
+  # a module the author had no reason to import.
+  #
+  # The deferral is deliberately narrow — it is keyed on the name being
+  # qualified. A BARE unresolved name is still a definition-site failure, and
+  # must stay one: an unbound bare name is exactly how a hygiene defect in a
+  # generated binder shows up, which is the class of bug this gate exists to
+  # catch. Deferring does not skip the check either; the expansion is checked
+  # again in the expanding module, where an unimportable module or a misspelt
+  # remote call is reported against the code that actually caused it.
+  defp use_site_resolved_reference?({:source_context, reason, _context}),
+    do: use_site_resolved_reference?(reason)
+
+  defp use_site_resolved_reference?({:unknown_global, name, _details}) when is_atom(name),
+    do: qualified_name?(name)
+
+  defp use_site_resolved_reference?({:unknown_global, name}) when is_atom(name),
+    do: qualified_name?(name)
+
+  defp use_site_resolved_reference?(_reason), do: false
+
+  defp qualified_name?(name), do: name |> Atom.to_string() |> String.contains?(".")
 
   defp emit_proof_lifted_requests(requests) do
     Enum.reduce_while(requests, :ok, fn request, :ok ->

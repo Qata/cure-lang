@@ -41,19 +41,33 @@ defmodule Cure.Compiler.MacroStagedResolutionTest do
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
-    assert apply(module, :answer, []) == ~c"7"
+    # `String` is a nominal record now, not a `List(Char)` alias, so it erases to
+    # `{:String, charlist}` rather than to the bare charlist.
+    assert apply(module, :answer, []) == {:String, ~c"7"}
   after
     purge(:StagedTransitiveResolution)
   end
 
   test "ambiguous imported names remain an error in staged compilation" do
+    # `Std.List` and `Std.String` both export `length`, so the bare spelling has
+    # two providers and no local winner. An *applied* `length("hello")` is no
+    # longer ambiguous — `String` is a nominal record rather than a `List(Char)`
+    # alias, so pruning the overload set by argument type leaves exactly one
+    # candidate. Referenced as a value there are no argument types to prune with,
+    # which is what leaves the guard reachable and what this test pins: staging
+    # must not paper over an unresolvable name.
     source = """
     mod StagedAmbiguousResolution
       use Std.{List, String}
-      fn answer() -> Int = length("hello")
+      fn measure() -> (String -> Int) = length
     """
 
-    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:error, reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert {:codegen_error, {:ambiguous_name, :length, providers}} =
+             Cure.Elab.Program.semantic_error(reason)
+
+    assert Enum.sort(providers) == ["Std.List", "Std.String"]
   after
     purge(:StagedAmbiguousResolution)
   end

@@ -121,7 +121,11 @@ defmodule Cure.Elab.MacroTypedRecordTest do
       fn f(n: Int) -> Int = mk n
     """
 
-    assert {:error, {:computed_macro_error, _meta, {:author_failure, "BadInput", [_]}} = reason} =
+    # The reason is wrapped in `:source_context` because it now carries the
+    # invocation span; the payload underneath is unchanged, and the rendering
+    # below is what actually pins the author-facing behaviour.
+    assert {:error,
+            {:source_context, {:computed_macro_error, _meta, {:author_failure, "BadInput", [_]}}, _ctx} = reason} =
              Program.elaborate(source)
 
     {diagnostic, registry} = Errors.to_diagnostic(reason, "author_failure.cure", source)
@@ -165,7 +169,9 @@ defmodule Cure.Elab.MacroTypedRecordTest do
     """
 
     assert {:error,
-            {:computed_macro_error, _meta, {:author_diagnostics, [{:macro_failure, :missing_state, []}]}} = reason} =
+            {:source_context,
+             {:computed_macro_error, _meta, {:author_diagnostics, [{:macro_failure, :missing_state, []}]}},
+             _ctx} = reason} =
              Program.elaborate(source)
 
     {diagnostic, registry} = Errors.to_diagnostic(reason, "author_diagnostic.cure", source)

@@ -57,6 +57,68 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
            end)
   end
 
+  # Every macro passes through `Cure.Compiler.MacroFuzz`'s expansion-proof gate at
+  # its DEFINITION site: the rule is expanded against generated use-sites and the
+  # result is checked. The gate recognised a `{:block, …}` of declarations and a
+  # `lift module` request, and sent everything else to the expression checker — so
+  # a rule whose template is a single declaration was checked as an expression and
+  # rejected with `{:unsupported_expression, {:function_def, …}}`, before any
+  # use-site existed. A `becomes` template is ONE expression, so a lone
+  # declaration is the only shape a `syntax … becomes fn …` rule can have.
+  test "a rule whose template is a single declaration passes the expansion-proof gate" do
+    source = """
+    mod SingleDeclarationTemplate
+      macro Publish
+        syntax publish becomes fn made() -> Int = 1
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
+
+  test "a single-declaration template is still proved, not waved through" do
+    source = """
+    mod IllTypedDeclarationTemplate
+      macro Publish
+        syntax publish becomes fn made() -> Int = true
+    """
+
+    assert {:error, reason} = Program.elaborate(source)
+
+    assert {:expansion_ill_typed, %{keyword: "publish"}} = Program.semantic_error(reason)
+  end
+
+  # A template may name another module, and the defining module need not import
+  # it: the reference does not exist until the rule expands, and it lands in the
+  # EXPANDING module, where the canonical pipeline discovers it as a
+  # `:macro_generated_reference` edge and extends the dependency graph until it
+  # closes. The definition-site proof failing on it made such a template
+  # unwritable and reported a module the author had no reason to import.
+  test "a template may name a module the defining module does not import" do
+    source = """
+    mod CrossModuleTemplate
+      macro Publish
+        syntax publish becomes fn made() -> Int = Some.Other.Module.value()
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
+
+  # And the deferral is keyed on the name being QUALIFIED. A bare unresolved name
+  # is still a definition-site failure and must stay one — that is exactly how a
+  # hygiene defect in a generated binder surfaces, which is the class of bug this
+  # gate exists to catch.
+  test "a bare unresolved name in a template is still a definition-site failure" do
+    source = """
+    mod BareUnresolvedTemplate
+      macro Publish
+        syntax publish becomes fn made() -> Int = no_such_function()
+    """
+
+    assert {:error, reason} = Program.elaborate(source)
+
+    assert {:expansion_ill_typed, %{keyword: "publish"}} = Program.semantic_error(reason)
+  end
+
   test "the declaration pass does not consume computed uses in function bodies" do
     source = """
     mod M
@@ -92,8 +154,13 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     end
     """
 
+    # The inner reason is wrapped in `:source_context` so it carries the
+    # invocation span; the `:computed_macro_error` payload underneath is
+    # unchanged, and the rendering below is what pins the author-facing text.
     assert {:error,
-            {:codegen_error, {:computed_macro_error, meta, {:invalid_generated_syntax, {:raw_syntax_in_expansion, []}}}} =
+            {:codegen_error,
+             {:source_context,
+              {:computed_macro_error, meta, {:invalid_generated_syntax, {:raw_syntax_in_expansion, []}}}, _ctx}} =
               reason} =
              Cure.Compiler.compile_and_load(source, emit_events: false)
 
@@ -498,8 +565,12 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     end
     """
 
+    # Wrapped in `:source_context` so the failure carries the span of the
+    # definition it was checking; the obligation payload is unchanged.
     assert {:error,
-            {:codegen_error, {:macro_capture_obligation_failed, "gated", "BeamEncode", "value", {:no_instance, _, _}}}} =
+            {:codegen_error,
+             {:source_context,
+              {:macro_capture_obligation_failed, "gated", "BeamEncode", "value", {:no_instance, _, _}}, _ctx}}} =
              Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 

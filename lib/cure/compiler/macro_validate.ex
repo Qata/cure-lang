@@ -588,6 +588,20 @@ defmodule Cure.Compiler.MacroValidate do
     {t, strip_pos(meta), Enum.map(children, &normalize/1)}
   end
 
+  # An integer literal's `:exact_integer` is the author's own digits, kept
+  # because the literal protocols hand them to `from_natural_literal` verbatim.
+  # A literal a macro BUILDS has no source text and so no spelling — but it is
+  # the same literal as the pin's `0`, since a missing spelling resolves to the
+  # value's decimal rendering. Canonicalize the key on both sides before
+  # comparing, or every computed expansion pinned against a plain numeral
+  # mismatches on metadata that denotes exactly what the pin denotes.
+  # `Metadata.integer_spelling/2` is the same resolution the elaborator uses to
+  # pick the protocol payload, so `0x10` and a computed `16` still differ.
+  defp normalize({:literal, meta, value}) when is_list(meta) and is_integer(value) do
+    spelling = Metadata.integer_spelling(Keyword.get(meta, :exact_integer), value)
+    {:literal, meta |> strip_pos() |> Keyword.put(:exact_integer, spelling), value}
+  end
+
   # A scalar-valued node (`:literal`'s {subtype, value} shape — `value` is a raw
   # integer/float/string/bool/atom/char, NOT a list of children) still carries
   # `:line`/`:col` in its meta that must be stripped, exactly like any other node.

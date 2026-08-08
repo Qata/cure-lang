@@ -137,7 +137,8 @@ defmodule Cure.Elab.MacroRecursiveExpansionTest do
     '''
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
-    assert apply(module, :run, []) == ~c"line\nquote:\" slash:\\"
+    # `String` is a nominal record, so it erases to `{:String, charlist}`.
+    assert apply(module, :run, []) == {:String, ~c"line\nquote:\" slash:\\"}
   after
     :code.purge(:"Cure.MacroEscapes")
     :code.delete(:"Cure.MacroEscapes")
