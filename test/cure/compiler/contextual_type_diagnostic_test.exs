@@ -898,7 +898,11 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.payload.origin.owner == :if
     assert diagnostic.payload.origin.index == 1
     assert rendered =~ "Expected: Int"
-    assert rendered =~ "Found:    String (List(Bounded(1114112)))"
+    # `String` is nominal, so it names itself. There is nothing to unfold and
+    # therefore nothing to leak: the reader is never shown `List`, `Cons`, or
+    # `Bounded(1114112)` for a type they wrote as `String`.
+    assert rendered =~ "Found:    String"
+    refute rendered =~ "Bounded"
     refute rendered =~ "does not belong"
   end
 
@@ -923,7 +927,8 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.payload.origin.kind == :branch
     assert diagnostic.payload.origin.index == 1
     assert rendered =~ "Expected: Int"
-    assert rendered =~ "Found:    String (List(Bounded(1114112)))"
+    assert rendered =~ "Found:    String"
+    refute rendered =~ "Bounded"
     refute rendered =~ "`Cons`"
     refute rendered =~ "does not belong"
   end

@@ -2,18 +2,18 @@ defmodule Cure.Elab.StringLiteralTest do
   use ExUnit.Case, async: true
   alias Cure.Elab.{Program, Emit}
 
-  # A string literal is `List(Char)` (Char = Bounded(0x110000)); Char erases to a
-  # native integer and List to a BEAM list, so `"abc"` runs to the charlist
-  # `[97, 98, 99]`.
-  # `Char` is not yet a prelude type (that lands with the Std.String migration,
-  # #29), so — as in the char-literal tests — the module brings `Bounded` into
-  # scope and aliases `Char` locally.
-  defp run(body) do
+  # `String` is nominal -- `rec String { characters: List(Char) }` -- so a string
+  # literal elaborates at type `String`, not at `List(Char)`. `Char` is a
+  # `@prelude` builtin that erases to its bare code point and `List` to a BEAM
+  # list, so `"abc"` runs to the tagged pair `{:String, [97, 98, 99]}`.
+  #
+  # Both `String` and `Char` are ambient, so nothing here declares them; the
+  # `use Std.String` is only for `characters/1` below.
+  defp run(body, return_type \\ "String") do
     src = """
     mod S
-      use Std.Bounded
-      typealias Char = Bounded(1114112)
-      fn t() -> List(Char) = #{body}
+      use Std.String
+      fn t() -> #{return_type} = #{body}
     end
     """
 
@@ -22,20 +22,24 @@ defmodule Cure.Elab.StringLiteralTest do
     apply(m, :t, [])
   end
 
-  test ~s|"abc" elaborates to a List(Char) charlist and runs to [97, 98, 99]| do
-    assert run(~s|"abc"|) == [97, 98, 99]
+  test ~s|"abc" elaborates to a String and runs to {:String, [97, 98, 99]}| do
+    assert run(~s|"abc"|) == {:String, [97, 98, 99]}
   end
 
-  test ~s|the empty string "" is the empty charlist []| do
-    assert run(~s|""|) == []
+  test ~s|the empty string "" wraps the empty charlist| do
+    assert run(~s|""|) == {:String, []}
   end
 
-  test ~s|"abc" is definitionally the char-literal list ['a', 'b', 'c']| do
-    assert run(~s|"abc"|) == run(~s|['a', 'b', 'c']|)
+  test ~s|"abc" carries the same code points as the char-literal list ['a', 'b', 'c']| do
+    # Nominality means `"abc"` is NOT definitionally `['a', 'b', 'c']` -- that was
+    # true only while `String` was a typealias. `characters/1` projects the single
+    # field the two now share.
+    assert run(~s|Std.String.characters("abc")|, "List(Char)") ==
+             run(~s|['a', 'b', 'c']|, "List(Char)")
   end
 
   test "a multi-byte UTF-8 string decodes by Unicode codepoint" do
     # é = U+00E9 = 233, 😀 = U+1F600 = 128512 — one Char each, not their UTF-8 bytes.
-    assert run(~s|"é😀"|) == [233, 128_512]
+    assert run(~s|"é😀"|) == {:String, [233, 128_512]}
   end
 end

@@ -3,12 +3,19 @@ defmodule Cure.Stdlib.DecimalTest do
 
   @decimal :"Cure.Std.Decimal"
 
+  # `Std.Decimal` is written entirely against `String`, which is nominal --
+  # `rec String { characters: List(Char) }` -- and therefore erases to the tagged
+  # pair `{:String, code_points}`. A BEAM caller of a compiled Cure function
+  # speaks that erased language directly, so a bare charlist is not a `String`.
+  defp cure_string(text), do: {:String, String.to_charlist(text)}
+  defp elixir_string({:String, chars}), do: List.to_string(chars)
+
   defp decimal!(text) do
-    assert {:ok, value} = apply(@decimal, :from_string, [String.to_charlist(text)])
+    assert {:ok, value} = apply(@decimal, :from_string, [cure_string(text)])
     value
   end
 
-  defp render(value), do: @decimal |> apply(:to_string, [value]) |> List.to_string()
+  defp render(value), do: @decimal |> apply(:to_string, [value]) |> elixir_string()
 
   describe "construction and parsing" do
     test "parses ordinary, scientific, leading-dot, and special forms" do
@@ -18,11 +25,12 @@ defmodule Cure.Stdlib.DecimalTest do
       assert render(decimal!("-7.5")) == "-7.5"
       assert render(decimal!("-iNf")) == "-Infinity"
       assert render(decimal!("nAn")) == "NaN"
-      assert {:error, ~c"bad"} = apply(@decimal, :from_string, [~c"bad"])
+      assert {:error, {:String, ~c"bad"}} = apply(@decimal, :from_string, [cure_string("bad")])
     end
 
     test "parse/1 returns the unconsumed suffix" do
-      assert {:ok, {value, ~c"rest"}} = apply(@decimal, :parse, [~c"3.14rest"])
+      assert {:ok, {value, {:String, ~c"rest"}}} =
+               apply(@decimal, :parse, [cure_string("3.14rest")])
       assert render(value) == "3.14"
     end
 
@@ -98,9 +106,9 @@ defmodule Cure.Stdlib.DecimalTest do
   describe "format variants and special values" do
     test "renders scientific, raw, and XSD forms" do
       value = decimal!("123.45")
-      assert @decimal |> apply(:to_string_scientific, [value]) |> List.to_string() == "1.2345E+2"
-      assert @decimal |> apply(:to_string_raw, [value]) |> List.to_string() == "12345E-2"
-      assert @decimal |> apply(:to_string_xsd, [decimal!("42")]) |> List.to_string() == "42.0"
+      assert @decimal |> apply(:to_string_scientific, [value]) |> elixir_string() == "1.2345E+2"
+      assert @decimal |> apply(:to_string_raw, [value]) |> elixir_string() == "12345E-2"
+      assert @decimal |> apply(:to_string_xsd, [decimal!("42")]) |> elixir_string() == "42.0"
     end
 
     test "propagates NaN and handles infinity arithmetic" do

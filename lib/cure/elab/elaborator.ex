@@ -220,10 +220,19 @@ defmodule Cure.Elab.Elaborator do
   # only reachable as a re-keyed `:"Mod#name"` variant, which uniform resolution
   # just bound `cname` to), report the targeted R5 `:shadowed_ctor` with a
   # qualified-escape-hatch hint; otherwise it is a genuine cross-family
-  # `:foreign_ctor` (existing behavior, unchanged).
+  # `:foreign_ctor`.
+  #
+  # "Shadowed off the registry" is not the same question as "reached through an
+  # import": the latter is true of every imported constructor, so asking it alone
+  # reported an ordinary wrong-family pattern as shadowing and hinted at a
+  # qualified spelling that does not type-check either. The R5 story needs BOTH —
+  # the bare name resolves only through an import, AND the local family the
+  # pattern is checked against carries the same bare name as the constructor's
+  # own family. That name collision is what pushed the imported constructors out
+  # of bare reach, and is what makes `Mod.Ctor` the fix.
   defp shadowed_or_foreign_ctor(env, sig, cname0, cname, dname) do
-    case Cure.Elab.Resolution.shadowed_origin(env, cname0) do
-      {:ok, mod_id, _key} ->
+    case shadowed_ctor_origin(env, sig, cname, dname, cname0) do
+      {:ok, mod_id} ->
         {:error,
          {:shadowed_ctor,
           [
@@ -245,6 +254,20 @@ defmodule Cure.Elab.Elaborator do
             expectation_origin: :pattern_constructor,
             expression_category: :constructor_pattern
           }}}
+    end
+  end
+
+  # The module whose type name the scrutinee's family shadows, when that is why
+  # `cname0` could not be written bare. `nil` bare names (a family with no owner,
+  # or a ctor the signature does not know) never count as a collision.
+  defp shadowed_ctor_origin(env, sig, cname, dname, cname0) do
+    with {:ok, mod_id, _key} <- Cure.Elab.Resolution.shadowed_origin(env, cname0),
+         ctor_family when not is_nil(ctor_family) <- Inductive.ctor_family(sig, cname),
+         local_base when not is_nil(local_base) <- Cure.Elab.Name.base(dname),
+         ^local_base <- Cure.Elab.Name.base(ctor_family) do
+      {:ok, mod_id}
+    else
+      _ -> :error
     end
   end
 
@@ -1285,10 +1308,10 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # String interpolation `"a#{e}b"` desugars to a right fold of `str_concat` over
-  # the segments (see `desugar_interpolation`). String-valued holes only; a
-  # non-string hole fails as an ordinary type error against `str_concat`'s
-  # `List(Char)` parameter.
+  # String interpolation `"a#{e}b"` desugars to a right fold of
+  # `Std.String.concat` over the segments (see `desugar_interpolation`).
+  # String-valued holes only; a non-string hole fails as an ordinary type error
+  # against `concat`'s `String` parameter.
   def elaborate_expr_typed({:string_interpolation, meta, segments}, names, ctx, env) do
     elaborate_expr_typed(
       desugar_interpolation(segments, Keyword.get(meta, :line, 0)),
@@ -3662,11 +3685,11 @@ defmodule Cure.Elab.Elaborator do
         env
       )
 
-  defp normalized_integer_spelling(spelling, value) when is_binary(spelling) and value < 0,
-    do: "-" <> String.trim_leading(spelling, "-")
-
-  defp normalized_integer_spelling(spelling, _value) when is_binary(spelling), do: spelling
-  defp normalized_integer_spelling(_spelling, value), do: Integer.to_string(value)
+  # One rule, shared with example-pin comparison — see
+  # `Cure.MetaAST.Metadata.integer_spelling/2` for why a spelling-less literal's
+  # canonical digits are the decimal rendering of its value.
+  defp normalized_integer_spelling(spelling, value),
+    do: Cure.MetaAST.Metadata.integer_spelling(spelling, value)
 
   # Prelude bootstrap modules are elaborated before the literal interfaces can
   # be ambiently imported. Preserve the ordinary infer-and-convert path there;
@@ -3724,14 +3747,34 @@ defmodule Cure.Elab.Elaborator do
   end
 
   # Compatibility for indexed `Bounded(n)` until coherence keys retain indices
-  # (today every `Bounded(n)` implementation shares the `Bounded` head). Char's
-  # ordinary protocol instance wins before this path; arbitrary bounds keep the
-  # existing compact representation and range check instead of materializing a
-  # constructor tower or silently selecting Char's differently-indexed instance.
+  # (today every `Bounded(n)` implementation shares the `Bounded` head).
+  # Arbitrary bounds keep the existing compact representation and range check
+  # instead of materializing a constructor tower.
+  #
+  # `Char` lands here too, and deliberately. It is a constructor-less nominal
+  # carrier whose SOLE introduction form is the kernel's compact-literal rule
+  # (`Kernel.check/3` on `{:bounded_lit, k}`, which re-derives the Unicode scalar
+  # ceiling itself). A user-space `ExpressibleByNaturalLiteral for Char` cannot
+  # stand in for that rule: any such instance has to turn an `Int` into a `Char`,
+  # and every route from `Int` to `Char` is an `@extern` postulate with no body,
+  # so the initializer never reduces to a compile-time value — `fn c() -> Char =
+  # 12` failed with `literal_initializer_not_compile_time_value` rather than
+  # producing a character. Introducing builtin scalars from the elaborator's own
+  # rule (as Idris and Lean do for `Char`) instead of from a protocol instance is
+  # what makes the literal work at all, and it keeps the ceiling in the one place
+  # the kernel already enforces it.
   defp elaborate_bounded_literal_fallback(value, expected_core, ctx, _env) do
-    bounded_family = Inductive.builtin(Context.signature(ctx), :bounded)
+    sig = Context.signature(ctx)
+    bounded_family = Inductive.builtin(sig, :bounded)
+    char_family = Inductive.builtin(sig, :char)
 
     case Kernel.normalize(ctx, expected_core) do
+      {:data, ^char_family, [], []} when not is_nil(char_family) and value < 0x110000 ->
+        {:ok, {:bounded_lit, value}}
+
+      {:data, ^char_family, [], []} when not is_nil(char_family) ->
+        {:error, {:char_literal_out_of_range, value}}
+
       {:data, ^bounded_family, [], [{:nat_lit, bound}]} when value < bound ->
         {:ok, {:bounded_lit, value}}
 
@@ -10936,19 +10979,28 @@ defmodule Cure.Elab.Elaborator do
   # segments are supported here; a typed segment (`x::float`, `x::binary`) is a
   # deferred rich-bit-syntax case and is rejected rather than mislowered. The
   # module must `use Std.Binary`.
-  # `"a#{e}b"` → `str_concat("a", str_concat(e, "b"))`: a right fold over the
-  # segments. Literal chunks stay `:string` literals (each desugars to its
-  # `List(Char)`); holes are the segment expressions unchanged, so a hole is
-  # elaborated against `str_concat`'s `List(Char)` parameter — a String hole
-  # checks, a non-String hole is a type error (Show-based conversion is #21).
-  # `str_concat` is auto-preluded (`Std.Binary`), so no import is required.
+  # `"a#{e}b"` → `Std.String.concat("a", Std.String.concat(e, "b"))`: a right fold
+  # over the segments. Literal chunks stay `:string` literals (each desugars to a
+  # nominal `String`); holes are the segment expressions unchanged, so a hole is
+  # elaborated against `concat`'s `String` parameter — a String hole checks, a
+  # non-String hole is a type error (Show-based conversion is #21).
+  #
+  # The fold names `Std.String.concat` by CANONICAL KEY, for the same reason
+  # `desugar_string/2` names the `String` constructor that way: this call is
+  # written by the compiler, not by the module the literal appears in, and that
+  # module never imported `Std.String`. It went through `Std.Binary.str_concat`
+  # while `String` was a typealias for `List(Char)`; once `String` became nominal
+  # that made every interpolation ill-typed, because the literal chunks are
+  # `String` and `str_concat` is a `List(Char)` operation. Concatenation has one
+  # canonical owner and interpolation must route through it.
   defp desugar_interpolation(segments, line) do
     case Enum.reverse(segments) do
       [] ->
         {:literal, [subtype: :string, line: line], ""}
 
       [last | rest] ->
-        Enum.reduce(rest, last, fn seg, acc -> mk_call("str_concat", [seg, acc], line) end)
+        concat = Atom.to_string(Cure.Elab.Name.qualify("Std.String", :concat))
+        Enum.reduce(rest, last, fn seg, acc -> mk_call(concat, [seg, acc], line) end)
     end
   end
 

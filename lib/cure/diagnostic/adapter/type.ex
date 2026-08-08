@@ -19,6 +19,18 @@ defmodule Cure.Diagnostic.Adapter.Type do
     TypeProblem
   }
 
+  # The six literal protocols, each with the spelling a reader would use for the
+  # literal that selects it. `elaborate_literal_protocol/7` reports a missing
+  # implementation for exactly these; nothing else routes through them.
+  @literal_spellings %{
+    ExpressibleByNaturalLiteral: "a natural-number literal",
+    ExpressibleByIntegerLiteral: "an integer literal",
+    ExpressibleByDecimalLiteral: "a decimal literal",
+    ExpressibleByStringLiteral: "a string literal",
+    ExpressibleByCharacterLiteral: "a character literal",
+    ExpressibleByAtomLiteral: "an atom literal"
+  }
+
   @doc false
   def empty_type_failure(opts) do
     Diagnostic.new(
@@ -317,9 +329,39 @@ defmodule Cure.Diagnostic.Adapter.Type do
   def from_error({:same_erased_literal, members}, opts),
     do: union_declaration_failure(:same_erased_literal, %{members: members}, opts)
 
+  # A literal is written, not built: it takes its value from whichever literal
+  # protocol the EXPECTED type implements. So `1.0` where `Int` is expected is
+  # not an implementation the author forgot to write — it is the ordinary
+  # mismatch between what they wrote and what the surrounding context demands,
+  # and it belongs in that context's own words ("Annotation does not match",
+  # "Local fact does not match") with the annotation labelled as the source of
+  # the expectation. The protocol is the reason, not the headline. Away from a
+  # literal — a `requires` that cannot be discharged, say — the same interface
+  # really is a missing implementation, so that case still falls through.
+  def from_error({:source_context, {:no_instance, interface, expected}, context}, opts)
+      when is_map(context) and is_map_key(@literal_spellings, interface) do
+    case {Map.get(context, :expectation_origin), Map.get(context, :expression_category)} do
+      {nil, _category} ->
+        instance_failure(interface, expected, context, Keyword.put_new(opts, :span, Map.get(context, :span)))
+
+      {origin, :literal} ->
+        literal_protocol_mismatch(origin, interface, expected, context, opts)
+
+      {_origin, _category} ->
+        instance_failure(interface, expected, context, Keyword.put_new(opts, :span, Map.get(context, :span)))
+    end
+  end
+
   def from_error({:source_context, {:no_instance, interface, head}, context}, opts)
       when is_map(context),
       do: instance_failure(interface, head, context, Keyword.put_new(opts, :span, Map.get(context, :span)))
+
+  def from_error({:constraint_head_not_determined, details}, opts) when is_map(details),
+    do: undetermined_constraint_head(details, %{}, opts)
+
+  def from_error({:source_context, {:constraint_head_not_determined, details}, context}, opts)
+      when is_map(details) and is_map(context),
+      do: undetermined_constraint_head(details, context, Keyword.put_new(opts, :span, Map.get(context, :span)))
 
   def from_error({:no_matching_overload, name, arguments}, opts),
     do: overload_mismatch(%{name: name, arguments: arguments, candidates: []}, opts)
@@ -3124,6 +3166,100 @@ defmodule Cure.Diagnostic.Adapter.Type do
     )
   end
 
+  # A `requires Iface(a)` whose `a` occurs in no parameter type is resolved from
+  # the type expected at the call — the shape `Std.Json.decode_as` uses, where
+  # `t` is named by the result and by the constraint and by nothing else. When
+  # the expected type does not have the declared result's shape, there is no
+  # position to read `a` off and the call cannot be resolved.
+  #
+  # This is an authoring mistake about the annotation, not a missing
+  # implementation, so it must not be reported as one: telling the author to
+  # write `implementation FromJSON for ...` sends them to fix code that is
+  # already correct. Name the constraint, say what is unfixed, show the shape
+  # the annotation has to take, and point at the annotation that fell short.
+  defp undetermined_constraint_head(details, context, opts) do
+    interface = name(details.interface)
+    tyvar = name(details.type_variable)
+    callee = name(details.callee)
+    expected_surface = surface_type(details.expected)
+    result_surface = constraint_result_surface(details.result_type)
+
+    origin = %ExpectationOrigin{
+      kind: Map.get(context, :expectation_origin, :annotation),
+      span: Map.get(context, :expectation_span),
+      owner: Map.get(context, :checking)
+    }
+
+    span = Keyword.get(opts, :span)
+
+    occurrence =
+      if result_surface,
+        do: "it occurs only in the result type `#{result_surface}`",
+        else: "it occurs only in the result type"
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Constraint type is not determined",
+      body:
+        Doc.stack([
+          Doc.paragraph(
+            "`#{callee}` requires `#{interface}(#{tyvar})`, and no argument fixes `#{tyvar}`: #{occurrence}."
+          ),
+          Doc.paragraph(
+            "So `#{tyvar}` has to come from the type expected here, and `#{expected_surface}` does not " <>
+              "supply it. Without `#{tyvar}` there is no `#{interface}` implementation to choose."
+          )
+        ]),
+      primary: if(span, do: %Label{span: span, style: :primary, message: "`#{tyvar}` is not determined here"}),
+      secondary: expectation_labels(origin, span, nil),
+      notes: Keyword.get(opts, :notes, []),
+      provenance: Keyword.get(opts, :provenance, []),
+      suggestions: [
+        %Suggestion{
+          message:
+            if(result_surface,
+              do:
+                "Annotate this call with a result type of the form `#{result_surface}`, " <>
+                  "naming the type `#{interface}` should use for `#{tyvar}`",
+              else: "Annotate this call with a result type that names the type `#{interface}` should use for `#{tyvar}`"
+            ),
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :constraint_head_not_determined,
+        interface: details.interface,
+        type_variable: details.type_variable,
+        callee: details.callee,
+        expected_surface: expected_surface,
+        result_surface: result_surface,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  # The declared result type as the author wrote it. This is a surface AST, not
+  # Core: it is the un-elaborated `-> Result(t, DecodeError)` of the callee's
+  # signature, and the type variable in it is exactly the one the constraint
+  # names. Anything else — a bare type, an unusual shape — has no useful spelling
+  # here, so say nothing rather than guess.
+  defp constraint_result_surface({:variable, _meta, var}), do: name(var)
+
+  defp constraint_result_surface({:function_call, meta, args}) when is_list(meta) and is_list(args) do
+    case Keyword.get(meta, :name) do
+      nil ->
+        nil
+
+      head ->
+        rendered = Enum.map(args, &constraint_result_surface/1)
+        if Enum.all?(rendered), do: "#{name(head)}(#{Enum.join(rendered, ", ")})"
+    end
+  end
+
+  defp constraint_result_surface(_ast), do: nil
+
   defp ambiguous_instance_failure(interface, expected, opts) do
     interface = name(interface)
     expected_surface = surface_type(expected)
@@ -3531,11 +3667,17 @@ defmodule Cure.Diagnostic.Adapter.Type do
           }
 
         :char_literal_out_of_range ->
+          # Name the bound. "The supported character range" told the author
+          # nothing they could act on — the range is Unicode scalar space, it is
+          # fixed, and a numeral checked against `Char` is admitted by exactly
+          # this rule, so the endpoints are the whole answer.
           {
             "Character literal is out of range",
-            "The character value `#{inspect(value)}` is outside the supported character range.",
-            "use a character value in the supported range",
-            "Use a valid character literal"
+            "The character value `#{inspect(value)}` is not a Unicode code point. " <>
+              "A `Char` holds a code point in `0`..`#{0x110000 - 1}` (`0x10FFFF`), " <>
+              "the whole of Unicode scalar space.",
+            "code point must be between 0 and #{0x110000 - 1}",
+            "Use a code point in `0`..`#{0x110000 - 1}`, or a character literal such as `'a'`"
           }
       end
 
@@ -3714,6 +3856,53 @@ defmodule Cure.Diagnostic.Adapter.Type do
     do: String.upcase(<<first::utf8>>) <> rest
 
   defp sentence_case(""), do: "Revise this expression"
+
+  defp literal_protocol_mismatch(kind, interface, expected, context, opts) do
+    origin = %ExpectationOrigin{
+      kind: kind,
+      span: Map.get(context, :expectation_span),
+      owner: Map.get(context, :checking),
+      index: Map.get(context, :argument_index)
+    }
+
+    span = Keyword.get(opts, :span, Map.get(context, :span))
+    spelling = Map.fetch!(@literal_spellings, interface)
+    expected_surface = surface_type(expected)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title(origin),
+      body:
+        Doc.stack([
+          Doc.paragraph(context(origin)),
+          Doc.paragraph(
+            "This is #{spelling}. A literal takes its value through the expected type's " <>
+              "literal protocol, and `#{expected_surface}` has no `#{interface}` " <>
+              "implementation, so it cannot be written this way."
+          )
+        ]),
+      primary: if(span, do: %Label{span: span, style: :primary, message: label(origin)}),
+      secondary: expectation_labels(origin, span, nil),
+      notes: Keyword.get(opts, :notes, []),
+      provenance: Keyword.get(opts, :provenance, []),
+      suggestions: [
+        %Suggestion{
+          message:
+            "Write a `#{expected_surface}` value here, or implement `#{interface}` for `#{expected_surface}`",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        expected_surface: expected_surface,
+        actual_surface: spelling,
+        interface: interface,
+        origin: Map.from_struct(origin),
+        expression_category: :literal
+      }
+    )
+  end
 
   defp title(%ExpectationOrigin{kind: :annotation}), do: "Annotation does not match"
   defp title(%ExpectationOrigin{kind: :local_fact}), do: "Local fact does not match"

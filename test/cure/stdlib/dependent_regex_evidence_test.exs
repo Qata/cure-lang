@@ -1,6 +1,21 @@
 defmodule Cure.Stdlib.DependentRegexEvidenceTest do
   use ExUnit.Case, async: false
 
+  # `Std.Regex` is two layers. The `Pattern`/`Evidence` machine below is the
+  # low-level code-point layer: its *input* is `List(Char)`, so
+  # `pattern_evidence` and `pattern_prefix_evidence` take one and the residual
+  # suffix of a prefix match comes back as a bare charlist. The `Regex`/`parse_*`
+  # surface sits on top of it typed at `String`, and `parse_pattern_full` is the
+  # seam -- it calls `Std.String.characters` on its input before handing it down.
+  # So the source below converts explicitly at the evidence calls and passes
+  # literals straight through to `parse_pattern_full`.
+  #
+  # `String` is nominal -- `rec String { characters: List(Char) }` -- so it
+  # erases to the tagged pair `{:String, code_points}`. Both `StringEvidence`'s
+  # payload and `Sem(StringC)` are `String`, hence the tags below; the
+  # per-character evidence payloads stay bare code points.
+  defp cure_string(chars), do: {:String, chars}
+
   setup_all do
     source = """
     mod RegexEvidenceRuntime
@@ -17,15 +32,15 @@ defmodule Cure.Stdlib.DependentRegexEvidenceTest do
       fn grouped() -> Pattern(StringC) = PatternGroup(ab())
       fn nested_group() -> Pattern(StringC) = PatternGroup(PatternGroup(ab()))
 
-      fn pair_evidence() -> Option(List(Evidence)) = pattern_evidence(ab(), "ab")
-      fn ambiguous_evidence() -> Option(List(Evidence)) = pattern_evidence(ambiguous(), "a")
-      fn list_evidence() -> Option(List(Evidence)) = pattern_evidence(many(), "aa")
-      fn greedy_evidence() -> Option(List(Evidence)) = pattern_evidence(greedy_pair(), "aa")
-      fn group_evidence() -> Option(List(Evidence)) = pattern_evidence(grouped(), "ab")
-      fn nested_group_evidence() -> Option(List(Evidence)) = pattern_evidence(nested_group(), "ab")
-      fn failed_evidence() -> Option(List(Evidence)) = pattern_evidence(ab(), "aa")
-      fn shortest_prefix() -> Option(EvidencePrefix) = pattern_prefix_evidence(many(), "aaab", false)
-      fn longest_prefix() -> Option(EvidencePrefix) = pattern_prefix_evidence(many(), "aaab", true)
+      fn pair_evidence() -> Option(List(Evidence)) = pattern_evidence(ab(), Std.String.characters("ab"))
+      fn ambiguous_evidence() -> Option(List(Evidence)) = pattern_evidence(ambiguous(), Std.String.characters("a"))
+      fn list_evidence() -> Option(List(Evidence)) = pattern_evidence(many(), Std.String.characters("aa"))
+      fn greedy_evidence() -> Option(List(Evidence)) = pattern_evidence(greedy_pair(), Std.String.characters("aa"))
+      fn group_evidence() -> Option(List(Evidence)) = pattern_evidence(grouped(), Std.String.characters("ab"))
+      fn nested_group_evidence() -> Option(List(Evidence)) = pattern_evidence(nested_group(), Std.String.characters("ab"))
+      fn failed_evidence() -> Option(List(Evidence)) = pattern_evidence(ab(), Std.String.characters("aa"))
+      fn shortest_prefix() -> Option(EvidencePrefix) = pattern_prefix_evidence(many(), Std.String.characters("aaab"), false)
+      fn longest_prefix() -> Option(EvidencePrefix) = pattern_prefix_evidence(many(), Std.String.characters("aaab"), true)
       fn parsed_pair() -> Option(Tuple(Char, Char)) = parse_pattern_full(ab(), "ab")
       fn parsed_left() -> Option(Choice(Char, Char)) = parse_pattern_full(ambiguous(), "a")
       fn parsed_list() -> Option(List(Char)) = parse_pattern_full(many(), "aaa")
@@ -80,8 +95,8 @@ defmodule Cure.Stdlib.DependentRegexEvidenceTest do
   end
 
   test "groups replace child evidence with the exact consumed extent", %{runtime_module: module} do
-    assert apply(module, :group_evidence, []) == {:some, [{:StringEvidence, ~c"ab"}]}
-    assert apply(module, :nested_group_evidence, []) == {:some, [{:StringEvidence, ~c"ab"}]}
+    assert apply(module, :group_evidence, []) == {:some, [{:StringEvidence, cure_string(~c"ab")}]}
+    assert apply(module, :nested_group_evidence, []) == {:some, [{:StringEvidence, cure_string(~c"ab")}]}
   end
 
   test "failed full matches produce no evidence", %{runtime_module: module} do
@@ -108,7 +123,7 @@ defmodule Cure.Stdlib.DependentRegexEvidenceTest do
     assert apply(module, :parsed_pair, []) == {:some, {?a, ?b}}
     assert apply(module, :parsed_left, []) == {:some, {:ChoseLeft, ?a}}
     assert apply(module, :parsed_list, []) == {:some, ~c"aaa"}
-    assert apply(module, :parsed_group, []) == {:some, ~c"ab"}
+    assert apply(module, :parsed_group, []) == {:some, cure_string(~c"ab")}
   end
 
   test "the certified decoder rejects malformed and trailing evidence", %{runtime_module: module} do

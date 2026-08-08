@@ -131,6 +131,9 @@ defmodule Cure.Audit.ShimConformance do
 
   defp instant, do: map(int(), fn n -> :cure_std_time.of_unix(1_700_000_000 + n) end)
 
+  # The erased form of a Cure `String`; see the `:cure_string` shape below.
+  defp cure_string(text), do: {:String, String.to_charlist(text)}
+
   defp duration do
     map(seq([int(), int()]), fn [a, b] ->
       :cure_std_time.diff(:cure_std_time.of_unix(a), :cure_std_time.of_unix(b))
@@ -142,7 +145,7 @@ defmodule Cure.Audit.ShimConformance do
   defp prop_fn, do: {:member_of, [fn _ -> true end, fn n -> n < 50 end]}
 
   # ---------------------------------------------------------------------------
-  # The axiom table. 37 executable axioms; `cure_std_http`'s 4 are excluded.
+  # The axiom table. 34 executable axioms; `cure_std_http`'s 4 are excluded.
   # ---------------------------------------------------------------------------
 
   @doc "Every `CURE RUNTIME` axiom this harness executes."
@@ -206,7 +209,11 @@ defmodule Cure.Audit.ShimConformance do
     dur = :duration
     # A mix of valid and invalid ISO-8601 strings, so BOTH the `{:Ok, Instant}`
     # and the `{:Error, ParseError}` branches of parse_iso8601 are shape-checked.
-    iso = {:member_of, ["2026-05-01T09:00:00Z", "2026-04-21T15:11:46.5Z", "not-a-date", ""]}
+    # `String` erases to `{:String, code_points}`, which is what these externs
+    # actually receive from Cure — a bare binary is not a Cure `String`.
+    iso =
+      {:member_of,
+       Enum.map(["2026-05-01T09:00:00Z", "2026-04-21T15:11:46.5Z", "not-a-date", ""], &cure_string/1)}
 
     [
       # Reads the clock. Declared `-> Instant ! Io`, but `declarations.ex` never
@@ -214,13 +221,13 @@ defmodule Cure.Audit.ShimConformance do
       a({:cure_std_time, :now, 0}, ret([]), inst, :effectful),
       a({:cure_std_time, :utc_now, 0}, ret([]), inst, :effectful),
       a({:cure_std_time, :parse_iso8601, 1}, seq([iso]), {:result, inst, :parse_error}),
-      a({:cure_std_time, :format_iso8601, 1}, seq([instant()]), :binary),
+      a({:cure_std_time, :format_iso8601, 1}, seq([instant()]), :cure_string),
       a({:cure_std_time, :add, 2}, seq([instant(), duration()]), inst),
       a({:cure_std_time, :diff, 2}, seq([instant(), instant()]), dur),
       a(
         {:cure_std_time, :zone, 2},
-        seq([instant(), {:member_of, ["UTC", "+01:00", "Bad/Zone"]}]),
-        {:result, :binary, :parse_error}
+        seq([instant(), {:member_of, Enum.map(["UTC", "+01:00", "Bad/Zone"], &cure_string/1)}]),
+        {:result, :cure_string, :parse_error}
       ),
       a({:cure_std_time, :to_unix, 1}, seq([instant()]), :int),
       a({:cure_std_time, :of_unix, 1}, seq([int()]), inst)
@@ -396,10 +403,17 @@ defmodule Cure.Audit.ShimConformance do
   defp shape?(:duration, {:Duration, m}), do: is_integer(m)
   defp shape?(:duration, _), do: false
 
+  # `rec String { characters: List(Char) }` → `{:String, code_points}`. A Cure
+  # `String` is NOT a binary and not a bare charlist: an `@extern` is a direct
+  # remote call with no marshalling, so a shim declared over `String` has to
+  # produce and accept exactly this pair.
+  defp shape?(:cure_string, {:String, chars}), do: is_list(chars) and Enum.all?(chars, &is_integer/1)
+  defp shape?(:cure_string, _), do: false
+
   # `ParseError = InvalidFormat(String) | OutOfRange(String)` — so the Error side
   # of a Result is really checked, not waved through with `:any`.
-  defp shape?(:parse_error, {:InvalidFormat, m}), do: is_binary(m)
-  defp shape?(:parse_error, {:OutOfRange, m}), do: is_binary(m)
+  defp shape?(:parse_error, {:InvalidFormat, m}), do: shape?(:cure_string, m)
+  defp shape?(:parse_error, {:OutOfRange, m}), do: shape?(:cure_string, m)
   defp shape?(:parse_error, _), do: false
 
   defp shape?(:json, v) do

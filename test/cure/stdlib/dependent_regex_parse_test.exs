@@ -1,6 +1,12 @@
 defmodule Cure.Stdlib.DependentRegexParseTest do
   use ExUnit.Case, async: false
 
+  # `String` is nominal -- `rec String { characters: List(Char) }` -- so it erases
+  # to the tagged pair `{:String, code_points}`. `Regex(String)` results and the
+  # three `String` partitions of a `Match` carry that tag; a `Regex(List(Char))`
+  # result (`repeat`, a bare literal) stays a bare charlist.
+  defp cure_string(chars), do: {:String, chars}
+
   setup_all do
     source = """
     mod RegexTypedParsing
@@ -10,7 +16,7 @@ defmodule Cure.Stdlib.DependentRegexParseTest do
         fn(actual) -> Std.Char.same(expected, actual)
 
       fn atom(char: Char) -> Regex(Char) = predicate(same(char))
-      fn as_text(char: Char) -> String = [char]
+      fn as_text(char: Char) -> String = Std.String.from_characters([char])
 
       fn parsed_char() -> Option(Char) = parse_full(atom('a'), "a")
       fn parsed_exact() -> Option(Unit) = parse_full(exactly('a'), "a")
@@ -46,12 +52,12 @@ defmodule Cure.Stdlib.DependentRegexParseTest do
     assert apply(module, :parsed_char, []) == {:some, ?a}
     assert apply(module, :parsed_exact, []) == {:some, :unit}
     assert apply(module, :parsed_pair, []) == {:some, {?a, ?b}}
-    assert apply(module, :parsed_map, []) == {:some, ~c"a"}
+    assert apply(module, :parsed_map, []) == {:some, cure_string(~c"a")}
     assert apply(module, :parsed_optional_some, []) == {:some, {:some, ?a}}
     assert apply(module, :parsed_optional_none, []) == {:some, :none}
     assert apply(module, :parsed_many, []) == {:some, ~c"aaa"}
     assert apply(module, :parsed_one_or_more, []) == {:some, {:OneOrMore, ?a, ~c"aa"}}
-    assert apply(module, :parsed_capture, []) == {:some, ~c"ab"}
+    assert apply(module, :parsed_capture, []) == {:some, cure_string(~c"ab")}
     assert apply(module, :parsed_right, []) == {:some, ?b}
     assert apply(module, :parsed_left, []) == {:some, ?a}
     assert apply(module, :parsed_same_alt, []) == {:some, ?b}
@@ -62,15 +68,19 @@ defmodule Cure.Stdlib.DependentRegexParseTest do
   end
 
   test "prefix parsing returns the typed value and untouched suffix", %{runtime_module: module} do
-    assert apply(module, :parsed_prefix, []) == {:some, {~c"aaa", ~c"b"}}
+    assert apply(module, :parsed_prefix, []) == {:some, {~c"aaa", cure_string(~c"b")}}
   end
 
   test "search is leftmost, longest, typed, and reports all input partitions", %{runtime_module: module} do
     assert apply(module, :searched, []) ==
-             {:some, {:Match, ~c"aaa", ~c"xx", ~c"aaa", ~c"y"}}
+             {:some,
+              {:Match, cure_string(~c"aaa"), cure_string(~c"xx"), cure_string(~c"aaa"),
+               cure_string(~c"y")}}
 
     assert apply(module, :searched_leftmost_longest, []) ==
-             {:some, {:Match, ~c"aa", ~c"x", ~c"aa", ~c"y"}}
+             {:some,
+              {:Match, cure_string(~c"aa"), cure_string(~c"x"), cure_string(~c"aa"),
+               cure_string(~c"y")}}
 
     assert apply(module, :search_matches, [])
     refute apply(module, :search_misses, [])

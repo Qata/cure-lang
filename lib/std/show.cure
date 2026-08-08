@@ -65,20 +65,27 @@ mod Std.Show
 
   # -- FFI helpers ---------------------------------------------------
 
-  ## Private: integer -> code-point list (`String` is `List(Char)`, which
-  ## erases to a charlist, so the `*_to_list` BIFs are the coherent choice —
-  ## `*_to_binary` would yield a `Binary`, not the `List(Char)` these signatures
-  ## promise).
+  ## Private: integer -> code-point list. The `*_to_list` BIFs are the coherent
+  ## choice because `List(Char)` erases to a bare charlist — `*_to_binary` would
+  ## yield a `Binary` instead. An `@extern` is a direct remote call with no
+  ## marshalling, so these are declared at `List(Char)` and wrapped below:
+  ## `String` is nominal and erases to `{String, chars}`, which no BIF produces.
   @extern(:erlang, :integer_to_list, 1)
-  local fn int_to_string(n: Int) -> String
+  local fn int_to_charlist(n: Int) -> List(Char)
+
+  local fn int_to_string(n: Int) -> String = Std.String.from_characters(int_to_charlist(n))
 
   ## Private: float -> code-point list.
   @extern(:erlang, :float_to_list, 1)
-  local fn float_to_string(f: Float) -> String
+  local fn float_to_charlist(f: Float) -> List(Char)
+
+  local fn float_to_string(f: Float) -> String = Std.String.from_characters(float_to_charlist(f))
 
   ## Private: atom -> code-point list.
   @extern(:erlang, :atom_to_list, 1)
-  local fn atom_to_string(a: Atom) -> String
+  local fn atom_to_charlist(a: Atom) -> List(Char)
+
+  local fn atom_to_string(a: Atom) -> String = Std.String.from_characters(atom_to_charlist(a))
 
   # -- Convenience functions -----------------------------------------
 

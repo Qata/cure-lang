@@ -5,7 +5,8 @@ defmodule Cure.Elab.SemigroupConcatTest do
   `combine` method, and `+` on a non-numeric operand desugars to the same
   (Swift-style `+` overload), so both dispatch by coherence to the `List`
   implementation (which delegates to the reducing library `Std.List.append`).
-  String is `List(Char)`, so string concat rides the same List instance.
+  `String` is a nominal record rather than a `List(Char)` alias, so it carries
+  its own instance and concatenation returns a `String`.
   """
   use ExUnit.Case, async: true
   alias Cure.Elab.{Program, Emit}
@@ -41,7 +42,7 @@ defmodule Cure.Elab.SemigroupConcatTest do
     assert eval(src, :go, :"Cure.SgPlus") == [1, 2, 3, 4]
   end
 
-  test "`<>` on strings appends code points (String = List(Char))" do
+  test "`<>` on strings concatenates through String's own Semigroup instance" do
     src = """
     mod T
       use Std.Semigroup
@@ -50,18 +51,48 @@ defmodule Cure.Elab.SemigroupConcatTest do
     end
     """
 
-    assert eval(src, :go, :"Cure.SgStr") == ~c"abcd"
+    # `{:String, charlist}` is the erasure of the nominal record, not a stray
+    # wrapper: `String` owns its `Semigroup` instance now rather than borrowing
+    # `List`'s, so the result is a `String` and stays one.
+    assert eval(src, :go, :"Cure.SgStr") == {:String, ~c"abcd"}
   end
 
-  test "a nested concat without Semigroup names the missing provider at the operator" do
+  test "a nested concat needs no `use Std.Semigroup`" do
+    # This used to assert `operator_provider_not_in_scope`. That guard can no
+    # longer fire for `<>`: instance coherence is global, and `Std.String` is
+    # `@prelude` and carries `implementation Semigroup for String`, so `combine`
+    # has a meaning in every module whether or not `Std.Semigroup` is used.
+    # (`Std.Semigroup`'s own `List` instance rides along for the same reason —
+    # instances are global, not import-scoped.)
+    assert {:ok, _env} =
+             Program.elaborate("mod T\n  fn go() -> String = \"a\" <> \"b\" <> \"c\"\n",
+               file: "ambient_semigroup.cure"
+             )
+  end
+
+  test "the missing-provider diagnostic names the operator, the method and the fix" do
+    # The guard is unreachable for `<>` today (see above) but is not dead: it is
+    # the general answer for an operator whose provider a module has not brought
+    # into scope. Render it from the reason so the wording and the caret
+    # placement stay covered by the suite rather than only by the code path that
+    # currently cannot produce it.
     src = "mod T\n  fn go() -> String = \"a\" <> \"b\" <> \"c\"\n"
 
-    assert {:error,
-            {:source_context,
-             {:operator_provider_not_in_scope, %{operator: :<>, method: :combine, provider: "Std.Semigroup"}}, context} =
-              reason} = Program.elaborate(src, file: "missing_semigroup.cure")
+    span = %Cure.Diagnostic.Span{
+      source_id: "missing_semigroup.cure",
+      path: "missing_semigroup.cure",
+      start_byte: 34,
+      end_byte: 36,
+      start_line: 2,
+      start_column: 27,
+      end_line: 2,
+      end_column: 29
+    }
 
-    assert %Cure.Diagnostic.Span{start_line: 2, start_column: 27, end_column: 29} = context.span
+    reason =
+      {:source_context,
+       {:operator_provider_not_in_scope,
+        %{operator: :<>, method: :combine, provider: "Std.Semigroup"}}, %{span: span, checking: :go}}
 
     {diagnostic, registry} =
       Cure.Compiler.Errors.to_diagnostic(reason, "missing_semigroup.cure", src)

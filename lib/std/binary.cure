@@ -82,13 +82,3 @@ mod Std.Binary
 
   ## Drop the first `n` bytes of `b`, returning the remaining suffix.
   fn drop_bytes(b: Binary, n: Int) -> Binary = part(b, n, byte_size(b) - n)
-
-  ## Concatenate two `String`s (`List(Char)`). This is the concatenation a
-  ## string interpolation `"a#{x}b"` desugars to — `Std.Binary` is auto-preluded,
-  ## so interpolation needs no import. A self-contained total recursion (no
-  ## `Std.List` dependency); `<>` on `List(Char)` routes through `Std.Semigroup`
-  ## separately once that lands.
-  fn str_concat(a: List(Char), b: List(Char)) -> List(Char) =
-    match a
-      [] -> b
-      [h | t] -> [h | str_concat(t, b)]

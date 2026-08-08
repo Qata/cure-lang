@@ -112,8 +112,8 @@ implementation Functor for List
 
 `Semigroup(a)` provides associative `combine/2`. The `<>` operator, and `+`
 for non-numeric operands, resolve through this interface. Lists provide the
-standard implementation; because `String = List(Char)`, strings use the same
-structural append.
+standard implementation; `String` is nominal, so it supplies its own instance
+(`Std.String.concat`) rather than reusing the list append.
 
 ## Derivation
 

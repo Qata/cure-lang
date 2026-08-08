@@ -27,14 +27,15 @@ defmodule Cure.Compiler.RecordDefaultsTest do
 
       {:ok, mod} = compile_and_load(source)
 
-      # {:Person, name, age}
+      # {:Person, name, age} — `String` is a nominal record, so a string field
+      # erases to `{:String, charlist}` rather than to the bare charlist.
       blank = mod.blank()
       assert elem(blank, 0) == :Person
-      assert elem(blank, 1) == ~c"Anonymous"
+      assert elem(blank, 1) == {:String, ~c"Anonymous"}
       assert elem(blank, 2) == 0
 
-      alice = mod.named(~c"Alice")
-      assert elem(alice, 1) == ~c"Alice"
+      alice = mod.named({:String, ~c"Alice"})
+      assert elem(alice, 1) == {:String, ~c"Alice"}
       # default for age still applies
       assert elem(alice, 2) == 0
     end

@@ -14,12 +14,14 @@ defmodule Cure.Audit.ShimConformanceTest do
     executed = length(SC.axioms())
     excluded = length(SC.excluded())
 
-    assert executed == 37
+    assert executed == 34
     assert excluded == 4
 
     # Std.Regex is now a pure Cure value and no longer contributes seven shim
-    # axioms to this transitional runtime audit.
-    assert executed + excluded == 41
+    # axioms to this transitional runtime audit. `Std.Json` went the same way in
+    # `8643613b` — rebuilt on the exact literal protocols, so `encode/decode/
+    # num_of_int` stopped being externs and left the table with them.
+    assert executed + excluded == 38
 
     for {_mfa, reason} <- SC.excluded(), do: assert(reason == "network I/O")
   end

@@ -26,14 +26,16 @@ defmodule Cure.Stdlib.StalePascalCaseShimsRedTest do
     end
   end
 
-  describe "cure_std_time.parse_iso8601/1 (lib/cure/stdlib/cure_std_time.ex:39-60)" do
+  describe "cure_std_time.parse_iso8601/1" do
+    # `String` is nominal and erases to `{:String, chars}`; the shim is an
+    # `@extern` target, so it receives that shape and never a bare binary.
     test "a valid ISO 8601 timestamp returns {:ok, instant}, not {:Ok, instant}" do
       assert {:ok, %{__struct__: :instant, micros: _}} =
-               :cure_std_time.parse_iso8601("2026-04-21T15:11:46Z")
+               :cure_std_time.parse_iso8601({:String, ~c"2026-04-21T15:11:46Z"})
     end
 
     test "an invalid string returns {:error, _}, not {:Error, _}" do
-      assert {:error, _reason} = :cure_std_time.parse_iso8601("not-a-date")
+      assert {:error, _reason} = :cure_std_time.parse_iso8601({:String, ~c"not-a-date"})
     end
 
     test "a non-binary argument returns {:error, _}, not {:Error, _}" do

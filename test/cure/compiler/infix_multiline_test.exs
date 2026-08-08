@@ -16,8 +16,7 @@ defmodule Cure.Compiler.InfixMultilineTest do
           "1 +\n  2",
           "1 ==\n  2",
           "1 ..\n  2",
-          "value.\n  field",
-          "mailbox <-|\n  message"
+          "value.\n  field"
         ] do
       assert {:ok, _ast} = parse(source), "failed to parse:\n#{source}"
     end
@@ -44,9 +43,22 @@ defmodule Cure.Compiler.InfixMultilineTest do
              """)
   end
 
-  test "operators beginning a continuation line are also declaration-driven" do
-    assert {:ok, _ast} = parse("mailbox\n  <-| message")
+  # `<-|` keeps a dedicated lexer token — it gives both the ASCII and envelope
+  # spellings good spans — but it is an ordinary library-defined operator: the
+  # `Melquiades` precedence group is ambient (`lib/std/operators.cure`) while the
+  # fixity `infix `<-|` : Melquiades` lives in `Std.Otp`. So only the fixity has
+  # to be written out here; redeclaring the group is a conflict, not a setup step.
+  test "the melquiades send takes the continuation from its declaration" do
+    source = """
+    infix `<-|` : Melquiades
+    fn send(mailbox: Int, message: Int) -> Int = mailbox
+    """
 
+    assert {:ok, _ast} = parse(source <> "fn trailing() -> Int = 1 <-|\n  2\n")
+    assert {:ok, _ast} = parse(source <> "fn leading() -> Int = 1\n  <-| 2\n")
+  end
+
+  test "operators beginning a continuation line are also declaration-driven" do
     assert {:ok, _ast} =
              parse("""
              precedencegroup Join

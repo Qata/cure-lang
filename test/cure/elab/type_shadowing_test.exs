@@ -140,11 +140,50 @@ defmodule Cure.Elab.TypeShadowingTest do
     end
     """
 
-    assert {:error, {:source_context, {:shadowed_ctor, info}, _}} = elaborate(src)
+    assert {:error, {:source_context, {:shadowed_ctor, info}, _} = reason} = elaborate(src)
     assert info[:ctor] == :Z
     assert info[:shadowed_module] == "Std.Nat"
     assert info[:hint] == "Std.Nat.Z"
     assert info[:local_family] == :"WrongCtor#Nat"
+
+    # The reason must reach the author as a diagnostic. It had no registered
+    # conversion at all, so every module that tripped R5 got an
+    # `UnhandledError` crash out of the adapter instead of the message above.
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, "wrong_ctor.cure", src)
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered =~ "`Z` IS SHADOWED BY THIS MODULE'S OWN `NAT` [E091]"
+    assert rendered =~ "`Z` is a constructor of `Std.Nat`'s `Nat`, but this module declares its own"
+    assert rendered =~ "The local `Nat` provides `Zero`, `Suc`."
+    assert rendered =~ "Write `Std.Nat.Z` to name `Std.Nat`'s constructor explicitly"
+    assert rendered =~ "Or match a constructor of the local `Nat`: `Zero`, `Suc`"
+  end
+
+  # `:shadowed_ctor` says something specific: the local module declared a type
+  # whose name shadows the imported one, so the imported family's constructors
+  # can no longer be reached by their bare spelling — write `Std.Nat.Z` instead.
+  # The classifier asked a much weaker question: does this bare ctor resolve
+  # through an import rather than locally? That is true of EVERY imported
+  # constructor, so an ordinary wrong-family pattern was reported as shadowing
+  # and hinted at a qualified spelling that does not type-check either.
+  #
+  # The concrete case that surfaced it: `match input` on a `String` with a cons
+  # pattern. `String` is a nominal record now, not a `List(Char)` alias, so
+  # `Cons` is simply foreign to it — nothing about `List` is shadowed, and
+  # "write `Std.List.Cons`" is not the fix.
+  test "an imported ctor from an unshadowed family is foreign, not shadowed" do
+    src = """
+    mod ForeignNotShadowed
+      fn classify(input: String) -> Int = match input
+        ['x' | _] -> 1
+        _ -> 2
+    end
+    """
+
+    assert {:error, {:source_context, {:foreign_ctor, ctor}, context}} = elaborate(src)
+    assert ctor == :"Std.List#Cons"
+    assert context.expected_family == :"Std.String#String"
+    assert context.actual_family == :"Std.List#List"
   end
 
   describe "a local `typealias` shadows a same-named type reached from another module" do
@@ -208,16 +247,24 @@ defmodule Cure.Elab.TypeShadowingTest do
 
     test "with no local declaration the ambient type still wins the bare name" do
       # The control: shadowing must be triggered by the local declaration, not by
-      # the spelling. Nothing here declares `Char`, so `Char` is `Std.Char#Char` and
-      # an integer literal is not one of its values.
+      # the spelling. Nothing here declares `Char`, so `Char` is `Std.Char#Char`.
+      #
+      # The discriminating observable is the annotation's resolved TYPE, not an
+      # error. `Char` is `@builtin(:char)` and the kernel's compact-literal rule is
+      # its introduction form, so `97` is a perfectly good `Char` — as it is a
+      # perfectly good `Bounded(1114112)`. Both elaborate to `{:bounded_lit, 97}`;
+      # what tells the two apart is which type the definition ended up at.
       src = """
       mod NoAliasShadow
         fn a() -> Char = 97
       end
       """
 
-      assert {:error, {:source_context, reason, _}} = elaborate(src)
-      refute match?({:bounded_lit_out_of_range, _, _}, reason)
+      assert {:ok, env} = elaborate(src)
+      definition = Cure.Core.Env.get_def(env, :a)
+
+      assert definition.body == {:bounded_lit, 97}
+      assert definition.type == {:data, :"Std.Char#Char", [], []}
     end
   end
 

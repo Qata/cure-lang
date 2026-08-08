@@ -122,6 +122,9 @@ mod Std.Beam
     true -> Ok(raw_term_boolean(1, %[term, :checked_boolean]))
     false -> Error(InvalidBeamTerm())
 
+  ## A BEAM binary is not a Cure `String`: `String` is nominal and erases to
+  ## `{String, code_points}`. Decode the UTF-8 binary into its code points and
+  ## rebuild the nominal value, rather than relabelling the binary.
   fn decode_string(term: BeamTerm) -> Result(String, BeamDecodeError) = match raw_term_is_binary(term)
-    true -> Ok(raw_term_string(1, %[term, :checked_string]))
+    true -> Ok(Std.String.from_characters(Std.Binary.from_binary(raw_term_binary(1, %[term, :checked_string]))))
     false -> Error(InvalidBeamTerm())

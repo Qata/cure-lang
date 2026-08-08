@@ -106,6 +106,11 @@ defmodule Cure.Audit.GoldenTest do
   UNAUDITED (0)
   """
 
+  # `OPAQUE TYPES` is the audited module's own trust surface: what it declares,
+  # plus what its reachable definitions name. It is not a census of every opaque
+  # family in the environment — once `Tuple` became an ambient `@prelude opaque
+  # type`, a census reported it for every module in the language, including ones
+  # that never mention a pair.
   test "Std.List matches the spec's sample report" do
     {:ok, text} = CLI.run("Std.List", [])
     assert text == @expected

@@ -451,7 +451,19 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
 
   # A name is renamed iff it is uppercase-initial (a type-var/constructor spelling)
   # and does NOT resolve to a known type (built-in, declared, or imported).
-  defp rename?(name, ctx), do: uppercase_initial?(name) and not MapSet.member?(ctx, name)
+  #
+  # A retired spelling (`Pid`, `Ref` — see `Cure.Elab.Resolution`) resolves to
+  # nothing by design, so it reaches here looking exactly like a free type
+  # variable. Lowercasing it would turn `-> Pid` into `-> pid`, a well-formed
+  # signature over a fresh variable, and destroy the elaborator's
+  # `retired_process_type` diagnostic — the only thing that tells the author to
+  # write `Pid(m)`. There is no mechanical rewrite (the message type cannot be
+  # synthesized), so the rule leaves the name as authored, as
+  # `Rules.RemovedModule` does for a removed `use`.
+  defp rename?(name, ctx) do
+    uppercase_initial?(name) and not MapSet.member?(ctx, name) and
+      not Cure.Elab.Resolution.retired_type_name?(name)
+  end
 
   defp uppercase_initial?(<<c, _::binary>>) when c in ?A..?Z, do: true
   defp uppercase_initial?(_), do: false

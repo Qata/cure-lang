@@ -115,12 +115,7 @@ defmodule Cure.Audit.Ledger do
 
     %Report{
       axioms: axioms,
-      opaque:
-        env.families
-        |> Map.keys()
-        |> Enum.filter(&Cure.Core.Inductive.opaque?(env, &1))
-        |> Enum.reject(&(&1 in Map.values(env.builtins)))
-        |> Enum.sort(),
+      opaque: opaque_types(env, reachable),
       builtin_count:
         env.defs
         |> Enum.flat_map(fn {_name, definition} -> List.wrap(Map.get(definition, :builtin_op)) end)
@@ -163,6 +158,37 @@ defmodule Cure.Audit.Ledger do
   # believed, not checked. Raising here would make the tool unable to audit
   # Std.Fsm, Std.Actor, Std.Supervisor and Std.Process. It is a finding, and a
   # sharp one: an axiom whose type names something that does not exist.
+  # An opaque type belongs on the audited module's trust surface when the module
+  # declares it, or when a reachable definition mentions it — in a signature or
+  # in a body. Listing every opaque family in the environment instead reports the
+  # prelude's: `Std.Tuple#Tuple` is ambient, so every module in the language
+  # would be told it depends on an opaque `Tuple` it never names. Ownership is
+  # decided the same way `roots/1` decides it, by canonical definition identity.
+  defp opaque_types(env, reachable) do
+    mentioned =
+      reachable
+      |> Enum.flat_map(fn name ->
+        definition = Map.fetch!(env.defs, name)
+        Refs.families(Map.get(definition, :type)) ++ Refs.families(Map.get(definition, :body))
+      end)
+      |> MapSet.new()
+
+    env.families
+    |> Map.keys()
+    |> Enum.filter(&Cure.Core.Inductive.opaque?(env, &1))
+    |> Enum.reject(&(&1 in Map.values(env.builtins)))
+    |> Enum.filter(&(declared_here?(env, &1) or MapSet.member?(mentioned, &1)))
+    |> Enum.sort()
+  end
+
+  defp declared_here?(%Env{module_owner: owner}, family) when is_binary(owner),
+    do: Cure.Elab.Name.owner(family) == owner
+
+  # Synthetic/legacy environments carry no canonical owner. Fall back to the same
+  # prelude diff `roots/1` uses: anything the empty-module probe does not already
+  # have was declared by the source under audit.
+  defp declared_here?(%Env{}, family), do: not Map.has_key?(prelude_env().families, family)
+
   defp reachable(env, roots) do
     {seen, unresolved} =
       Enum.reduce(roots, {MapSet.new(), MapSet.new()}, fn root, acc -> collect(env, root, acc) end)

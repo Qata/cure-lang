@@ -63,13 +63,22 @@ defmodule Cure.Elab.NestedAliasCtorTest do
     assert {:ok, _} = Program.elaborate(rev)
   end
 
-  test "nested: list of string literals at List(String) where String = List(Char)" do
+  # Two alias levels under an outer family: the outer `List` sees `CodePoints`,
+  # which unfolds to `List(CodePoint)`, whose own parameter unfolds again before
+  # the innermost literals are checked.
+  #
+  # This used to be spelled `String = List(Char)` with `["hi", "yo"]`. That
+  # equation is gone — `String` is its own nominal record, so a string literal
+  # placed at `List(Char)` now fails on `ExpressibleByStringLiteral`, and the
+  # local alias named `String` collides with the ambient constructor besides.
+  # The innermost alias is a plain `Int`, not a `Bounded(n)`: bounded literals in
+  # list-element position have their own unrelated gap.
+  test "nested: lists of literals under two alias levels" do
     src = """
     mod NA
-      use Std.Bounded
-      typealias Char = Bounded(1114112)
-      typealias String = List(Char)
-      fn f() -> List(String) = ["hi", "yo"]
+      typealias Count = Int
+      typealias Counts = List(Count)
+      fn f() -> List(Counts) = [[104, 105], [121, 111]]
     end
     """
 

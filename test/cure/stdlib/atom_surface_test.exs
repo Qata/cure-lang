@@ -118,12 +118,14 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
   end
 
   test "safe atom lookup preserves existing atoms without interning input" do
-    assert :ok = :"Cure.Std.String".to_existing_atom(~c"ok")
+    # Called at the BEAM level, so the argument is the erasure of the nominal
+    # `String` record — `{:String, charlist}`, not a bare charlist.
+    assert :ok = :"Cure.Std.String".to_existing_atom({:String, ~c"ok"})
 
     unknown = "cure_atom_surface_#{System.unique_integer([:positive])}"
 
     assert_raise ArgumentError, fn ->
-      apply(:"Cure.Std.String", :to_existing_atom, [String.to_charlist(unknown)])
+      apply(:"Cure.Std.String", :to_existing_atom, [{:String, String.to_charlist(unknown)}])
     end
 
     assert_raise ArgumentError, fn -> String.to_existing_atom(unknown) end

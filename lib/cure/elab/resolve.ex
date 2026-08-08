@@ -198,7 +198,7 @@ defmodule Cure.Elab.Resolve do
   def constrained_call_checked(env, name, args, expected_core, names, ctx) do
     specs = Env.constrained(env, name)
 
-    with {:ok, dict_asts} <- dict_arguments_checked(specs, args, expected_core, names, ctx, env),
+    with {:ok, dict_asts} <- dict_arguments_checked(specs, name, args, expected_core, names, ctx, env),
          {:ok, term, _type} <-
            Elaborator.elaborate_implicit_global_app(env, name, args ++ dict_asts, names, ctx),
          :ok <- Cure.Core.Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
@@ -415,13 +415,13 @@ defmodule Cure.Elab.Resolve do
     end)
   end
 
-  defp dict_arguments_checked(specs, args, expected_core, names, ctx, env) do
+  defp dict_arguments_checked(specs, callee, args, expected_core, names, ctx, env) do
     Enum.reduce_while(specs, {:ok, []}, fn spec, {:ok, acc} ->
       result =
         if is_integer(spec.head_arg_index) do
           dictionary_ast_from_argument(spec, Enum.at(args, spec.head_arg_index), names, ctx, env)
         else
-          dictionary_ast_from_result(spec, expected_core, names, ctx, env)
+          dictionary_ast_from_result(spec, callee, expected_core, names, ctx, env)
         end
 
       case result do
@@ -446,13 +446,25 @@ defmodule Cure.Elab.Resolve do
     end
   end
 
-  defp dictionary_ast_from_result(spec, expected_core, names, ctx, env) do
+  defp dictionary_ast_from_result(spec, callee, expected_core, names, ctx, env) do
     case result_head_core(spec.return_type, expected_core, spec.tyvar) do
       {:ok, head_core} ->
         dictionary_ast_from_type(spec, Eval.eval(head_core, Context.env(ctx)), names, ctx, env)
 
+      # No argument fixes the head, and the expected type does not have the
+      # declared result's shape, so there is nothing to read the head off. The
+      # author has to widen or correct the annotation — which means the reason
+      # has to carry enough to say which annotation and what shape it must take.
       :error ->
-        {:error, {:constraint_head_not_determined, spec.iface, spec.tyvar}}
+        {:error,
+         {:constraint_head_not_determined,
+          %{
+            interface: spec.iface,
+            type_variable: spec.tyvar,
+            callee: callee,
+            result_type: spec.return_type,
+            expected: expected_core
+          }}}
     end
   end
 

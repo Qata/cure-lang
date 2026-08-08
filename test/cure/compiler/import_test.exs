@@ -97,7 +97,10 @@ defmodule Cure.Compiler.ImportTest do
 
       {:ok, m} = Cure.Compiler.compile_and_load(source)
       assert m.doubled([1, 2]) == [2, 4]
-      assert m.str_len("hello") == 5
+      # `String` is nominal and erases to `{String, code_points}` — a raw BEAM
+      # binary is a `Std.Binary`, not a `String`, and there is no marshalling
+      # wrapper at the export boundary. Hand the function what it declares.
+      assert m.str_len({:String, ~c"hello"}) == 5
     after
       purge(:"Cure.ImportMixed")
     end

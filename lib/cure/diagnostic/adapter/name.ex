@@ -135,6 +135,12 @@ defmodule Cure.Diagnostic.Adapter.Name do
   def from_error({:source_context, {:foreign_ctor, constructor}, context}, opts) when is_map(context),
     do: foreign_constructor(constructor, context, opts)
 
+  def from_error({:source_context, {:shadowed_ctor, info}, context}, opts) when is_map(context) and is_list(info),
+    do: shadowed_constructor(info, context, opts)
+
+  def from_error({:shadowed_ctor, info}, opts) when is_list(info),
+    do: shadowed_constructor(info, %{}, opts)
+
   def from_error({:no_such_interface, %{interface: interface} = details}, opts) do
     opts =
       opts
@@ -1780,6 +1786,105 @@ defmodule Cure.Diagnostic.Adapter.Name do
   defp missing_field_label(fields), do: "the missing fields " <> Enum.map_join(fields, ", ", &"`#{name_to_string(&1)}`")
   defp field_list([field]), do: "`#{name_to_string(field)}`"
   defp field_list(fields), do: Enum.map_join(fields, ", ", &"`#{name_to_string(&1)}`")
+
+  @doc """
+  A bare constructor spelling that names an imported family's constructor, in a
+  module whose own type declaration has taken that family's name.
+
+  This is distinct from `foreign_constructor/3`: there the constructor simply
+  belongs to another type, and the fix is to use one of the scrutinee's own. Here
+  the two families share a bare name, so the author almost certainly believed the
+  bare constructor still referred to the imported one — and the qualified
+  spelling is a real second option, not just a workaround.
+  """
+  @spec shadowed_constructor(keyword(), map(), keyword()) :: Diagnostic.t()
+  def shadowed_constructor(info, context, opts) do
+    constructor = Keyword.fetch!(info, :ctor)
+    constructor_name = surface_name(constructor)
+    module = Keyword.fetch!(info, :shadowed_module)
+    local_family_id = Keyword.fetch!(info, :local_family)
+    local_family = surface_name(local_family_id)
+    qualified = Keyword.get(info, :hint, "#{module}.#{constructor_name}")
+    local_constructors = info |> Keyword.get(:local_ctors, []) |> Enum.map(&surface_name/1)
+
+    # Prefer the offending pattern's own span over the whole match, exactly as
+    # `foreign_constructor/3` does, so the caret sits on the constructor the
+    # author has to change rather than underlining every arm.
+    primary_span =
+      constructor_pattern_span(context, constructor_name) || Map.get(context, :span) || Keyword.get(opts, :span)
+
+    body =
+      Doc.stack([
+        Doc.paragraph(
+          "`#{constructor_name}` is a constructor of `#{module}`'s `#{local_family}`, " <>
+            "but this module declares its own `#{local_family}`. The local declaration takes the bare " <>
+            "spelling of the type, so its constructors are the only ones `#{constructor_name}` could name here."
+        ),
+        available_constructors_paragraph(local_family, local_constructors)
+      ])
+
+    Diagnostic.new(
+      code: "E091",
+      key: :unknown_name,
+      severity: :error,
+      title: "`#{constructor_name}` is shadowed by this module's own `#{local_family}`",
+      body: body,
+      primary:
+        if(primary_span,
+          do: %Label{
+            span: primary_span,
+            style: :primary,
+            message: "this names a constructor of `#{module}`, not of the local `#{local_family}`"
+          },
+          else: primary(opts, "this constructor comes from `#{module}`")
+        ),
+      suggestions:
+        [
+          %Suggestion{
+            message: "Write `#{qualified}` to name `#{module}`'s constructor explicitly",
+            applicability: :manual
+          }
+        ] ++ local_constructor_suggestions(local_family, local_constructors),
+      notes: Keyword.get(opts, :notes, []),
+      provenance: Keyword.get(opts, :provenance, []),
+      payload: %{
+        kind: :shadowed_ctor,
+        constructor: constructor_name,
+        shadowed_module: module,
+        local_family: local_family,
+        local_family_id: name_to_string(local_family_id),
+        local_constructors: local_constructors,
+        qualified_spelling: qualified
+      }
+    )
+  end
+
+  defp constructor_pattern_span(context, constructor_name) do
+    context
+    |> Map.get(:branch_patterns, [])
+    |> Enum.find_value(fn pattern ->
+      if name_to_string(Map.get(pattern, :name)) == constructor_name,
+        do: Map.get(pattern, :pattern_span) || Map.get(pattern, :span)
+    end)
+  end
+
+  defp available_constructors_paragraph(_local_family, []),
+    do: Doc.paragraph("The local declaration has no constructors of its own.")
+
+  defp available_constructors_paragraph(local_family, constructors),
+    do: Doc.paragraph("The local `#{local_family}` provides #{Enum.map_join(constructors, ", ", &"`#{&1}`")}.")
+
+  defp local_constructor_suggestions(_local_family, []), do: []
+
+  defp local_constructor_suggestions(local_family, constructors),
+    do: [
+      %Suggestion{
+        message:
+          "Or match a constructor of the local `#{local_family}`: " <>
+            Enum.map_join(constructors, ", ", &"`#{&1}`"),
+        applicability: :manual
+      }
+    ]
 
   @doc false
   def foreign_constructor(constructor, context, opts) do

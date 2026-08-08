@@ -436,6 +436,10 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: TypeAdapter.from_error(error, opts)
 
+  def from_error({:source_context, {:constraint_head_not_determined, details}, context} = error, opts)
+      when is_map(details) and is_map(context),
+      do: TypeAdapter.from_error(error, opts)
+
   def from_error({:source_context, {:ambiguous_method, method, interfaces}, context}, opts)
       when is_map(context),
       do: NameAdapter.ambiguous_member(method, interfaces, context, opts)
@@ -573,6 +577,13 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:source_context, {:foreign_ctor, constructor}, context}, opts)
       when is_map(context),
       do: NameAdapter.from_error({:source_context, {:foreign_ctor, constructor}, context}, opts)
+
+  def from_error({:source_context, {:shadowed_ctor, info}, context} = error, opts)
+      when is_map(context) and is_list(info),
+      do: NameAdapter.from_error(error, opts)
+
+  def from_error({:shadowed_ctor, info} = error, opts) when is_list(info),
+    do: NameAdapter.from_error(error, opts)
 
   def from_error({:source_context, {kind, _name}, context} = error, opts)
       when kind in [:unknown_ctor, :foreign_ctor, :unknown_pattern_constructor, :unknown_family] and
@@ -1395,6 +1406,9 @@ defmodule Cure.Diagnostic.Adapter do
     do: KernelAdapter.from_error(error, opts)
 
   def from_error({:no_instance, _interface, _head} = error, opts),
+    do: TypeAdapter.from_error(error, opts)
+
+  def from_error({:constraint_head_not_determined, details} = error, opts) when is_map(details),
     do: TypeAdapter.from_error(error, opts)
 
   def from_error({:ambiguous_instance_for_expected_type, interface, expected}, opts),
@@ -2420,8 +2434,9 @@ defmodule Cure.Diagnostic.Adapter do
            "add the required bounded character annotation"}
 
         :char_literal_out_of_range ->
-          {"Character literal is out of range", "This character value is outside the supported character range.",
-           "use a valid character literal"}
+          {"Character literal is out of range",
+           "This value is not a Unicode code point. A `Char` holds a code point in `0`..`1114111` (`0x10FFFF`).",
+           "code point must be between 0 and 1114111"}
 
         :extern_returns_union ->
           {"Extern return type is unsupported", "An extern declaration cannot return this union type.",

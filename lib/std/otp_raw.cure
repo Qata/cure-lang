@@ -149,8 +149,11 @@ mod Std.Otp.Raw
   @extern(:erlang, :element, 2)
   fn raw_term_boolean(index: Int, checked: Tuple(RawTerm, Atom)) -> Bool
 
+  ## The guard that admits this extraction is `raw_term_is_binary`, so what comes
+  ## out is a `Binary` — not a Cure `String`, which is nominal and erases to
+  ## `{String, code_points}`. `Std.Beam.decode_string` decodes the binary.
   @extern(:erlang, :element, 2)
-  fn raw_term_string(index: Int, checked: Tuple(RawTerm, Atom)) -> String
+  fn raw_term_binary(index: Int, checked: Tuple(RawTerm, Atom)) -> Binary
 
   ## Attach erased actor protocol indices to an already PID-validated carrier.
   ## This is the construction trust point used by Std.Otp.start_actor; it does

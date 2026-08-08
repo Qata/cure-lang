@@ -6,6 +6,17 @@ defmodule Cure.Stdlib.DependentRegexNfaPropertyTest do
 
   @runs [max_runs: 500, max_run_time: :infinity]
 
+  # `String` is nominal -- `rec String { characters: List(Char) }` -- so it
+  # erases to the tagged pair `{:String, code_points}`. The generators below
+  # produce bare charlists, so every subject is wrapped before it crosses into a
+  # compiled Cure function.
+  #
+  # `Std.Regex` splits its two layers on this line: `pattern_accepts` and
+  # `parse_pattern_full` take a `String` and convert internally, while the raw
+  # evidence machine (`pattern_evidence`) works in code points. The source below
+  # therefore converts once, at the `pattern_evidence` calls.
+  defp cure_string(chars), do: {:String, chars}
+
   setup_all do
     source = """
     mod RegexNfaProperties
@@ -43,16 +54,16 @@ defmodule Cure.Stdlib.DependentRegexNfaPropertyTest do
         None() -> false
 
       fn has_evidence(kind: Int, input: String) -> Bool = pickup
-        kind == 0 -> evidence_present(pattern_evidence(empty(), input))
-        kind == 1 -> evidence_present(pattern_evidence(atom('a'), input))
-        kind == 2 -> evidence_present(pattern_evidence(ab(), input))
-        kind == 3 -> evidence_present(pattern_evidence(either(), input))
-        kind == 4 -> evidence_present(pattern_evidence(many_a(), input))
-        kind == 5 -> evidence_present(pattern_evidence(many_either(), input))
-        kind == 6 -> evidence_present(pattern_evidence(many_a_then_b(), input))
-        kind == 7 -> evidence_present(pattern_evidence(nullable_star(), input))
-        kind == 8 -> evidence_present(pattern_evidence(grouped(), input))
-        else -> evidence_present(pattern_evidence(empty_then_a(), input))
+        kind == 0 -> evidence_present(pattern_evidence(empty(), Std.String.characters(input)))
+        kind == 1 -> evidence_present(pattern_evidence(atom('a'), Std.String.characters(input)))
+        kind == 2 -> evidence_present(pattern_evidence(ab(), Std.String.characters(input)))
+        kind == 3 -> evidence_present(pattern_evidence(either(), Std.String.characters(input)))
+        kind == 4 -> evidence_present(pattern_evidence(many_a(), Std.String.characters(input)))
+        kind == 5 -> evidence_present(pattern_evidence(many_either(), Std.String.characters(input)))
+        kind == 6 -> evidence_present(pattern_evidence(many_a_then_b(), Std.String.characters(input)))
+        kind == 7 -> evidence_present(pattern_evidence(nullable_star(), Std.String.characters(input)))
+        kind == 8 -> evidence_present(pattern_evidence(grouped(), Std.String.characters(input)))
+        else -> evidence_present(pattern_evidence(empty_then_a(), Std.String.characters(input)))
 
       fn parsed({value: Type}, result: Option(value)) -> Bool = match result
         Some(_) -> true
@@ -106,11 +117,11 @@ defmodule Cure.Stdlib.DependentRegexNfaPropertyTest do
   test "Thompson acceptance agrees with structural denotation on generated words", %{runtime_module: module} do
     assert :ok =
              Property.check_all(case_gen(), @runs, fn {kind, input} ->
-               accepted = apply(module, :accepts, [kind, input])
+               accepted = apply(module, :accepts, [kind, cure_string(input)])
 
                accepted == reference(kind, input) and
-                 apply(module, :has_evidence, [kind, input]) == accepted and
-                 apply(module, :parses, [kind, input]) == accepted
+                 apply(module, :has_evidence, [kind, cure_string(input)]) == accepted and
+                 apply(module, :parses, [kind, cure_string(input)]) == accepted
              end)
   end
 
@@ -123,13 +134,13 @@ defmodule Cure.Stdlib.DependentRegexNfaPropertyTest do
           do: Enum.reverse(word)
 
     for kind <- 0..9, input <- words do
-      assert apply(module, :accepts, [kind, input]) == reference(kind, input),
+      assert apply(module, :accepts, [kind, cure_string(input)]) == reference(kind, input),
              "kind=#{kind} input=#{inspect(input)}"
 
-      assert apply(module, :has_evidence, [kind, input]) == reference(kind, input),
+      assert apply(module, :has_evidence, [kind, cure_string(input)]) == reference(kind, input),
              "evidence kind=#{kind} input=#{inspect(input)}"
 
-      assert apply(module, :parses, [kind, input]) == reference(kind, input),
+      assert apply(module, :parses, [kind, cure_string(input)]) == reference(kind, input),
              "typed parse kind=#{kind} input=#{inspect(input)}"
     end
   end

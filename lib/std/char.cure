@@ -8,8 +8,8 @@ mod Std.Char
   ## `@builtin(:char)` names the kernel rule that introduces its values: a
   ## character literal is a compact code point, so the runtime representation is
   ## one machine integer and no constructor is needed (or allowed). Character
-  ## literals (`'a'`, `'\n'`) elaborate to `Char` values, and a `String` is a
-  ## `List(Char)`. This
+  ## literals (`'a'`, `'\n'`) elaborate to `Char` values, and a `String` stores
+  ## its text as a `List(Char)` behind its own nominal boundary. This
   ## module gives the type its visible, documented home, mirroring
   ## `Std.Int`/`Std.Float`/`Std.Binary`/`Std.Atom`.
   ##
@@ -21,8 +21,8 @@ mod Std.Char
   use Std.Comparable
   use Std.Literal
 
-  ## `@prelude`: `Char` is ambient like `String` (which is `List(Char)`), so a
-  ## bare `Char` return/field type and character literals resolve with no `use`.
+  ## `@prelude`: `Char` is ambient like `String`, so a bare `Char` return/field
+  ## type and character literals resolve with no `use`.
   @prelude
   @builtin(:char)
   opaque type Char
@@ -33,12 +33,14 @@ mod Std.Char
   implementation Comparable for Char
     fn `<`(a: Char, b: Char) -> Bool = less_than(a, b)
 
-  implementation ExpressibleByNaturalLiteral for Char
-    fn from_natural_literal(literal: NaturalLiteral) -> LiteralResult(Char) =
-      match from_code_point(FromNat(literal.value))
-        Std.Option.Some(value) -> LiteralValue(value)
-        Std.Option.None() -> InvalidLiteral()
-
+  ## `Char` declares no `ExpressibleByNaturalLiteral` instance, and cannot have a
+  ## working one. Every route from `Int` to `Char` is an `@extern` postulate with
+  ## no body, so an initializer written in terms of one never reduces to a
+  ## compile-time value — `fn c() -> Char = 12` failed rather than producing a
+  ## character. A numeral checked against `Char` is admitted by the kernel's
+  ## compact-literal rule instead, which re-derives the Unicode scalar ceiling
+  ## itself; that rule is the type's only introduction form, as it is for `Char`
+  ## in Idris and Lean.
   implementation ExpressibleByCharacterLiteral for Char
     fn from_character_literal(literal: CharacterLiteral) -> LiteralResult(Char) = LiteralValue(literal.value)
 
@@ -109,12 +111,19 @@ mod Std.Char
   fn is_lowercase(c: Char) -> Bool
 
   ## Case conversion returns a String because Unicode mappings may expand one
-  ## scalar into several (`'ß'.uppercased()` is `"SS"`).
+  ## scalar into several (`'ß'.uppercased()` is `"SS"`). The shim returns a bare
+  ## code-point list, so the extern is declared at `List(Char)` and wrapped: an
+  ## `@extern` performs no marshalling, and nominal `String` erases to
+  ## `{String, chars}`, a shape the shim does not build.
   @extern(:cure_std_char, :uppercased, 1)
-  fn uppercased(c: Char) -> String
+  local fn uppercased_charlist(c: Char) -> List(Char)
+
+  fn uppercased(c: Char) -> String = Std.String.from_characters(uppercased_charlist(c))
 
   @extern(:cure_std_char, :lowercased, 1)
-  fn lowercased(c: Char) -> String
+  local fn lowercased_charlist(c: Char) -> List(Char)
+
+  fn lowercased(c: Char) -> String = Std.String.from_characters(lowercased_charlist(c))
 
   ## ASCII-only one-to-one fold for protocols (such as non-Unicode regex
   ## caseless matching) that explicitly require ASCII semantics.

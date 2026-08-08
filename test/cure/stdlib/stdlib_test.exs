@@ -14,6 +14,13 @@ defmodule Cure.StdlibTest do
     module
   end
 
+  # `String` is nominal -- `rec String { characters: List(Char) }` -- so it erases
+  # to the tagged pair `{:String, code_points}`. A BEAM caller of a compiled Cure
+  # function speaks the erased language: neither an Elixir binary nor a bare
+  # charlist is a Cure `String`, and only `Std.String`'s own private externs work
+  # at `List(Char)`.
+  defp cure_string(text), do: {:String, String.to_charlist(text)}
+
   # A `where Equatable(t)` function (e.g. `List.contains`) is elaborated in the
   # dictionary-passing model Idris/Agda use: the resolved `Equatable` instance is
   # threaded as a trailing runtime argument. At the element type `Int`, that
@@ -119,22 +126,20 @@ defmodule Cure.StdlibTest do
     end
 
     test "int_to_string", %{m: m} do
-      assert m.int_to_string(42) == "42"
-      assert m.int_to_string(-1) == "-1"
+      assert m.int_to_string(42) == cure_string("42")
+      assert m.int_to_string(-1) == cure_string("-1")
     end
 
     test "atom_to_string", %{m: m} do
-      assert m.atom_to_string(:hello) == "hello"
+      assert m.atom_to_string(:hello) == cure_string("hello")
     end
 
-    # A Cure `String` is `List(Char)` (#29), which at the Erlang boundary is a
-    # charlist — so pass `~c"test"`, not the Elixir binary `"test"`.
     test "println returns unit", %{m: m} do
-      assert m.println(~c"test") == :unit
+      assert m.println(cure_string("test")) == :unit
     end
 
     test "print returns unit", %{m: m} do
-      assert m.print(~c"test") == :unit
+      assert m.print(cure_string("test")) == :unit
     end
   end
 
@@ -476,50 +481,52 @@ defmodule Cure.StdlibTest do
     end
 
     test "length", %{m: m} do
-      assert m.length("hello") == 5
-      assert m.length("") == 0
+      assert m.length(cure_string("hello")) == 5
+      assert m.length(cure_string("")) == 0
     end
 
     test "is_empty", %{m: m} do
-      assert m.is_empty("") == true
-      assert m.is_empty("x") == false
+      assert m.is_empty(cure_string("")) == true
+      assert m.is_empty(cure_string("x")) == false
     end
 
     test "concat", %{m: m} do
-      # #29: String is List(Char); concat yields the value-surface charlist.
-      assert m.concat("hello", " world") == ~c"hello world"
+      assert m.concat(cure_string("hello"), cure_string(" world")) == cure_string("hello world")
     end
 
     test "from_int and from_atom", %{m: m} do
-      assert m.from_int(42) == ~c"42"
-      assert m.from_atom(:hello) == ~c"hello"
+      assert m.from_int(42) == cure_string("42")
+      assert m.from_atom(:hello) == cure_string("hello")
     end
 
     test "to_int", %{m: m} do
-      assert m.to_int("42") == 42
+      assert m.to_int(cure_string("42")) == 42
     end
 
     test "existing and explicitly unsafe atom conversion", %{m: m} do
-      assert m.to_existing_atom("hello") == :hello
-      assert m.unsafe_to_atom("hello") == :hello
+      assert m.to_existing_atom(cure_string("hello")) == :hello
+      assert m.unsafe_to_atom(cure_string("hello")) == :hello
     end
 
     test "split", %{m: m} do
-      assert m.split("a,b,c", ",") == ["a", "b,c"]
+      # `split/2` is one-shot: `List(String)`, so each element is a nominal pair.
+      assert m.split(cure_string("a,b,c"), cure_string(",")) == [
+               cure_string("a"),
+               cure_string("b,c")
+             ]
     end
 
     test "repeat", %{m: m} do
-      assert m.repeat("ab", 3) == ~c"ababab"
+      assert m.repeat(cure_string("ab"), 3) == cure_string("ababab")
     end
 
     test "trim", %{m: m} do
-      result = m.trim("  hello  ")
-      assert is_binary(result) or is_list(result)
+      assert m.trim(cure_string("  hello  ")) == cure_string("hello")
     end
 
     test "reverse", %{m: m} do
-      assert m.reverse("hello") == ~c"olleh"
-      assert m.reverse("") == ~c""
+      assert m.reverse(cure_string("hello")) == cure_string("olleh")
+      assert m.reverse(cure_string("")) == cure_string("")
     end
   end
 
@@ -542,12 +549,24 @@ defmodule Cure.StdlibTest do
       assert ts > 0
     end
 
-    test "self returns pid", %{m: m} do
-      assert is_pid(m.self())
+    # `Std.System.self/0` was deleted in `1f53615a` (the dependent-core
+    # migration): a bare `Pid` carries no mailbox type, so process identity now
+    # lives in the typed process algebra as `Std.Otp.self({m: Type}) ->
+    # Effect(Pid(m))`. Pin the deletion so the untyped entry cannot come back.
+    test "self is no longer an untyped Std.System entry", %{m: m} do
+      refute function_exported?(m, :self, 0)
     end
 
     test "node returns atom", %{m: m} do
       assert is_atom(m.node())
+    end
+
+    test "otp_version returns a String", %{m: m} do
+      # `:erlang.system_info(:otp_release)` answers a bare charlist; nominal
+      # `String` erases to `{:String, chars}`, so the wrapper must rebuild it.
+      assert {:String, chars} = m.otp_version()
+      assert Enum.all?(chars, &is_integer/1)
+      assert chars != []
     end
 
     test "cpu_count returns positive integer", %{m: m} do

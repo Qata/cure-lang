@@ -730,11 +730,16 @@ doesn't depend on which implementation was found. Cure enforces it globally.
 type Ordering = LessThan | EqualTo | GreaterThan
 ```
 
-**String** — Text, defined as `List(Char)` (a `Char` is `Bounded(0x110000)`, a
-provably-valid code point). Because a string *is* a list, list operations and
-concatenation work on it directly.
+**String** — Text: a *nominal* type, `rec String { characters: List(Char) }`. A
+`Char` is a nominal Unicode code point. A string is therefore not itself a list —
+the nominal boundary lets `String` and `List(Char)` carry distinct conformances,
+and lets the storage change later without changing source-level identity. Use
+`Std.String`'s operations; `characters`/`from_characters` cross the boundary
+when you genuinely need the code points.
 
 ```cure
+use Std.String
+
 length("hello")          # => 5   (code points, not bytes)
 ```
 
@@ -753,8 +758,9 @@ fn equal() -> Bool = 1 == 1
 ```
 
 **Semigroup / combine** — Types with an associative `combine`. `x <> y` desugars to
-`combine(x, y)`; a non-numeric `x + y` does too. The `List` instance is append, and
-since `String = List(Char)`, string concat rides the same instance.
+`combine(x, y)`; a non-numeric `x + y` does too. The `List` instance is append;
+`String` is nominal, so it carries its own instance (`Std.String.concat`) rather
+than riding the `List` one.
 
 ```cure
 use Std.Semigroup

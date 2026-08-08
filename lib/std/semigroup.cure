@@ -10,8 +10,9 @@ mod Std.Semigroup
   ##
   ## The built-in implementation for `List` is the ordinary structural append,
   ## a reducing library function (not a kernel primitive), so `Vector`/length-
-  ## indexed reasoning keeps computing through a concatenation. Because
-  ## `String = List(Char)`, string concat rides the same `List` instance.
+  ## indexed reasoning keeps computing through a concatenation. `String` is
+  ## nominal, so it supplies its own instance (`Std.String.concat`) rather than
+  ## riding the `List` one.
   ##
   ## ## Examples
   ##

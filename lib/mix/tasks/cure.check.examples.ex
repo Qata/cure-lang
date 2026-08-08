@@ -46,7 +46,11 @@ defmodule Mix.Tasks.Cure.Check.Examples do
     "fsm_pipeline" => :compile_only,
     "hello" => "42",
     "holes_demo" => "0",
-    "json_derive" => ~s(~c"{}"),
+    # Two things moved since this said `~c"{}"`. `@derive(ToJSON)` now builds the
+    # structured `Value.Object` its docstring describes instead of an empty one,
+    # and `String` became nominal — so `main()` returns the derived object inside
+    # the `{String, code_points}` constructor rather than a bare charlist.
+    "json_derive" => ~S({:String, ~c"{\"name\":\"Ada\",\"age\":36}"}),
     "json_tree" => "48",
     "lambda_block" => "54",
     "lazy_iter" => "55",

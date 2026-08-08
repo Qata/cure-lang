@@ -57,10 +57,16 @@ defmodule Mix.Tasks.Cure.CompileTest do
     Mix.shell(Mix.Shell.IO)
     Mix.Task.reenable("cure.compile")
 
+    # A cycle is a WARNING, not a failure: `load_module_interface/2` answers a
+    # back-edge with an interface skeleton, so cycle members check against each
+    # other's real signatures and the build completes. The stdlib relies on this
+    # — `Std.Char`/`Std.Literal`/`Std.String` are mutually recursive by design.
+    # What W086 buys is that the cycle is still SAID, exactly once, from the one
+    # place that can see the whole file set.
     stderr =
       ExUnit.CaptureIO.capture_io(:stderr, fn ->
         ExUnit.CaptureIO.capture_io(fn ->
-          assert catch_exit(Mix.Task.run("cure.compile", [dir, "--output-dir", out])) == {:shutdown, 1}
+          assert :ok = Mix.Task.run("cure.compile", [dir, "--output-dir", out])
         end)
       end)
 

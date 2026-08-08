@@ -15,17 +15,39 @@ defmodule Cure.Audit.Refs do
   Untrusted; outside the TCB.
   """
 
-  @type scan :: %{globals: [atom()], holes: [String.t()], absurd: non_neg_integer()}
+  @type scan :: %{
+          globals: [atom()],
+          families: [atom()],
+          holes: [String.t()],
+          absurd: non_neg_integer()
+        }
 
-  @empty %{globals: [], holes: [], absurd: 0}
+  @empty %{globals: [], families: [], holes: [], absurd: 0}
 
   @spec globals(term()) :: [atom()]
   def globals(t), do: scan(t).globals
 
+  @doc """
+  The inductive families a term mentions, by canonical family key.
+
+  Constructors are deliberately not counted: a ctor key (`Std.List#Cons`) does
+  not name its family (`Std.List#List`), and the one consumer — the trust
+  ledger's opaque-type surface — is asking about types that appear in a
+  signature, which is always a `:data` occurrence.
+  """
+  @spec families(term()) :: [atom()]
+  def families(t), do: scan(t).families
+
   @spec scan(term()) :: scan()
   def scan(t) do
     acc = walk(t, @empty)
-    %{acc | globals: acc.globals |> Enum.uniq() |> Enum.sort(), holes: Enum.sort(acc.holes)}
+
+    %{
+      acc
+      | globals: acc.globals |> Enum.uniq() |> Enum.sort(),
+        families: acc.families |> Enum.uniq() |> Enum.sort(),
+        holes: Enum.sort(acc.holes)
+    }
   end
 
   # -- non-Core sentinels occupying a def's `body` slot -----------------------
@@ -66,8 +88,8 @@ defmodule Cure.Audit.Refs do
 
   defp walk({:app, f, a}, acc), do: acc |> then(&walk(f, &1)) |> then(&walk(a, &1))
 
-  defp walk({:data, _name, params, indices}, acc),
-    do: Enum.reduce(params ++ indices, acc, &walk/2)
+  defp walk({:data, name, params, indices}, acc),
+    do: Enum.reduce(params ++ indices, %{acc | families: [name | acc.families]}, &walk/2)
 
   defp walk({:ctor, _name, args}, acc), do: Enum.reduce(args, acc, &walk/2)
 

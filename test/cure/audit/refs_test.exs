@@ -30,12 +30,12 @@ defmodule Cure.Audit.RefsTest do
 
   test "reports holes and absurd" do
     t = {:app, {:hole, "goal"}, {:absurd}}
-    assert Refs.scan(t) == %{globals: [], holes: ["goal"], absurd: 1}
+    assert Refs.scan(t) == %{globals: [], families: [], holes: ["goal"], absurd: 1}
   end
 
   test "accepts the extern body sentinel" do
     assert Refs.scan({:extern, {:erlang, :length, 1}}) ==
-             %{globals: [], holes: [], absurd: 0}
+             %{globals: [], families: [], holes: [], absurd: 0}
   end
 
   test "accepts nil — a builtin op's absent body" do
@@ -43,7 +43,7 @@ defmodule Cure.Audit.RefsTest do
     # Core.Term. Ledger's reachability walk does not skip them, so without this
     # clause every audit of a module using arithmetic raises
     # `unknown Core term in Audit.Refs: nil`.
-    assert Refs.scan(nil) == %{globals: [], holes: [], absurd: 0}
+    assert Refs.scan(nil) == %{globals: [], families: [], holes: [], absurd: 0}
   end
 
   test "collects globals inside an effect type" do

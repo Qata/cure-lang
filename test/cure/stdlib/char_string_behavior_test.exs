@@ -11,6 +11,12 @@ defmodule Cure.Stdlib.CharStringBehaviorTest do
   defp char(name, args), do: apply(@char, name, args)
   defp string(name, args), do: apply(@string, name, args)
 
+  # `String` is nominal -- `rec String { characters: List(Char) }` -- so it erases
+  # to the tagged pair `{:String, code_points}`. `Char` still erases to a bare
+  # code-point integer, so character arguments and `Option(Char)` results below
+  # stay unwrapped; only the string-shaped ones carry the tag.
+  defp cure_string(chars) when is_list(chars), do: {:String, chars}
+
   defp scalar_gen do
     Gen.bind(Gen.integer(0, 0x10FFFF), fn cp ->
       Gen.return(if cp in 0xD800..0xDFFF, do: 0xFFFD, else: cp)
@@ -52,8 +58,11 @@ defmodule Cure.Stdlib.CharStringBehaviorTest do
   end
 
   test "character casing is Unicode-aware and permits expansion" do
-    assert char(:lowercased, [?É]) == ~c"é"
-    assert char(:uppercased, [?ß]) == ~c"SS"
+    # Casing returns a `String`, not a `Char`, because one scalar may expand into
+    # several -- so these results carry the nominal tag.
+    assert char(:lowercased, [?É]) == cure_string(~c"é")
+    assert char(:uppercased, [?ß]) == cure_string(~c"SS")
+    # `ascii_lowercased` is the one-to-one ASCII fold, so it stays at `Char`.
     assert char(:ascii_lowercased, [?A]) == ?a
     assert char(:ascii_lowercased, [?É]) == ?É
   end
@@ -78,22 +87,26 @@ defmodule Cure.Stdlib.CharStringBehaviorTest do
   end
 
   test "Swift-style string conveniences handle boundaries and Unicode" do
-    assert string(:lowercased, [~c"CAFÉ"]) == ~c"café"
-    assert string(:uppercased, [~c"straße"]) == ~c"STRASSE"
-    assert string(:has_prefix, [~c"cure", ~c"cu"])
-    assert string(:has_suffix, [~c"cure", ~c"re"])
-    assert string(:contains, [~c"café", ?é])
-    assert string(:first, [~c"cure"]) == {:some, ?c}
-    assert string(:last, [~c"cure"]) == {:some, ?e}
-    assert string(:first, [[]]) == :none
-    assert string(:last, [[]]) == :none
-    assert string(:prefix, [~c"cure", 2]) == ~c"cu"
-    assert string(:suffix, [~c"cure", 2]) == ~c"re"
-    assert string(:drop_first, [~c"cure", 2]) == ~c"re"
-    assert string(:drop_last, [~c"cure", 2]) == ~c"cu"
-    assert string(:prefix, [~c"cure", -1]) == []
-    assert string(:drop_first, [~c"cure", -1]) == ~c"cure"
-    assert string(:split_on, [~c",a,,b,", ?,]) == [~c"a", ~c"b"]
+    cure = cure_string(~c"cure")
+
+    assert string(:lowercased, [cure_string(~c"CAFÉ")]) == cure_string(~c"café")
+    assert string(:uppercased, [cure_string(~c"straße")]) == cure_string(~c"STRASSE")
+    assert string(:has_prefix, [cure, cure_string(~c"cu")])
+    assert string(:has_suffix, [cure, cure_string(~c"re")])
+    assert string(:contains, [cure_string(~c"café"), ?é])
+    assert string(:first, [cure]) == {:some, ?c}
+    assert string(:last, [cure]) == {:some, ?e}
+    assert string(:first, [cure_string([])]) == :none
+    assert string(:last, [cure_string([])]) == :none
+    assert string(:prefix, [cure, 2]) == cure_string(~c"cu")
+    assert string(:suffix, [cure, 2]) == cure_string(~c"re")
+    assert string(:drop_first, [cure, 2]) == cure_string(~c"re")
+    assert string(:drop_last, [cure, 2]) == cure_string(~c"cu")
+    assert string(:prefix, [cure, -1]) == cure_string([])
+    assert string(:drop_first, [cure, -1]) == cure
+    # `split_on/2` answers a `List(String)`, so each element carries the tag.
+    assert string(:split_on, [cure_string(~c",a,,b,"), ?,]) ==
+             [cure_string(~c"a"), cure_string(~c"b")]
   end
 
   test "character functions agree with the Unicode reference over generated scalars" do
@@ -111,8 +124,8 @@ defmodule Cure.Stdlib.CharStringBehaviorTest do
                  ascii_value == if(cp <= 0x7F, do: {:some, cp}, else: :none) and
                  char(:less_than, [cp, 0x10FFFF]) == cp < 0x10FFFF and
                  char(:between, [cp, 0, 0x10FFFF]) and
-                 char(:lowercased, [cp]) == :string.lowercase([cp]) and
-                 char(:uppercased, [cp]) == :string.uppercase([cp]) and
+                 char(:lowercased, [cp]) == cure_string(:string.lowercase([cp])) and
+                 char(:uppercased, [cp]) == cure_string(:string.uppercase([cp])) and
                  char(:is_letter, [cp]) == :alphabetic in properties and
                  char(:is_punctuation, [cp]) == category in [:Pc, :Pd, :Pe, :Pf, :Pi, :Po, :Ps] and
                  char(:is_newline, [cp]) == cp in [10, 11, 12, 13, 0x85, 0x2028, 0x2029] and
@@ -133,21 +146,22 @@ defmodule Cure.Stdlib.CharStringBehaviorTest do
   test "string slicing obeys prefix/drop and suffix/drop decomposition laws" do
     assert :ok =
              Property.check_all(string_case_gen(), @runs, fn {chars, count} ->
-               prefix = string(:prefix, [chars, count])
-               suffix = string(:suffix, [chars, count])
-               first_rest = string(:drop_first, [chars, count])
-               last_rest = string(:drop_last, [chars, count])
+               s = cure_string(chars)
+               prefix = string(:prefix, [s, count])
+               suffix = string(:suffix, [s, count])
+               first_rest = string(:drop_first, [s, count])
+               last_rest = string(:drop_last, [s, count])
                expected_first = if(chars == [], do: :none, else: {:some, hd(chars)})
                expected_last = if(chars == [], do: :none, else: {:some, List.last(chars)})
 
-               string(:concat, [prefix, first_rest]) == chars and
-                 string(:concat, [last_rest, suffix]) == chars and
-                 string(:has_prefix, [chars, prefix]) and
-                 string(:has_suffix, [chars, suffix]) and
-                 string(:first, [chars]) == expected_first and
-                 string(:last, [chars]) == expected_last and
-                 string(:lowercased, [chars]) == :string.lowercase(chars) and
-                 string(:uppercased, [chars]) == :string.uppercase(chars)
+               string(:concat, [prefix, first_rest]) == s and
+                 string(:concat, [last_rest, suffix]) == s and
+                 string(:has_prefix, [s, prefix]) and
+                 string(:has_suffix, [s, suffix]) and
+                 string(:first, [s]) == expected_first and
+                 string(:last, [s]) == expected_last and
+                 string(:lowercased, [s]) == cure_string(:string.lowercase(chars)) and
+                 string(:uppercased, [s]) == cure_string(:string.uppercase(chars))
              end)
   end
 end

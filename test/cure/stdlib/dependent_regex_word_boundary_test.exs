@@ -1,6 +1,12 @@
 defmodule Cure.Stdlib.DependentRegexWordBoundaryTest do
   use ExUnit.Case, async: false
 
+  # `String` is nominal -- `rec String { characters: List(Char) }` -- so it
+  # erases to the tagged pair `{:String, code_points}`. Subjects and the three
+  # `String` partitions of a `Match` carry the tag; `Char` still erases to a bare
+  # code point.
+  defp cure_string(chars), do: {:String, chars}
+
   setup_all do
     source = """
     mod RegexWordBoundaryRuntime
@@ -21,7 +27,10 @@ defmodule Cure.Stdlib.DependentRegexWordBoundaryTest do
       fn interior(input: String) -> Option(Match(Unit)) = search(bounded(cat(), false, true), input)
       fn unicode_word(input: String) -> Option(Match(Unit)) = search(bounded(accent(), true, false), input)
       fn ascii_unicode_letter(input: String) -> Option(Match(Unit)) = search(bounded(accent(), false, false), input)
-      fn class_backspace(input: String) -> Option(Char) = parse_full(one_of([8]), input)
+      # `Char` has no natural-literal spelling -- its `ExpressibleByNaturalLiteral`
+      # instance bottoms out in the extern `from_code_point`, which never reduces
+      # at compile time -- so backspace is written as its escape, not as `8`.
+      fn class_backspace(input: String) -> Option(Char) = parse_full(one_of(['\\b']), input)
     end
     """
 
@@ -30,21 +39,21 @@ defmodule Cure.Stdlib.DependentRegexWordBoundaryTest do
   end
 
   test "\\b observes the current search position and ASCII/Unicode word mode", %{runtime_module: module} do
-    assert apply(module, :ascii_word, [~c"a cat!"]) ==
-             {:some, {:Match, :unit, ~c"a ", ~c"cat", ~c"!"}}
+    assert apply(module, :ascii_word, [cure_string(~c"a cat!")]) ==
+             {:some, {:Match, :unit, cure_string(~c"a "), cure_string(~c"cat"), cure_string(~c"!")}}
 
-    assert apply(module, :ascii_word, [~c"concatenate"]) == :none
+    assert apply(module, :ascii_word, [cure_string(~c"concatenate")]) == :none
 
-    assert apply(module, :unicode_word, [[?\s, ?é, ?\s]]) ==
-             {:some, {:Match, :unit, ~c" ", ~c"é", ~c" "}}
+    assert apply(module, :unicode_word, [cure_string([?\s, ?é, ?\s])]) ==
+             {:some, {:Match, :unit, cure_string(~c" "), cure_string(~c"é"), cure_string(~c" ")}}
 
-    assert apply(module, :ascii_unicode_letter, [[?\s, ?é, ?\s]]) == :none
+    assert apply(module, :ascii_unicode_letter, [cure_string([?\s, ?é, ?\s])]) == :none
   end
 
   test "\\B is the complement and \\b inside a class is backspace", %{runtime_module: module} do
-    assert apply(module, :interior, [~c"scatx"]) ==
-             {:some, {:Match, :unit, ~c"s", ~c"cat", ~c"x"}}
+    assert apply(module, :interior, [cure_string(~c"scatx")]) ==
+             {:some, {:Match, :unit, cure_string(~c"s"), cure_string(~c"cat"), cure_string(~c"x")}}
 
-    assert apply(module, :class_backspace, [[8]]) == {:some, 8}
+    assert apply(module, :class_backspace, [cure_string([8])]) == {:some, 8}
   end
 end

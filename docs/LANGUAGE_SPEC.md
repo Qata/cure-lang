@@ -503,14 +503,24 @@ fn display(x: t) -> String requires Show(t) = show(x)
 
 A constraint head need not occur as the direct type of a value parameter. When
 it occurs only in the result, a call in checking position obtains the head from
-the expected result type and supplies the corresponding dictionary:
+the expected result type and supplies the corresponding dictionary. `Std.Json`
+declares `decode_as` that way — `t` is named by the result and by the
+constraint, never by an argument:
+
+```text
+fn decode_as(source: String) -> Result(t, DecodeError) requires FromJSON(t)
+```
+
+The caller fixes `t` from the expected result type:
 
 ```cure
-fn decode_as(source: String) -> Result(t, DecodeError) requires FromJSON(t) =
-  # ...
+mod DecodeExample
+  use Std.Result
+  use Std.Json
 
-fn decimal() -> Result(Decimal, DecodeError) =
-  assert_type decode_as("1.2300") : Result(Decimal, DecodeError)
+  fn flag() -> Result(Bool, DecodeError) =
+    assert_type decode_as("true") : Result(Bool, DecodeError)
+end
 ```
 
 The annotation (or another surrounding expected type) is semantically relevant:

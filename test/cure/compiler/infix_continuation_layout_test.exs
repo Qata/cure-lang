@@ -88,7 +88,12 @@ defmodule Cure.Compiler.InfixContinuationLayoutTest do
       assert {:ok, ast} = parse("mod T\n  fn f(a: Int) -> Int =\n    a\n    - 1\n")
 
       assert {:container, _, [{:function_def, _, [{:block, _, stmts}]}]} = ast
-      assert [{:variable, _, "a"}, {:unary_op, _, _}] = stmts
+
+      # Two statements, not one `binary_op`: that is what "not a continuation"
+      # means. The second is a literal rather than a `unary_op` because a sign
+      # applied directly to a numeral is folded into the literal's exact
+      # descriptor (`fold_signed_numeric_literal/1`).
+      assert [{:variable, _, "a"}, {:literal, _, -1}] = stmts
     end
 
     test "an indented line beginning with an operator continues the line above" do

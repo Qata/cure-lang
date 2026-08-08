@@ -296,19 +296,48 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
   end
 
-  test "a BEAM/container built-in type (Pid) is left alone" do
-    # `Pid`/`Ref`/`Binary`/`Bitstring`/`Map`/`Tuple`/`Nat` are real Cure types
-    # (never free type variables), so — like `Type` — the lint's owned
-    # `@builtin_type_names` set must list them explicitly, or every signature that
-    # mentions them warns spuriously and `cure migrate --all` would corrupt them
-    # (`Pid` -> `pid`).
-    for ty <- ~w(Pid Ref Binary Bitstring Map Tuple Nat) do
+  test "a BEAM/container built-in type is left alone" do
+    # `Binary`/`Bitstring`/`Map`/`Tuple`/`Nat` are real Cure types (never free
+    # type variables), so — like `Type` — the lint's owned `@builtin_type_names`
+    # set must list them explicitly, or every signature that mentions them warns
+    # spuriously and `cure migrate --all` would corrupt them.
+    for ty <- ~w(Binary Bitstring Map Tuple Nat) do
       src = "mod M\nfn f(x: #{ty}) -> #{ty} = x\n"
       {out, warns} = migrate(src, "builtin.cure")
       assert out =~ "x: #{ty}", "#{ty} should be left as-is"
 
       refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var)),
              "#{ty} should not warn"
+    end
+  end
+
+  test "a retired process type (Pid/Ref) is left alone" do
+    # `Pid` and `Ref` are NOT builtins: the unindexed process surface was retired
+    # in favour of `Std.Otp`'s `Pid(m)`/`MonitorRef`/`TimerRef`, and they were
+    # dropped from `@builtin_type_names` for exactly that reason — so a stale
+    # declaration is caught rather than silently believed.
+    #
+    # Dropping them from the builtins is not enough on its own. A retired name
+    # resolves to nothing, so this lint reads it as a free type variable and
+    # lowercases it: `fn me() -> Pid` becomes `fn me() -> pid`, which is a
+    # perfectly well-formed signature over a fresh type variable. That converts
+    # the elaborator's precise `retired_process_type` diagnostic — the one that
+    # names `Pid(m)` as the replacement — into no diagnostic at all, on a file
+    # `cure migrate --all` has already rewritten in place.
+    #
+    # A retired spelling is a real type name the language withdrew, not a type
+    # variable, and it has no mechanical replacement (`Pid(m)` needs the message
+    # type, which no rewrite can synthesize). So the lint leaves it exactly as
+    # authored and lets the elaborator do the talking, the same way
+    # `Rules.RemovedModule` leaves a removed `use` in place.
+    for ty <- ~w(Pid Ref) do
+      src = "mod M\nfn f(x: #{ty}) -> #{ty} = x\n"
+      {out, warns} = migrate(src, "retired.cure")
+      assert out =~ "x: #{ty}", "#{ty} should be left as-is"
+      assert out =~ "-> #{ty}", "#{ty} should be left as-is in return position"
+
+      refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var)),
+             "#{ty} is retired, not a type variable"
     end
   end
 

@@ -389,13 +389,18 @@ defmodule Cure.Migrate do
   # `Binary`/`Bitstring` are BEAM primitive types; `Map`/`Tuple` are
   # built-in containers; `Nat` is the Int-tier foundational numeric (dedicated
   # kernel literal forms). Without these, container/kind signatures warn
-  # spuriously and `cure migrate --all` would corrupt them (`Pid` -> `pid`). Data
-  # *constructors* of imported inductives (e.g. `Std.Nat`'s `Z`/`S`) are a
+  # spuriously and `cure migrate --all` would corrupt them (`Tuple` -> `tuple`).
+  # Data *constructors* of imported inductives (e.g. `Std.Nat`'s `Z`/`S`) are a
   # different category — resolved per-import (`imported_names/2`), not here.
+  #
   # Unindexed `Pid` and `Ref` belonged to the retired unrestricted process
   # surface. The formal OTP API provides `Std.Otp.Pid(m)`, `MonitorRef`, and
   # `TimerRef`; treating the old spellings as builtins hid stale declarations
-  # until a later Core read-back happened to expose `unknown_global`.
+  # until a later Core read-back happened to expose `unknown_global`. They are
+  # withdrawn names, not builtins and not type variables, and are recognized as
+  # such by `Cure.Elab.Resolution.retired_type_name?/1` — which
+  # `Rules.UppercaseTypeVar` consults so it does not lowercase them into fresh
+  # variables. Do not re-add them here: that would restore the hiding.
   @builtin_type_names ~w(Int Float String Bool Atom Unit Any Never Char
                          Type Binary Bitstring Map Tuple Nat)
 

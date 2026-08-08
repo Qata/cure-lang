@@ -813,7 +813,14 @@ defmodule Cure.Core.Inductive do
   @spec declare(Env.t(), family(), [ctor()]) :: Env.t()
   def declare(%Env{} = env, %{name: fname} = family, ctors) do
     fname = Env.owned_name(env, fname)
-    family = %{family | name: fname}
+
+    # Declaration order, recorded once here because it is unrecoverable
+    # afterwards: `env.ctors` is a map, so the order constructors arrived in is
+    # gone the moment they are stored. See `ctors_of/2`.
+    family =
+      %{family | name: fname}
+      |> Map.put(:ctor_order, Enum.map(ctors, fn %{name: cname} -> Env.owned_name(env, cname) end))
+
     env = %{env | families: Map.put(env.families, fname, family)}
 
     Enum.reduce(ctors, env, fn %{name: cname} = c, acc ->
@@ -963,17 +970,34 @@ defmodule Cure.Core.Inductive do
     end
   end
 
-  @doc "All constructors registered for the family `fname`."
+  @doc """
+  All constructors registered for the family `fname`, in **declaration order**.
+
+  Declaration order is the canonical order for a family's constructors, as it is
+  in Agda, Idris and Lean: it fixes the eliminator's argument order, and it is
+  the order a reader expects to see them listed back. It is recorded on the
+  family at `declare/3` (`:ctor_order`).
+
+  Filtering `env.ctors` instead — as this did — orders by map iteration, which is
+  a hash of the constructor keys. That is stable for a given set of names and
+  meaningless to a reader, so `type Left = L1 | L2` could suggest "use one of
+  `L2`, `L1`" and an anonymous `Int | Bool` could print as `Bool | Int`, with the
+  answer changing whenever an unrelated rename shifted the hash. The filter
+  remains as the fallback for family records predating the recorded order.
+  """
   @spec ctors_of(Env.t(), atom()) :: [ctor()]
   def ctors_of(%Env{} = env, fname) do
     fname = Env.resolve_key(env, env.families, fname)
 
-    cs = env.ctors
-    c2f = env.ctor_to_family
+    case Map.get(env.families, fname) do
+      %{ctor_order: [_ | _] = order} ->
+        for name <- order, ctor = Map.get(env.ctors, name), do: ctor
 
-    cs
-    |> Map.values()
-    |> Enum.filter(fn %{name: n} -> Map.get(c2f, n) == fname end)
+      _family ->
+        env.ctors
+        |> Map.values()
+        |> Enum.filter(fn %{name: n} -> Map.get(env.ctor_to_family, n) == fname end)
+    end
   end
 
   # -- strict positivity ------------------------------------------------------

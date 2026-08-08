@@ -31,7 +31,7 @@ defmodule Cure.Stdlib.OtpRawPinTest do
     "raw_term_integer" => "Int",
     "raw_term_float" => "Float",
     "raw_term_boolean" => "Bool",
-    "raw_term_string" => "String",
+    "raw_term_binary" => "Binary",
     "raw_actor_server" => "RawServerPid(m, q, r)",
     "raw_fsm_pid" => "RawFsmPid(event, state, data)",
     "raw_supervisor_pid" => "RawSupervisorPid",

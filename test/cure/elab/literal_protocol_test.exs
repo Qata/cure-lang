@@ -56,8 +56,19 @@ defmodule Cure.Elab.LiteralProtocolTest do
 
     assert {:error, error} = Program.elaborate(source)
 
-    assert {:literal_out_of_range, :from_natural_literal, 1_114_112, _expected} =
-             Program.semantic_error(error)
+    # `Char` has no `ExpressibleByNaturalLiteral` instance and cannot have a
+    # working one — every `Int -> Char` route is a bodyless `@extern`, so such an
+    # initializer never reduces at compile time. The numeral is admitted (or
+    # here refused) by the same rule that introduces every other `Char` value,
+    # which is why the range failure is reported as a character-literal one
+    # rather than as a protocol result.
+    assert {:char_literal_out_of_range, 1_114_112} = Program.semantic_error(error)
+
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "char_range.cure", source)
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered =~ "1114112"
+    assert rendered =~ "1114111"
   end
 
   test "a bare numeral continues to default to Int" do

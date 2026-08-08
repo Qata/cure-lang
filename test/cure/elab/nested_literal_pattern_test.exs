@@ -6,11 +6,16 @@ defmodule Cure.Elab.NestedLiteralPatternTest do
     module
   end
 
+  # The scrutinee is a `List(Char)`, not a `String`. `String` is a nominal record
+  # now rather than a `List(Char)` alias, so a cons pattern is foreign to it —
+  # character data reaches these patterns through `Std.String.as_charlist`. What
+  # is under test is the list pattern with a literal head, which is unchanged.
+
   test "literal heads in list patterns remain refutable" do
     module =
       compile("""
       mod NestedLiteralListPattern
-        fn classify(input: String) -> Int = match input
+        fn classify(input: List(Char)) -> Int = match input
           ['[' | _] -> 1
           ['x' | _] -> 2
           _ -> 3
@@ -27,7 +32,7 @@ defmodule Cure.Elab.NestedLiteralPatternTest do
     module =
       compile("""
       mod NestedLiteralMultipleColumns
-        fn classify(input: String) -> Int = match input
+        fn classify(input: List(Char)) -> Int = match input
           ['a', 'b' | _] when true -> 1
           ['a', _ | _] -> 2
           _ -> 3
@@ -43,16 +48,18 @@ defmodule Cure.Elab.NestedLiteralPatternTest do
     module =
       compile("""
       mod NestedLiteralConstructorPattern
-        type Parsed = Parsed(Int, String) | Invalid
+        use Std.String
+
+        type Parsed = Parsed(Int, List(Char)) | Invalid
 
         fn classify(value: Parsed) -> Int = match value
           Parsed(_, ['*' | _]) -> 1
           Parsed(_, ['+' | _]) -> 2
           _ -> 3
 
-        fn star() -> Int = classify(Parsed(0, "*tail"))
-        fn plus() -> Int = classify(Parsed(0, "+tail"))
-        fn other() -> Int = classify(Parsed(0, "tail"))
+        fn star() -> Int = classify(Parsed(0, as_charlist("*tail")))
+        fn plus() -> Int = classify(Parsed(0, as_charlist("+tail")))
+        fn other() -> Int = classify(Parsed(0, as_charlist("tail")))
       end
       """)
 

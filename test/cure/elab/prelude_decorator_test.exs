@@ -22,8 +22,12 @@ defmodule Cure.Elab.PreludeDecoratorTest do
     """
 
     assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
-    # "hi" erases to the List(Char) cons spine [104, 105] (code points).
-    assert mod.greet() == [?h, ?i]
+    # `String` is NOMINAL, not a synonym for `List(Char)`: the nominal boundary
+    # is what lets `String` and `List(Char)` carry distinct conformances. So the
+    # literal erases to the one-field constructor wrapping the code-point spine,
+    # not to the bare spine. Callers on the BEAM side see that representation —
+    # there is no auto-marshalling wrapper at the export boundary.
+    assert mod.greet() == {:String, [?h, ?i]}
   after
     purge(:"Cure.PreludeStr")
   end

@@ -327,7 +327,10 @@ defmodule Cure.Stdlib.OtpTest do
     assert apply(module, :decode_float_value, [7]) == {:error, :InvalidBeamTerm}
     assert apply(module, :decode_bool_value, [true]) == {:ok, true}
     assert apply(module, :decode_bool_value, [:ready]) == {:error, :InvalidBeamTerm}
-    assert apply(module, :decode_string_value, ["beam"]) == {:ok, "beam"}
+    # A BEAM binary is not a Cure `String`: `decode_string` decodes the UTF-8
+    # binary into code points and rebuilds the nominal value (`Std.Beam`), so the
+    # decoded result is `{String, code_points}`, never the binary relabelled.
+    assert apply(module, :decode_string_value, ["beam"]) == {:ok, {:String, ~c"beam"}}
     assert apply(module, :decode_string_value, [:beam]) == {:error, :InvalidBeamTerm}
   end
 

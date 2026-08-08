@@ -38,7 +38,8 @@ defmodule Cure.Elab.Interface do
     super_interfaces =
       meta |> Keyword.get(:requires, []) |> Enum.map(&String.to_atom/1)
 
-    with {:ok, head_kind} <- infer_head_kind(name_atom, head_var, methods, meta) do
+    with :ok <- reject_reserved_family_name(name_atom),
+         {:ok, head_kind} <- infer_head_kind(name_atom, head_var, methods, meta) do
       desc =
         Metadata.strip_diagnostics(%{
           name: name_atom,
@@ -56,6 +57,22 @@ defmodule Cure.Elab.Interface do
         {:ok, Env.put_interface(env1, name_atom, desc)}
       end
     end
+  end
+
+  # An `interface` declares a type name like any `type` or `typealias` does, so
+  # the generated-family namespace (`Union<…>` / `Disjoint<…>`, reachable through
+  # backtick-quoted identifiers) has to be reserved against it too — the same
+  # guard `Cure.Elab.Declarations` applies to every other type-name declaration.
+  #
+  # It runs FIRST, before head-kind inference and before method registration.
+  # A reserved name is not a declaration at all, so nothing about its members
+  # should be diagnosed: registering them first meant a reserved interface whose
+  # method collided with an ambient one (`combine`, from the `@prelude`
+  # `Std.Semigroup`) reported the collision and never reached this check.
+  defp reject_reserved_family_name(name) do
+    if Cure.Elab.Union.reserved_name?(name),
+      do: {:error, {:reserved_union_type_name, name}},
+      else: :ok
   end
 
   # `for_method/2` is the SOLE lookup `Resolve.method_call` uses to find the interface owning an

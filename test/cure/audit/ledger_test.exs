@@ -158,25 +158,31 @@ defmodule Cure.Audit.UnresolvedTest do
   use ExUnit.Case, async: true
   alias Cure.Audit.{CLI, Ledger}
 
-  # `Std.Fsm` declares `fn spawn(fsm_module: Atom) -> Pid` and four siblings.
-  # `Pid` is defined nowhere — not a def, not a family, not a constructor — yet
-  # the module elaborates, because a bodyless @extern is a postulate whose
-  # signature is never checked. The spec asserted this could not happen
-  # ("Kernel.infer/2 already rejects dangling globals"). It does happen.
+  # A bodyless `@extern` is a postulate: its signature is believed, not checked,
+  # so a name that is defined nowhere — not a def, not a family, not a
+  # constructor — still elaborates. The spec asserted this could not happen
+  # ("Kernel.infer/2 already rejects dangling globals"). It does happen, and it
+  # is a sharp finding: an axiom whose type names something that does not exist.
   #
-  # A ledger that raises here is a ledger that cannot audit Std.Fsm, Std.Actor,
-  # Std.Supervisor or Std.Process. Report the finding; do not crash on it.
+  # A ledger that raises here is a ledger that cannot audit the modules where
+  # this occurs. Report the finding; do not crash on it.
+  #
+  # This used to be spelled with `Pid`, which was dangling in exactly this way.
+  # It no longer is: a bare `Pid` is now rejected outright as
+  # `:retired_process_type` in favour of the indexed `RawPid`, so spelling it
+  # that way would test the elaborator's refusal rather than the ledger's
+  # tolerance. Any never-declared name does the job.
 
   test "a dangling global in a signature is reported, not raised" do
     src = """
     mod Test.Dangling
       @extern(:erlang, :self, 0)
-      fn me() -> Pid
+      fn me() -> Widget
     end
     """
 
     report = Ledger.audit_source(src, "Test.Dangling")
-    assert report.unresolved == [:Pid]
+    assert report.unresolved == [:Widget]
     assert [axiom] = report.axioms
     assert axiom.mfa == {:erlang, :self, 0}
   end

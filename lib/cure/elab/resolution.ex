@@ -192,6 +192,33 @@ defmodule Cure.Elab.Resolution do
     end
   end
 
+  # Surface type spellings the language has withdrawn. `Pid` and `Ref` named the
+  # unrestricted process surface; the formal OTP API replaced them with the
+  # indexed `Std.Otp.Pid(m)`, `MonitorRef` and `TimerRef`. They are deliberately
+  # NOT registered anywhere, so a stale declaration is caught instead of quietly
+  # believed — but "resolves to nothing" is exactly what a free type variable
+  # looks like, so every consumer that classifies an unresolved uppercase name
+  # has to be told these two are withdrawn names rather than variables.
+  @retired_type_names ~w(Pid Ref)
+
+  @doc """
+  Surface type names the language has withdrawn, with no registered declaration.
+
+  One list, because two consumers must agree: the elaborator's name cascade
+  reports `:retired_process_type` for these, and the `cure migrate` lint has to
+  leave them spelled as authored so that diagnostic is what the porter sees.
+  If the lint decided independently it would lowercase them into fresh type
+  variables and erase the very error that tells the author what to write.
+  """
+  @spec retired_type_names() :: [String.t()]
+  def retired_type_names, do: @retired_type_names
+
+  @doc "Whether `name` is a withdrawn surface type spelling."
+  @spec retired_type_name?(atom() | String.t()) :: boolean()
+  def retired_type_name?(name) when is_atom(name), do: retired_type_name?(Atom.to_string(name))
+  def retired_type_name?(name) when is_binary(name), do: name in @retired_type_names
+  def retired_type_name?(_name), do: false
+
   @doc """
   Return all canonical providers of a bare spelling when no local or bare
   winner exists. This is used to produce the targeted ambiguity diagnostic.

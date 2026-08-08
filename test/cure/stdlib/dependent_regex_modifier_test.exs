@@ -1,6 +1,12 @@
 defmodule Cure.Stdlib.DependentRegexModifierTest do
   use ExUnit.Case, async: false
 
+  # `String` is nominal -- `rec String { characters: List(Char) }` -- so it
+  # erases to the tagged pair `{:String, code_points}`. Every subject below, and
+  # every `String` partition of a `Match` or `captured` result, carries the tag;
+  # `Char` still erases to a bare code point, so `Option(Char)` results do not.
+  defp cure_string(chars), do: {:String, chars}
+
   setup_all do
     source = """
     mod RegexModifierRuntime
@@ -98,46 +104,46 @@ defmodule Cure.Stdlib.DependentRegexModifierTest do
   end
 
   test "PCRE control and horizontal/vertical whitespace escapes behave directly", %{runtime_module: module} do
-    assert apply(module, :alert_escape, [[7]]) == {:some, :unit}
-    assert apply(module, :escape_escape, [[27]]) == {:some, :unit}
-    assert apply(module, :form_feed_escape, [[12]]) == {:some, :unit}
-    assert apply(module, :carriage_return_escape, [[13]]) == {:some, :unit}
+    assert apply(module, :alert_escape, [cure_string([7])]) == {:some, :unit}
+    assert apply(module, :escape_escape, [cure_string([27])]) == {:some, :unit}
+    assert apply(module, :form_feed_escape, [cure_string([12])]) == {:some, :unit}
+    assert apply(module, :carriage_return_escape, [cure_string([13])]) == {:some, :unit}
 
-    assert apply(module, :horizontal_escape, [[9]]) == {:some, 9}
-    assert apply(module, :horizontal_escape, [[0x2007]]) == {:some, 0x2007}
-    assert apply(module, :horizontal_escape, [[?a]]) == :none
-    assert apply(module, :not_horizontal_escape, [[?a]]) == {:some, ?a}
+    assert apply(module, :horizontal_escape, [cure_string([9])]) == {:some, 9}
+    assert apply(module, :horizontal_escape, [cure_string([0x2007])]) == {:some, 0x2007}
+    assert apply(module, :horizontal_escape, [cure_string([?a])]) == :none
+    assert apply(module, :not_horizontal_escape, [cure_string([?a])]) == {:some, ?a}
 
-    assert apply(module, :vertical_escape, [[10]]) == {:some, 10}
-    assert apply(module, :vertical_escape, [[0x2028]]) == {:some, 0x2028}
-    assert apply(module, :vertical_escape, [[?a]]) == :none
-    assert apply(module, :not_vertical_escape, [[?a]]) == {:some, ?a}
+    assert apply(module, :vertical_escape, [cure_string([10])]) == {:some, 10}
+    assert apply(module, :vertical_escape, [cure_string([0x2028])]) == {:some, 0x2028}
+    assert apply(module, :vertical_escape, [cure_string([?a])]) == :none
+    assert apply(module, :not_vertical_escape, [cure_string([?a])]) == {:some, ?a}
   end
 
   test "anchors use subject boundaries by default and line boundaries under m", %{runtime_module: module} do
-    assert apply(module, :anchored_full, [~c"abc"]) == {:some, :unit}
-    assert apply(module, :anchored_full, [~c"xabc"]) == :none
-    assert apply(module, :anchored_search, [~c"x\nabc\ny"]) == :none
+    assert apply(module, :anchored_full, [cure_string(~c"abc")]) == {:some, :unit}
+    assert apply(module, :anchored_full, [cure_string(~c"xabc")]) == :none
+    assert apply(module, :anchored_search, [cure_string(~c"x\nabc\ny")]) == :none
 
-    assert apply(module, :multiline_anchored_search, [~c"x\nabc\ny"]) ==
-             {:some, {:Match, :unit, ~c"x\n", ~c"abc", ~c"\ny"}}
+    assert apply(module, :multiline_anchored_search, [cure_string(~c"x\nabc\ny")]) ==
+             {:some, {:Match, :unit, cure_string(~c"x\n"), cure_string(~c"abc"), cure_string(~c"\ny")}}
 
-    assert apply(module, :anchored_search, [~c"abc\n"]) ==
-             {:some, {:Match, :unit, ~c"", ~c"abc", ~c"\n"}}
+    assert apply(module, :anchored_search, [cure_string(~c"abc\n")]) ==
+             {:some, {:Match, :unit, cure_string(~c""), cure_string(~c"abc"), cure_string(~c"\n")}}
   end
 
   test "f restricts possible match starts to the first line", %{runtime_module: module} do
-    assert apply(module, :ordinary_later_line_search, [~c"x\nabc"]) ==
-             {:some, {:Match, :unit, ~c"x\n", ~c"abc", ~c""}}
+    assert apply(module, :ordinary_later_line_search, [cure_string(~c"x\nabc")]) ==
+             {:some, {:Match, :unit, cure_string(~c"x\n"), cure_string(~c"abc"), cure_string(~c"")}}
 
-    assert apply(module, :firstline_search, [~c"x\nabc"]) == :none
+    assert apply(module, :firstline_search, [cure_string(~c"x\nabc")]) == :none
 
-    assert apply(module, :firstline_search, [~c"xabc\nrest"]) ==
-             {:some, {:Match, :unit, ~c"x", ~c"abc", ~c"\nrest"}}
+    assert apply(module, :firstline_search, [cure_string(~c"xabc\nrest")]) ==
+             {:some, {:Match, :unit, cure_string(~c"x"), cure_string(~c"abc"), cure_string(~c"\nrest")}}
   end
 
   test "greedy and lazy repetition preserve ordered Thompson preference", %{runtime_module: module} do
-    assert apply(module, :greedy_partition, []) == {:some, {~c"aa", ~c""}}
-    assert apply(module, :lazy_partition, []) == {:some, {~c"", ~c"aa"}}
+    assert apply(module, :greedy_partition, []) == {:some, {cure_string(~c"aa"), cure_string(~c"")}}
+    assert apply(module, :lazy_partition, []) == {:some, {cure_string(~c""), cure_string(~c"aa")}}
   end
 end

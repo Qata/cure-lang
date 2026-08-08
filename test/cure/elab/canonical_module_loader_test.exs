@@ -41,12 +41,37 @@ defmodule Cure.Elab.CanonicalModuleLoaderTest do
     Process.delete(:cure_module_loader_observer)
   end
 
-  test "an import cycle reports the complete canonical cycle", %{root: root} do
-    write_module(root, "a.cure", "Loader.A", "use Loader.B")
-    write_module(root, "b.cure", "Loader.B", "use Loader.A")
+  # A `use` cycle is not an elaboration error. `load_module_interface/2` answers a
+  # back-edge with a types -> signatures -> conformance skeleton, so each member
+  # sees its peer's interface and the outer load still checks every body once the
+  # complete peer interfaces exist. The stdlib depends on exactly this:
+  # `Std.Char` and `Std.String` are mutually recursive by design.
+  #
+  # Cycles are still reported, once, from the one place that can see the whole
+  # file set: `Cure.Compiler.DepGraph`. Every driver (`mix cure.compile`,
+  # `Cure.CLI`, `Cure.Project`) renders its walks as the W086 warning.
+  test "an import cycle elaborates through canonical interfaces", %{root: root} do
+    a = write_module(root, "a.cure", "Loader.A", "use Loader.B\n  fn from_a() -> Int = 1\n  fn a_uses_b() -> Int = from_b()")
+    b = write_module(root, "b.cure", "Loader.B", "use Loader.A\n  fn from_b() -> Int = 2\n  fn b_uses_a() -> Int = from_a()")
 
-    assert {:error, reason} = Program.elaborate("mod Loader.Main\n  use Loader.A\nend\n")
-    assert contains_term?(reason, {:import_cycle, ["Loader.A", "Loader.B", "Loader.A"]})
+    assert {:ok, env} =
+             Program.elaborate("mod Loader.Main\n  use Loader.A\n  fn result() -> Int = a_uses_b()\nend\n")
+
+    # The back-edge resolved to a canonical identity, not to a re-declared local
+    # copy: the skeleton published `Loader.A`'s signature, and the body that
+    # crosses back into `Loader.B` was checked against `Loader.B`'s own.
+    assert %{body: {:global, :"Loader.A#a_uses_b"}} = Map.fetch!(env.defs, :"Loader.Main#result")
+    assert %{body: {:global, :"Loader.B#from_b"}} = Map.fetch!(env.defs, :"Loader.A#a_uses_b")
+    assert %{body: {:global, :"Loader.A#from_a"}} = Map.fetch!(env.defs, :"Loader.B#b_uses_a")
+
+    # And the cycle is still surfaced, with every hop located so W086 can print
+    # the file and line each `use` sits on.
+    assert {:ok, _ordered, [walk]} =
+             [a, b] |> Cure.Compiler.DepGraph.scan() |> then(fn {:ok, graph} -> Cure.Compiler.DepGraph.order(graph) end)
+
+    assert Enum.map(walk, & &1.module) == ["Loader.A", "Loader.B", "Loader.A"]
+    assert Enum.map(walk, & &1.path) == [a, b, a]
+    assert Enum.all?(walk, &is_integer(&1.line))
   end
 
   test "two source files cannot declare one canonical identity", %{root: root} do
@@ -121,9 +146,4 @@ defmodule Cure.Elab.CanonicalModuleLoaderTest do
       0 -> Enum.reverse(events)
     end
   end
-
-  defp contains_term?(term, wanted) when term == wanted, do: true
-  defp contains_term?(term, wanted) when is_tuple(term), do: term |> Tuple.to_list() |> contains_term?(wanted)
-  defp contains_term?(term, wanted) when is_list(term), do: Enum.any?(term, &contains_term?(&1, wanted))
-  defp contains_term?(_term, _wanted), do: false
 end

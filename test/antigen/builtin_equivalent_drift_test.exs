@@ -72,12 +72,23 @@ defmodule Antigen.BuiltinEquivalentDriftTest do
     seeded_family = Inductive.get_family(seeded, :Equivalent)
     seeded_ctors = Inductive.ctors_of(seeded, :Equivalent)
 
-    seeded_family_stripped = %{seeded_family | name: strip_owner(seeded_family.name)}
-
     seeded_ctors_stripped =
       Enum.map(seeded_ctors, fn c -> %{c | name: strip_owner(c.name)} end)
 
     {antigen_family, antigen_ctors} = antigen_eq_family()
+
+    # `:ctor_order` is not part of a hand-built family: `Inductive.declare/3`
+    # stamps it on at registration, because `env.ctors` is a map and arrival
+    # order is unrecoverable afterwards. Antigen's copy is the pre-registration
+    # pair, so the seeded family carries the key and the copy cannot. Compare the
+    # authored shape structurally, and check the stamped order against the very
+    # ctors it is supposed to be recording — which is the drift that would matter.
+    seeded_family_stripped =
+      %{seeded_family | name: strip_owner(seeded_family.name)}
+      |> Map.delete(:ctor_order)
+
+    assert Enum.map(seeded_family.ctor_order, &strip_owner/1) ==
+             Enum.map(seeded_ctors_stripped, & &1.name)
 
     assert antigen_family == seeded_family_stripped
     assert antigen_ctors == seeded_ctors_stripped
