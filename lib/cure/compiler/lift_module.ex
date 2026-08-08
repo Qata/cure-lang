@@ -277,7 +277,8 @@ defmodule Cure.Compiler.LiftModule do
     with {:ok, module_ast} <- ordinary_module_ast(request),
          {:ok, module_name} <- ordinary_module_name(module),
          {:ok, env, local_defs} <- Program.check_ast_with_locals(module_ast),
-         {:ok, forms} <- Emit.compile_forms(env, Program.module_atom(module_ast), local_defs) do
+         {:ok, forms} <-
+           Emit.compile_forms(env, Program.module_atom(module_ast), canonical_lifted_defs(local_defs)) do
       {:ok,
        %{
          module: Program.module_atom(module_ast),
@@ -307,6 +308,35 @@ defmodule Cure.Compiler.LiftModule do
   end
 
   def emit(other), do: {:error, {:invalid_lift_module, other}}
+
+  # Authored functions retain source order. Auto-derived implementation methods
+  # come from coherence maps, whose enumeration order can depend on which macro
+  # module was elaborated earlier in the VM. Generated modules have no authored
+  # order for those methods, so replace only their slots with a canonical order
+  # before the lifted unit reaches BEAM emission.
+  defp canonical_lifted_defs(defs) do
+    implementations =
+      defs
+      |> Enum.filter(&implementation_def?/1)
+      |> Enum.sort()
+
+    {canonical, []} =
+      Enum.map_reduce(defs, implementations, fn name, remaining ->
+        if implementation_def?(name) do
+          [next | rest] = remaining
+          {next, rest}
+        else
+          {name, remaining}
+        end
+      end)
+
+    canonical
+  end
+
+  defp implementation_def?(name) when is_atom(name),
+    do: name |> Atom.to_string() |> String.contains?("#__impl_")
+
+  defp implementation_def?(_name), do: false
 
   defp collect_node({:lift_module, meta, []}, acc) when is_list(meta) do
     case request_ast({:lift_module, meta, []}) do
