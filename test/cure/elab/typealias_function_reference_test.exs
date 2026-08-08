@@ -106,4 +106,51 @@ defmodule Cure.Elab.TypealiasFunctionReferenceTest do
 
     assert {:ok, _module} = Cure.Compiler.compile_and_load(src, emit_events: false)
   end
+
+  test "a typed actor compile does not poison a later preloaded compilation" do
+    actor = """
+    use Std.Actor
+
+    actor CacheIsolationCounter
+      state Int
+      initial 0
+      on_call Value() returns Int
+        reply state
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(actor, emit_events: false)
+
+    root = File.cwd!()
+    stdlib_source = Path.expand("lib/std", root)
+    stdlib_ebin = Path.expand("_build/cure/ebin", root)
+    previous_cure_lib = System.get_env("CURE_LIB")
+    previous_source = Application.get_env(:cure, :stdlib_source_dir)
+    previous_ebin = Application.get_env(:cure, :stdlib_beam_dir)
+
+    on_exit(fn ->
+      if previous_cure_lib,
+        do: System.put_env("CURE_LIB", previous_cure_lib),
+        else: System.delete_env("CURE_LIB")
+
+      restore_application_env(:stdlib_source_dir, previous_source)
+      restore_application_env(:stdlib_beam_dir, previous_ebin)
+    end)
+
+    System.put_env("CURE_LIB", stdlib_ebin)
+    Application.put_env(:cure, :stdlib_source_dir, stdlib_source)
+    Application.put_env(:cure, :stdlib_beam_dir, stdlib_ebin)
+    assert :ok = Cure.Stdlib.Preload.preload(kind: :all, stdlib_ebin: stdlib_ebin, source_jit: false)
+
+    source = "mod AfterActor\n  fn answer() -> Int = 42\n"
+
+    assert {:ok, _module} =
+             Cure.Compiler.compile_and_load(source,
+               file: "after_actor.cure",
+               source_roots: [Path.expand("lib", root), stdlib_source],
+               emit_events: false
+             )
+  end
+
+  defp restore_application_env(key, nil), do: Application.delete_env(:cure, key)
+  defp restore_application_env(key, value), do: Application.put_env(:cure, key, value)
 end

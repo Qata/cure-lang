@@ -51,3 +51,6 @@ cure-*.tar
 # Artefacts
 .DS_Store
 .refact/
+
+# Local agent workflow guidance; intentionally machine-specific.
+/AGENTS.md
