@@ -41,6 +41,11 @@ defmodule Cure.Elab.ListTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "list elements inherit a dependent Bounded element goal" do
+    src = "mod M\n  use Std.Bounded\n  fn xs() -> List(Bounded(3)) = [0, 1, 2]\nend\n"
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "a cons literal elaborates" do
     src = "mod M\n  fn c(h: Int, t: List(Int)) -> List(Int) = [h | t]\nend\n"
     assert {:ok, _} = Program.elaborate(src)

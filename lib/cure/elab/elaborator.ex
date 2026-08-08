@@ -2614,44 +2614,42 @@ defmodule Cure.Elab.Elaborator do
         # indices no present argument determines), then let the kernel re-check the
         # assembled constructor against the goal.
         #
-        # The normal path infers each present argument first (`map_present_args`),
-        # which fails for an *underdetermined nested constructor* — `Cons(Z(),
-        # Nil())` at `-> List(Nat)`, whose inner `Nil()` has no argument to fix its
-        # type parameter. When inference fails, fall back to a bidirectional pass
-        # (`elaborate_ctor_app_bidirectional`) that solves the parameters from the
-        # expected type first, then *checks* each argument against its field type.
-        # The fallback is reached only when the inference path already errored, so a
-        # working constructor is untouched; either way the kernel re-checks below.
+        # Checking is goal-first: solve the constructor parameters from the
+        # expected result, then check each present argument against its instantiated
+        # field type. This is required even when standalone argument inference would
+        # succeed with a DIFFERENT type — a numeral in `List(Bounded(3))` otherwise
+        # defaults to `Int`, and the useful element goal is lost. If the result goal
+        # cannot seed this constructor, retain the ordinary inference path as the
+        # compatibility fallback. Either way the kernel re-checks below.
         result =
           case align_constructor_args(cres, ctor, meta, args) do
             {:error, _} = error ->
               error
 
             {:ok, aligned_args} ->
-              inferred =
-                with :ok <- validate_constructor_arity(env, cres, aligned_args, name),
-                     {:ok, present} <- map_present_args(aligned_args, names, ctx, env),
-                     {:ok, term, _type} <- elaborate_ctor_app(env, cres, present, ctx, expected_core) do
-                  {:ok, term}
-                end
+              bidirectional =
+                elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core)
 
-              case inferred do
+              case bidirectional do
                 {:ok, _} = ok ->
                   ok
 
-                {:error, _} = orig ->
-                  # Argument inference itself may need the constructor field's
-                  # expected type (an untyped lambda or an underdetermined nested
-                  # constructor). Keep the fallback around the whole inference
-                  # attempt, not only elaborate_ctor_app/5.
-                  case elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core) do
-                    {:ok, _} = ok ->
+                {:error, _} = bidirectional_error ->
+                  inferred =
+                    with :ok <- validate_constructor_arity(env, cres, aligned_args, name),
+                         {:ok, present} <- map_present_args(aligned_args, names, ctx, env),
+                         {:ok, term, _type} <- elaborate_ctor_app(env, cres, present, ctx, expected_core) do
+                      {:ok, term}
+                    end
+
+                  case {inferred, bidirectional_error} do
+                    {{:ok, _} = ok, _} ->
                       ok
 
-                    {:error, {:constructor_result_mismatch, details}} ->
+                    {{:error, _} = orig, {:error, {:constructor_result_mismatch, details}}} ->
                       attach_constructor_result_mismatch(orig, details, meta, args)
 
-                    {:error, _} ->
+                    {{:error, _} = orig, _} ->
                       attach_nested_constructor_context(orig, aligned_args, cres)
                   end
               end
@@ -12581,17 +12579,17 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # Bidirectional checking-mode constructor elaboration, used only as a fallback
-  # when the inference path fails (an underdetermined nested constructor like
-  # `Cons(Z(), Nil())` at `-> List(Nat)`). Rather than infer each argument, it
-  # solves the family parameters from the *expected* type — the constructor's
+  # Bidirectional checking-mode constructor elaboration. It is the primary path
+  # whenever a constructor has an expected result type: rather than infer each
+  # argument independently, it solves the family parameters from the *expected*
+  # type — the constructor's
   # result applied to fresh metavariables, unified against `expected_core` — and
   # then *checks* each present argument against its field type instantiated with
   # the solved parameters (and the arguments checked so far, mirroring
   # `solve_arg`'s frame). The assembled constructor is still kernel-re-checked by
   # the caller, so this can only ever accept a term the kernel independently
-  # accepts. Restricted to all-present constructors (List/Maybe/tree shapes); an
-  # erased field bails so the caller reports the original inference error.
+  # accepts. The caller retains inference as a compatibility fallback when this
+  # goal-directed pass is inapplicable.
   defp elaborate_ctor_app_bidirectional(env, cname, arg_asts, names, ctx, expected_core)
        when expected_core != nil do
     ctor = Inductive.get_ctor(env, cname)
@@ -12616,11 +12614,7 @@ defmodule Cure.Elab.Elaborator do
         # frame — can be built and pinned against the goal before any argument is
         # known. Pinning solves the parameters and the erased indices; the present
         # fields are then checked against their now-concrete types.
-        {mctx, seed} =
-          Enum.reduce(1..(pc + length(ctor.args)), {MetaCtx.new(), []}, fn _, {m, acc} ->
-            {m, id} = MetaCtx.fresh(m)
-            {m, acc ++ [{:meta, id}]}
-          end)
+        {mctx, seed} = fresh_seed(MetaCtx.new(), pc + length(ctor.args))
 
         params = Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, seed))
         indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, seed))
