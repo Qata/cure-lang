@@ -183,23 +183,25 @@ defmodule Cure.Compiler.ModulePipeline.Interface do
       extensions = interface.extension_payloads
       empty = Env.empty()
 
-      {:ok,
-       %Env{
-         empty
-         | defs: Map.get(declarations, :defs, %{}),
-           families: Map.get(declarations, :families, %{}),
-           ctors: Map.get(declarations, :ctors, %{}),
-           ctor_to_family: Map.get(declarations, :ctor_to_family, %{}),
-           equations: Map.get(declarations, :equations, %{}),
-           interfaces: Map.get(extensions, :interfaces, %{}),
-           coherence: Map.get(extensions, :coherence),
-           primitives: Map.get(extensions, :primitives, %{}),
-           builtins: Map.get(extensions, :builtins, %{}),
-           constrained: Map.get(extensions, :constrained, %{}),
-           lemmas: Map.get(extensions, :lemmas, %{}),
-           certified: transparent_definitions(Map.get(declarations, :defs, %{})),
-           module_owner: interface.module_name
-       }}
+      env =
+        %Env{
+          empty
+          | defs: Map.get(declarations, :defs, %{}),
+            families: Map.get(declarations, :families, %{}),
+            ctors: Map.get(declarations, :ctors, %{}),
+            ctor_to_family: Map.get(declarations, :ctor_to_family, %{}),
+            equations: Map.get(declarations, :equations, %{}),
+            interfaces: %{},
+            coherence: Map.get(extensions, :coherence),
+            primitives: Map.get(extensions, :primitives, %{}),
+            builtins: Map.get(extensions, :builtins, %{}),
+            constrained: Map.get(extensions, :constrained, %{}),
+            lemmas: Map.get(extensions, :lemmas, %{}),
+            certified: transparent_definitions(Map.get(declarations, :defs, %{})),
+            module_owner: interface.module_name
+        }
+
+      {:ok, Env.with_interfaces(env, Map.get(extensions, :interfaces, %{}))}
     end
   end
 

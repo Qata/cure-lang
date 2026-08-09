@@ -13,8 +13,11 @@ MIX_ENV=test mix cure.bench.interfaces --warm-iterations 3
 
 The cold sample starts without a checked-interface cache. Each warm sample runs
 the identical source universe against the cache published by the preceding run.
-The report includes exact rebuilt-module lists, top-level phase timings, and SCC
-component timings; a warm sample is cache evidence only when `rebuilt=0`.
+The report includes exact rebuilt-module lists, top-level phase timings, SCC
+component timings, and the slowest declaration/stage timings. The CLI prints
+the top 20 entries in each ranking by default; use `--top N` to change that
+without discarding the complete timing lists retained by the benchmark API. A
+warm sample is cache evidence only when `rebuilt=0`.
 
 Pass an explicit list of files only when it is a dependency-complete compilation
 universe. A lone module that imports another source is intentionally rejected by
@@ -46,6 +49,27 @@ source line count alone is not sufficient justification.
 For comparison, before shape-directed zonking and canonical-name interning, the
 same cold check measured 93.402 s with `Std.Actor` at 71.349 s. Those numbers are
 diagnostic evidence from the same machine, not a second supported baseline.
+
+## 2026-08-10 declaration-stage profile
+
+On the same machine, a cold run after adding declaration-stage timing measured
+41.193 s overall, with `Std.Actor` accounting for 33.110 s. A no-rebuild warm
+sample measured 1.351 s. The dominant declarations and their typed-elaboration
+times were:
+
+| Declaration | Typed elaboration |
+|---|---:|
+| `emit_actor_dep_call_parts` | 7.590 s |
+| `derive_behavior_family` | 7.455 s |
+| `emit_actor_call_parts` | 6.913 s |
+| `emit_actor_parts_poly` | 3.322 s |
+| `emit_actor_parts_aliased_raw` | 2.679 s |
+| `emit_actor_parts_aliased` | 2.525 s |
+
+The parsed `Std.Actor` body contains hundreds, not millions, of authored calls;
+profiling therefore identifies repeated typed elaboration as the remaining
+cost, rather than parsing, expansion size, interface publication, or totality
+certification. This profile is the baseline for the next elaborator change.
 
 ## Focused test startup
 

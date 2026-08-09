@@ -54,8 +54,17 @@ defmodule Cure.Compiler.ShapeInterfaceReloadPropertyTest do
     assert {:ok, checked_provider} = check([provider], dir)
     assert :ok = Cure.Compiler.ModulePipeline.write_interfaces(checked_provider, interfaces)
 
-    assert {:ok, %{"Shape.Provider" => reloaded_interface}} =
-             Cure.Compiler.ModulePipeline.Interface.load_roots([interfaces])
+    assert {:ok, stdlib} =
+             Cure.Compiler.Artifacts.open_verified_set(
+               kind: :stdlib,
+               candidates: Cure.Stdlib.Paths.beam_dirs()
+             )
+
+    assert {:ok, loaded_interfaces} =
+             Cure.Compiler.ModulePipeline.Interface.load_roots([interfaces, stdlib.artifact_root])
+
+    assert %Cure.Compiler.ModuleInterface{} =
+             reloaded_interface = Map.fetch!(loaded_interfaces, "Shape.Provider")
 
     assert {:ok, reloaded_env} =
              Cure.Compiler.ModulePipeline.Interface.to_env(reloaded_interface)

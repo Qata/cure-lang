@@ -167,10 +167,54 @@ defmodule Cure.Elab.Interface do
 
   @doc "The interface descriptor whose method set contains `method`, or nil."
   @spec for_method(Env.t(), atom()) :: map() | nil
-  def for_method(%Env{interfaces: ifaces}, method) do
-    Enum.find_value(ifaces, fn {_name, desc} ->
-      if Map.has_key?(desc.methods, method), do: desc, else: nil
+  def for_method(%Env{interface_methods: methods}, method), do: Map.get(methods, method)
+
+  @doc false
+  @spec merge_tables(map(), map()) :: {:ok, map()} | {:error, term()}
+  def merge_tables(left, right) when is_map(left) and is_map(right) do
+    interfaces = Map.merge(left, right)
+
+    interfaces
+    |> method_owners()
+    |> Enum.find(fn {_method, owners} -> length(owners) > 1 end)
+    |> case do
+      nil ->
+        {:ok, interfaces}
+
+      {method, owners} ->
+        owners = Enum.sort(owners)
+        primary = List.last(owners)
+        primary_span = Cure.Elab.SourceMetadata.interface_method_span(primary, method)
+
+        {:error,
+         {:source_context, {:ambiguous_method, method, owners},
+          %{
+            span: primary_span,
+            method: method,
+            interfaces: owners,
+            method_declarations:
+              Enum.map(owners, fn interface ->
+                %{
+                  interface: interface,
+                  span: Cure.Elab.SourceMetadata.interface_method_span(interface, method)
+                }
+              end),
+            checking: primary,
+            expectation_origin: :interface_merge,
+            expression_category: :interface_method
+          }}}
+    end
+  end
+
+  defp method_owners(interfaces) do
+    interfaces
+    |> Enum.reduce(%{}, fn {interface, descriptor}, owners ->
+      Enum.reduce(Map.keys(descriptor.methods), owners, fn method, owners ->
+        Map.update(owners, method, [interface], &[interface | &1])
+      end)
     end)
+    |> Enum.map(fn {method, owners} -> {method, Enum.uniq(owners)} end)
+    |> Enum.sort_by(&elem(&1, 0))
   end
 
   # -- descriptor construction ------------------------------------------------

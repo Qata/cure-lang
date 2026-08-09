@@ -17,7 +17,22 @@ defmodule Cure.Compiler.InterfaceBenchmark do
           total_us: non_neg_integer(),
           phases: %{atom() => non_neg_integer()},
           components: [%{modules: [String.t()], elapsed_us: non_neg_integer()}],
+          declarations: [declaration_timing()],
+          declaration_stages: [declaration_stage_timing()],
           rebuilt_modules: [String.t()]
+        }
+
+  @type declaration_timing :: %{
+          module: String.t(),
+          declaration: String.t(),
+          elapsed_us: non_neg_integer()
+        }
+
+  @type declaration_stage_timing :: %{
+          module: String.t(),
+          declaration: String.t(),
+          stage: atom(),
+          elapsed_us: non_neg_integer()
         }
 
   @spec run([Path.t()], keyword()) :: {:ok, map()} | {:error, term()}
@@ -62,6 +77,17 @@ defmodule Cure.Compiler.InterfaceBenchmark do
     end
   end
 
+  @doc "Returns the slowest timing entries with stable tie ordering."
+  @spec slowest([map()], non_neg_integer()) :: [map()]
+  def slowest(timings, limit) when is_list(timings) and is_integer(limit) and limit >= 0 do
+    timings
+    |> Enum.sort_by(fn timing ->
+      {-Map.fetch!(timing, :elapsed_us), Map.get(timing, :module, ""), Map.get(timing, :declaration, ""),
+       Map.get(timing, :stage, :none)}
+    end)
+    |> Enum.take(limit)
+  end
+
   defp warm_samples(paths, opts, iterations) do
     Enum.reduce_while(1..iterations, {:ok, []}, fn _, {:ok, samples} ->
       case timed_run(paths, opts) do
@@ -91,6 +117,8 @@ defmodule Cure.Compiler.InterfaceBenchmark do
            total_us: total,
            phases: phase_timings(events),
            components: component_timings(events),
+           declarations: declaration_timings(events),
+           declaration_stages: declaration_stage_timings(events),
            rebuilt_modules: ModulePipeline.rebuilt_modules(result)
          }}
 
@@ -119,6 +147,19 @@ defmodule Cure.Compiler.InterfaceBenchmark do
   defp component_timings(events) do
     for {:module_pipeline_timing, :component, elapsed, %{modules: modules}} <- events do
       %{modules: modules, elapsed_us: elapsed}
+    end
+  end
+
+  defp declaration_timings(events) do
+    for {:module_pipeline_timing, :declaration, elapsed, %{module: module, declaration: declaration}} <- events do
+      %{module: module, declaration: declaration, elapsed_us: elapsed}
+    end
+  end
+
+  defp declaration_stage_timings(events) do
+    for {:module_pipeline_timing, :declaration_stage, elapsed,
+         %{module: module, declaration: declaration, stage: stage}} <- events do
+      %{module: module, declaration: declaration, stage: stage, elapsed_us: elapsed}
     end
   end
 end

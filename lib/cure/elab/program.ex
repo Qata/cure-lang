@@ -4110,7 +4110,7 @@ defmodule Cure.Elab.Program do
   # and quietly breaking global coherence. The assertion below turns the next such
   # omission into a compile error rather than a runtime mystery.
   @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
-                      primitives interfaces coherence constrained import_modules bare_modules bare_bindings
+                      primitives interfaces interface_methods coherence constrained import_modules bare_modules bare_bindings
                       qualified_modules lemmas equations module_owner current_def)a
 
   @env_keys Map.keys(Map.from_struct(%Env{}))
@@ -4125,31 +4125,35 @@ defmodule Cure.Elab.Program do
   end
 
   defp merge_env(%Env{} = left, %Env{} = right) do
-    with {:ok, coherence} <- merge_coherence(left.coherence, right.coherence) do
-      {:ok,
-       %Env{
-         families: Map.merge(left.families, right.families),
-         ctors: Map.merge(left.ctors, right.ctors),
-         ctor_to_family: Map.merge(left.ctor_to_family, right.ctor_to_family),
-         defs: merge_defs(left.defs, right.defs),
-         certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
-         builtins: Map.merge(left.builtins, right.builtins),
-         primitives: Map.merge(left.primitives, right.primitives),
-         interfaces: Map.merge(left.interfaces, right.interfaces),
-         coherence: coherence,
-         constrained: Map.merge(left.constrained, right.constrained),
-         import_modules: MapSet.union(left.import_modules, right.import_modules),
-         bare_modules: merge_module_visibility(left.bare_modules, right.bare_modules),
-         bare_bindings: merge_module_visibility(left.bare_bindings, right.bare_bindings),
-         qualified_modules: merge_module_visibility(left.qualified_modules, right.qualified_modules),
-         lemmas: Map.merge(left.lemmas, right.lemmas, fn _head, ls, rs -> Enum.uniq(ls ++ rs) end),
-         equations: Map.merge(left.equations, right.equations, fn _owner, ls, rs -> Enum.uniq(ls ++ rs) end),
-         module_owner: left.module_owner || right.module_owner,
-         # Transient (set only for the duration of one def's body elaboration in
-         # `Declarations.elaborate_real_body/3`, never part of a stored/merged
-         # env in practice); mirrors `module_owner`'s merge for consistency.
-         current_def: left.current_def || right.current_def
-       }}
+    with {:ok, coherence} <- merge_coherence(left.coherence, right.coherence),
+         {:ok, merged_interfaces} <- Cure.Elab.Interface.merge_tables(left.interfaces, right.interfaces) do
+      merged =
+        %Env{
+          families: Map.merge(left.families, right.families),
+          ctors: Map.merge(left.ctors, right.ctors),
+          ctor_to_family: Map.merge(left.ctor_to_family, right.ctor_to_family),
+          defs: merge_defs(left.defs, right.defs),
+          certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
+          builtins: Map.merge(left.builtins, right.builtins),
+          primitives: Map.merge(left.primitives, right.primitives),
+          interfaces: merged_interfaces,
+          interface_methods: %{},
+          coherence: coherence,
+          constrained: Map.merge(left.constrained, right.constrained),
+          import_modules: MapSet.union(left.import_modules, right.import_modules),
+          bare_modules: merge_module_visibility(left.bare_modules, right.bare_modules),
+          bare_bindings: merge_module_visibility(left.bare_bindings, right.bare_bindings),
+          qualified_modules: merge_module_visibility(left.qualified_modules, right.qualified_modules),
+          lemmas: Map.merge(left.lemmas, right.lemmas, fn _head, ls, rs -> Enum.uniq(ls ++ rs) end),
+          equations: Map.merge(left.equations, right.equations, fn _owner, ls, rs -> Enum.uniq(ls ++ rs) end),
+          module_owner: left.module_owner || right.module_owner,
+          # Transient (set only for the duration of one def's body elaboration in
+          # `Declarations.elaborate_real_body/3`, never part of a stored/merged
+          # env in practice); mirrors `module_owner`'s merge for consistency.
+          current_def: left.current_def || right.current_def
+        }
+
+      {:ok, Env.with_interfaces(merged, merged_interfaces)}
     end
   end
 

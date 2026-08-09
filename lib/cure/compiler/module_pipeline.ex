@@ -834,7 +834,7 @@ defmodule Cure.Compiler.ModulePipeline do
     with :ok <- Cycle.classify(manifest, component, asts, skeletons),
          {:ok, prepared} <-
            timed(request, :component_register, timing_metadata, fn ->
-             register_component(manifest, component, members, asts, sources, checked_envs)
+             register_component(manifest, component, members, asts, sources, interfaces, checked_envs)
            end),
          {:ok, component_env} <-
            timed(request, :component_merge, timing_metadata, fn ->
@@ -852,8 +852,9 @@ defmodule Cure.Compiler.ModulePipeline do
     end
   end
 
-  defp register_component(manifest, component, members, asts, sources, checked_envs) do
-    with {:ok, skeletons} <- register_component_type_skeletons(manifest, component, members, asts, checked_envs),
+  defp register_component(manifest, component, members, asts, sources, interfaces, checked_envs) do
+    with {:ok, skeletons} <-
+           register_component_type_skeletons(manifest, component, members, asts, interfaces, checked_envs),
          {:ok, component_skeleton} <- merge_environments(skeletons, :component_type_skeleton_merge_failed) do
       register_component_interfaces(
         manifest,
@@ -861,17 +862,18 @@ defmodule Cure.Compiler.ModulePipeline do
         members,
         asts,
         sources,
+        interfaces,
         checked_envs,
         component_skeleton
       )
     end
   end
 
-  defp register_component_type_skeletons(manifest, component, members, asts, checked_envs) do
+  defp register_component_type_skeletons(manifest, component, members, asts, interfaces, checked_envs) do
     Enum.reduce_while(component, {:ok, %{}}, fn identity, {:ok, skeletons} ->
       entry = Map.fetch!(manifest.entries, identity)
 
-      with {:ok, imported} <- imported_environment(manifest, identity, checked_envs, members),
+      with {:ok, imported} <- imported_environment(manifest, identity, interfaces, checked_envs, members),
            {:ok, skeleton} <-
              Program.canonical_type_skeleton(Map.fetch!(asts, identity), imported,
                module_name: entry.module_name,
@@ -890,13 +892,14 @@ defmodule Cure.Compiler.ModulePipeline do
          members,
          asts,
          sources,
+         interfaces,
          checked_envs,
          component_skeleton
        ) do
     Enum.reduce_while(component, {:ok, %{}}, fn identity, {:ok, prepared} ->
       entry = Map.fetch!(manifest.entries, identity)
 
-      with {:ok, imported} <- imported_environment(manifest, identity, checked_envs, members),
+      with {:ok, imported} <- imported_environment(manifest, identity, interfaces, checked_envs, members),
            {:ok, imported} <- Program.merge_canonical_environments(imported, component_skeleton),
            {:ok, module} <-
              Program.canonical_register_interface(Map.fetch!(asts, identity), imported,
@@ -1073,11 +1076,11 @@ defmodule Cure.Compiler.ModulePipeline do
   # check against is its dependencies' interfaces closed under their own
   # dependencies. Visibility is decided separately and is not widened by this:
   # being present in the environment is not the same as being in scope.
-  defp imported_environment(manifest, identity, checked_envs, excluded) do
+  defp imported_environment(manifest, identity, interfaces, checked_envs, excluded) do
     manifest
     |> compiled_dependencies(identity)
-    |> Enum.flat_map(&(manifest |> reachable_modules(&1) |> MapSet.to_list()))
-    |> Enum.uniq()
+    |> reachable_environment_dependencies(manifest, interfaces)
+    |> MapSet.to_list()
     |> Enum.reject(&MapSet.member?(excluded, &1))
     |> Enum.sort()
     |> Enum.reduce_while({:ok, Env.empty()}, fn dependency, {:ok, imported} ->
@@ -1092,6 +1095,52 @@ defmodule Cure.Compiler.ModulePipeline do
           {:halt, {:error, {:interface_dependency_unavailable, identity, dependency}}}
       end
     end)
+  end
+
+  # Source entries and loaded interfaces are nodes in the same semantic graph.
+  # A focused build may have only the requester in the source manifest, so once
+  # the walk reaches an interface node its recorded direct edges are the sole
+  # canonical account of the declarations needed to interpret that interface.
+  # This expands availability only; `module_visibility/2` still derives lexical
+  # scope exclusively from the requester's own manifest edges.
+  defp reachable_environment_dependencies(roots, manifest, interfaces) do
+    reachable_environment_dependencies(roots, manifest, interfaces, MapSet.new())
+  end
+
+  defp reachable_environment_dependencies([], _manifest, _interfaces, seen), do: seen
+
+  defp reachable_environment_dependencies([identity | rest], manifest, interfaces, seen) do
+    if MapSet.member?(seen, identity) do
+      reachable_environment_dependencies(rest, manifest, interfaces, seen)
+    else
+      dependencies = environment_dependencies(manifest, interfaces, identity)
+
+      reachable_environment_dependencies(
+        dependencies ++ rest,
+        manifest,
+        interfaces,
+        MapSet.put(seen, identity)
+      )
+    end
+  end
+
+  defp environment_dependencies(manifest, interfaces, identity) do
+    if Map.has_key?(manifest.entries, identity) do
+      compiled_dependencies(manifest, identity)
+    else
+      case Map.fetch(interfaces, identity) do
+        {:ok, interface} ->
+          provided = MapSet.new(Builtins.provided_modules())
+
+          interface.direct_edges
+          |> Enum.map(&{manifest.package, &1.target})
+          |> Enum.uniq()
+          |> Enum.reject(&MapSet.member?(provided, elem(&1, 1)))
+
+        :error ->
+          []
+      end
+    end
   end
 
   defp dependency_hashes(manifest, identity, interfaces) do

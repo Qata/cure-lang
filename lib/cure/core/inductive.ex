@@ -28,6 +28,7 @@ defmodule Cure.Core.Env do
             certified: nil,
             builtins: %{},
             interfaces: %{},
+            interface_methods: %{},
             coherence: nil,
             constrained: %{},
             primitives: %{},
@@ -48,6 +49,7 @@ defmodule Cure.Core.Env do
           certified: MapSet.t() | nil,
           builtins: %{atom() => atom()},
           interfaces: %{atom() => map()},
+          interface_methods: %{atom() => map()},
           coherence: term(),
           constrained: %{atom() => [map()]},
           primitives: %{String.t() => tuple()},
@@ -463,7 +465,20 @@ defmodule Cure.Core.Env do
   """
   @spec put_interface(t(), atom(), map()) :: t()
   def put_interface(%__MODULE__{interfaces: ifaces} = env, name, desc),
-    do: %{env | interfaces: Map.put(ifaces, name, desc)}
+    do: with_interfaces(env, Map.put(ifaces, name, desc))
+
+  @doc false
+  @spec with_interfaces(t(), %{atom() => map()}) :: t()
+  def with_interfaces(%__MODULE__{} = env, interfaces) when is_map(interfaces) do
+    methods =
+      Enum.reduce(interfaces, %{}, fn {_name, descriptor}, index ->
+        Enum.reduce(descriptor.methods, index, fn {method, _method_descriptor}, index ->
+          Map.put(index, method, descriptor)
+        end)
+      end)
+
+    %{env | interfaces: interfaces, interface_methods: methods}
+  end
 
   @doc "The interface descriptor for `name`, or nil."
   @spec get_interface(t(), atom()) :: map() | nil
