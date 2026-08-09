@@ -112,6 +112,23 @@ defmodule Cure.MixProject do
   end
 
   defp aliases do
+    compile =
+      if Mix.env() == :test do
+        # Tests compile the host application and a VM-local stdlib generation.
+        # Packaged sources/BEAMs and the root escript are independent release
+        # gates; writing them here makes concurrent test VMs race on shared
+        # filesystem outputs.
+        ["compile", "cure.compile_stdlib"]
+      else
+        [
+          "compile",
+          "cure.bundle_stdlib",
+          "cure.compile_stdlib",
+          "cure.bundle_stdlib_beams",
+          "cure.escript"
+        ]
+      end
+
     [
       # Warnings during `mix test` are failures — keeps the suite output clean
       # and stops new compile warnings from slipping in. Covers lib AND test
@@ -138,7 +155,7 @@ defmodule Cure.MixProject do
       # into `priv/ebin/`. That directory rides along with every OTP
       # release so the embedded REPL can call into the stdlib at runtime
       # without relying on the build-time `_build/cure/ebin` artefact.
-      compile: ["compile", "cure.bundle_stdlib", "cure.compile_stdlib", "cure.bundle_stdlib_beams", "cure.escript"]
+      compile: compile
     ]
   end
 

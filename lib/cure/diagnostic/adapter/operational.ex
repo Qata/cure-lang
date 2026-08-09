@@ -363,13 +363,17 @@ defmodule Cure.Diagnostic.Adapter.Operational do
 
   @doc "Build E101 only for a caught exception at an explicit compiler boundary."
   def internal_exception(exception, stacktrace, opts \\ []) when is_exception(exception) and is_list(stacktrace) do
-    fingerprint = fingerprint({exception.__struct__, Exception.message(exception), stack_head(stacktrace)})
+    internal_context = Cure.Diagnostic.InternalContext.normalize(opts)
 
-    payload = %{
-      fingerprint: fingerprint,
-      exception: inspect(exception.__struct__),
-      context: Keyword.get(opts, :context)
-    }
+    fingerprint =
+      fingerprint({exception.__struct__, Exception.message(exception), stack_head(stacktrace), internal_context})
+
+    payload =
+      Map.merge(internal_context, %{
+        fingerprint: fingerprint,
+        exception: inspect(exception.__struct__),
+        context: Keyword.get(opts, :context)
+      })
 
     payload = if Keyword.get(opts, :debug, false), do: Map.put(payload, :stacktrace, stacktrace), else: payload
 
@@ -379,13 +383,16 @@ defmodule Cure.Diagnostic.Adapter.Operational do
       severity: :error,
       title: "Internal compiler error",
       message: "The compiler failed unexpectedly. Please report fingerprint `#{fingerprint}`.",
+      primary: internal_primary(internal_context.span),
+      provenance: internal_context.provenance,
       payload: payload
     )
   end
 
   @doc "Build E101 for a return shape that violates an internal boundary contract."
   def impossible_return(context, value, opts \\ []) do
-    fingerprint = fingerprint({context, value})
+    internal_context = Cure.Diagnostic.InternalContext.normalize(opts)
+    fingerprint = fingerprint({context, value, internal_context})
 
     Diagnostic.new(
       code: "E101",
@@ -393,13 +400,21 @@ defmodule Cure.Diagnostic.Adapter.Operational do
       severity: :error,
       title: "Internal compiler error",
       message: "The compiler reached an impossible state. Please report fingerprint `#{fingerprint}`.",
-      payload: %{
-        fingerprint: fingerprint,
-        context: context,
-        impossible_shape: if(Keyword.get(opts, :debug, false), do: inspect(value), else: nil)
-      }
+      primary: internal_primary(internal_context.span),
+      provenance: internal_context.provenance,
+      payload:
+        Map.merge(internal_context, %{
+          fingerprint: fingerprint,
+          context: context,
+          impossible_shape: if(Keyword.get(opts, :debug, false), do: inspect(value), else: nil)
+        })
     )
   end
+
+  defp internal_primary(nil), do: nil
+
+  defp internal_primary(span),
+    do: %Cure.Diagnostic.Label{span: span, style: :primary, message: "the compiler failed here"}
 
   defp diagnostic(code, key, message, payload) do
     Diagnostic.new(

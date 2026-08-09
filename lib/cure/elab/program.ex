@@ -162,15 +162,21 @@ defmodule Cure.Elab.Program do
   end
 
   @doc false
-  @spec canonical_check_bodies(map()) :: {:ok, Env.t()} | {:error, term()}
-  def canonical_check_bodies(%{
-        ast: ast,
-        owner: owner,
-        interface_env: %Env{} = interface_env,
-        function_declarations: function_declarations,
-        source_opts: source_opts
-      }) do
-    with {:ok, checked} <- body_pass_strict(function_declarations, interface_env),
+  @spec canonical_check_bodies(map(), keyword()) :: {:ok, Env.t()} | {:error, term()}
+  def canonical_check_bodies(module, opts \\ [])
+
+  def canonical_check_bodies(
+        %{
+          ast: ast,
+          owner: owner,
+          interface_env: %Env{} = interface_env,
+          function_declarations: function_declarations,
+          source_opts: source_opts
+        },
+        opts
+      ) do
+    with {:ok, checked} <-
+           body_pass_strict(function_declarations, interface_env, owner, Keyword.get(opts, :event_sink)),
          checked = TotalityClosure.certify_deferred(checked),
          :ok <- MacroValidate.check_program(ast, checked),
          {:ok, certified} <- certify_type_level_with_source(ast, checked, source_opts),
@@ -2563,9 +2569,8 @@ defmodule Cure.Elab.Program do
 
   `cached_module_interface/2` assumes a shipped stdlib source is immutable for
   the lifetime of a compiler run — true for ordinary one-shot compilation, but
-  violated BY DESIGN whenever incremental compilation recompiles that very
-  source within one long-lived process (two `Cure.Compiler.Incremental`
-  builds sharing a VM, e.g. `mix cure.compile_stdlib` invoked twice in one
+  violated BY DESIGN whenever the canonical artifact sweep recompiles that
+  source within one long-lived process (for example, two stdlib sweeps in one
   node). Without this, a module's SECOND same-process recompile can silently
   report the FIRST run's now-stale interface, and a dependent whose actual
   interface changed is never recompiled. The incremental driver calls this
@@ -5247,16 +5252,48 @@ defmodule Cure.Elab.Program do
   # Canonical module compilation receives its complete checked interface table
   # from the phase planner. A missing qualified global is therefore a real
   # resolver error: it must never invoke the source loader and retry.
-  defp body_pass_strict(fn_decls, env) do
+  defp body_pass_strict(fn_decls, env, owner, event_sink) do
     {plain, computed} = Enum.split_with(fn_decls, &(not MacroExpand.contains_computed_use?(&1)))
 
     Enum.reduce_while(plain ++ computed, {:ok, env}, fn decl, {:ok, acc} ->
-      case Declarations.elaborate_function_body(decl, acc) do
+      started = System.monotonic_time(:microsecond)
+      metadata = body_timing_metadata(owner, decl)
+
+      stage_sink = fn stage, elapsed ->
+        emit_body_timing(event_sink, Map.put(metadata, :stage, stage), elapsed)
+      end
+
+      result = Declarations.elaborate_function_body(decl, acc, event_sink: stage_sink)
+      elapsed = System.monotonic_time(:microsecond) - started
+      emit_body_timing(event_sink, metadata, elapsed)
+
+      case result do
         {:ok, checked} -> {:cont, {:ok, checked}}
         {:error, _} = error -> {:halt, contextualize_body_pass_error(error, decl)}
       end
     end)
   end
+
+  defp body_timing_metadata(owner, {:function_def, meta, _body}) when is_list(meta) do
+    source_info = Cure.MetaAST.Metadata.source_info(meta)
+
+    %{
+      module: owner,
+      declaration: Keyword.get(meta, :name),
+      span: if(source_info, do: source_info.whole)
+    }
+  end
+
+  defp emit_body_timing(event_sink, metadata, elapsed) when is_function(event_sink, 2) do
+    event_sink.(metadata, elapsed)
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  defp emit_body_timing(_event_sink, _metadata, _elapsed), do: :ok
 
   # Body elaboration normally attaches expression-level source context itself.
   # Kernel invariant failures such as `:ctor_arity`, however, used to escape as

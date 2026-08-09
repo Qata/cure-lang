@@ -264,8 +264,8 @@ defmodule Cure.Elab.DefiningEquationTest do
     Program.invalidate_module_interface(module_path)
     assert {:ok, second} = Program.module_interface("EquationHashProvider", module_path)
 
-    assert Cure.Compiler.Incremental.interface_hash(first.export_env) ==
-             Cure.Compiler.Incremental.interface_hash(second.export_env)
+    assert Cure.Compiler.ModuleInterface.semantic_hash(first.export_env) ==
+             Cure.Compiler.ModuleInterface.semantic_hash(second.export_env)
   end
 
   test "polymorphic constructor fields and dependent result carriers remain kernel checked" do

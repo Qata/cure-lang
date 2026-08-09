@@ -1,5 +1,6 @@
 defmodule Cure.Elab.MacroRecursiveExpansionTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Cure.Compiler.{Errors, Lexer, MacroSyntax, Parser}
   alias Cure.Core.{Context, Env, Normalise}
@@ -182,6 +183,40 @@ defmodule Cure.Elab.MacroRecursiveExpansionTest do
   after
     :code.purge(:"Cure.MacroBackendParity")
     :code.delete(:"Cure.MacroBackendParity")
+  end
+
+  property "generated compiled and Core macro results decode to identical syntax" do
+    check all(value <- integer(-1_000..1_000), max_runs: 12) do
+      owner = "MacroBackendParity#{System.unique_integer([:positive])}"
+
+      source = """
+      mod #{owner}
+        use Std.Syntax
+
+        fn build() -> MacroResult = Expanded(Leaf(:literal, [], SInt(#{value})))
+      """
+
+      assert {:ok, env} = Program.elaborate(source)
+
+      core_result =
+        Normalise.nf(
+          Context.empty(env),
+          {:global, Name.qualify(owner, "build")}
+        )
+
+      assert {:expanded, core_syntax} = MacroSyntax.from_core_macro_result(core_result)
+      assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+
+      assert {:expanded, compiled_syntax} =
+               module
+               |> apply(:build, [])
+               |> MacroSyntax.from_runtime_macro_result()
+
+      assert compiled_syntax == core_syntax
+
+      :code.purge(module)
+      :code.delete(module)
+    end
   end
 
   test "sibling computed expansions freshen independently without cross-binding" do

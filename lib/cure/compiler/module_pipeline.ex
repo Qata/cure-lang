@@ -58,27 +58,44 @@ defmodule Cure.Compiler.ModulePipeline do
   end
 
   defp check_request(request, paths) do
-    with {:ok, external_interfaces} <- Interface.load_roots(request.interface_roots),
+    with {:ok, external_interfaces} <-
+           timed(request, :interface_load, %{roots: request.interface_roots}, fn ->
+             Interface.load_roots(request.interface_roots)
+           end),
          {:ok, external_envs} <- interface_environments(external_interfaces),
          manifest_options = manifest_options(request, external_interfaces),
-         {:ok, manifest} <- ModuleManifest.build(paths, manifest_options),
-         {:ok, expansion} <- Expansion.run(manifest, manifest_options),
+         {:ok, manifest} <-
+           timed(request, :manifest, %{source_count: length(paths)}, fn ->
+             ModuleManifest.build(paths, manifest_options)
+           end),
+         {:ok, expansion} <-
+           timed(request, :expansion, %{source_count: length(paths)}, fn ->
+             Expansion.run(manifest, manifest_options)
+           end),
          manifest = expansion.manifest,
          components = strongly_connected_components(manifest),
          {:ok, interfaces, checked_envs, body_envs, diagnostics, rebuilt} <-
-           check_modules(
-             request,
-             manifest,
-             expansion.skeletons,
-             expansion.asts,
-             expansion.sources,
-             external_interfaces,
-             external_envs,
-             components
-           ),
+           timed(request, :module_check, %{component_count: length(components)}, fn ->
+             check_modules(
+               request,
+               manifest,
+               expansion.skeletons,
+               expansion.asts,
+               expansion.sources,
+               external_interfaces,
+               external_envs,
+               components
+             )
+           end),
          :ok <- reject_failed_run(diagnostics),
-         {:ok, beams} <- emit_beams(request, expansion.asts, body_envs),
-         :ok <- publish(request, interfaces, beams) do
+         {:ok, beams} <-
+           timed(request, :emission, %{module_count: map_size(expansion.asts)}, fn ->
+             emit_beams(request, manifest, expansion.asts, interfaces, body_envs)
+           end),
+         :ok <-
+           timed(request, :publication, %{module_count: map_size(expansion.asts)}, fn ->
+             publish(request, interfaces, beams)
+           end) do
       {:ok,
        %Result{
          request: request,
@@ -97,6 +114,25 @@ defmodule Cure.Compiler.ModulePipeline do
        }}
     end
   end
+
+  defp timed(request, phase, metadata, operation) when is_function(operation, 0) do
+    started = System.monotonic_time(:microsecond)
+    result = operation.()
+    elapsed = System.monotonic_time(:microsecond) - started
+    emit_event(request, {:module_pipeline_timing, phase, elapsed, metadata})
+    result
+  end
+
+  defp emit_event(%Request{event_sink: sink}, event) when is_function(sink, 1) do
+    sink.(event)
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  defp emit_event(_request, _event), do: :ok
 
   defp record_generated_references(graph, generated) do
     Enum.reduce(generated, graph, fn reference, graph ->
@@ -121,9 +157,9 @@ defmodule Cure.Compiler.ModulePipeline do
   # universe costs real time. A run that asks for beams gets them from the envs
   # the check already produced — see `Emission` — so asking cannot change what
   # was checked, only what is carried out of the run.
-  defp emit_beams(%Request{products: products}, asts, body_envs) do
+  defp emit_beams(%Request{products: products, artifact_roots: artifact_roots}, manifest, asts, interfaces, body_envs) do
     if :beams in List.wrap(products),
-      do: Emission.run(asts, body_envs),
+      do: Emission.run(manifest, asts, interfaces, body_envs, artifact_roots),
       else: {:ok, %{}}
   end
 
@@ -156,8 +192,9 @@ defmodule Cure.Compiler.ModulePipeline do
 
   @spec write_interfaces(Result.t(), Path.t()) :: :ok | {:error, term()}
   def write_interfaces(%Result{} = result, root) when is_binary(root) do
-    result.interfaces
-    |> Map.values()
+    result.manifest.entries
+    |> Map.keys()
+    |> Enum.map(&Map.fetch!(result.interfaces, &1))
     |> Enum.uniq_by(&{&1.module_name, &1.interface_hash})
     |> Enum.sort_by(& &1.module_name)
     |> Enum.reduce_while(:ok, fn interface, :ok ->
@@ -669,6 +706,7 @@ defmodule Cure.Compiler.ModulePipeline do
 
   defp check_modules(request, manifest, skeletons, asts, sources, external_interfaces, external_envs, components) do
     cached = Cache.load(request.cache)
+    reusable_products = reusable_product_identities(request, manifest, cached)
 
     initial =
       {:ok, external_interface_table(manifest, external_interfaces), external_env_table(manifest, external_envs), %{},
@@ -676,19 +714,21 @@ defmodule Cure.Compiler.ModulePipeline do
 
     result =
       Enum.reduce_while(components, initial, fn component, {:ok, interfaces, envs, bodies, diagnostics, rebuilt} ->
-        case reuse_component(cached, component, manifest, interfaces) do
-          {:ok, reused, reused_envs} ->
-            {:cont, {:ok, Map.merge(interfaces, reused), Map.merge(envs, reused_envs), bodies, diagnostics, rebuilt}}
+        timed(request, :component, %{modules: component |> Enum.map(&elem(&1, 1)) |> Enum.sort()}, fn ->
+          case reuse_component(cached, component, manifest, interfaces, reusable_products) do
+            {:ok, reused, reused_envs} ->
+              {:cont, {:ok, Map.merge(interfaces, reused), Map.merge(envs, reused_envs), bodies, diagnostics, rebuilt}}
 
-          :stale ->
-            check_or_report(manifest, skeletons, component, asts, sources, request, {
-              interfaces,
-              envs,
-              bodies,
-              diagnostics,
-              rebuilt
-            })
-        end
+            :stale ->
+              check_or_report(manifest, skeletons, component, asts, sources, request, {
+                interfaces,
+                envs,
+                bodies,
+                diagnostics,
+                rebuilt
+              })
+          end
+        end)
       end)
 
     with {:ok, interfaces, envs, bodies, diagnostics, rebuilt} <- result do
@@ -697,10 +737,36 @@ defmodule Cure.Compiler.ModulePipeline do
     end
   end
 
+  defp reusable_product_identities(
+         %Request{products: products, artifact_roots: artifact_roots},
+         manifest,
+         cached
+       ) do
+    if :beams in List.wrap(products) do
+      cached_by_identity =
+        manifest.entries
+        |> Enum.reduce(%{}, fn {identity, entry}, interfaces ->
+          case Map.fetch(cached, entry.module_name) do
+            {:ok, interface} -> Map.put(interfaces, identity, interface)
+            :error -> interfaces
+          end
+        end)
+
+      Emission.reusable_beam_identities(artifact_roots, manifest, cached_by_identity)
+    else
+      nil
+    end
+  end
+
   defp check_or_report(manifest, skeletons, component, asts, sources, request, state) do
     {interfaces, envs, bodies, diagnostics, rebuilt} = state
 
-    case check_component(manifest, skeletons, component, asts, sources, interfaces, envs) do
+    Enum.each(component, fn identity ->
+      entry = Map.fetch!(manifest.entries, identity)
+      emit_event(request, {:compile_started, entry.module_name, entry.source_path})
+    end)
+
+    case check_component(request, manifest, skeletons, component, asts, sources, interfaces, envs) do
       {:ok, next_interfaces, next_envs, checked} ->
         {:cont,
          {:ok, next_interfaces, next_envs, Map.merge(bodies, checked), diagnostics,
@@ -715,17 +781,21 @@ defmodule Cure.Compiler.ModulePipeline do
     end
   end
 
-  defp reuse_component(cached, component, manifest, published_interfaces) do
+  defp reuse_component(cached, component, manifest, published_interfaces, reusable_products) do
     published =
       Map.new(published_interfaces, fn {identity, interface} -> {elem(identity, 1), interface.interface_hash} end)
 
     with {:ok, reused} <- Cache.reusable(cached, component, manifest.entries, published),
+         true <- products_reusable?(component, reusable_products),
          {:ok, envs} <- reused_environments(reused) do
       {:ok, reused, envs}
     else
       _ -> :stale
     end
   end
+
+  defp products_reusable?(_component, nil), do: true
+  defp products_reusable?(component, reusable), do: Enum.all?(component, &MapSet.member?(reusable, &1))
 
   defp reused_environments(reused) do
     Enum.reduce_while(reused, {:ok, %{}}, fn {identity, interface}, {:ok, envs} ->
@@ -749,15 +819,27 @@ defmodule Cure.Compiler.ModulePipeline do
     end
   end
 
-  defp check_component(manifest, skeletons, component, asts, sources, interfaces, checked_envs) do
+  defp check_component(request, manifest, skeletons, component, asts, sources, interfaces, checked_envs) do
     members = MapSet.new(component)
+    timing_metadata = %{modules: component |> Enum.map(&elem(&1, 1)) |> Enum.sort()}
 
     with :ok <- Cycle.classify(manifest, component, asts, skeletons),
-         {:ok, prepared} <- register_component(manifest, component, members, asts, sources, checked_envs),
-         {:ok, component_env} <- merge_component_environments(prepared),
-         {:ok, checked} <- check_component_bodies(component, skeletons, prepared, component_env),
+         {:ok, prepared} <-
+           timed(request, :component_register, timing_metadata, fn ->
+             register_component(manifest, component, members, asts, sources, checked_envs)
+           end),
+         {:ok, component_env} <-
+           timed(request, :component_merge, timing_metadata, fn ->
+             merge_component_environments(prepared)
+           end),
+         {:ok, checked} <-
+           timed(request, :component_bodies, timing_metadata, fn ->
+             check_component_bodies(request, component, skeletons, prepared, component_env)
+           end),
          {:ok, component_interfaces, component_envs} <-
-           freeze_component_interfaces(manifest, component, checked, interfaces) do
+           timed(request, :component_freeze, timing_metadata, fn ->
+             freeze_component_interfaces(manifest, component, checked, interfaces)
+           end) do
       {:ok, Map.merge(interfaces, component_interfaces), Map.merge(checked_envs, component_envs), checked}
     end
   end
@@ -838,7 +920,7 @@ defmodule Cure.Compiler.ModulePipeline do
     end)
   end
 
-  defp check_component_bodies(component, skeletons, prepared, component_env) do
+  defp check_component_bodies(request, component, skeletons, prepared, component_env) do
     Enum.reduce_while(component, {:ok, %{}}, fn identity, {:ok, checked} ->
       module =
         prepared
@@ -852,7 +934,12 @@ defmodule Cure.Compiler.ModulePipeline do
       # readable as the defect it is rather than being invisible.
       record_component_body_elaboration(identity, component)
 
-      case Program.canonical_check_bodies(module) do
+      declaration_timing = fn metadata, elapsed ->
+        phase = if Map.has_key?(metadata, :stage), do: :declaration_stage, else: :declaration
+        emit_event(request, {:module_pipeline_timing, phase, elapsed, metadata})
+      end
+
+      case Program.canonical_check_bodies(module, event_sink: declaration_timing) do
         {:ok, env} ->
           {:cont, {:ok, Map.put(checked, identity, env)}}
 

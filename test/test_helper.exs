@@ -7,19 +7,37 @@ ExUnit.configure(exclude: [examples: true])
 # completeness authority; test startup does not rescan source declarations or
 # infer freshness from filenames.
 (fn ->
-   IO.puts("test_helper: sweeping Cure stdlib artifacts")
+   output_dir =
+     Application.get_env(:cure, :stdlib_beam_dir) ||
+       Cure.Stdlib.Paths.build_beam_dir(:test, System.pid())
 
-   {:ok, result} =
-     Cure.Compiler.Artifacts.sweep(
-       kind: :stdlib,
-       source_roots: ["lib/std"],
-       output_dir: "_build/cure/ebin",
-       repair: true,
-       compile_opts: [emit_events: false]
-     )
+   Application.put_env(:cure, :stdlib_beam_dir, output_dir)
 
-   :ok = Cure.Compiler.Artifacts.load_verified_set(result.artifact_root)
-   {:ok, artifact_set} = Cure.Compiler.Artifacts.open_verified_set(result.artifact_root)
+   artifact_root =
+     case Application.get_env(:cure, :stdlib_compiled_in_vm) do
+       ^output_dir ->
+         IO.puts("test_helper: using stdlib generation verified by compile alias")
+         {:ok, _set} = Cure.Compiler.Artifacts.open_verified_set(output_dir, verification: :full)
+         output_dir
+
+       _other ->
+         IO.puts("test_helper: sweeping Cure stdlib artifacts")
+
+         {:ok, result} =
+           Cure.Compiler.Artifacts.sweep(
+             module_pipeline: :canonical,
+             kind: :stdlib,
+             source_roots: ["lib/std"],
+             output_dir: output_dir,
+             repair: true,
+             compile_opts: [emit_events: false]
+           )
+
+         result.artifact_root
+     end
+
+   :ok = Cure.Compiler.Artifacts.load_verified_set(artifact_root)
+   {:ok, artifact_set} = Cure.Compiler.Artifacts.open_verified_set(artifact_root)
 
    loaded =
      artifact_set.modules

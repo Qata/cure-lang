@@ -80,6 +80,30 @@ defmodule Cure.Elab.LiteralPatternTest do
     assert apply(mod, :no, []) == :Z
   end
 
+  test "= is an ordinary character literal pattern" do
+    src = """
+    mod CharacterEqualsPattern
+      fn classify(value: Char) -> Bool = match value
+        '=' -> true
+        _ -> false
+
+      fn hit() -> Bool = classify('=')
+      fn miss() -> Bool = classify('x')
+    end
+    """
+
+    {:ok, env} = Program.elaborate(src)
+
+    {:ok, mod} =
+      Emit.compile_and_load(env,
+        module: :"Cure.CharacterEqualsPattern",
+        functions: [:classify, :hit, :miss]
+      )
+
+    assert apply(mod, :hit, [])
+    refute apply(mod, :miss, [])
+  end
+
   test "string literal patterns reuse nested list-pattern lowering" do
     src =
       @nat <>

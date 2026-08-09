@@ -107,6 +107,84 @@ defmodule Cure.Elab.ModuleMergeLawsTest do
     assert first[:"Merge.Base#Code"].body == {:data, :"Std.Int#Int", [], []}
   end
 
+  test "repeated macro expansion publishes one stable canonical alias" do
+    source = """
+    mod Merge.GeneratedAlias
+      macro Publish
+        syntax publish becomes typealias Code = Int
+
+      publish
+      fn id(value: Code) -> Code = value
+    """
+
+    projections =
+      for _round <- 1..3 do
+        assert {:ok, env} = Program.elaborate(source)
+
+        alias_keys =
+          env.defs
+          |> Map.keys()
+          |> Enum.filter(&(Cure.Elab.Name.base(&1) == "Code"))
+
+        assert alias_keys == [:"Merge.GeneratedAlias#Code"]
+
+        %{
+          alias: env.defs[:"Merge.GeneratedAlias#Code"],
+          caller: env.defs[:"Merge.GeneratedAlias#id"],
+          bare_bindings: env.bare_bindings
+        }
+      end
+
+    assert Enum.uniq(projections) |> length() == 1
+    assert hd(projections).alias.body == {:data, :"Std.Int#Int", [], []}
+  end
+
+  test "indexed aliases remain definitionally identical under every merge order", %{tmp_dir: dir} do
+    write!(
+      dir,
+      "bounded_base.cure",
+      """
+      mod Merge.BoundedBase
+        use Std.Bounded
+        typealias Small = Bounded(3)
+      """
+    )
+
+    for {name, function} <- [{"Left", "left"}, {"Right", "right"}] do
+      write!(
+        dir,
+        "bounded_#{String.downcase(name)}.cure",
+        """
+        mod Merge.Bounded#{name}
+          use Merge.BoundedBase
+          fn #{function}(value: Small) -> Small = value
+        """
+      )
+    end
+
+    projections =
+      for imports <- [["Merge.BoundedLeft", "Merge.BoundedRight"], ["Merge.BoundedRight", "Merge.BoundedLeft"]] do
+        assert {:ok, env} =
+                 Program.elaborate("""
+                 mod Merge.BoundedConsumer
+                   use #{Enum.at(imports, 0)}
+                   use #{Enum.at(imports, 1)}
+                   fn keep(value: Merge.BoundedBase.Small) -> Merge.BoundedBase.Small = value
+                 """)
+
+        %{
+          alias: env.defs[:"Merge.BoundedBase#Small"],
+          left: env.defs[:"Merge.BoundedLeft#left"],
+          right: env.defs[:"Merge.BoundedRight#right"],
+          consumer: env.defs[:"Merge.BoundedConsumer#keep"]
+        }
+      end
+
+    assert [first, second] = projections
+    assert first == second
+    assert first.alias.body == {:data, :"Std.Bounded#Bounded", [], [nat_lit: 3]}
+  end
+
   defp collect_loader_events(acc \\ []) do
     receive do
       {:cure_module_loader, event} -> collect_loader_events([event | acc])

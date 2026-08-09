@@ -59,7 +59,7 @@ defmodule Cure.Stdlib.Preload do
   historical behaviour.
   """
 
-  alias Cure.Compiler.{Artifacts, Incremental}
+  alias Cure.Compiler.Artifacts
   alias Cure.Stdlib.Paths
 
   @default_examples_ebin "_build/cure/ex_ebin"
@@ -527,10 +527,13 @@ defmodule Cure.Stdlib.Preload do
          files when files != [] <- Path.wildcard(Path.join(source_dir, "*.cure")),
          output_dir <- repair_output_dir(candidate_dirs, opts),
          {:ok, summary} <-
-           Incremental.compile_dir(files, output_dir,
+           Artifacts.sweep(
+             module_pipeline: :canonical,
+             source_paths: files,
              source_roots: [source_dir],
-             artifact_kind: :stdlib,
-             compile_opts: [emit_events: false]
+             output_dir: output_dir,
+             kind: :stdlib,
+             repair: true
            ),
          [] <- summary.errors,
          {:ok, artifact_set} <- Artifacts.open_verified_set(output_dir) do

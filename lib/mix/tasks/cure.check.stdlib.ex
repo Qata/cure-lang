@@ -34,6 +34,7 @@ defmodule Mix.Tasks.Cure.Check.Stdlib do
     Application.ensure_all_started(:cure)
 
     case Cure.Compiler.Artifacts.sweep(
+           module_pipeline: :canonical,
            kind: :stdlib,
            source_roots: [@stdlib_dir],
            output_dir: @output_dir,

@@ -289,6 +289,7 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
   defp ensure_stdlib_compiled do
     case Cure.Compiler.Artifacts.sweep(
+           module_pipeline: :canonical,
            kind: :stdlib,
            output_dir: "_build/cure/ebin",
            repair: false,
@@ -316,6 +317,7 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
       source_root ->
         case Cure.Compiler.Artifacts.sweep(
+               module_pipeline: :canonical,
                kind: :stdlib,
                source_roots: [source_root],
                output_dir: "_build/cure/ebin",

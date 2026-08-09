@@ -1,5 +1,7 @@
 defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
+  import ExUnitProperties, except: [check: 2]
 
   @moduletag :canonical_module_pipeline_red
   @moduletag :tmp_dir
@@ -39,6 +41,71 @@ defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
 
       assert pipeline(:canonical_identities, [once]) == pipeline(:canonical_identities, [reversed])
       assert pipeline(:definitionally_equal?, [once, "Merge.A.Letter", "Int"])
+    end
+
+    property "generated interface permutations and repetitions preserve the semantic environment", %{
+      tmp_dir: dir
+    } do
+      paths = [
+        write!(dir, "property_a.cure", "mod MergeProperty.A\n  typealias Letter = Int\n"),
+        write!(
+          dir,
+          "property_b.cure",
+          "mod MergeProperty.B\n  fn left(value: Int) -> Int = value\n"
+        ),
+        write!(
+          dir,
+          "property_c.cure",
+          "mod MergeProperty.C\n  fn right(value: Bool) -> Bool = value\n"
+        )
+      ]
+
+      assert {:ok, checked} = check(paths, dir)
+
+      interfaces =
+        Enum.map(["MergeProperty.A", "MergeProperty.B", "MergeProperty.C"], fn module ->
+          assert {:ok, interface} = pipeline(:interface, [checked, module])
+          interface
+        end)
+
+      assert {:ok, baseline} = pipeline(:merge_interfaces, [interfaces])
+      baseline_dump = pipeline(:semantic_environment_dump, [baseline])
+      baseline_identities = pipeline(:canonical_identities, [baseline])
+
+      interface_envs =
+        Enum.map(interfaces, fn interface ->
+          assert {:ok, env} = Cure.Compiler.ModulePipeline.Interface.to_env(interface)
+          env
+        end)
+
+      ExUnitProperties.check all(
+                               order <- member_of(permutations([0, 1, 2])),
+                               repetitions <- list_of(member_of([0, 1, 2]), max_length: 8),
+                               max_runs: 40
+                             ) do
+        selected = Enum.map(order ++ repetitions, &Enum.at(interfaces, &1))
+        assert {:ok, merged} = pipeline(:merge_interfaces, [selected])
+        assert pipeline(:semantic_environment_dump, [merged]) == baseline_dump
+        assert pipeline(:canonical_identities, [merged]) == baseline_identities
+
+        [a, b, c] = Enum.map(order, &Enum.at(interface_envs, &1))
+        assert {:ok, ab} = Cure.Elab.Program.merge_canonical_environments(a, b)
+        assert {:ok, left_associated} = Cure.Elab.Program.merge_canonical_environments(ab, c)
+        assert {:ok, bc} = Cure.Elab.Program.merge_canonical_environments(b, c)
+        assert {:ok, right_associated} = Cure.Elab.Program.merge_canonical_environments(a, bc)
+
+        left =
+          Cure.Compiler.ModulePipeline.Environment.semantic_dump(%Cure.Compiler.ModulePipeline.Environment{
+            env: left_associated
+          })
+
+        right =
+          Cure.Compiler.ModulePipeline.Environment.semantic_dump(%Cure.Compiler.ModulePipeline.Environment{
+            env: right_associated
+          })
+
+        assert left == right
+      end
     end
 
     test "direct imports win no preference from transitive or ambient availability", %{tmp_dir: dir} do
@@ -313,6 +380,24 @@ defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
   end
 
   describe "artifacts and incremental compilation" do
+    property "generated file orders produce one canonical dependency manifest", %{tmp_dir: dir} do
+      paths = [
+        write!(dir, "order_d.cure", "mod Order.D\n  fn value() -> Int = 1\n"),
+        write!(dir, "order_c.cure", "mod Order.C\n  use Order.D\n  fn value() -> Int = Order.D.value()\n"),
+        write!(dir, "order_b.cure", "mod Order.B\n  use Order.C\n  fn value() -> Int = Order.C.value()\n"),
+        write!(dir, "order_a.cure", "mod Order.A\n  use Order.B\n  fn value() -> Int = Order.B.value()\n")
+      ]
+
+      assert {:ok, baseline} = Cure.Compiler.ModuleManifest.build(paths, package: "property")
+      dump = Cure.Compiler.ModuleManifest.canonical_dump(baseline)
+
+      ExUnitProperties.check all(order <- member_of(permutations([0, 1, 2, 3])), max_runs: 40) do
+        permuted = Enum.map(order, &Enum.at(paths, &1))
+        assert {:ok, manifest} = Cure.Compiler.ModuleManifest.build(permuted, package: "property")
+        assert Cure.Compiler.ModuleManifest.canonical_dump(manifest) == dump
+      end
+    end
+
     test "interface hashes ignore bodies but include semantic interface and direct dependency hashes", %{
       tmp_dir: dir
     } do
@@ -366,6 +451,21 @@ defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
       File.write!(provider, "mod Inc.Provider\n  fn value() -> Int = 2\n  fn extra() -> Int = 3\n")
       assert {:ok, interface_change} = check([consumer, provider], dir, cache: cache)
       assert pipeline(:rebuilt_modules, [interface_change]) == ["Inc.Consumer", "Inc.Provider"]
+    end
+
+    test "a cached interface cannot suppress a body required for a requested beam", %{tmp_dir: dir} do
+      source = write!(dir, "product_cache.cure", "mod Product.Cache\n  fn value() -> Int = 1\n")
+      cache = Path.join(dir, "cache")
+
+      assert {:ok, first} = check([source], dir, cache: cache, products: [:beams])
+      assert Map.has_key?(first.beams, :"Cure.Product.Cache")
+
+      # An interface cache is deliberately independent of emitted products.
+      # With no artifact root supplying the old beam, the canonical pipeline
+      # must recheck the body instead of accepting an incomplete generation.
+      assert {:ok, second} = check([source], dir, cache: cache, products: [:beams])
+      assert pipeline(:rebuilt_modules, [second]) == ["Product.Cache"]
+      assert Map.has_key?(second.beams, :"Cure.Product.Cache")
     end
   end
 

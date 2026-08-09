@@ -33,6 +33,7 @@ mod Std.Regex
 
   ## Genuine large elimination: each value-level shape computes to its Cure
   ## result type. No runtime tag, Dynamic value, cast, or postulate is involved.
+  @reducible
   fn Sem(shape: ShapeCode) -> Type = match shape
     UnitC -> Unit
     CharC -> Char

@@ -2,7 +2,7 @@ defmodule Cure.Elab.CheckedModuleTest do
   use ExUnit.Case, async: false
 
   alias Cure.Compiler
-  alias Cure.Compiler.{Incremental, ModuleInterface}
+  alias Cure.Compiler.{Artifacts, ModuleInterface}
   alias Cure.Elab.{CheckedModule, Program}
 
   setup do
@@ -87,29 +87,24 @@ defmodule Cure.Elab.CheckedModuleTest do
       fn value() -> Int = 1
     """)
 
-    Process.put(:cure_elaboration_observer, self())
+    owner = self()
+    progress = fn event -> send(owner, {:pipeline, event}) end
 
-    on_exit(fn ->
-      Process.delete(:cure_elaboration_observer)
-    end)
-
-    assert {:ok, %{compiled: ["Checked.Incremental"], errors: []}} =
-             Incremental.compile_dir([path], output_dir,
+    assert {:ok, result} =
+             Artifacts.sweep(
+               source_paths: [path],
                source_roots: [root],
+               output_dir: output_dir,
+               kind: :project,
+               progress: progress,
                compile_opts: [emit_events: false]
              )
 
-    events = drain_elaboration_events([])
+    assert Map.keys(result.rebuilt) == ["Checked.Incremental"]
+    assert result.errors == []
 
-    assert Enum.count(
-             events,
-             &match?({:checked, :entry, "Checked.Incremental", ^path}, &1)
-           ) == 1
-
-    refute Enum.any?(
-             events,
-             &match?({:checked, :interface, "Checked.Incremental", ^path}, &1)
-           )
+    assert_receive {:pipeline, {:compile_started, "Checked.Incremental", ^path}}
+    refute_receive {:pipeline, {:compile_started, "Checked.Incremental", ^path}}
   end
 
   defp drain_elaboration_events(acc) do

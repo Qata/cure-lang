@@ -50,21 +50,21 @@ defmodule Mix.Tasks.Cure.Compile do
 
   defp compile_dir(path, output_dir) do
     files = path |> Path.join("**/*.cure") |> Path.wildcard()
-    cycles = import_cycles(files)
-
-    Enum.each(cycles, fn walk ->
-      Mix.shell().error(render_host_diagnostic({:import_cycle, walk}, path))
-    end)
 
     case Cure.Compiler.Artifacts.sweep(
+           module_pipeline: :canonical,
            source_roots: [path],
            output_dir: output_dir,
            kind: :project,
            repair: true,
            verify_stdlib: true,
-           stdlib_artifact_digest: Cure.Compiler.Incremental.stdlib_fingerprint()
+           stdlib_artifact_digest: Cure.Compiler.Artifacts.stdlib_fingerprint()
          ) do
       {:ok, result} ->
+        Enum.each(result.cycles, fn walk ->
+          Mix.shell().error(render_host_diagnostic({:import_cycle, walk}, path))
+        end)
+
         Mix.shell().info(
           "  #{map_size(result.rebuilt)} compiled, " <>
             "#{length(result.reused)} up-to-date, " <>
@@ -77,26 +77,18 @@ defmodule Mix.Tasks.Cure.Compile do
     end
   end
 
-  defp import_cycles(files) do
-    with {:ok, graph} <- Cure.Compiler.DepGraph.scan(files),
-         {:ok, _ordered, cycles} <- Cure.Compiler.DepGraph.order(graph) do
-      cycles
-    else
-      _ -> []
-    end
-  end
-
   defp compile_one(path, output_dir) do
     Mix.shell().info("Compiling #{path}")
 
     case Cure.Compiler.Artifacts.sweep(
+           module_pipeline: :canonical,
            source_roots: [Path.dirname(path)],
            source_paths: [path],
            output_dir: output_dir,
            kind: :project,
            repair: true,
            verify_stdlib: true,
-           stdlib_artifact_digest: Cure.Compiler.Incremental.stdlib_fingerprint()
+           stdlib_artifact_digest: Cure.Compiler.Artifacts.stdlib_fingerprint()
          ) do
       {:ok, result} ->
         Mix.shell().info("  -> #{result.rebuilt |> Map.keys() |> Enum.join(", ")}")

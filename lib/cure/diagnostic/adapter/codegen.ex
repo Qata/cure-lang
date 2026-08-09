@@ -9,6 +9,7 @@ defmodule Cure.Diagnostic.Adapter.Codegen do
 
   alias Cure.Diagnostic
   alias Cure.Diagnostic.{Doc, Label, Span}
+  alias Cure.Diagnostic.InternalContext
 
   @spec from_error(term(), keyword()) :: Diagnostic.t()
   def from_error({:codegen_failure, details}, opts) when is_map(details) do
@@ -17,6 +18,9 @@ defmodule Cure.Diagnostic.Adapter.Codegen do
       |> Keyword.put(:codegen_stage, Map.get(details, :stage))
       |> Keyword.put(:codegen_module, Map.get(details, :module))
       |> Keyword.put(:source_file, Map.get(details, :file, Keyword.get(opts, :source_file)))
+      |> Keyword.put(:failure_context, details)
+      |> put_detail_opt(:span, details)
+      |> put_detail_opt(:provenance, details)
 
     failure(Map.get(details, :reason), opts)
   end
@@ -32,17 +36,20 @@ defmodule Cure.Diagnostic.Adapter.Codegen do
 
   defp failure(reason, opts) do
     {title, body, kind} = failure_content(reason)
+    failure_context = context(reason, Keyword.get(opts, :failure_context, %{}))
     stage = Keyword.get(opts, :codegen_stage) || stage(reason)
-    module = Keyword.get(opts, :codegen_module)
+    module = Keyword.get(opts, :codegen_module) || Map.get(failure_context, :module)
     file = source_file(opts)
     reason_text = reason_text(reason)
-    fingerprint = fingerprint({stage, module, file, reason})
+    diagnostic_context = InternalContext.normalize(failure_context)
+    fingerprint = fingerprint({stage, module, file, reason, diagnostic_context})
 
     context =
       [
         "Stage: `#{name(stage)}`.",
         if(module, do: "Module: `#{name(module)}`."),
         if(file, do: "Source: `#{file}`."),
+        context_sentence(diagnostic_context),
         "Underlying reason: #{reason_text}.",
         "Diagnostic fingerprint: `#{fingerprint}`."
       ]
@@ -57,14 +64,16 @@ defmodule Cure.Diagnostic.Adapter.Codegen do
       body: Doc.stack([Doc.paragraph(body), Doc.paragraph(context)]),
       primary: primary(opts, "code generation failed here"),
       notes: ["This is an internal compiler failure; report it with the diagnostic fingerprint."],
-      payload: %{
-        kind: kind,
-        stage: stage,
-        module: module,
-        file: file,
-        reason: reason_text,
-        fingerprint: fingerprint
-      }
+      provenance: Keyword.get(opts, :provenance, Map.get(failure_context, :provenance, [])),
+      payload:
+        Map.merge(diagnostic_context, %{
+          kind: context_kind(reason, kind),
+          stage: stage,
+          module: module,
+          file: file,
+          reason: reason_text,
+          fingerprint: fingerprint
+        })
     )
   end
 
@@ -74,13 +83,29 @@ defmodule Cure.Diagnostic.Adapter.Codegen do
     stage = Keyword.get(opts, :codegen_stage, :final_core_validation)
     module = Keyword.get(opts, :codegen_module)
     file = source_file(opts)
-    fingerprint = fingerprint({stage, module, file, name, rejections})
+
+    nodes = Enum.map(rejections, &Map.get(&1, :node)) |> Enum.reject(&is_nil/1)
+
+    diagnostic_context = %{
+      declaration: name,
+      span: Keyword.get(opts, :span),
+      core_term: InternalContext.bounded_term(List.first(nodes)),
+      core_trace: nodes,
+      expected_type: rejections |> first_present(:expected_type) |> InternalContext.bounded_term(),
+      inferred_type: rejections |> first_present(:inferred_type) |> InternalContext.bounded_term(),
+      unresolved_global: Enum.find_value(nodes, &unresolved_global/1),
+      closure_path: [],
+      provenance: Keyword.get(opts, :provenance, [])
+    }
+
+    fingerprint = fingerprint({stage, module, file, name, rejections, diagnostic_context})
 
     context =
       [
         "Stage: `#{name(stage)}`.",
         if(module, do: "Module: `#{name(module)}`."),
         if(file, do: "Source: `#{file}`."),
+        context_sentence(diagnostic_context),
         "Diagnostic fingerprint: `#{fingerprint}`."
       ]
       |> Enum.reject(&is_nil/1)
@@ -100,16 +125,18 @@ defmodule Cure.Diagnostic.Adapter.Codegen do
         ]),
       primary: primary(opts, "this definition produced invalid internal Core"),
       notes: ["This is an internal compiler failure; report it with the diagnostic fingerprint."],
-      payload: %{
-        kind: :final_core_violation,
-        name: name,
-        clauses: clauses,
-        messages: messages,
-        stage: stage,
-        module: module,
-        file: file,
-        fingerprint: fingerprint
-      }
+      provenance: diagnostic_context.provenance,
+      payload:
+        Map.merge(diagnostic_context, %{
+          kind: :final_core_violation,
+          name: name,
+          clauses: clauses,
+          messages: messages,
+          stage: stage,
+          module: module,
+          file: file,
+          fingerprint: fingerprint
+        })
     )
   end
 
@@ -143,6 +170,12 @@ defmodule Cure.Diagnostic.Adapter.Codegen do
     {"Stdlib module resolution failed",
      "The compiler could not resolve `#{name(module)}` while generating the BEAM artifact. #{message}",
      :missing_stdlib_module}
+  end
+
+  defp failure_content({kind, _details})
+       when kind in [:emission_closure_missing, :emission_closure_incomplete, :emission_closure_invalid] do
+    {"Invalid emission closure",
+     "The compiler found an invalid canonical definition edge before emitting the BEAM artifact.", kind}
   end
 
   defp failure_content(_reason) do
@@ -222,6 +255,61 @@ defmodule Cure.Diagnostic.Adapter.Codegen do
       nil -> nil
     end
   end
+
+  defp put_detail_opt(opts, key, details) do
+    case Map.get(details, key) do
+      nil -> opts
+      value -> Keyword.put(opts, key, value)
+    end
+  end
+
+  defp context({kind, details}, outer)
+       when kind in [:emission_closure_missing, :emission_closure_incomplete, :emission_closure_invalid] and
+              is_map(details) do
+    outer
+    |> Map.merge(details)
+    |> Map.put_new(:declaration, Map.get(details, :referenced_by))
+    |> Map.put_new(:unresolved_global, Map.get(details, :definition))
+    |> Map.put_new_lazy(:closure_path, fn ->
+      [Map.get(details, :referenced_by), Map.get(details, :definition)] |> Enum.reject(&is_nil/1)
+    end)
+  end
+
+  defp context(_reason, outer) when is_map(outer), do: outer
+
+  defp context_sentence(context) do
+    parts =
+      [
+        if(context.declaration, do: "Declaration: `#{name(context.declaration)}`."),
+        if(context.unresolved_global, do: "Unresolved global: `#{name(context.unresolved_global)}`."),
+        if(context.closure_path != [], do: "Closure path: `#{Enum.map_join(context.closure_path, " -> ", &name/1)}`."),
+        if(context.core_term, do: "Failing Core term: `#{context.core_term}`."),
+        if(context.expected_type, do: "Expected type: `#{context.expected_type}`."),
+        if(context.inferred_type, do: "Inferred type: `#{context.inferred_type}`.")
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    if parts == [], do: nil, else: Enum.join(parts, " ")
+  end
+
+  defp context_kind({kind, _details}, _fallback)
+       when kind in [:emission_closure_missing, :emission_closure_incomplete, :emission_closure_invalid],
+       do: kind
+
+  defp context_kind(_reason, fallback), do: fallback
+
+  defp first_present(maps, key), do: Enum.find_value(maps, &Map.get(&1, key))
+
+  defp unresolved_global({:global, name}), do: name
+
+  defp unresolved_global(term) when is_tuple(term) do
+    term
+    |> Tuple.to_list()
+    |> Enum.find_value(&unresolved_global/1)
+  end
+
+  defp unresolved_global(terms) when is_list(terms), do: Enum.find_value(terms, &unresolved_global/1)
+  defp unresolved_global(_term), do: nil
 
   defp fingerprint(term) do
     term

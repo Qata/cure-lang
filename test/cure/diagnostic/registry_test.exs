@@ -317,9 +317,50 @@ end
       raise ArgumentError, "boom"
     rescue
       exception ->
-        diagnostic = Cure.Diagnostic.Operational.internal_exception(exception, __STACKTRACE__)
+        span =
+          Cure.Diagnostic.Span.new(
+            source_id: "internal.cure",
+            path: "internal.cure",
+            start_byte: 0,
+            end_byte: 3,
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 4
+          )
+
+        provenance = [
+          %Cure.Diagnostic.ProvenanceFrame{
+            kind: :generated_declaration,
+            name: :derive,
+            generated: span
+          }
+        ]
+
+        diagnostic =
+          Cure.Diagnostic.Operational.internal_exception(exception, __STACKTRACE__,
+            declaration: :"M#run",
+            span: span,
+            core_term: {:global, :"M#run"},
+            core_trace: [{:global, :"M#run"}],
+            expected_type: {:global, :Nat},
+            inferred_type: {:global, :String},
+            unresolved_global: :"M#missing",
+            closure_path: [:"M#run", :"M#missing"],
+            provenance: provenance
+          )
+
         assert diagnostic.code == "E101"
         assert diagnostic.payload.fingerprint =~ ~r/^[0-9a-f]{12}$/
+        assert diagnostic.primary.span == span
+        assert diagnostic.provenance == provenance
+        assert diagnostic.payload.declaration == :"M#run"
+        assert diagnostic.payload.core_term =~ "M#run"
+        assert diagnostic.payload.core_trace == [{:global, :"M#run"}]
+        assert diagnostic.payload.expected_type == "{:global, :Nat}"
+        assert diagnostic.payload.inferred_type == "{:global, :String}"
+        assert diagnostic.payload.unresolved_global == :"M#missing"
+        assert diagnostic.payload.closure_path == [:"M#run", :"M#missing"]
         refute Map.has_key?(diagnostic.payload, :stacktrace)
     end
 

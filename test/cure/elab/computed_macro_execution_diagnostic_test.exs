@@ -85,6 +85,15 @@ defmodule Cure.Elab.ComputedMacroExecutionDiagnosticTest do
     assert diagnostic.code == "E101"
     assert diagnostic.payload.stage == :computed_macro_expansion
     assert diagnostic.payload.exception == "RuntimeError"
+    assert diagnostic.payload.declaration == "expand"
+    assert diagnostic.payload.span == diagnostic.primary.span
+    assert diagnostic.payload.provenance == diagnostic.provenance
+    assert diagnostic.payload.core_term == nil
+    assert diagnostic.payload.core_trace == []
+    assert diagnostic.payload.expected_type == nil
+    assert diagnostic.payload.inferred_type == nil
+    assert diagnostic.payload.unresolved_global == nil
+    assert diagnostic.payload.closure_path == []
     assert fingerprint = diagnostic.payload.fingerprint
     assert fingerprint =~ ~r/^[0-9a-f]{12}$/
 

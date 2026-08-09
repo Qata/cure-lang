@@ -110,6 +110,7 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
         File.mkdir_p!(dest_dir)
 
         case Cure.Compiler.Artifacts.sweep(
+               module_pipeline: :canonical,
                source_roots: [source_dir],
                output_dir: dest_dir,
                kind: :stdlib,

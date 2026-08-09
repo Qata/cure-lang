@@ -476,19 +476,7 @@ defmodule Cure.CLI do
       end)
       |> Enum.uniq()
 
-    {ordered, providers, module_index} =
-      case Cure.Compiler.prepare_files(files, known_modules: modules_in_roots(dependency_roots)) do
-        {:ok, %{ordered: ordered, providers: providers, cycles: cycles, module_index: module_index}} ->
-          Enum.each(cycles, fn walk ->
-            emit_host_diagnostic({:import_cycle, walk}, hd(paths))
-          end)
-
-          {ordered, providers, module_index}
-
-        {:error, reason} ->
-          emit_host_diagnostic(reason, hd(paths))
-          exit({:shutdown, 1})
-      end
+    ordered = Enum.sort(files)
 
     # Compilation validates explicit imports by asking whether their provider
     # module is loaded. Dependency closure scanning is intentionally about
@@ -497,34 +485,26 @@ defmodule Cure.CLI do
     # fresh escript VM. CLI compilation promises the complete stdlib surface.
     preload_runtime_dependencies!(project)
 
-    # A user `@prelude` module reached by the scan contributes its operators to
-    # every file compiled in this run — even siblings that do not `use` it.
-    compile_opts =
-      compile_opts
-      |> Keyword.put(:prelude_providers, providers)
-      |> Keyword.put(:module_index, module_index)
-
     if verbose?, do: Enum.each(ordered, &info("Compiling #{&1}"))
 
     case Cure.Compiler.Artifacts.sweep(
+           module_pipeline: :canonical,
            source_paths: ordered,
            source_roots: Keyword.fetch!(compile_opts, :source_roots),
            output_dir: output_dir,
            kind: :project,
            repair: true,
            verify_stdlib: true,
-           stdlib_artifact_digest: Cure.Compiler.Incremental.stdlib_fingerprint(),
+           stdlib_artifact_digest: Cure.Compiler.Artifacts.stdlib_fingerprint(),
            package_artifact_sets: package_sets,
            package_artifact_digests: Map.new(package_sets, fn {name, set} -> {name, set.artifact_digest} end),
-           compile_opts:
-             Keyword.take(compile_opts, [
-               :emit_events,
-               :prelude_providers,
-               :module_index,
-               :source_roots
-             ])
+           compile_opts: Keyword.take(compile_opts, [:emit_events, :source_roots])
          ) do
       {:ok, result} ->
+        Enum.each(result.cycles, fn walk ->
+          emit_host_diagnostic({:import_cycle, walk}, hd(paths))
+        end)
+
         result.rebuilt
         |> Enum.sort_by(&elem(&1, 0))
         |> Enum.each(fn {module, reasons} ->
@@ -729,16 +709,6 @@ defmodule Cure.CLI do
     |> Enum.uniq()
   end
 
-  defp modules_in_roots(roots) do
-    roots
-    |> Enum.flat_map(fn root -> Path.wildcard(Path.join(root, "**/*.cure")) end)
-    |> Cure.Compiler.ModuleIndex.build(validate_dependencies: false)
-    |> case do
-      {:ok, index} -> Cure.Compiler.ModuleIndex.module_names(index)
-      {:error, _} -> []
-    end
-  end
-
   # -- check -------------------------------------------------------------------
 
   @dialyzer {:nowarn_function, cmd_check: 2}
@@ -796,8 +766,9 @@ defmodule Cure.CLI do
       info("Compiling Cure standard library (#{length(cure_files)} modules)")
 
       case Cure.Compiler.compile_files(cure_files,
+             module_pipeline: :canonical,
              output_dir: output_dir,
-             artifact_kind: :stdlib,
+             kind: :stdlib,
              emit_events: false,
              source_roots: [stdlib_dir],
              continue_on_error: true
@@ -1063,12 +1034,13 @@ defmodule Cure.CLI do
 
         _ ->
           Cure.Compiler.compile_files(files,
+            module_pipeline: :canonical,
             output_dir: "_build/cure/project/ebin",
             emit_events: false,
             source_roots: ["lib"],
             continue_on_error: true,
             verify_stdlib: true,
-            stdlib_artifact_digest: Cure.Compiler.Incremental.stdlib_fingerprint()
+            stdlib_artifact_digest: Cure.Compiler.Artifacts.stdlib_fingerprint()
           )
       end
 

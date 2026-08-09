@@ -5,9 +5,10 @@
 #   scripts/check-canonical-module-pipeline --full     # add the full + boundary red suites
 #   scripts/check-canonical-module-pipeline <args...>  # raw `elixir` args (ad-hoc scripts)
 #
-# `mix compile` is NOT used: its alias chain runs the stdlib bundler, which is
-# the legacy pipeline this work replaces and currently fails. `compile.elixir`
-# builds the compiler itself, which is what these suites exercise.
+# In MIX_ENV=test the compile alias builds the host compiler and a VM-local
+# stdlib generation only. Packaging and escript gates are deliberately absent,
+# so this can use the ordinary dependency-aware compiler path without mutating
+# shared release outputs or compiling Elixir against a dependency-free path.
 set -eu
 
 repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -38,7 +39,7 @@ test/cure/compiler/canonical_module_pipeline_beam_product_test.exs
 # shellcheck disable=SC2086
 mix format $formatted_sources
 
-MIX_ENV=test mix compile.elixir
+MIX_ENV=test mix compile
 
 if [ "$#" -gt 0 ] && [ "$1" != "--full" ]; then
   MIX_ENV=test elixir -pa _build/test/lib/cure/ebin "$@"

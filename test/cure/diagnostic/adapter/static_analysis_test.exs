@@ -85,6 +85,33 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysisTest do
              |> String.trim_trailing()
   end
 
+  test "an unresolved totality dependency preserves the exact closure path" do
+    diagnostic =
+      Adapter.from_error(
+        {:totality_closure_unresolved,
+         %{
+           definition: :"Proof.Missing#lemma",
+           root: :"Proof.Owner#theorem",
+           closure_path: [:"Proof.Owner#theorem", :"Proof.Helper#step", :"Proof.Missing#lemma"]
+         }}
+      )
+
+    assert diagnostic.code == "E013"
+    assert diagnostic.key == :totality_closure_unresolved
+    assert diagnostic.payload.definition == :"Proof.Missing#lemma"
+
+    assert diagnostic.payload.closure_path == [
+             :"Proof.Owner#theorem",
+             :"Proof.Helper#step",
+             :"Proof.Missing#lemma"
+           ]
+
+    rendered = Renderer.plain(diagnostic, nil, width: 80)
+    assert rendered =~ "TOTALITY DEPENDENCY DOES NOT RESOLVE"
+    assert rendered =~ "Closure path: Proof.Owner#theorem -> Proof.Helper#step ->"
+    assert rendered =~ "Proof.Missing#lemma"
+  end
+
   test "resource usage preserves declaration and earlier-use regions" do
     source = "x x x\n"
     registry = SourceRegistry.new() |> SourceRegistry.register(:usage, source, "usage.cure")

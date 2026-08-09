@@ -59,7 +59,7 @@ defmodule Cure.Compiler.DepGraphTest do
       :code.delete(:"Cure.Bulk.Provider")
     end
 
-    test "bulk drivers can reuse one validated graph plan", %{tmp_dir: dir} do
+    test "bulk drivers reject a legacy external graph plan", %{tmp_dir: dir} do
       output = Path.join(dir, "planned_ebin")
       provider = write!(dir, "zz_planned.cure", "mod Planned.Provider\n  fn value() -> Int = 8\n")
 
@@ -70,18 +70,12 @@ defmodule Cure.Compiler.DepGraphTest do
           "mod Planned.Consumer\n  use Planned.Provider\n  fn run() -> Int = value()\n"
         )
 
-      assert {:ok, plan} = Cure.Compiler.prepare_files([consumer, provider])
-
-      assert {:ok, result} =
+      assert {:error, {:invalid_compile_files_options, [:plan]}} =
                Cure.Compiler.compile_files([consumer, provider],
-                 plan: plan,
+                 plan: %{retired: true},
                  output_dir: output,
                  emit_events: false
                )
-
-      assert Enum.map(result.compiled, &elem(&1, 0)) == [provider, consumer]
-      assert apply(:"Cure.Planned.Consumer", :run, []) == 8
-      assert {:error, :bulk_compile_plan_mismatch} = Cure.Compiler.compile_files([consumer], plan: plan)
     after
       :code.purge(:"Cure.Planned.Consumer")
       :code.delete(:"Cure.Planned.Consumer")

@@ -16,6 +16,24 @@ defmodule Cure.Compiler.Artifacts do
           {:ok, Cure.Compiler.Artifacts.Result.t()} | {:error, term()}
   defdelegate sweep(opts), to: Cure.Compiler.Artifacts.Sweep, as: :run
 
+  @doc "Artifact digest of the first verified stdlib generation visible to this process."
+  @spec stdlib_fingerprint() :: binary()
+  def stdlib_fingerprint do
+    case open_verified_set(kind: :stdlib, candidates: Cure.Stdlib.Paths.beam_dirs()) do
+      {:ok, %{artifact_digest: artifact_digest}} -> artifact_digest
+      {:error, _reason} -> empty_artifact_fingerprint()
+    end
+  end
+
+  @doc "Artifact digest of a verified stdlib generation rooted at `dir`."
+  @spec stdlib_fingerprint(Path.t()) :: binary()
+  def stdlib_fingerprint(dir) do
+    case open_verified_set(dir) do
+      {:ok, %{kind: :stdlib, artifact_digest: artifact_digest}} -> artifact_digest
+      _ -> empty_artifact_fingerprint()
+    end
+  end
+
   @doc "Copy one already verified generation into another artifact-set root."
   @spec copy_verified_set(Path.t(), Path.t()) :: {:ok, Path.t()} | {:error, term()}
   defdelegate copy_verified_set(source_root, output_root),
@@ -879,4 +897,8 @@ defmodule Cure.Compiler.Artifacts do
   defp unwrap_attribute([value]) when is_map(value), do: value
   defp unwrap_attribute(value) when is_map(value), do: value
   defp unwrap_attribute(_), do: nil
+
+  defp empty_artifact_fingerprint do
+    :crypto.hash(:sha256, :erlang.term_to_binary([], [:deterministic]))
+  end
 end

@@ -70,4 +70,14 @@ defmodule Cure.Elab.TotalityClosureTest do
     refute MapSet.member?(TotalityClosure.type_level_fns(env), :rt)
     assert {:ok, _env2} = TotalityClosure.certify_type_level(env)
   end
+
+  test "a missing type-level callee reports its exact canonical closure path" do
+    assert {:error, {:totality_closure_unresolved, %{definition: :missing, closure_path: [:and, :missing], root: :and}}} =
+             TotalityClosure.certify_type_level_detailed(env_with({:global, :missing}))
+  end
+
+  test "a missing compile-time root is not silently filtered from certification" do
+    assert {:error, {:totality_closure_unresolved, %{definition: :missing, closure_path: [:missing], root: :missing}}} =
+             TotalityClosure.certify_roots(Env.empty(), [:missing])
+  end
 end

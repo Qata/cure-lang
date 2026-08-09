@@ -167,41 +167,9 @@ defmodule Cure.Compiler do
   defdelegate prelude_provider_names(graph), to: Cure.Compiler.DepGraph
 
   @doc """
-  Scan and order a bulk Cure compilation universe, returning the ambient
-  prelude-provider names alongside the ordered paths and any tolerated cycles.
-  Bulk drivers share this entry point so parser scope and compile order cannot
-  disagree about user `@prelude` modules.
-  """
-  @spec prepare_files([Path.t()], keyword()) ::
-          {:ok,
-           %{
-             ordered: [Path.t()],
-             providers: [String.t()],
-             cycles: [list()],
-             module_index: Cure.Compiler.ModuleIndex.t()
-           }}
-          | {:error, term()}
-  def prepare_files(files, opts \\ []) when is_list(files) do
-    with {:ok, graph} <-
-           Cure.Compiler.DepGraph.scan(files,
-             validate_dependencies: true,
-             known_modules: Keyword.get(opts, :known_modules, [])
-           ),
-         {:ok, ordered, cycles} <- Cure.Compiler.DepGraph.order(graph) do
-      {:ok,
-       %{
-         ordered: ordered,
-         providers: Cure.Compiler.DepGraph.prelude_provider_names(graph),
-         cycles: cycles,
-         module_index: graph.module_index
-       }}
-    end
-  end
-
-  @doc """
   Compile a complete source universe through the canonical module graph.
 
-  Every bulk driver should use this entry point (or `Incremental.compile_dir/3`)
+  Every bulk driver should use this entry point or the canonical artifact sweep
   instead of sorting filenames and invoking `compile_file/2` independently.
   The graph supplies one dependency order, prelude-provider set, module index,
   and source-root universe to every file in the run.
@@ -217,165 +185,131 @@ defmodule Cure.Compiler do
           | {:error, {Path.t(), term()} | term()}
   def compile_files(files, opts \\ [])
 
-  def compile_files([], _opts) do
-    {:ok,
-     %{
-       compiled: [],
-       errors: [],
-       cycles: [],
-       module_index: %Cure.Compiler.ModuleIndex{}
-     }}
+  def compile_files([], opts) do
+    with :ok <- reject_retired_bulk_options(opts),
+         {:ok, :canonical} <- Cure.Compiler.ModulePipeline.Selection.normalize(opts) do
+      {:ok,
+       %{
+         compiled: [],
+         errors: [],
+         cycles: [],
+         module_index: nil,
+         pipeline: :canonical
+       }}
+    end
   end
 
   def compile_files(files, opts) when is_list(files) do
     files = files |> Enum.map(&Path.expand/1) |> Enum.uniq()
 
-    with {:ok, plan} <- bulk_plan(files, Keyword.get(opts, :plan)) do
-      roots =
-        opts
-        |> Keyword.get(:source_roots, Enum.map(files, &Path.dirname/1))
-        |> List.wrap()
-        |> Enum.map(&Path.expand/1)
-        |> Enum.uniq()
-
-      compile_opts =
-        opts
-        |> Keyword.drop([
-          :plan,
-          :load_emitted,
-          :file_options,
-          :continue_on_error,
-          :artifact_kind,
-          :verify_stdlib,
-          :stdlib_artifact_digest,
-          :package_artifact_sets,
-          :package_artifact_digests
-        ])
-        |> Keyword.put(:source_roots, roots)
-        |> Keyword.put(:prelude_providers, plan.providers)
-        |> Keyword.put(:module_index, plan.module_index)
-
-      load? = Keyword.get(opts, :load_emitted, true)
-      continue? = Keyword.get(opts, :continue_on_error, false)
-      output_dir = Keyword.get(compile_opts, :output_dir, "_build/cure/project/ebin")
-      kind = Keyword.get(opts, :artifact_kind, :project)
-
-      sweep_opts =
-        [
-          source_paths: plan.ordered,
-          source_roots: roots,
-          output_dir: output_dir,
-          kind: kind,
-          repair: true,
-          compile_opts: compile_opts
-        ]
-        |> maybe_put_sweep_opt(opts, :verify_stdlib)
-        |> maybe_put_sweep_opt(opts, :stdlib_artifact_digest)
-        |> maybe_put_sweep_opt(opts, :package_artifact_sets)
-        |> maybe_put_sweep_opt(opts, :package_artifact_digests)
-
-      case Cure.Compiler.Artifacts.sweep(sweep_opts) do
-        {:ok, result} ->
-          with {:ok, set} <- Cure.Compiler.Artifacts.open_verified_set(result.artifact_root),
-               :ok <-
-                 if(load?,
-                   do: Cure.Compiler.Artifacts.load_verified_set(result.artifact_root),
-                   else: :ok
-                 ) do
-            compiled =
-              plan.ordered
-              |> Enum.flat_map(fn source_path ->
-                case Enum.find(set.modules, fn {_name, entry} ->
-                       Path.expand(get_in(entry, [:source, :path])) == Path.expand(source_path)
-                     end) do
-                  {name, entry} ->
-                    if Map.has_key?(result.rebuilt, name) do
-                      module = String.to_existing_atom("Cure." <> name)
-                      [{get_in(entry, [:source, :path]), module, Map.get(result.warnings, name, [])}]
-                    else
-                      []
-                    end
-
-                  nil ->
-                    []
-                end
-              end)
-
-            {:ok,
-             %{
-               compiled: compiled,
-               errors: [],
-               cycles: result.cycles,
-               module_index: plan.module_index
-             }}
-          end
-
-        {:error, {:artifact_sweep_failed, errors}} when continue? ->
-          {:ok,
-           %{
-             compiled: [],
-             errors:
-               Enum.map(errors, fn {target, reason} ->
-                 {bulk_error_path(target, files), reason}
-               end),
-             cycles: plan.cycles,
-             module_index: plan.module_index
-           }}
-
-        {:error, {:artifact_sweep_failed, [{target, reason} | _]}} ->
-          {:error, {bulk_error_path(target, files), reason}}
-
-        {:error, reason} ->
-          {:error, reason}
+    with :ok <- reject_retired_bulk_options(opts) do
+      case Cure.Compiler.ModulePipeline.Selection.normalize(opts) do
+        {:ok, :canonical} -> compile_files_canonical(files, opts)
+        {:error, _reason} = error -> error
       end
     end
   end
 
-  defp bulk_plan(files, nil), do: prepare_files(files)
+  # A caller-supplied DepGraph plan was the second compilation authority: it
+  # could disagree with the canonical manifest's source universe, Prelude set,
+  # or generated semantic edges. Reject it explicitly instead of silently
+  # ignoring it and appearing to honour stale ordering information.
+  defp reject_retired_bulk_options(opts) do
+    retired = [:plan] |> Enum.filter(&Keyword.has_key?(opts, &1)) |> Enum.sort()
+    if retired == [], do: :ok, else: {:error, {:invalid_compile_files_options, retired}}
+  end
 
-  defp bulk_plan(files, %{ordered: ordered, providers: providers, cycles: cycles, module_index: module_index})
-       when is_list(ordered) and is_list(providers) and is_list(cycles) do
-    if MapSet.new(Enum.map(ordered, &Path.expand/1)) == MapSet.new(files) do
+  defp compile_files_canonical(files, opts) do
+    request_opts =
+      opts
+      |> Keyword.take([
+        :kind,
+        :package,
+        :package_dependencies,
+        :source_roots,
+        :interface_roots,
+        :artifact_roots,
+        :stdlib,
+        :prelude_set,
+        :compiler_providers,
+        :edition,
+        :macro_execution,
+        :requested_roots,
+        :diagnostic_sink,
+        :event_sink,
+        :incremental,
+        :cache,
+        :collect_diagnostics,
+        :discovery_concurrency,
+        :forbid_source_fallback,
+        :forbid_beam_resolution,
+        :fresh_environment
+      ])
+      |> Keyword.put(:module_pipeline, :canonical)
+      |> Keyword.put(:products, [:beams])
+
+    with {:ok, result} <-
+           Cure.Compiler.ModulePipeline.check_entry_point(:compiler_files, files, request_opts),
+         {:ok, compiled} <- publish_canonical_beams(result, opts) do
       {:ok,
        %{
-         ordered: Enum.map(ordered, &Path.expand/1),
-         providers: providers,
-         cycles: cycles,
-         module_index: module_index
+         compiled: compiled,
+         errors: [],
+         cycles: canonical_cycles(result),
+         module_index: nil,
+         pipeline: :canonical,
+         manifest: result.manifest,
+         semantic_graph: result.semantic_graph,
+         canonical_result: result
        }}
-    else
-      {:error, :bulk_compile_plan_mismatch}
     end
   end
 
-  defp bulk_plan(_files, _invalid), do: {:error, :invalid_bulk_compile_plan}
+  defp publish_canonical_beams(result, opts) do
+    output_dir = Keyword.get(opts, :output_dir, "_build/cure/project/ebin")
+    emit? = Keyword.get(opts, :emit_events, true)
+    load? = Keyword.get(opts, :load_emitted, true)
+    File.mkdir_p!(output_dir)
 
-  defp maybe_put_sweep_opt(sweep_opts, opts, key) do
-    if Keyword.has_key?(opts, key),
-      do: Keyword.put(sweep_opts, key, Keyword.fetch!(opts, key)),
-      else: sweep_opts
-  end
+    result.components
+    |> List.flatten()
+    |> Enum.reduce_while({:ok, []}, fn identity, {:ok, compiled} ->
+      entry = Map.fetch!(result.manifest.entries, identity)
+      module = String.to_atom("Cure." <> entry.module_name)
 
-  defp bulk_error_path(target, files) when is_binary(target) do
-    if File.regular?(target) do
-      target
-    else
-      Enum.find(files, hd(files), fn path ->
-        case File.read(path) do
-          {:ok, source} ->
-            Regex.match?(
-              ~r/^\s*(?:mod|proof|actor|fsm|sup|app)\s+#{Regex.escape(target)}(?:\s|$)/m,
-              source
-            )
-
-          {:error, _} ->
-            false
-        end
-      end)
+      with {:ok, binary} <- Map.fetch(result.beams, module),
+           :ok <-
+             BeamWriter.write_beam(module, binary, output_dir,
+               emit_events: emit?,
+               file: entry.source_path
+             ),
+           :ok <- maybe_load_canonical_beam(load?, module, binary) do
+        {:cont, {:ok, [{entry.source_path, module, []} | compiled]}}
+      else
+        :error -> {:halt, {:error, {:canonical_beam_missing, entry.module_name}}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, compiled} -> {:ok, Enum.reverse(compiled)}
+      {:error, _reason} = error -> error
     end
   end
 
-  defp bulk_error_path(_target, files), do: hd(files)
+  defp maybe_load_canonical_beam(false, _module, _binary), do: :ok
+
+  defp maybe_load_canonical_beam(true, module, binary) do
+    case :code.load_binary(module, ~c"canonical", binary) do
+      {:module, ^module} -> :ok
+      {:error, reason} -> {:error, {:beam_load_failed, module, reason}}
+    end
+  end
+
+  defp canonical_cycles(result) do
+    result.components
+    |> Enum.filter(&(length(&1) > 1))
+    |> Enum.map(fn component -> Enum.map(component, &elem(&1, 1)) end)
+  end
 
   # `BeamWriter.compile_forms/2` returns `{:error, errors, warnings}` (3-tuple)
   # on lint/compile failures, but the public `compile_string/2`,
@@ -1050,10 +984,11 @@ defmodule Cure.Compiler do
   end
 
   defp final_core_source_context(ast, name) do
-    span = find_definition_span(ast, Cure.Elab.Name.base(name))
+    source_info = find_definition_source_info(ast, Cure.Elab.Name.base(name))
 
     %{
-      span: span,
+      span: source_info && source_info.whole,
+      provenance: if(source_info, do: source_info.provenance, else: []),
       checking: name,
       codegen_stage: :final_core_validation,
       codegen_module: Cure.Elab.Program.module_atom(ast),
@@ -1061,19 +996,17 @@ defmodule Cure.Compiler do
     }
   end
 
-  defp find_definition_span({:function_def, meta, _body}, bare_name) when is_list(meta) do
+  defp find_definition_source_info({:function_def, meta, _body}, bare_name) when is_list(meta) do
     if to_string(Keyword.get(meta, :name)) == bare_name do
-      case Cure.MetaAST.Metadata.source_info(meta) do
-        %Cure.MetaAST.SourceInfo{whole: span} -> span
-        _ -> nil
-      end
+      Cure.MetaAST.Metadata.source_info(meta)
     end
   end
 
-  defp find_definition_span({_tag, _meta, children}, bare_name), do: find_definition_span(children, bare_name)
+  defp find_definition_source_info({_tag, _meta, children}, bare_name),
+    do: find_definition_source_info(children, bare_name)
 
-  defp find_definition_span(items, bare_name) when is_list(items),
-    do: Enum.find_value(items, &find_definition_span(&1, bare_name))
+  defp find_definition_source_info(items, bare_name) when is_list(items),
+    do: Enum.find_value(items, &find_definition_source_info(&1, bare_name))
 
-  defp find_definition_span(_item, _bare_name), do: nil
+  defp find_definition_source_info(_item, _bare_name), do: nil
 end

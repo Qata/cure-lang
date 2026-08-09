@@ -14,7 +14,7 @@ defmodule Cure.Compiler.ModulePipeline.Emission do
   published at all.
   """
 
-  alias Cure.Compiler.BeamWriter
+  alias Cure.Compiler.{Artifacts, BeamWriter, BuildManifest, ModuleInterface, ModuleManifest}
   alias Cure.Core.Env
   alias Cure.Elab.{Emit, Program}
 
@@ -25,39 +25,143 @@ defmodule Cure.Compiler.ModulePipeline.Emission do
   one is a broken run rather than a module with nothing to emit, so it is an
   error and not an empty beam.
   """
-  @spec run(%{term() => term()}, %{term() => Env.t()}) ::
+  @spec run(
+          ModuleManifest.t(),
+          %{term() => term()},
+          %{term() => ModuleInterface.t()},
+          %{term() => Env.t()},
+          [Path.t()]
+        ) ::
           {:ok, %{module() => binary()}} | {:error, term()}
-  def run(asts, body_envs) when is_map(asts) and is_map(body_envs) do
+  def run(%ModuleManifest{} = manifest, asts, interfaces, body_envs, artifact_roots)
+      when is_map(asts) and is_map(interfaces) and is_map(body_envs) and is_list(artifact_roots) do
+    producer_snapshot = producer_snapshot(manifest, interfaces)
+    reusable_beams = reusable_beams(artifact_roots, manifest, interfaces)
+
     asts
     |> Enum.sort_by(fn {identity, _ast} -> identity end)
     |> Enum.reduce_while({:ok, %{}}, fn {identity, ast}, {:ok, emitted} ->
-      case emit_module(identity, ast, body_envs) do
+      case emit_module(identity, ast, manifest, interfaces, body_envs, reusable_beams, producer_snapshot) do
         {:ok, module, binary} -> {:cont, {:ok, Map.put(emitted, module, binary)}}
         {:error, _reason} = error -> {:halt, error}
       end
     end)
   end
 
-  defp emit_module({_package, module_name} = identity, ast, body_envs) do
-    case Map.fetch(body_envs, identity) do
-      {:ok, env} ->
-        case emit(ast, env) do
-          {:ok, _module, _binary} = ok -> ok
-          {:error, reason} -> {:error, {:beam_emission_failed, module_name, reason}}
-        end
+  @doc false
+  @spec reusable_beam_identities(
+          [Path.t()],
+          ModuleManifest.t(),
+          %{term() => ModuleInterface.t()}
+        ) :: MapSet.t(term())
+  def reusable_beam_identities(artifact_roots, %ModuleManifest{} = manifest, interfaces)
+      when is_list(artifact_roots) and is_map(interfaces) do
+    artifact_roots
+    |> reusable_beams(manifest, interfaces)
+    |> Map.keys()
+    |> MapSet.new()
+  end
 
-      :error ->
-        {:error, {:beam_emission_env_missing, module_name}}
+  defp emit_module(
+         {_package, module_name} = identity,
+         ast,
+         manifest,
+         interfaces,
+         body_envs,
+         reusable_beams,
+         snapshot
+       ) do
+    with {:ok, entry} <- Map.fetch(manifest.entries, identity),
+         {:ok, interface} <- Map.fetch(interfaces, identity) do
+      case Map.fetch(body_envs, identity) do
+        {:ok, env} ->
+          provenance = provenance(module_name, entry, interface, snapshot)
+
+          case emit(ast, env, provenance) do
+            {:ok, _module, _binary} = ok -> ok
+            {:error, reason} -> {:error, {:beam_emission_failed, module_name, reason}}
+          end
+
+        :error ->
+          case Map.fetch(reusable_beams, identity) do
+            {:ok, {module, binary}} -> {:ok, module, binary}
+            :error -> {:error, {:beam_emission_input_missing, module_name}}
+          end
+      end
+    else
+      :error -> {:error, {:beam_emission_input_missing, module_name}}
     end
   end
 
-  defp emit(ast, env) do
+  defp provenance(module_name, entry, interface, snapshot) do
+    %{
+      format: 1,
+      module: module_name,
+      source_path: entry.source_path,
+      source_hash: entry.source_hash,
+      interface_hash: interface.interface_hash,
+      compiler_hash: BuildManifest.toolchain_fingerprint(),
+      producer_snapshot: snapshot
+    }
+  end
+
+  defp reusable_beams(roots, manifest, interfaces) do
+    Enum.reduce(roots, %{}, fn root, reusable ->
+      case Artifacts.open_verified_set(root, verification: :full) do
+        {:ok, published} -> reusable_from_generation(published, manifest, interfaces, reusable)
+        {:error, _reason} -> reusable
+      end
+    end)
+  end
+
+  defp reusable_from_generation(published, manifest, interfaces, reusable) do
+    Enum.reduce(manifest.entries, reusable, fn {identity, entry}, reusable ->
+      with false <- Map.has_key?(reusable, identity),
+           {:ok, interface} <- Map.fetch(interfaces, identity),
+           {:ok, artifact_entry} <- Map.fetch(published.modules, entry.module_name),
+           true <- get_in(artifact_entry, [:source, :sha256]) == entry.source_hash,
+           true <- artifact_entry.interface_hash == interface.interface_hash,
+           [artifact] <- artifact_entry.artifacts,
+           provenance when is_map(provenance) <- artifact.provenance,
+           true <- provenance.interface_hash == interface.interface_hash,
+           true <- provenance.compiler_hash == BuildManifest.toolchain_fingerprint(),
+           path <- Path.join(published.artifact_root, artifact.path),
+           {:ok, binary} <- File.read(path),
+           module <- String.to_existing_atom("Cure." <> entry.module_name),
+           :ok <- Artifacts.verify_binary(binary, module) do
+        Map.put(reusable, identity, {module, binary})
+      else
+        _ -> reusable
+      end
+    end)
+  end
+
+  defp emit(ast, env, provenance) do
     module = Program.module_atom(ast)
 
-    case Emit.compile_forms(env, module, Program.local_defs(ast, env)) do
+    case Emit.compile_forms(env, module, Program.local_defs(ast, env), %{}, artifact_provenance: provenance) do
       {:ok, forms} -> assemble(module, forms)
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp producer_snapshot(manifest, interfaces) do
+    interface_hashes =
+      interfaces
+      |> Enum.map(fn {identity, interface} -> {identity, interface.interface_hash} end)
+      |> Enum.sort()
+
+    :crypto.hash(
+      :sha256,
+      :erlang.term_to_binary(
+        %{
+          compiler_hash: BuildManifest.toolchain_fingerprint(),
+          manifest: ModuleManifest.semantic_dump(manifest),
+          interface_hashes: interface_hashes
+        },
+        [:deterministic]
+      )
+    )
   end
 
   # `:compile.forms/2` derives the module name from the forms themselves. It

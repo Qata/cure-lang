@@ -226,6 +226,25 @@ defmodule Cure.Diagnostic.HostTest do
     assert binary_part(source, span.start_byte, span.end_byte - span.start_byte) == "]"
   end
 
+  test "canonical module-pipeline envelopes preserve the inner syntax diagnostic" do
+    source = "fn run(] -> Int = 1\n"
+    assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: "syntax.cure", emit_events: false)
+    token = Enum.find(tokens, &(&1.type == :rbracket))
+
+    reason =
+      {:module_skeleton_error, {"fixture", "Broken"},
+       [{:expected_token, :rparen, :rbracket, "]", token.line, token.col, token.span}]}
+
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, "syntax.cure", source)
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E094"
+    assert diagnostic.payload.pipeline_stage == :module_skeleton
+    assert diagnostic.payload.module_identity == {"fixture", "Broken"}
+    assert rendered =~ "CLOSING DELIMITER DOES NOT MATCH"
+    refute rendered =~ "INTERNAL COMPILER ERROR"
+  end
+
   test "parser-owned keyword expectation spans survive the compiler boundary" do
     source = "fn run() = with x\n"
     assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: "keyword.cure", emit_events: false)
@@ -330,6 +349,22 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "Set CURE_LIB"
   end
 
+  test "canonical emission input failures retain their module and pipeline stage" do
+    {diagnostic, registry} =
+      Host.to_diagnostic({:beam_emission_input_missing, "Std.Actor"}, "lib/std/actor.cure")
+
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 100)
+
+    assert diagnostic.code == "E101"
+    assert diagnostic.payload.stage == :canonical_beam_emission
+    assert diagnostic.payload.module == "Std.Actor"
+    assert diagnostic.payload.file == "lib/std/actor.cure"
+    assert diagnostic.payload.reason =~ "beam_emission_input_missing"
+    assert diagnostic.payload.fingerprint =~ ~r/^[0-9a-f]{12}$/
+    assert rendered =~ "Stage: `canonical_beam_emission`."
+    assert rendered =~ "Module: `Std.Actor`."
+  end
+
   test "converts BEAM writer boundary failures without exposing raw tuples" do
     assert Host.render({:write_failed, "_build/Demo.beam", :eacces}, "demo.cure") =~
              "[E096]"
@@ -381,7 +416,7 @@ defmodule Cure.Diagnostic.HostTest do
              present in Core term).
 
              Stage: `final_core_validation`. Module: `Cure.Demo`. Source: `demo.cure`.
-             Diagnostic fingerprint: `#{fingerprint}`.
+             Declaration: `Demo#run`. Diagnostic fingerprint: `#{fingerprint}`.
 
              at demo.cure:1:1
              1 | fn run() -> Int = 1

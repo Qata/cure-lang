@@ -1,5 +1,6 @@
 defmodule Cure.Compiler.LosslessRoundtripTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
   alias Cure.Compiler.{Lexer, Parser, Trivia, Printer}
 
   # Local helper (test modules do not share `defp` helpers across files --
@@ -105,5 +106,31 @@ defmodule Cure.Compiler.LosslessRoundtripTest do
     refute String.starts_with?(o1, "# inner")
     assert o1 =~ "# inner"
     assert _ = parse!(o1, "lam.cure")
+  end
+
+  property "parse and print are invariant under generated diagnostic metadata positions" do
+    check all(
+            leading_blanks <- integer(0..3),
+            inner_blanks <- integer(0..2),
+            comment <- string(:alphanumeric, min_length: 0, max_length: 16),
+            value <- integer(-100..100),
+            max_runs: 40
+          ) do
+      comment_line = if comment == "", do: "", else: "  # #{comment}\n"
+
+      source =
+        String.duplicate("\n", leading_blanks) <>
+          "mod MetadataInvariant\n" <>
+          String.duplicate("\n", inner_blanks) <>
+          comment_line <>
+          "  fn value() -> Int = #{value}\n"
+
+      first = parse!(source, "generated-before.cure")
+      printed = Cure.Compiler.Printer.quoted_to_string(first)
+      second = parse!(printed, "generated-after.cure")
+
+      assert Cure.MetaAST.Metadata.strip_diagnostics(first) ==
+               Cure.MetaAST.Metadata.strip_diagnostics(second)
+    end
   end
 end

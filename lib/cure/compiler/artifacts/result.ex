@@ -3,6 +3,7 @@ defmodule Cure.Compiler.Artifacts.Result do
 
   @enforce_keys [:workspace_key, :input_snapshot, :artifact_digest, :artifact_root, :manifest_path]
   defstruct workspace_key: nil,
+            pipeline: :default,
             input_snapshot: nil,
             artifact_digest: nil,
             artifact_root: nil,
@@ -19,6 +20,7 @@ defmodule Cure.Compiler.Artifacts.Result do
 
   @type t :: %__MODULE__{
           workspace_key: binary(),
+          pipeline: :default | :canonical,
           input_snapshot: binary(),
           artifact_digest: binary(),
           artifact_root: Path.t(),

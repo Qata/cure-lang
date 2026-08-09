@@ -24,7 +24,10 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
         aliases: [o: :output_dir]
       )
 
-    output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
+    output_dir =
+      Keyword.get_lazy(opts, :output_dir, fn ->
+        Cure.Stdlib.Paths.build_beam_dir(Mix.env(), System.pid())
+      end)
 
     # Ensure the application is started (for Registry).
     # --no-deps-check prevents dependency-validation loops when
@@ -46,6 +49,7 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
       true ->
         Mix.shell().info("Compiling Cure standard library (#{length(cure_files)} modules)")
 
+        seed_isolated_test_output(output_dir, opts)
         File.mkdir_p!(output_dir)
 
         progress_key = {__MODULE__, make_ref()}
@@ -76,6 +80,7 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
           try do
             result =
               Cure.Compiler.Artifacts.sweep(
+                module_pipeline: :canonical,
                 source_roots: [stdlib_dir],
                 output_dir: output_dir,
                 kind: :stdlib,
@@ -95,6 +100,12 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
 
         case result do
           {:ok, result} ->
+            # Every subsequent consumer in this VM must use the exact verified
+            # generation this task produced. In test, that generation is
+            # process-local so concurrent Mix VMs cannot mutate it.
+            Application.put_env(:cure, :stdlib_beam_dir, result.artifact_root)
+            Application.put_env(:cure, :stdlib_compiled_in_vm, result.artifact_root)
+
             Enum.each(result.cycles, fn walk ->
               Mix.shell().error(render_host_diagnostic({:import_cycle, walk}, stdlib_dir))
             end)
@@ -117,6 +128,24 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
   defp compiler_available? do
     Code.ensure_loaded?(Cure.Compiler) and
       function_exported?(Cure.Compiler, :compile_file, 2)
+  end
+
+  # A test VM owns its mutable generation, but it need not rebuild the entire
+  # stdlib to obtain one. Seed a new container from the last verified canonical
+  # development generation; the sweep immediately below revalidates source and
+  # dependency hashes and rebuilds only what changed. Explicit output dirs are
+  # caller-owned and are never seeded implicitly.
+  defp seed_isolated_test_output(output_dir, opts) do
+    canonical = Cure.Stdlib.Paths.build_beam_dir(:dev, :canonical)
+
+    if Mix.env() == :test and not Keyword.has_key?(opts, :output_dir) and
+         Cure.Compiler.Artifacts.Writer.resolve(output_dir) == output_dir and
+         Path.expand(output_dir) != Path.expand(canonical) do
+      case Cure.Compiler.Artifacts.copy_verified_set(canonical, output_dir) do
+        {:ok, _generation} -> :ok
+        {:error, _reason} -> :ok
+      end
+    end
   end
 
   defp flush_migration_diagnostics(batches) do

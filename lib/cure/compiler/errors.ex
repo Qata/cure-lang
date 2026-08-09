@@ -195,6 +195,11 @@ defmodule Cure.Compiler.Errors do
         do: Keyword.put(opts, :debug, true),
         else: opts
 
+    # The presentation boundary always knows the authored file even when an
+    # error has no usable span. Internal diagnostics must not lose that context
+    # merely because the failing pipeline stage could not attach a label.
+    opts = Keyword.put(opts, :source_file, file)
+
     diagnostic =
       if operational_error?(error) do
         Cure.Diagnostic.Operational.from_error(error)

@@ -14,6 +14,12 @@ defmodule Cure.Compiler.CanonicalModulePipelineBoundaryRedTest do
     "lib/cure/stdlib/preload.ex"
   ]
 
+  @bulk_compiler_routes [
+    "lib/cure/cli.ex",
+    "lib/cure/project.ex",
+    "lib/mix/tasks/cure.compile.ex"
+  ]
+
   test "the canonical module pipeline has no alternate resolution backdoors" do
     offenders =
       for path <- source_files(),
@@ -26,6 +32,21 @@ defmodule Cure.Compiler.CanonicalModulePipelineBoundaryRedTest do
     Remove these calls while replacing their behavior with manifest/interface contracts:
 
     #{Enum.map_join(offenders, "\n", &"  #{&1.path}:#{&1.line} #{&1.call} — #{&1.reason}")}
+    """
+  end
+
+  test "bulk compiler routes do not construct a legacy dependency plan" do
+    offenders =
+      for path <- @bulk_compiler_routes,
+          needle <- ["Cure.Compiler.prepare_files"],
+          occurrence <- occurrences(path, needle),
+          do: %{path: path, line: occurrence.line, call: needle}
+
+    assert offenders == [], """
+    Bulk compilation must obtain ordering, cycles, Prelude providers, and module
+    identities from the canonical module pipeline alone:
+
+    #{Enum.map_join(offenders, "\n", &"  #{&1.path}:#{&1.line} #{&1.call}")}
     """
   end
 

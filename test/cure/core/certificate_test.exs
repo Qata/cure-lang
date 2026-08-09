@@ -47,6 +47,17 @@ defmodule Cure.Core.CertificateTest do
     refute Conv.conv?({:global, :loop}, @causal, [], 0, env)
   end
 
+  test "replacing a definition invalidates its prior totality certificate" do
+    env = Env.add_def(base(), :stable, @dec, @causal)
+    assert {:ok, certified} = Kernel.validate_certificate(env, :stable)
+    assert Env.certified?(certified, :stable)
+
+    replaced = Env.add_def(certified, :stable, @dec, {:global, :stable})
+
+    refute Env.certified?(replaced, :stable)
+    assert {:error, :not_total} = Kernel.validate_certificate(replaced, :stable)
+  end
+
   test "a mutually-recursive cycle f→g→f is NOT certified (mutual recursion is soundly rejected)" do
     ty = {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec}
     bf = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:app, {:global, :g}, {:var, 0}}}

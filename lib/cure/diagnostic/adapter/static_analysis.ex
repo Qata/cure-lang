@@ -149,6 +149,9 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysis do
   def from_error({:compile_time_totality, name, reason}, opts),
     do: totality_failure(name, %{totality_reason: reason}, opts)
 
+  def from_error({:totality_closure_unresolved, details}, opts) when is_map(details),
+    do: totality_closure_failure(details, opts)
+
   def from_error({:source_context, {:totality_required, name}, context}, opts)
       when is_map(context),
       do: totality_failure(name, context, opts)
@@ -570,6 +573,38 @@ defmodule Cure.Diagnostic.Adapter.StaticAnalysis do
         name: name,
         checking: Map.get(context, :checking, Keyword.get(opts, :checking)),
         reason: Map.get(context, :totality_reason)
+      }
+    )
+  end
+
+  defp totality_closure_failure(details, opts) do
+    definition = Map.fetch!(details, :definition)
+    root = Map.fetch!(details, :root)
+    closure_path = Map.fetch!(details, :closure_path)
+
+    Diagnostic.new(
+      code: "E013",
+      key: :totality_closure_unresolved,
+      severity: :error,
+      title: "Totality dependency does not resolve",
+      body:
+        Doc.paragraph(
+          "`#{name_to_string(root)}` must be certified for compile-time evaluation, but its dependency `#{name_to_string(definition)}` does not resolve to a definition, builtin, or extern."
+        ),
+      primary: primary(opts, "this compile-time dependency cannot be certified"),
+      notes: [
+        "Closure path: " <> Enum.map_join(closure_path, " -> ", &name_to_string/1)
+      ],
+      suggestions: [
+        %Suggestion{
+          message: "Define or import the missing function, and keep every compile-time dependency canonical",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        definition: definition,
+        root: root,
+        closure_path: closure_path
       }
     )
   end

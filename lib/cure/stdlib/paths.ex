@@ -158,6 +158,20 @@ defmodule Cure.Stdlib.Paths do
   def beam_dir, do: List.first(beam_dirs())
 
   @doc """
+  Return the stdlib artifact publication directory for a Mix environment.
+
+  Test VMs share one publication root. Its children are immutable,
+  content-addressed generations and publication is lock-serialized, so
+  concurrent suites can reuse identical interfaces without replacing files
+  another VM has loaded. Development and production builds retain the
+  historical canonical output.
+  """
+  @spec build_beam_dir(atom(), term()) :: String.t()
+  def build_beam_dir(:test, _identity), do: Path.join(["_build", "cure", "test", "ebin"])
+
+  def build_beam_dir(_environment, _identity), do: @legacy_cwd_beam
+
+  @doc """
   Default destination for `Mix.Tasks.Cure.BundleStdlib` and its
   consumers. Exposed as a function (rather than a module attribute)
   so tests can stub it without pulling in Mix machinery.

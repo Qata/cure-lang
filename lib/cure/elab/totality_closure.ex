@@ -23,7 +23,7 @@ defmodule Cure.Elab.TotalityClosure do
   @spec type_level_fns(Env.t()) :: MapSet.t(atom())
   def type_level_fns(%Env{} = env) do
     seeds = seed_globals(env)
-    close(env, MapSet.to_list(seeds), seeds)
+    close_unchecked(env, MapSet.to_list(seeds), seeds)
   end
 
   @doc """
@@ -41,22 +41,27 @@ defmodule Cure.Elab.TotalityClosure do
 
   @doc false
   @spec certify_type_level_detailed(Env.t()) ::
-          {:ok, Env.t()} | {:error, {:totality_required, atom(), term()}}
+          {:ok, Env.t()}
+          | {:error, {:totality_required, atom(), term()}}
+          | {:error, {:totality_closure_unresolved, map()}}
   def certify_type_level_detailed(%Env{} = env) do
-    env
-    |> type_level_fns()
-    |> MapSet.to_list()
-    # Wave-3: an @extern global has no Core body to certify (it is an asserted FFI
-    # postulate — spec §2.1 point 4). Certification is a category error for it, so
-    # skip it here rather than hand its sentinel body to Kernel.check.
-    |> Enum.reject(&extern_def?(env, &1))
-    |> Enum.reject(&bodyless_def?(env, &1))
-    |> Enum.reduce_while({:ok, env}, fn name, {:ok, acc} ->
-      case Kernel.validate_certificate(acc, name) do
-        {:ok, acc2} -> {:cont, {:ok, acc2}}
-        {:error, reason} -> {:halt, {:error, {:totality_required, name, reason}}}
-      end
-    end)
+    seeds = seed_globals(env)
+
+    with {:ok, closure} <- checked_closure(env, MapSet.to_list(seeds)) do
+      closure
+      |> MapSet.to_list()
+      # Wave-3: an @extern global has no Core body to certify (it is an asserted FFI
+      # postulate — spec §2.1 point 4). Certification is a category error for it, so
+      # skip it here rather than hand its sentinel body to Kernel.check.
+      |> Enum.reject(&extern_def?(env, &1))
+      |> Enum.reject(&bodyless_def?(env, &1))
+      |> Enum.reduce_while({:ok, env}, fn name, {:ok, acc} ->
+        case Kernel.validate_certificate(acc, name) do
+          {:ok, acc2} -> {:cont, {:ok, acc2}}
+          {:error, reason} -> {:halt, {:error, {:totality_required, name, reason}}}
+        end
+      end)
+    end
   end
 
   @doc """
@@ -72,18 +77,18 @@ defmodule Cure.Elab.TotalityClosure do
   """
   @spec certify_roots(Env.t(), [atom()]) :: {:ok, Env.t()} | {:error, term()}
   def certify_roots(%Env{} = env, roots) when is_list(roots) do
-    roots = Enum.filter(roots, &(Env.get_def(env, &1) != nil))
-
-    env
-    |> close(roots, MapSet.new(roots))
-    |> MapSet.to_list()
-    |> Enum.reject(&extern_def?(env, &1))
-    |> Enum.reduce_while({:ok, env}, fn name, {:ok, acc} ->
-      case Kernel.validate_certificate(acc, name) do
-        {:ok, acc2} -> {:cont, {:ok, acc2}}
-        {:error, reason} -> {:halt, {:error, {:compile_time_totality, name, reason}}}
-      end
-    end)
+    with {:ok, closure} <- checked_closure(env, roots) do
+      closure
+      |> MapSet.to_list()
+      |> Enum.reject(&extern_def?(env, &1))
+      |> Enum.reject(&(not is_nil(env.certified) and Env.certified?(env, &1)))
+      |> Enum.reduce_while({:ok, env}, fn name, {:ok, acc} ->
+        case Kernel.validate_certificate(acc, name) do
+          {:ok, acc2} -> {:cont, {:ok, acc2}}
+          {:error, reason} -> {:halt, {:error, {:compile_time_totality, name, reason}}}
+        end
+      end)
+    end
   end
 
   @doc """
@@ -154,17 +159,49 @@ defmodule Cure.Elab.TotalityClosure do
   defp tele_globals(tele), do: Enum.flat_map(tele, fn {_name, ty} -> collect(ty) end)
 
   # Transitive closure: a type-level function's callees are themselves type-level.
-  defp close(_env, [], acc), do: acc
+  defp close_unchecked(_env, [], acc), do: acc
 
-  defp close(env, [name | rest], acc) do
+  defp close_unchecked(env, [name | rest], acc) do
     case Env.get_def(env, name) do
       nil ->
-        close(env, rest, acc)
+        close_unchecked(env, rest, acc)
 
       %{body: body} ->
         fresh = body |> collect() |> Enum.reject(&MapSet.member?(acc, &1))
-        close(env, rest ++ fresh, Enum.reduce(fresh, acc, &MapSet.put(&2, &1)))
+        close_unchecked(env, rest ++ fresh, Enum.reduce(fresh, acc, &MapSet.put(&2, &1)))
     end
+  end
+
+  # Certification is a proof obligation, so its dependency walk cannot use the
+  # inspection helper's historical "missing means leaf" convention. Track the
+  # first predecessor path while closing and fail before asking the kernel to
+  # certify a caller whose body contains an unresolved global.
+  defp checked_closure(%Env{} = env, roots) do
+    roots = Enum.uniq(roots)
+    queue = Enum.map(roots, &{&1, &1, [&1]})
+    checked_closure(env, queue, MapSet.new(roots))
+  end
+
+  defp checked_closure(_env, [], seen), do: {:ok, seen}
+
+  defp checked_closure(env, [{name, root, path} | rest], seen) do
+    case Env.get_def(env, name) do
+      nil ->
+        if legitimate_boundary?(env, name) do
+          checked_closure(env, rest, seen)
+        else
+          {:error, {:totality_closure_unresolved, %{definition: name, root: root, closure_path: path}}}
+        end
+
+      %{body: body} ->
+        fresh = body |> collect() |> Enum.reject(&MapSet.member?(seen, &1))
+        next = Enum.map(fresh, &{&1, root, path ++ [&1]})
+        checked_closure(env, rest ++ next, Enum.reduce(fresh, seen, &MapSet.put(&2, &1)))
+    end
+  end
+
+  defp legitimate_boundary?(env, name) do
+    not is_nil(Env.builtin_op(env, name)) or not is_nil(Env.inline_hint(env, name))
   end
 
   # -- collect global names occurring in a Core term --------------------------

@@ -590,7 +590,16 @@ defmodule Cure.Diagnostic.Adapter.Macro do
     span = (source_info && source_info.whole) || Keyword.get(opts, :span)
     provenance = ((source_info && source_info.provenance) || []) ++ Keyword.get(opts, :provenance, [])
     exception_name = exception |> name_to_string() |> String.trim_leading("Elixir.")
-    fingerprint = diagnostic_fingerprint({:computed_macro_host_exception, keyword, exception})
+
+    internal_context =
+      Cure.Diagnostic.InternalContext.normalize(%{
+        declaration: keyword,
+        span: span,
+        provenance: provenance
+      })
+
+    fingerprint =
+      diagnostic_fingerprint({:computed_macro_host_exception, keyword, exception, internal_context})
 
     Diagnostic.new(
       code: "E101",
@@ -611,7 +620,13 @@ defmodule Cure.Diagnostic.Adapter.Macro do
       ],
       provenance: provenance,
       payload:
-        %{stage: :computed_macro_expansion, macro: keyword, exception: exception_name, fingerprint: fingerprint}
+        internal_context
+        |> Map.merge(%{
+          stage: :computed_macro_expansion,
+          macro: keyword,
+          exception: exception_name,
+          fingerprint: fingerprint
+        })
         |> maybe_put_meta_location(meta)
     )
   end

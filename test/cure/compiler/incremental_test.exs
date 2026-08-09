@@ -1,7 +1,7 @@
-defmodule Cure.Compiler.IncrementalTest do
+defmodule Cure.Compiler.CanonicalArtifactIncrementalTest do
   use ExUnit.Case, async: false
 
-  alias Cure.Compiler.{Artifacts, BuildManifest, DepGraph, Incremental}
+  alias Cure.Compiler.{Artifacts, BuildManifest, DepGraph}
   alias Cure.Compiler.Artifacts.Writer
 
   # A 3-module chain Leaf <- Mid <- Top via `use`, plus `Amb`, an extra module
@@ -135,16 +135,42 @@ defmodule Cure.Compiler.IncrementalTest do
   defp paths(src), do: Path.wildcard(Path.join(src, "*.cure"))
 
   defp compile(src, out, opts \\ []) do
-    Incremental.compile_dir(paths(src), out, Keyword.put_new(opts, :source_roots, [src]))
+    canonical_sweep(paths(src), out, Keyword.put_new(opts, :source_roots, [src]))
   end
+
+  defp canonical_sweep(paths, out, opts) do
+    kind = Keyword.get(opts, :kind, Keyword.get(opts, :artifact_kind, :project))
+
+    opts =
+      opts
+      |> Keyword.delete(:artifact_kind)
+      |> Keyword.merge(
+        module_pipeline: :canonical,
+        source_paths: paths,
+        output_dir: out,
+        kind: kind,
+        repair: true
+      )
+
+    Artifacts.sweep(opts)
+  end
+
+  defp compile_order(graph) do
+    order = DepGraph.order_deps_map(graph)
+    DepGraph.toposort(order, Map.keys(order), DepGraph.prelude_provider_names(graph))
+  end
+
+  defp compiled(result), do: result.rebuilt |> Map.keys() |> Enum.sort()
+  defp skipped(result), do: Enum.sort(result.reused)
+  defp deleted(result), do: result.removed |> Map.keys() |> Enum.sort()
 
   defp artifact_root(out), do: Writer.resolve(out)
   defp manifest(out), do: BuildManifest.load(artifact_root(out))
 
   test "first build compiles every module", %{src: src, out: out} do
     assert {:ok, s} = compile(src, out)
-    assert Enum.sort(s.compiled) == ["Amb", "Leaf", "Mid", "Top"]
-    assert s.skipped_fresh == []
+    assert compiled(s) == ["Amb", "Leaf", "Mid", "Top"]
+    assert skipped(s) == []
     assert s.errors == []
   end
 
@@ -174,8 +200,8 @@ defmodule Cure.Compiler.IncrementalTest do
 
     assert {:ok, summary} = compile(src, out)
     assert summary.errors == []
-    assert "InterfaceA" in summary.compiled
-    assert "InterfaceB" in summary.compiled
+    assert "InterfaceA" in compiled(summary)
+    assert "InterfaceB" in compiled(summary)
     assert File.exists?(Path.join(artifact_root(out), "Cure.InterfaceA.beam"))
     assert File.exists?(Path.join(artifact_root(out), "Cure.InterfaceB.beam"))
   end
@@ -202,8 +228,8 @@ defmodule Cure.Compiler.IncrementalTest do
   test "no-change rebuild compiles nothing", %{src: src, out: out} do
     assert {:ok, _} = compile(src, out)
     assert {:ok, s} = compile(src, out)
-    assert s.compiled == []
-    assert Enum.sort(s.skipped_fresh) == ["Amb", "Leaf", "Mid", "Top"]
+    assert compiled(s) == []
+    assert skipped(s) == ["Amb", "Leaf", "Mid", "Top"]
   end
 
   test "incremental edit sequences remain equivalent to clean builds", %{
@@ -229,7 +255,7 @@ defmodule Cure.Compiler.IncrementalTest do
       clean = Path.join(Path.dirname(out), "clean-#{index}")
 
       assert {:ok, clean_summary} =
-               Incremental.compile_dir(paths(src), clean,
+               canonical_sweep(paths(src), clean,
                  source_roots: [src],
                  force: true
                )
@@ -349,8 +375,8 @@ defmodule Cure.Compiler.IncrementalTest do
     assert {:ok, _} = compile(src, out)
     write.("leaf.cure", @leaf_v2_comment)
     assert {:ok, s} = compile(src, out)
-    assert s.compiled == ["Leaf"]
-    assert "Mid" in s.skipped_fresh and "Top" in s.skipped_fresh
+    assert compiled(s) == ["Leaf"]
+    assert "Mid" in skipped(s) and "Top" in skipped(s)
   end
 
   test "editing a public surface rebuilds direct consumers without a transitive false cascade",
@@ -358,22 +384,22 @@ defmodule Cure.Compiler.IncrementalTest do
     assert {:ok, _} = compile(src, out)
     write.("leaf.cure", @leaf_v3_public)
     assert {:ok, s} = compile(src, out)
-    assert "Leaf" in s.compiled
-    assert "Mid" in s.compiled
+    assert "Leaf" in compiled(s)
+    assert "Mid" in compiled(s)
 
-    assert "Top" in s.skipped_fresh,
+    assert "Top" in skipped(s),
            "Mid was rechecked against Leaf's new interface, but Mid's own public interface stayed stable"
   end
 
-  test "editing a directly-depended module recompiles its caller",
+  test "editing only a directly-depended module body preserves its caller",
        %{src: src, out: out, write: write} do
     assert {:ok, _} = compile(src, out)
     write.("amb.cure", @amb_v2)
     assert {:ok, s} = compile(src, out)
-    assert "Amb" in s.compiled
-    assert "Top" in s.compiled
-    # Mid does not depend on Amb, so it stays fresh.
-    assert "Mid" in s.skipped_fresh
+    assert "Amb" in compiled(s)
+    assert "Top" in skipped(s)
+    # Neither caller needs rebuilding when Amb's canonical interface is stable.
+    assert "Mid" in skipped(s)
   end
 
   test "a change propagates the second hop when the middle module's own interface moves",
@@ -384,26 +410,26 @@ defmodule Cure.Compiler.IncrementalTest do
 
     assert {:ok, first} = compile(src, out)
     assert first.errors == []
-    assert "Top" in first.compiled
+    assert "Top" in compiled(first)
 
     write.("leaf.cure", @chain_leaf_nat)
 
     assert {:ok, s} = compile(src, out)
     assert s.errors == []
 
-    assert s.rebuild_reasons["Leaf"] == [:source_hash_mismatch]
-    assert s.rebuild_reasons["Mid"] == [:dependency_interface_changed]
+    assert s.rebuilt["Leaf"] == [:source_hash_mismatch]
+    assert s.rebuilt["Mid"] == [:dependency_interface_changed]
 
     # The point of the test: `Top` never mentions `Leaf`, so it can only be
     # reached through `Mid`. Under-rebuilding here would publish a `Top` beam
     # compiled against an interface that no longer exists.
-    assert "Top" in s.compiled,
+    assert "Top" in compiled(s),
            "Mid's own interface moved, so Top -- which use's only Mid -- must rebuild against it"
 
-    assert s.rebuild_reasons["Top"] == [:dependency_interface_changed]
+    assert s.rebuilt["Top"] == [:dependency_interface_changed]
 
     # Untouched and unrelated: this is a targeted cascade, not a full rebuild.
-    assert "Amb" in s.skipped_fresh
+    assert "Amb" in skipped(s)
   end
 
   test "closure_deps_map (the driver's dirty graph) is a strict superset of use-only edges" do
@@ -437,7 +463,7 @@ defmodule Cure.Compiler.IncrementalTest do
     assert {:ok, _} = compile(src, out)
     File.rm!(Path.join(artifact_root(out), "Cure.Leaf.beam"))
     assert {:ok, s} = compile(src, out)
-    assert "Leaf" in s.compiled
+    assert "Leaf" in compiled(s)
   end
 
   test "a stale Semigroup BEAM cannot be loaded as fresh" do
@@ -454,11 +480,14 @@ defmodule Cure.Compiler.IncrementalTest do
       fn current_marker() -> Int = 34
     """)
 
-    assert {:ok, %{errors: [], compiled: ["Fixture.Semigroup"]}} =
-             Incremental.compile_dir([source], out,
+    assert {:ok, initial} =
+             canonical_sweep([source], out,
                source_roots: [src],
                artifact_kind: :stdlib
              )
+
+    assert initial.errors == []
+    assert compiled(initial) == ["Fixture.Semigroup"]
 
     stale_forms = [
       {:attribute, 1, :module, :"Cure.Fixture.Semigroup"},
@@ -477,13 +506,13 @@ defmodule Cure.Compiler.IncrementalTest do
     File.write!(Path.join(artifact_root(out), "Cure.Fixture.Semigroup.beam"), stale_binary)
 
     assert {:ok, repaired} =
-             Incremental.compile_dir([source], out,
+             canonical_sweep([source], out,
                source_roots: [src],
                artifact_kind: :stdlib
              )
 
-    assert repaired.compiled == ["Fixture.Semigroup"]
-    assert :artifact_hash_mismatch in repaired.rebuild_reasons["Fixture.Semigroup"]
+    assert compiled(repaired) == ["Fixture.Semigroup"]
+    assert :artifact_hash_mismatch in repaired.rebuilt["Fixture.Semigroup"]
 
     beam = Path.join(artifact_root(out), "Cure.Fixture.Semigroup.beam")
 
@@ -504,14 +533,14 @@ defmodule Cure.Compiler.IncrementalTest do
     )
 
     assert {:ok, s} = compile(src, out)
-    assert Enum.sort(s.compiled) == ["Amb", "Leaf", "Mid", "Top"]
+    assert compiled(s) == ["Amb", "Leaf", "Mid", "Top"]
   end
 
   test "deleting a source removes its beam and drops it from the manifest", %{src: src, out: out} do
     assert {:ok, _} = compile(src, out)
     File.rm!(Path.join(src, "top.cure"))
     assert {:ok, s} = compile(src, out)
-    assert "Top" in s.deleted
+    assert "Top" in deleted(s)
     refute File.exists?(Path.join(artifact_root(out), "Cure.Top.beam"))
     refute Map.has_key?(manifest(out).modules, "Top")
   end
@@ -528,7 +557,7 @@ defmodule Cure.Compiler.IncrementalTest do
 
     File.rm!(Path.join(src, "top.cure"))
     assert {:ok, s} = compile(src, out)
-    assert "Top" in s.deleted
+    assert "Top" in deleted(s)
     refute File.exists?(Path.join(artifact_root(out), "Cure.Top.beam"))
   end
 
@@ -537,7 +566,7 @@ defmodule Cure.Compiler.IncrementalTest do
     File.write!(Path.join(artifact_root(out), "Cure.Std.Fake.beam"), "stub")
 
     assert {:ok, s} = compile(src, out)
-    assert "Cure.Std.Fake.beam" in s.deleted
+    assert "Cure.Std.Fake.beam" in deleted(s)
     refute File.exists?(Path.join(artifact_root(out), "Cure.Std.Fake.beam"))
     refute Map.has_key?(manifest(out).modules, "Std.Fake")
   end
@@ -563,38 +592,35 @@ defmodule Cure.Compiler.IncrementalTest do
     assert {:ok, _} = compile(src, out)
     published_before = File.read!(Path.join(out, "current"))
     write.("leaf.cure", "mod Leaf\n  fn pubval() -> Int = nonexistent_fn()\n")
-    assert {:ok, s} = compile(src, out)
-    # Leaf errors; its use-dependents (Mid, Top) cannot resolve the broken chain
-    # and error too — a correct cascade. The contract under test is that the
-    # failing module is reported and the manifest is not advanced.
-    assert Enum.any?(s.errors, fn {m, _} -> m == "Leaf" end)
+    assert {:error, diagnostics} = compile(src, out)
+    assert Enum.any?(diagnostics, &match?(%{module: "Leaf", severity: :error}, &1))
     assert File.read!(Path.join(out, "current")) == published_before
     # manifest NOT advanced: next run still sees Leaf as dirty
-    assert {:ok, s2} = compile(src, out)
-    assert "Leaf" in (s2.compiled ++ Enum.map(s2.errors, &elem(&1, 0)))
+    assert {:error, diagnostics2} = compile(src, out)
+    assert Enum.any?(diagnostics2, &match?(%{module: "Leaf", severity: :error}, &1))
   end
 
   test "a dependency failing to compile treats its dependent as dirty too",
        %{src: src, out: out, write: write} do
     assert {:ok, _} = compile(src, out)
+    published_before = File.read!(Path.join(out, "current"))
     # break Leaf; Mid `use`s Leaf. Mid must not be recorded fresh against a broken dep.
     write.("leaf.cure", "mod Leaf\n  fn pubval() -> Int = nonexistent_fn()\n")
-    assert {:ok, s} = compile(src, out)
-    assert Enum.any?(s.errors, fn {m, _} -> m == "Leaf" end)
-    # Mid is either recompiled or errored this build, never silently skipped fresh.
-    refute "Mid" in s.skipped_fresh
+    assert {:error, diagnostics} = compile(src, out)
+    assert Enum.any?(diagnostics, &match?(%{module: "Leaf", severity: :error}, &1))
+    assert File.read!(Path.join(out, "current")) == published_before
   end
 
   test "a source with a genuine parse error is reported, not silently dropped", %{src: src, out: out} do
     File.write!(Path.join(src, "broken.cure"), "mod Broken\n  fn x( = end\n")
-    assert {:ok, s} = compile(src, out)
-    assert s.errors != []
+    assert {:error, {:module_skeleton_error, {"root", "Broken"}, errors}} = compile(src, out)
+    assert errors != []
   end
 
   test "force rebuilds everything", %{src: src, out: out} do
     assert {:ok, _} = compile(src, out)
     assert {:ok, s} = compile(src, out, force: true)
-    assert Enum.sort(s.compiled) == ["Amb", "Leaf", "Mid", "Top"]
+    assert compiled(s) == ["Amb", "Leaf", "Mid", "Top"]
   end
 
   test "a code-generation option change rebuilds the complete set", %{src: src, out: out} do
@@ -603,9 +629,9 @@ defmodule Cure.Compiler.IncrementalTest do
     assert {:ok, summary} =
              compile(src, out, compile_opts: [check_types: true])
 
-    assert Enum.sort(summary.compiled) == ["Amb", "Leaf", "Mid", "Top"]
+    assert compiled(summary) == ["Amb", "Leaf", "Mid", "Top"]
 
-    assert Enum.all?(summary.rebuild_reasons, fn {_module, reasons} ->
+    assert Enum.all?(summary.rebuilt, fn {_module, reasons} ->
              :compiler_context_mismatch in reasons
            end)
   end
@@ -622,9 +648,9 @@ defmodule Cure.Compiler.IncrementalTest do
       BuildManifest.save(changed, artifact_root(out))
 
       assert {:ok, summary} = compile(src, out)
-      assert Enum.sort(summary.compiled) == ["Amb", "Leaf", "Mid", "Top"]
+      assert compiled(summary) == ["Amb", "Leaf", "Mid", "Top"]
 
-      assert Enum.all?(summary.rebuild_reasons, fn {_module, reasons} ->
+      assert Enum.all?(summary.rebuilt, fn {_module, reasons} ->
                :compiler_context_mismatch in reasons
              end)
     end
@@ -643,9 +669,9 @@ defmodule Cure.Compiler.IncrementalTest do
                package_artifact_digests: %{"dep" => <<2>>}
              )
 
-    assert Enum.sort(summary.compiled) == ["Amb", "Leaf", "Mid", "Top"]
+    assert compiled(summary) == ["Amb", "Leaf", "Mid", "Top"]
 
-    assert Enum.all?(summary.rebuild_reasons, fn {_module, reasons} ->
+    assert Enum.all?(summary.rebuilt, fn {_module, reasons} ->
              :dependency_artifact_digest_mismatch in reasons
            end)
   end
@@ -671,12 +697,12 @@ defmodule Cure.Compiler.IncrementalTest do
     write.("ns_base.cure", @ns_base)
     write.("ns_base_child.cure", @ns_base_child)
     assert {:ok, s0} = compile(src, out)
-    assert "Ns.Base" in s0.compiled and "Ns.Base.Child" in s0.compiled
+    assert "Ns.Base" in compiled(s0) and "Ns.Base.Child" in compiled(s0)
 
     File.rm!(Path.join(src, "ns_base.cure"))
     assert {:ok, s} = compile(src, out)
-    assert "Ns.Base" in s.deleted
-    refute "Ns.Base.Child" in s.deleted
+    assert "Ns.Base" in deleted(s)
+    refute "Ns.Base.Child" in deleted(s)
     assert File.exists?(Path.join(artifact_root(out), "Cure.Ns.Base.Child.beam"))
     assert Map.has_key?(manifest(out).modules, "Ns.Base.Child")
   end
@@ -742,23 +768,23 @@ defmodule Cure.Compiler.IncrementalTest do
     File.write!(Path.join(src, "q.cure"), @q_ambient)
     paths = Path.wildcard(Path.join(src, "*.cure"))
 
-    assert {:ok, s0} = Incremental.compile_dir(paths, out, source_roots: [src])
-    assert Enum.sort(s0.compiled) == ["P", "Q", "R"]
+    assert {:ok, s0} = canonical_sweep(paths, out, source_roots: [src])
+    assert compiled(s0) == ["P", "Q", "R"]
 
     # Prelude providers are prioritized once their explicit dependencies are
     # ready, so P is now visited before its ambient consumer Q without adding a
     # synthetic graph edge.
     {:ok, graph} = DepGraph.scan(paths)
-    pos = Incremental.compile_order(graph) |> Enum.with_index() |> Map.new()
+    pos = compile_order(graph) |> Enum.with_index() |> Map.new()
     assert pos["P"] < pos["Q"]
 
     File.write!(Path.join(src, "r.cure"), @r_v2)
-    assert {:ok, s} = Incremental.compile_dir(paths, out, source_roots: [src])
+    assert {:ok, s} = canonical_sweep(paths, out, source_roots: [src])
 
-    assert "R" in s.compiled
-    assert "P" in s.compiled, "P has a real use-dep on R, which changed -- P must recompile"
+    assert "R" in compiled(s)
+    assert "P" in skipped(s), "R's body changed without changing P's checked dependency interface"
 
-    assert "Q" in s.skipped_fresh,
+    assert "Q" in skipped(s),
            "P's dependency-validation hashes changed, but its own declarations did not; " <>
              "an ambient consumer with no reference to P remains valid"
   end
@@ -786,7 +812,7 @@ defmodule Cure.Compiler.IncrementalTest do
   # `lib/std`. (Verified this is not a BEAM hot-code-loading artifact: the
   # driver's OWN `s2.compiled`/`skipped_fresh` bookkeeping is asserted below,
   # never the runtime behavior of a loaded module.)
-  test "a repeated same-process build of a stdlib-recognized path does not serve a stale cached interface",
+  test "a repeated same-process build preserves consumers across a body-only stdlib edit",
        %{out: out} do
     stdlib_src =
       Path.join(System.tmp_dir!(), "cure_stdlib_cache_#{:erlang.unique_integer([:positive])}")
@@ -810,23 +836,22 @@ defmodule Cure.Compiler.IncrementalTest do
     File.write!(p_path, "mod P\n  use R\n  fn pval() -> Int = R.val()\n")
     paths = Path.wildcard(Path.join(stdlib_src, "*.cure"))
 
-    assert {:ok, s1} = Incremental.compile_dir(paths, out, source_roots: [stdlib_src])
-    assert Enum.sort(s1.compiled) == ["P", "R"]
+    assert {:ok, s1} = canonical_sweep(paths, out, source_roots: [stdlib_src])
+    assert compiled(s1) == ["P", "R"]
 
     File.write!(r_path, "mod R\n  fn val() -> Int = 2\n")
 
-    assert {:ok, s2} = Incremental.compile_dir(paths, out, source_roots: [stdlib_src])
+    assert {:ok, s2} = canonical_sweep(paths, out, source_roots: [stdlib_src])
 
-    assert "R" in s2.compiled
+    assert "R" in compiled(s2)
 
-    assert "P" in s2.compiled,
-           "R's interface changed (val() 1 -> 2) between two same-process builds of " <>
-             "this stdlib-recognized path -- P must not be served a stale cached interface"
+    assert "P" in skipped(s2),
+           "R's implementation changed but its canonical interface did not"
   end
 
   test "compile_order places every module after its use-dependencies (real stdlib graph)" do
     {:ok, graph} = DepGraph.scan(Path.wildcard("lib/std/*.cure"))
-    order = Incremental.compile_order(graph)
+    order = compile_order(graph)
 
     pos = order |> Enum.with_index() |> Map.new()
     order_deps = DepGraph.order_deps_map(graph)
@@ -907,27 +932,27 @@ defmodule Cure.Compiler.IncrementalTest do
     File.write!(source, "mod Std.Fake\n  fn value() -> Int = 1\n")
 
     assert {:ok, %{errors: []}} =
-             Incremental.compile_dir([source], beam_dir,
+             canonical_sweep([source], beam_dir,
                source_roots: [source_dir],
                artifact_kind: :stdlib
              )
 
-    h1 = Incremental.stdlib_fingerprint()
+    h1 = Artifacts.stdlib_fingerprint()
 
     File.write!(source, "mod Std.Fake\n  fn value() -> Int = 2\n")
 
     assert {:ok, %{errors: []}} =
-             Incremental.compile_dir([source], beam_dir,
+             canonical_sweep([source], beam_dir,
                source_roots: [source_dir],
                artifact_kind: :stdlib
              )
 
-    h2 = Incremental.stdlib_fingerprint()
+    h2 = Artifacts.stdlib_fingerprint()
     assert h1 != h2
 
     # ...and it is genuinely reading the beam dir, not the empty project dir
     # (whose output-scoped fingerprint is the constant the old caller used).
-    assert h2 != Incremental.stdlib_fingerprint(proj_out)
+    assert h2 != Artifacts.stdlib_fingerprint(proj_out)
   end
 
   # LIMITATION 2 (a stale `@prelude` manifest survives across same-process
@@ -965,15 +990,15 @@ defmodule Cure.Compiler.IncrementalTest do
     File.write!(q_path, "mod Q\n  fn q() -> Int = 2\n")
     paths = Path.wildcard(Path.join(stdlib_src, "*.cure"))
 
-    assert {:ok, _s1} = Incremental.compile_dir(paths, out, source_roots: [stdlib_src])
+    assert {:ok, _s1} = canonical_sweep(paths, out, source_roots: [stdlib_src])
     # Build 1 populates the per-dir manifest cache: P contributes a prelude mark.
     assert Enum.any?(Cure.Elab.Program.prelude_manifest(), &(&1.source == "P")),
            "build 1 should have recorded P as a @prelude provider"
 
     # Remove the marker and rebuild in the SAME process.
     File.write!(p_path, "mod P\n  typealias Widget = Int\n  fn p() -> Int = 1\n")
-    assert {:ok, s2} = Incremental.compile_dir(paths, out, source_roots: [stdlib_src])
-    assert "P" in s2.compiled
+    assert {:ok, s2} = canonical_sweep(paths, out, source_roots: [stdlib_src])
+    assert "P" in compiled(s2)
 
     refute Enum.any?(Cure.Elab.Program.prelude_manifest(), &(&1.source == "P")),
            "stale @prelude manifest: P still marked after its marker was removed and it recompiled"
@@ -1017,17 +1042,17 @@ defmodule Cure.Compiler.IncrementalTest do
     end)
 
     {:ok, graph} = DepGraph.scan(paths)
-    pos = Incremental.compile_order(graph) |> Enum.with_index() |> Map.new()
+    pos = compile_order(graph) |> Enum.with_index() |> Map.new()
 
     assert pos["Std.AmbientFixture"] < pos["Std.AlphaFixture"],
            "the canonical dependency graph must schedule the ambient provider first"
 
-    assert {:ok, s} = Incremental.compile_dir(paths, out, source_roots: [src])
+    assert {:ok, s} = canonical_sweep(paths, out, source_roots: [src])
 
     assert s.errors == [],
            "cold build must not require a prebuilt beam for an injected @prelude import"
 
-    assert Enum.sort(s.compiled) == ["Std.AlphaFixture", "Std.AmbientFixture"]
+    assert compiled(s) == ["Std.AlphaFixture", "Std.AmbientFixture"]
   end
 
   defp semantic_set(set) do

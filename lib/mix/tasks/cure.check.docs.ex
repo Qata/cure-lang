@@ -59,7 +59,13 @@ defmodule Mix.Tasks.Cure.Check.Docs do
     # standard-library docstring is reported as a missing module even when the
     # preloaded BEAM is present.
     stdlib_source = Path.expand("lib/std", root)
-    stdlib_ebin = Path.expand("_build/cure/ebin", root)
+
+    stdlib_ebin =
+      case Application.get_env(:cure, :stdlib_beam_dir) do
+        dir when is_binary(dir) -> Path.expand(dir, root)
+        _ -> Path.expand("_build/cure/ebin", root)
+      end
+
     System.put_env("CURE_LIB", stdlib_ebin)
     Application.put_env(:cure, :stdlib_source_dir, stdlib_source)
     Application.put_env(:cure, :stdlib_beam_dir, stdlib_ebin)
@@ -72,7 +78,7 @@ defmodule Mix.Tasks.Cure.Check.Docs do
       Enum.flat_map(Snippets.markdown_files(root), &extract_markdown/1) ++
         Enum.flat_map(Snippets.cure_files(root), &extract_cure/1)
 
-    results = Enum.map(snippets, &check(&1, support, stdlib_source, verbose?))
+    results = Enum.map(snippets, &check(&1, support, stdlib_source, stdlib_ebin, verbose?))
     passed = Enum.count(results, &(&1 == :pass))
     failed = Enum.count(results, &(&1 == :fail))
 
@@ -97,7 +103,7 @@ defmodule Mix.Tasks.Cure.Check.Docs do
     end
   end
 
-  defp check(snippet, support, stdlib_source, verbose?) do
+  defp check(snippet, support, stdlib_source, stdlib_ebin, verbose?) do
     label = relative_label(snippet)
     source = Snippets.source(snippet, support)
 
@@ -107,16 +113,34 @@ defmodule Mix.Tasks.Cure.Check.Docs do
         :fail
 
       expected ->
-        compile_and_classify(snippet, support, stdlib_source, source, label, expected, verbose?)
+        compile_and_classify(
+          snippet,
+          support,
+          stdlib_source,
+          stdlib_ebin,
+          source,
+          label,
+          expected,
+          verbose?
+        )
     end
   end
 
-  defp compile_and_classify(snippet, support, stdlib_source, source, label, expected, verbose?) do
+  defp compile_and_classify(
+         snippet,
+         support,
+         stdlib_source,
+         stdlib_ebin,
+         source,
+         label,
+         expected,
+         verbose?
+       ) do
     try do
       case Snippets.compile(snippet,
              support: support,
              source_roots: [Path.expand("lib", File.cwd!()), stdlib_source],
-             stdlib_ebin: Path.expand("_build/cure/ebin")
+             stdlib_ebin: stdlib_ebin
            ) do
         {:ok, _module, []} when expected != nil ->
           {:ok, code} = expected

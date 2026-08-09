@@ -119,7 +119,20 @@ defmodule Cure.MetaAST.Metadata do
     |> Enum.map(fn {key, value} -> {key, strip_diagnostics(value)} end)
   end
 
+  defp legacy_source_info([]), do: nil
+
   defp legacy_source_info(meta) do
+    if Enum.any?(meta, fn
+         {key, _value} -> key in @source_keys
+         _other -> false
+       end) do
+      build_legacy_source_info(meta)
+    else
+      nil
+    end
+  end
+
+  defp build_legacy_source_info(meta) do
     fields = %{
       whole: Keyword.get(meta, :construct_span, Keyword.get(meta, :span)),
       name: Keyword.get(meta, :name_span),

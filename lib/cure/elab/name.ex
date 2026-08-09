@@ -9,6 +9,8 @@ defmodule Cure.Elab.Name do
 
   @separator "#"
   @overload_separator "~"
+  @split_cache_key {__MODULE__, :split_cache}
+  @split_cache_limit 4_096
 
   @type owner :: String.t() | atom()
   @type base :: String.t() | atom()
@@ -32,7 +34,23 @@ defmodule Cure.Elab.Name do
   question for every key in a table on every unresolved lookup.
   """
   @spec split(atom() | String.t()) :: {String.t() | nil, String.t()}
-  def split(name) when is_atom(name), do: split(Atom.to_string(name))
+  def split(name) when is_atom(name) do
+    cache = Process.get(@split_cache_key, %{})
+
+    case Map.fetch(cache, name) do
+      {:ok, split} ->
+        split
+
+      :error ->
+        split = split(Atom.to_string(name))
+
+        if map_size(cache) < @split_cache_limit do
+          Process.put(@split_cache_key, Map.put(cache, name, split))
+        end
+
+        split
+    end
+  end
 
   def split(name) when is_binary(name) do
     case :binary.split(name, @separator) do

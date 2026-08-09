@@ -36,7 +36,7 @@ defmodule Cure.Elab.Emit do
   @spec compile_and_load(Env.t(), keyword()) :: {:ok, module()} | {:error, term()}
   def compile_and_load(%Env{} = env, opts) do
     module = Keyword.fetch!(opts, :module)
-    names = Keyword.fetch!(opts, :functions)
+    names = opts |> Keyword.fetch!(:functions) |> Enum.map(&emission_root_key(env, &1))
     origins = Keyword.get(opts, :origins, %{})
 
     emit_opts =
@@ -81,11 +81,8 @@ defmodule Cure.Elab.Emit do
   def compile_forms(%Env{} = env, module, names), do: compile_forms(env, module, names, %{})
 
   @doc """
-  As `compile_forms/3`, but with an `origins` map (`%{fun_atom => Cure.<Module>}`,
-  from `Cure.Elab.Program.import_origins/1`) routing `use`-imported cross-module
-  `{:global, name}` references to REMOTE calls instead of undefined local ones.
-  An empty map (the /3 default) preserves the all-local behaviour of a
-  self-contained module.
+  Compatibility form of `compile_forms/3`. The `origins` argument is ignored:
+  qualified Core identities are the sole authority for remote-call routing.
   """
   @spec compile_forms(Env.t(), module(), [atom()], map()) :: {:ok, [tuple()]} | {:error, term()}
   def compile_forms(%Env{} = env, module, names, origins),
@@ -106,6 +103,8 @@ defmodule Cure.Elab.Emit do
     # Hole-check the FULL name set first — an unfilled obligation in a type-level
     # def is still refused (#102 firewall) — then drop the type-level defs from the
     # set that actually reaches emission.
+    names = Enum.map(names, &emission_root_key(env, &1))
+
     with :ok <- validate_emission_closure(env, names),
          :ok <- reject_holes(env, names) do
       emit_names = Enum.reject(names, &type_level_def?(env, &1))
@@ -129,7 +128,7 @@ defmodule Cure.Elab.Emit do
   def validate_emission_closure(%Env{} = env, names) do
     selected =
       names
-      |> Enum.map(&Env.resolve_key(env, env.defs, &1))
+      |> Enum.map(&emission_root_key(env, &1))
       |> MapSet.new()
 
     selected_owners =
@@ -220,7 +219,8 @@ defmodule Cure.Elab.Emit do
       |> Map.merge(%{
         definition: definition,
         referenced_by: referenced_by,
-        module: env.module_owner
+        module: env.module_owner,
+        closure_path: [referenced_by, definition] |> Enum.reject(&is_nil/1)
       })
 
     {:error, {kind, details}}
@@ -231,7 +231,7 @@ defmodule Cure.Elab.Emit do
   # value function returns a value, so its codomain is a data type / Π / primitive,
   # never a universe.
   defp type_level_def?(env, name) do
-    case Env.get_def(env, name) do
+    case Map.get(env.defs, name) do
       %{type: type} -> universe_codomain?(type)
       _ -> false
     end
@@ -245,7 +245,7 @@ defmodule Cure.Elab.Emit do
   @spec module_forms(Env.t(), module(), [atom()]) :: [tuple()]
   def module_forms(%Env{} = env, module, names), do: module_forms(env, module, names, %{})
 
-  @doc "As `module_forms/3`, with an import-`origins` map (see `compile_forms/4`)."
+  @doc "Compatibility form of `module_forms/3`; `origins` is ignored."
   @spec module_forms(Env.t(), module(), [atom()], map()) :: [tuple()]
   def module_forms(%Env{} = env, module, names, origins),
     do: module_forms(env, module, names, origins, [])
@@ -265,7 +265,7 @@ defmodule Cure.Elab.Emit do
     # Callers commonly select every definition owned by a module. Type formers
     # and interface method signatures are real Core definitions, but neither has
     # a runtime body to turn into an Erlang function.
-    names = Enum.filter(names, &runtime_definition?(env, &1))
+    names = names |> Enum.map(&emission_root_key(env, &1)) |> Enum.filter(&runtime_definition?(env, &1))
     prefix = Keyword.get(emit_opts, :prefix, "")
 
     local_owners =
@@ -274,22 +274,18 @@ defmodule Cure.Elab.Emit do
         list -> MapSet.new(list)
       end
 
-    # Stash the import origins for the two `{:global, name}` lowering sites; the
-    # de Bruijn `ctx` list threaded through `lower/3` has no room for a
-    # module-level constant, and the Core `Env` is TCB. Reset on every call
-    # (the /3 default passes `%{}`) so a self-contained module never inherits a
-    # previous module's origins. The prefix/local-owners route intra-group
-    # cross-owner calls to a prefixed target under a non-empty prefix (C2).
-    Process.put(:cure_emit_origins, origins)
+    # Prefix/local-owners route intra-group cross-owner calls to a prefixed
+    # target under a non-empty prefix (C2). `origins` remains only as a
+    # compatibility argument and cannot participate in identity recovery.
+    _ = origins
     Process.put(:cure_emit_prefix, prefix)
     Process.put(:cure_emit_local_owners, local_owners)
     Process.put(:cure_emit_fresh_counter, 0)
 
     aliases =
       Enum.flat_map(names, fn name ->
-        key = Env.resolve_key(env, env.defs, name)
-        emitted = emit_name_for_key(key)
-        [{name, emitted}, {key, emitted}]
+        emitted = emit_name_for_key(name)
+        [{name, emitted}]
       end)
 
     Process.put(:cure_emit_aliases, Map.new(aliases))
@@ -310,7 +306,6 @@ defmodule Cure.Elab.Emit do
         | artifact_provenance_attrs(emit_opts) ++ no_auto_import_attr(exports) ++ fn_forms
       ]
     after
-      Process.delete(:cure_emit_origins)
       Process.delete(:cure_emit_prefix)
       Process.delete(:cure_emit_local_owners)
       Process.delete(:cure_emit_aliases)
@@ -319,7 +314,7 @@ defmodule Cure.Elab.Emit do
   end
 
   defp runtime_definition?(env, name) do
-    case Env.get_def(env, name) do
+    case Map.get(env.defs, name) do
       %{body: nil} -> false
       %{body: _body} -> not type_level_def?(env, name)
       _ -> false
@@ -374,10 +369,6 @@ defmodule Cure.Elab.Emit do
     }
   end
 
-  # The import-origins map for the module currently being emitted (see
-  # `module_forms/4`); `%{}` outside an emit or for a self-contained module.
-  defp emit_origins, do: Process.get(:cure_emit_origins, %{})
-
   # The module-name prefix for the group currently being emitted (`""` outside an
   # emit or for the default un-prefixed path).
   defp emit_prefix, do: Process.get(:cure_emit_prefix, "")
@@ -399,9 +390,9 @@ defmodule Cure.Elab.Emit do
   # Resolve a source `{:global, name}` to a REMOTE `{module, fun}` target or
   # `:local`. Every ordinary global is owner-qualified during elaboration.
   # Local keys are recorded in `emit_aliases`; any remaining qualified key is a
-  # remote call. The origins fallback remains only for the compatibility /4 API
-  # while old direct emitter tests migrate to canonical environments.
-  defp remote_target(name, origins) do
+  # remote call. The compatibility emitter arities still accept an `origins`
+  # map, but identity is no longer recovered from it: Core is the authority.
+  defp remote_target(name) do
     cond do
       Map.has_key?(emit_aliases(), name) ->
         :local
@@ -415,9 +406,6 @@ defmodule Cure.Elab.Emit do
         else
           {String.to_atom("Cure." <> owner), base}
         end
-
-      (mod = Map.get(origins, name)) != nil ->
-        {mod, name}
 
       true ->
         :local
@@ -436,21 +424,25 @@ defmodule Cure.Elab.Emit do
   # rather than crashing codegen.
   defp reject_holes(env, names) do
     Enum.reduce_while(names, :ok, fn name, :ok ->
-      case Validator.validate(def_body(env, name), Validator.release_config()) do
-        {:ok, _warnings} ->
-          {:cont, :ok}
+      with {:ok, body} <- def_body(env, name) do
+        case Validator.validate(body, Validator.release_config()) do
+          {:ok, _warnings} ->
+            {:cont, :ok}
 
-        {:error, rejections} ->
-          case Enum.find(rejections, &(&1.clause == :no_hole)) do
-            nil -> {:halt, {:error, {:final_core_violation, name, rejections}}}
-            rejection -> {:halt, {:error, unfilled_hole_error(env, name, rejection)}}
-          end
+          {:error, rejections} ->
+            case Enum.find(rejections, &(&1.clause == :no_hole)) do
+              nil -> {:halt, {:error, {:final_core_violation, name, rejections}}}
+              rejection -> {:halt, {:error, unfilled_hole_error(env, name, rejection)}}
+            end
+        end
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
   defp unfilled_hole_error(env, name, %{node: {:hole, hole_id}}) do
-    source = env |> Env.get_def(name) |> then(&if(&1, do: Map.get(&1, :source_holes, %{}), else: %{}))
+    source = env.defs |> Map.get(name) |> then(&if(&1, do: Map.get(&1, :source_holes, %{}), else: %{}))
 
     case Map.get(source, hole_id) do
       nil -> {:unfilled_hole, name}
@@ -459,14 +451,14 @@ defmodule Cure.Elab.Emit do
   end
 
   defp def_body(env, name) do
-    case Env.get_def(env, name) do
-      %{body: body} -> body
-      nil -> raise ArgumentError, "no such definition: #{inspect(name)}"
+    case Map.get(env.defs, name) do
+      %{body: body} -> {:ok, body}
+      nil -> closure_error(:emission_closure_missing, env, name, nil)
     end
   end
 
   defp function_form(env, name) do
-    case Env.get_def(env, name) do
+    case Map.get(env.defs, name) do
       %{body: {:extern, {mod, fun, _arity}}} = def ->
         extern_form(
           emitted_name(name),
@@ -478,6 +470,19 @@ defmodule Cure.Elab.Emit do
 
       def ->
         real_function_form(emitted_name(name), def, env)
+    end
+  end
+
+  # Emission accepts an authored bare spelling only as a root of the current
+  # module. Recursive edges are already canonical Core identities. Never route
+  # this boundary through `Env.resolve_key/3`: its lexical unique-provider
+  # fallback is correct during elaboration but would let a missing local root be
+  # guessed from an unrelated imported definition with the same suffix.
+  defp emission_root_key(%Env{module_owner: owner}, name) when is_atom(name) do
+    cond do
+      Name.qualified?(name) -> name
+      is_binary(owner) -> Name.qualify(owner, name)
+      true -> name
     end
   end
 
@@ -779,13 +784,13 @@ defmodule Cure.Elab.Emit do
       nil ->
         case present_arity(env, name) do
           0 ->
-            case remote_target(name, emit_origins()) do
+            case remote_target(name) do
               :local -> {:call, @line, {:atom, @line, emitted_name(name)}, []}
               {mod, fun} -> {:call, @line, {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}, []}
             end
 
           n ->
-            case remote_target(name, emit_origins()) do
+            case remote_target(name) do
               :local ->
                 {:fun, @line, {:function, emitted_name(name), n}}
 
@@ -1009,7 +1014,7 @@ defmodule Cure.Elab.Emit do
         arity = present_arity(env, name)
 
         callee =
-          case remote_target(name, emit_origins()) do
+          case remote_target(name) do
             :local -> {:atom, @line, emitted_name(name)}
             {mod, fun} -> {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}
           end
@@ -1043,7 +1048,7 @@ defmodule Cure.Elab.Emit do
   end
 
   defp present_arity(env, name) do
-    case Env.get_def(env, name) do
+    case Map.get(env.defs, name) do
       %{quantities: qs} when is_list(qs) -> Enum.count(qs, &Grade.present?/1)
       _ -> 0
     end

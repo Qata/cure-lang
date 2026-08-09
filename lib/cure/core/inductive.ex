@@ -189,6 +189,7 @@ defmodule Cure.Core.Env do
 
   def add_def(%__MODULE__{} = env, name, type_term, body_term, quantities, plicities) do
     name = owned_name(env, name)
+    certified = if is_nil(env.certified), do: nil, else: MapSet.delete(env.certified, name)
 
     %{
       env
@@ -199,7 +200,8 @@ defmodule Cure.Core.Env do
             body: body_term,
             quantities: quantities,
             plicities: plicities
-          })
+          }),
+        certified: certified
     }
   end
 

@@ -1,5 +1,6 @@
 defmodule Cure.Elab.CanonicalDefinitionIdentityTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Elab.{Emit, Name, Program}
@@ -98,6 +99,117 @@ defmodule Cure.Elab.CanonicalDefinitionIdentityTest do
              Emit.compile_forms(env, :Fixture, [:"Fixture#run"])
   end
 
+  test "emission roots never recover a missing local through a unique foreign suffix" do
+    env =
+      Cure.Core.Env.empty()
+      |> Cure.Core.Env.with_owner("Fixture")
+      |> Cure.Core.Env.add_def(:"Other#same", {:int_type}, {:int_lit, 1})
+
+    assert {:error, {:emission_closure_missing, %{definition: :"Fixture#same", referenced_by: nil, module: "Fixture"}}} =
+             Emit.validate_emission_closure(env, [:same])
+  end
+
+  test "a legacy origins map cannot rekey a definition during emission" do
+    env =
+      Cure.Core.Env.empty()
+      |> Cure.Core.Env.add_def(:helper, {:int_type}, {:int_lit, 1})
+      |> Cure.Core.Env.add_def(:run, {:int_type}, {:global, :helper})
+
+    forms = Emit.module_forms(env, :"Cure.IdentityOrigins", [:run], %{helper: :"Cure.WrongOwner"})
+    encoded = :erlang.term_to_binary(forms)
+
+    refute encoded =~ "Cure.WrongOwner"
+  end
+
+  test "overload members and their callers use discriminated canonical keys" do
+    source = """
+    mod IdentityOverload
+      type Meters = MkM(Int)
+      type Grams = MkG(Int)
+      fn choose(a: Meters) -> Meters = a
+      fn choose(a: Grams) -> Grams = a
+      fn meters() -> Meters = choose(MkM(1))
+      fn grams() -> Grams = choose(MkG(2))
+    """
+
+    assert {:ok, env} = Program.elaborate(source)
+    assert globals(env.defs[:"IdentityOverload#meters"].body) == [:"IdentityOverload#choose~0"]
+    assert globals(env.defs[:"IdentityOverload#grams"].body) == [:"IdentityOverload#choose~1"]
+
+    assert Program.reachable_def_names(env, [:meters, :grams]) == [
+             :"IdentityOverload#choose~0",
+             :"IdentityOverload#choose~1",
+             :"IdentityOverload#grams",
+             :"IdentityOverload#meters"
+           ]
+  end
+
+  test "a global reached only through a lambda remains canonical and emit-reachable" do
+    source = """
+    mod IdentityLambda
+      fn apply(f: (Int) -> Int, value: Int) -> Int = f(value)
+      fn helper(value: Int) -> Int = value + 1
+      fn run(value: Int) -> Int = apply(fn(item) -> helper(item), value)
+    """
+
+    assert {:ok, env} = Program.elaborate(source)
+    run_globals = globals(env.defs[:"IdentityLambda#run"].body)
+    assert :"IdentityLambda#apply" in run_globals
+    assert :"IdentityLambda#helper" in run_globals
+    refute :helper in run_globals
+
+    assert Program.reachable_def_names(env, [:run]) == [
+             :"IdentityLambda#apply",
+             :"IdentityLambda#helper",
+             :"IdentityLambda#run"
+           ]
+  end
+
+  test "dictionary selection and constrained calls close over canonical definitions" do
+    source = """
+    mod IdentityDictionary
+      interface Eqs(a)
+        fn eqs(x: a, y: a) -> Bool
+      implementation Eqs for Int
+        fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)
+      fn same({a: Type}, x: a, y: a) -> Bool where Eqs(a) = eqs(x, y)
+      fn run(x: Int, y: Int) -> Bool = same(x, y)
+    """
+
+    assert {:ok, env} = Program.elaborate(source)
+    reachable = Program.reachable_def_names(env, [:run])
+
+    assert :"IdentityDictionary#same" in reachable
+    assert :"IdentityDictionary#__impl_Eqs_Std.Int#Int_eqs" in reachable
+    assert Enum.all?(reachable, &Name.qualified?/1)
+    assert Enum.all?(reachable, &Map.has_key?(env.defs, &1))
+    assert :ok = Emit.validate_emission_closure(env, reachable)
+  end
+
+  property "generated local dependency chains retain one canonical identity and valid closure" do
+    check all(chain_length <- integer(1..20), max_runs: 30) do
+      owner = "GeneratedIdentity"
+
+      env =
+        Enum.reduce(0..chain_length, Cure.Core.Env.empty() |> Cure.Core.Env.with_owner(owner), fn index, env ->
+          body =
+            if index == 0,
+              do: {:int_lit, 0},
+              else: {:global, Name.qualify(owner, "step#{index - 1}")}
+
+          Cure.Core.Env.add_def(env, String.to_atom("step#{index}"), {:int_type}, body)
+        end)
+
+      root = String.to_atom("step#{chain_length}")
+      reachable = Program.reachable_def_names(env, [root])
+
+      assert length(reachable) == chain_length + 1
+      assert Enum.all?(reachable, &Name.qualified?/1)
+      assert Enum.all?(reachable, &Map.has_key?(env.defs, &1))
+      assert :ok = Emit.validate_emission_closure(env, reachable)
+    end
+  end
+
   defp contains_term?(term, wanted) when term == wanted, do: true
 
   defp contains_term?(term, wanted) when is_tuple(term),
@@ -107,4 +219,12 @@ defmodule Cure.Elab.CanonicalDefinitionIdentityTest do
     do: Enum.any?(term, &contains_term?(&1, wanted))
 
   defp contains_term?(_term, _wanted), do: false
+
+  defp globals({:global, name}), do: [name]
+
+  defp globals(term) when is_tuple(term),
+    do: term |> Tuple.to_list() |> Enum.flat_map(&globals/1) |> Enum.uniq()
+
+  defp globals(terms) when is_list(terms), do: terms |> Enum.flat_map(&globals/1) |> Enum.uniq()
+  defp globals(_term), do: []
 end

@@ -46,6 +46,19 @@ defmodule Cure.Diagnostic.Adapter do
     from_error(errors, opts)
   end
 
+  def from_error({tag, {package, module_name} = identity, reason}, opts)
+      when tag in [
+             :module_skeleton_error,
+             :module_type_skeleton_failed,
+             :module_interface_registration_failed,
+             :module_interface_freeze_failed,
+             :module_body_check_failed
+           ] and is_binary(package) and is_binary(module_name) do
+    reason
+    |> from_error(opts)
+    |> preserve_pipeline_envelope(tag, identity)
+  end
+
   def from_error([reason | _], opts), do: from_error(reason, opts)
 
   def from_error([], opts) do
@@ -315,6 +328,30 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:codegen_failure, details}, opts) when is_map(details) do
     Codegen.from_error({:codegen_failure, details}, opts)
+  end
+
+  def from_error({:beam_emission_input_missing, module} = reason, opts) do
+    Codegen.from_error(
+      {:codegen_failure,
+       %{
+         stage: :canonical_beam_emission,
+         module: module,
+         reason: reason
+       }},
+      opts
+    )
+  end
+
+  def from_error({:beam_emission_failed, module, reason}, opts) do
+    Codegen.from_error(
+      {:codegen_failure,
+       %{
+         stage: :canonical_beam_emission,
+         module: module,
+         reason: reason
+       }},
+      opts
+    )
   end
 
   def from_error({:codegen_error, reason}, opts), do: Codegen.from_error({:codegen_error, reason}, opts)
@@ -685,6 +722,7 @@ defmodule Cure.Diagnostic.Adapter do
     opts =
       opts
       |> Keyword.put_new(:span, Map.get(context, :span))
+      |> Keyword.put(:provenance, Map.get(context, :provenance, []))
       |> Keyword.put(:codegen_stage, Map.get(context, :codegen_stage, :final_core_validation))
       |> Keyword.put(:codegen_module, Map.get(context, :codegen_module))
 
@@ -1587,6 +1625,9 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:compile_time_totality, _name, _reason} = error, opts),
     do: StaticAnalysis.from_error(error, opts)
 
+  def from_error({:totality_closure_unresolved, details} = error, opts) when is_map(details),
+    do: StaticAnalysis.from_error(error, opts)
+
   def from_error({:pickup_no_else, _details} = error, opts), do: StaticAnalysis.from_error(error, opts)
 
   def from_error({:pickup_else_not_last, _details} = error, opts), do: StaticAnalysis.from_error(error, opts)
@@ -2196,6 +2237,27 @@ defmodule Cure.Diagnostic.Adapter do
     do: TypeAdapter.from_error(error, opts)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp preserve_pipeline_envelope(%Diagnostic{} = diagnostic, tag, identity) do
+    stage =
+      case tag do
+        :module_skeleton_error -> :module_skeleton
+        :module_type_skeleton_failed -> :type_skeleton
+        :module_interface_registration_failed -> :interface_registration
+        :module_interface_freeze_failed -> :interface_freeze
+        :module_body_check_failed -> :body_check
+      end
+
+    context = %{pipeline_stage: stage, module_identity: identity}
+
+    %Diagnostic{
+      diagnostic
+      | payload: Map.merge(diagnostic.payload || %{}, context),
+        notes:
+          diagnostic.notes ++
+            [Doc.paragraph("While checking canonical module `#{elem(identity, 1)}` during #{stage}.")]
+    }
+  end
 
   defp contextual_type_problem(kind, actual, expected, origin, context, opts) do
     from_error(

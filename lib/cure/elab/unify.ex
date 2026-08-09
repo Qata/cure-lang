@@ -596,14 +596,71 @@ defmodule Cure.Elab.Unify do
   kernel.
   """
   @spec zonk(uterm(), MetaCtx.t()) :: uterm()
-  def zonk(t, ctx) do
-    case force(t, ctx) do
-      {:meta, _id} = m -> m
-      tup when is_tuple(tup) -> tup |> Tuple.to_list() |> Enum.map(&zonk(&1, ctx)) |> List.to_tuple()
-      lst when is_list(lst) -> Enum.map(lst, &zonk(&1, ctx))
-      other -> other
+  def zonk({:meta, id} = meta, ctx) do
+    case MetaCtx.solution(ctx, id) do
+      nil -> meta
+      solution -> zonk(solution, ctx)
     end
   end
+
+  # Core's known node grammar gets shape-directed clauses so zonking visits only
+  # actual subterms. The generic tuple/list clauses below remain the completeness
+  # firewall for elaborator-only and future nodes (Eq/Refl were historically the
+  # reason this operation must never use an opaque catch-all).
+  def zonk({:pi, grade, domain, codomain}, ctx),
+    do: {:pi, grade, zonk(domain, ctx), zonk(codomain, ctx)}
+
+  def zonk({:lam, grade, domain, body}, ctx),
+    do: {:lam, grade, zonk(domain, ctx), zonk(body, ctx)}
+
+  def zonk({:let, grade, type, value, body}, ctx),
+    do: {:let, grade, zonk(type, ctx), zonk(value, ctx), zonk(body, ctx)}
+
+  def zonk({:app, function, argument}, ctx),
+    do: {:app, zonk(function, ctx), zonk(argument, ctx)}
+
+  def zonk({:data, name, parameters, indices}, ctx),
+    do: {:data, name, Enum.map(parameters, &zonk(&1, ctx)), Enum.map(indices, &zonk(&1, ctx))}
+
+  def zonk({:ctor, name, arguments}, ctx),
+    do: {:ctor, name, Enum.map(arguments, &zonk(&1, ctx))}
+
+  def zonk({:case, scrutinee, motive, branches}, ctx) do
+    {:case, zonk(scrutinee, ctx), zonk(motive, ctx),
+     Enum.map(branches, fn {constructor, arity, body} ->
+       {constructor, arity, zonk(body, ctx)}
+     end)}
+  end
+
+  def zonk({:effect_type, type}, ctx), do: {:effect_type, zonk(type, ctx)}
+  def zonk({:effect_pure, value}, ctx), do: {:effect_pure, zonk(value, ctx)}
+
+  def zonk({:effect_bind, effect, continuation}, ctx),
+    do: {:effect_bind, zonk(effect, ctx), zonk(continuation, ctx)}
+
+  def zonk({tag} = leaf, _ctx)
+      when tag in [:int_type, :float_type, :binary_type, :atom_type, :absurd],
+      do: leaf
+
+  def zonk({tag, _payload} = leaf, _ctx)
+      when tag in [
+             :type,
+             :var,
+             :global,
+             :int_lit,
+             :nat_lit,
+             :bounded_lit,
+             :float_lit,
+             :atom_lit,
+             :hole
+           ],
+      do: leaf
+
+  def zonk(tup, ctx) when is_tuple(tup),
+    do: tup |> Tuple.to_list() |> Enum.map(&zonk(&1, ctx)) |> List.to_tuple()
+
+  def zonk(list, ctx) when is_list(list), do: Enum.map(list, &zonk(&1, ctx))
+  def zonk(other, _ctx), do: other
 
   @meta_placeholder_prefix "$meta$"
 

@@ -614,7 +614,9 @@ defmodule Cure.Elab.Declarations do
   # Elaborate a function's body against its (already registered) signature and
   # replace the placeholder with the real lambda. The environment already carries
   # every function's signature, so forward references and mutual recursion resolve.
-  def elaborate_function_body({:function_def, _meta, _body} = decl, env) do
+  def elaborate_function_body(decl, env, opts \\ [])
+
+  def elaborate_function_body({:function_def, _meta, _body} = decl, env, opts) do
     {:function_def, meta, body} = desugar_clause_fn(decl)
 
     case Keyword.get(meta, :extern) do
@@ -640,7 +642,7 @@ defmodule Cure.Elab.Declarations do
         end
 
       _ ->
-        elaborate_real_body(meta, body, env)
+        elaborate_real_body(meta, body, env, opts)
     end
   end
 
@@ -911,13 +913,16 @@ defmodule Cure.Elab.Declarations do
 
   defp put_clause_source_info(meta, _), do: meta
 
-  defp elaborate_real_body(meta, body, env) do
+  defp elaborate_real_body(meta, body, env, opts) do
     body_expr = single_body(body)
 
     with {:ok, body_expr} <-
-           MacroExpand.expand(body_expr, env, callback_context: Keyword.get(meta, :callback_context)),
-         {:ok, sig} <- function_signature(meta, env),
-         {:ok, body_expr} <- Induction.expand(body_expr, sig, env) do
+           timed_body_stage(opts, :macro_expansion, fn ->
+             MacroExpand.expand(body_expr, env, callback_context: Keyword.get(meta, :callback_context))
+           end),
+         {:ok, sig} <- timed_body_stage(opts, :signature, fn -> function_signature(meta, env) end),
+         {:ok, body_expr} <-
+           timed_body_stage(opts, :induction, fn -> Induction.expand(body_expr, sig, env) end) do
       ctx = build_context(env, sig.telescope)
       # Qualify any hole minted while elaborating THIS body by its enclosing def
       # (`hole_id/2`) — local to this call, never merged back into `final` below,
@@ -925,7 +930,9 @@ defmodule Cure.Elab.Declarations do
       def_env = Env.with_current_def(env, sig.name)
 
       with {:ok, body_term, return_core, _return_value} <-
-             elaborate_body_typed(body_expr, sig, ctx, def_env),
+             timed_body_stage(opts, :typed_elaboration, fn ->
+               elaborate_body_typed(body_expr, sig, ctx, def_env)
+             end),
            # A `where`-introduced dictionary parameter is present by default but
            # SAFELY demoted to `:erased` when the body never uses it relevantly (an
            # `ignore`-style constrained function): the same criterion the relevance
@@ -980,6 +987,28 @@ defmodule Cure.Elab.Declarations do
         Cure.Elab.Equation.generate(final, sig.name, meta, body_expr)
       end
     end
+  end
+
+  defp timed_body_stage(opts, stage, operation) when is_function(operation, 0) do
+    started = System.monotonic_time(:microsecond)
+    result = operation.()
+    elapsed = System.monotonic_time(:microsecond) - started
+
+    case Keyword.get(opts, :event_sink) do
+      sink when is_function(sink, 2) -> emit_body_stage_timing(sink, stage, elapsed)
+      _ -> :ok
+    end
+
+    result
+  end
+
+  defp emit_body_stage_timing(sink, stage, elapsed) do
+    sink.(stage, elapsed)
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
   end
 
   defp maybe_register_unsafe(env, name, meta) do

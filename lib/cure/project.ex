@@ -376,6 +376,7 @@ defmodule Cure.Project do
   # as opaque missing-module errors.
   defp compile_dep_files(cure_files, name, dep_ebin, base) do
     case Cure.Compiler.Artifacts.sweep(
+           module_pipeline: :canonical,
            source_paths: cure_files,
            source_roots: [Path.join(base, "lib")],
            output_dir: dep_ebin,
@@ -823,18 +824,7 @@ defmodule Cure.Project do
         if File.dir?(dir), do: Path.wildcard(Path.join(dir, "**/*.cure")), else: []
       end)
 
-    {cure_files_result, compile_plan} =
-      case Cure.Compiler.prepare_files(discovered) do
-        {:ok, %{ordered: ordered, cycles: cycles} = plan} ->
-          Enum.each(cycles, fn walk ->
-            Logger.warning(render_host_diagnostic({:import_cycle, walk}, project.root))
-          end)
-
-          {{:ok, ordered}, plan}
-
-        {:error, _} = err ->
-          {err, nil}
-      end
+    cure_files_result = {:ok, Enum.sort(discovered)}
 
     with {:ok, dependency_sets} <- dependency_artifact_sets(project),
          :ok <- Cure.Stdlib.Preload.preload(preload_opts),
@@ -850,7 +840,7 @@ defmodule Cure.Project do
              check?,
              declared_phases(project),
              extra_paths,
-             compile_plan,
+             project.root,
              dependency_sets
            ),
          :ok <- maybe_write_app_resource(app_info, modules, project, output_dir) do
@@ -1016,7 +1006,7 @@ defmodule Cure.Project do
          check?,
          declared_phases,
          source_roots,
-         compile_plan,
+         diagnostic_path,
          dependency_sets
        ) do
     base_opts = [emit_events: emit?, check_types: check?]
@@ -1026,24 +1016,24 @@ defmodule Cure.Project do
         do: Keyword.put(base_opts, :declared_phases, declared_phases),
         else: base_opts
 
-    opts =
-      opts
-      |> Keyword.put(:prelude_providers, compile_plan.providers)
-      |> Keyword.put(:module_index, compile_plan.module_index)
-
     case Cure.Compiler.Artifacts.sweep(
+           module_pipeline: :canonical,
            source_roots: source_roots,
            source_paths: files,
            output_dir: output_dir,
            kind: :project,
            repair: true,
-           stdlib_artifact_digest: Cure.Compiler.Incremental.stdlib_fingerprint(),
+           stdlib_artifact_digest: Cure.Compiler.Artifacts.stdlib_fingerprint(),
            verify_stdlib: true,
            package_artifact_sets: dependency_sets,
            package_artifact_digests: Map.new(dependency_sets, fn {name, set} -> {name, set.artifact_digest} end),
            compile_opts: opts
          ) do
-      {:ok, _result} ->
+      {:ok, result} ->
+        Enum.each(result.cycles, fn walk ->
+          Logger.warning(render_host_diagnostic({:import_cycle, walk}, diagnostic_path))
+        end)
+
         with {:ok, set} <- Cure.Compiler.Artifacts.open_verified_set(output_dir) do
           modules =
             set.modules

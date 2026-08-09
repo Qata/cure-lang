@@ -31,6 +31,12 @@ defmodule Cure.MetaAST.MetadataTest do
     assert Metadata.source_info(span: whole, name_span: name).name == name
   end
 
+  test "source lookup tolerates generated mixed metadata without source fields" do
+    generated_child = {:param, [type: {:variable, [], "Type"}], "value"}
+
+    assert Metadata.source_info([generated_child, semantic: :kept]) == nil
+  end
+
   test "recursive projection strips metadata stored inside metadata values" do
     source = span(0, 1)
 
