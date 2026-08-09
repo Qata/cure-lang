@@ -284,12 +284,21 @@ defmodule Cure.Compiler.Errors do
   defp remap_term_spans(term, _registry, _source_id), do: term
 
   defp remap_operational_span(
+         %Cure.Diagnostic{
+           primary: %Cure.Diagnostic.Label{span: %Cure.Diagnostic.Span{source_id: source_id}}
+         } = diagnostic,
+         _registry,
+         source_id
+       ),
+       do: diagnostic
+
+  defp remap_operational_span(
          %Cure.Diagnostic{primary: %Cure.Diagnostic.Label{span: %Cure.Diagnostic.Span{} = span} = label} =
            diagnostic,
          registry,
          source_id
        ) do
-    case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, span.start_line, span.start_column, 0) do
+    case Cure.Diagnostic.SourceRegistry.span(registry, source_id, span.start_byte, span.end_byte) do
       {:ok, remapped} -> %{diagnostic | primary: %{label | span: remapped}}
       {:error, _} -> diagnostic
     end

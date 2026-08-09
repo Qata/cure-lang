@@ -495,10 +495,8 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     assert {:error, err} = compile_multi_error(dir, files)
     assert match?({:ambiguous_overload, :foo, _}, unwrap_inner(err))
 
-    assert {:compile_failed, {:codegen_error, diagnostic_error}} = err
-
     {diagnostic, registry} =
-      Cure.Compiler.Errors.to_diagnostic(diagnostic_error, "main.cure", files["main.cure"])
+      Cure.Compiler.Errors.to_diagnostic(err, "main.cure", files["main.cure"])
 
     assert Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80) ==
              String.trim_trailing("""
@@ -510,6 +508,8 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
              at main.cure:4:22
              4 |   fn pick() -> Int = foo(1)
                |                      ^^^^^^ qualify this call with the module you intend
+
+             Note: While checking canonical module `OvlAmbC` during body_check.
 
              Hint: Choose `OvlAmbA.foo(...)` or `OvlAmbB.foo(...)`
              """)
@@ -523,8 +523,10 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
 
     assert lsp["data"]["payload"] == %{
              "kind" => "ambiguous_overload",
+             "module_identity" => ["root", "OvlAmbC"],
              "name" => "foo",
              "owners" => ["OvlAmbA", "OvlAmbB"],
+             "pipeline_stage" => "body_check",
              "qualified_candidates" => ["OvlAmbA.foo", "OvlAmbB.foo"]
            }
 

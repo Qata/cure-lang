@@ -42,7 +42,17 @@ defmodule Mix.Tasks.Cure.CompileTest do
     Mix.Task.reenable("cure.compile")
     assert :ok = Mix.Task.run("cure.compile", [dir, "--output-dir", out])
 
-    assert apply(String.to_atom("Cure.#{consumer}"), :go, []) == 41
+    module = String.to_atom("Cure.#{consumer}")
+    assert {:ok, published} = Cure.Compiler.Artifacts.open_verified_set(out, verification: :full)
+
+    for authored_module <- [provider, consumer] do
+      runtime_module = String.to_atom("Cure.#{authored_module}")
+      assert [beam_name] = published.modules[authored_module].beams
+      assert {:ok, binary} = File.read(Path.join(published.artifact_root, beam_name))
+      assert {:module, ^runtime_module} = :code.load_binary(runtime_module, ~c"published", binary)
+    end
+
+    assert apply(module, :go, []) == 41
   end
 
   test "directory import cycles emit one structured warning on stderr", %{dir: dir} do

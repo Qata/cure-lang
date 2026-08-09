@@ -150,8 +150,14 @@ defmodule Cure.Compiler.Artifacts.Sweep do
       if Keyword.get(opts, :kind, :project) == :stdlib do
         []
       else
-        Cure.Stdlib.Paths.beam_dirs()
-        |> Enum.filter(fn root -> Path.wildcard(Path.join(root, "*.cureinterface")) != [] end)
+        case Artifacts.open_verified_set(
+               kind: :stdlib,
+               candidates: Cure.Stdlib.Paths.beam_dirs(),
+               verification: :full
+             ) do
+          {:ok, %{artifact_root: root}} -> [root]
+          {:error, _reason} -> []
+        end
       end
 
     (explicit ++ package_roots ++ stdlib_roots)

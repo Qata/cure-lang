@@ -117,10 +117,11 @@ defmodule Cure.Stdlib.Paths do
   defp source_candidates do
     [configured_source_dir()] ++
       cure_lib_source_dirs() ++
+      [@checkout_source] ++
       [bundled_source_dir()] ++
       cure_home_source_dirs() ++
       launcher_home_source_dirs() ++
-      [@checkout_source, @legacy_cwd_source]
+      [@legacy_cwd_source]
   end
 
   @doc """

@@ -144,7 +144,15 @@ defmodule Cure.Stdlib.PreloadTest do
     test "honours :stdlib_beam_dir app-env override" do
       tmp = make_tmp!()
       module = :"Cure.Std.Core"
-      assert {:ok, _} = Cure.Compiler.Artifacts.copy_verified_set("_build/cure/ebin", tmp)
+
+      assert {:ok, resident_set} =
+               Cure.Compiler.Artifacts.open_verified_set(
+                 kind: :stdlib,
+                 candidates: Cure.Stdlib.Paths.beam_dirs(),
+                 verification: :full
+               )
+
+      assert {:ok, _} = Cure.Compiler.Artifacts.copy_verified_set(resident_set.artifact_root, tmp)
 
       previous = Application.get_env(:cure, :stdlib_beam_dir)
       Application.put_env(:cure, :stdlib_beam_dir, tmp)

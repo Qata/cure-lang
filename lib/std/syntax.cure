@@ -13,6 +13,7 @@ mod Std.Syntax
   ## losslessly. Source positions are not represented (the expansion is
   ## re-elaborated, K3 firewall).
   use Std.String
+  use Std.Char
   use Std.Option
 
   type Syntax =

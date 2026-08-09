@@ -7,13 +7,17 @@ defmodule Cure.Elab.Program do
   totality-certified signature.
   """
 
-  alias Cure.Compiler.{Lexer, MacroFamily, MacroSyntax, MacroValidate, ModuleIndex, ModuleInterface, Parser}
+  alias Cure.Compiler.{Artifacts, BuildManifest, Lexer, MacroFamily, MacroSyntax, MacroValidate, ModuleIndex,
+    ModuleInterface, Parser}
+  alias Cure.Compiler.ModulePipeline.Interface, as: PipelineInterface
   alias Cure.Compiler.Parser.FixityScan
   alias Cure.Core.{Env, Inductive, Validator}
   alias Cure.Elab.{CheckedModule, Coherence, Declarations, Erase, MacroExpand, TotalityClosure}
   alias Cure.Stdlib.Paths
 
   @loader_state_key {__MODULE__, :module_loader_state}
+  @module_interface_cache_version 3
+  @macro_home_cache_version 3
 
   @spec elaborate(String.t(), keyword()) :: {:ok, Env.t()} | {:error, term()}
   def elaborate(source, opts \\ []) when is_binary(source) and is_list(opts) do
@@ -1419,6 +1423,7 @@ defmodule Cure.Elab.Program do
         families: Map.take(env.families, fam_names),
         ctors: Map.take(env.ctors, Map.keys(kept_ctors)),
         ctor_to_family: kept_ctors,
+        builtins: Map.filter(env.builtins, fn {_key, family} -> family in fam_names end),
         primitives: Map.take(env.primitives, name_list),
         equations: kept_equations,
         certified: env.certified,
@@ -2489,13 +2494,88 @@ defmodule Cure.Elab.Program do
 
     case result do
       {:ok, interface} ->
-        put_loader_state(%{state | modules: Map.put(state.modules, module_name, {:loaded, interface})})
-        {:ok, interface.export_env}
+        case complete_interface_environment(interface) do
+          {:ok, export_env} ->
+            state = Process.get(@loader_state_key)
+            interface = %{interface | export_env: export_env}
+            put_loader_state(%{state | modules: Map.put(state.modules, module_name, {:loaded, interface})})
+            {:ok, export_env}
+
+          {:error, reason} ->
+            state = Process.get(@loader_state_key)
+            put_loader_state(%{state | modules: Map.put(state.modules, module_name, {:failed, path, reason})})
+            {:error, reason}
+        end
 
       {:error, reason} ->
         put_loader_state(%{state | modules: Map.put(state.modules, module_name, {:failed, path, reason})})
         {:error, reason}
     end
+  end
+
+  # A cached interface records canonical dependency identities, but its
+  # transitional `export_env` is only the view available when that module was
+  # checked.  In an SCC, a back-edge is necessarily a skeleton at that moment.
+  # Reconstruct the semantic dependency closure in each loader generation before
+  # publishing the cached interface, otherwise module-owned registrations such
+  # as `:char` can disappear permanently behind the cached skeleton.
+  #
+  # Dependency semantics travel; dependency visibility does not.  Clearing the
+  # four name-exposure fields keeps a transitive dependency from becoming a
+  # lexical `use` import of the consumer while retaining its canonical families,
+  # definitions, builtin registrations, coherence, and totality evidence.
+  defp complete_interface_environment(%ModuleInterface{} = interface) do
+    with {:ok, owned} <- Cure.Compiler.ModulePipeline.Interface.to_env(interface),
+         {:ok, dependencies} <- load_interface_dependency_environments(interface.dependency_names),
+         {:ok, merged} <- merge_env(dependencies, owned) do
+      owned_bindings = MapSet.new(all_global_keys(owned))
+      owner_visibility = MapSet.new([interface.module_name])
+
+      {:ok,
+       %Env{
+         merged
+         | module_owner: interface.module_name,
+           import_modules: MapSet.new(),
+           bare_modules: owner_visibility,
+           bare_bindings: owned_bindings,
+           qualified_modules: owner_visibility,
+           current_def: nil
+       }}
+    end
+  end
+
+  defp load_interface_dependency_environments(names) do
+    Enum.reduce_while(names, {:ok, Env.empty()}, fn name, {:ok, acc} ->
+      if ModuleIndex.compiler_owned?(name) do
+        {:cont, {:ok, acc}}
+      else
+        case resolved_module_path(name) do
+          nil ->
+            {:halt, {:error, {:module_not_found, name}}}
+
+          path ->
+            with {:ok, dependency} <- load_module_interface(name, path),
+                 dependency = semantic_dependency_environment(dependency),
+                 {:ok, merged} <- merge_env(acc, dependency) do
+              {:cont, {:ok, merged}}
+            else
+              {:error, _} = error -> {:halt, error}
+            end
+        end
+      end
+    end)
+  end
+
+  defp semantic_dependency_environment(%Env{} = env) do
+    %Env{
+      env
+      | import_modules: MapSet.new(),
+        bare_modules: MapSet.new(),
+        bare_bindings: MapSet.new(),
+        qualified_modules: MapSet.new(),
+        module_owner: nil,
+        current_def: nil
+    }
   end
 
   defp loading_signature_skeleton(state, module_name, path) do
@@ -2663,7 +2743,8 @@ defmodule Cure.Elab.Program do
   defp read_module_interface_cache(path, module_name, source_hash) do
     with true <- not is_nil(source_hash),
          {:ok, binary} <- File.read(module_interface_cache_path(path)),
-         {:cure_module_interface, 2, fingerprint, expanded_path, ^module_name, ^source_hash,
+         {:cure_module_interface, @module_interface_cache_version, fingerprint, expanded_path, ^module_name,
+          ^source_hash,
           {:ok, %ModuleInterface{} = interface} = result} <- :erlang.binary_to_term(binary),
          true <- fingerprint == macro_home_cache_fingerprint(),
          true <- expanded_path == Path.expand(path),
@@ -2688,7 +2769,8 @@ defmodule Cure.Elab.Program do
     temporary = destination <> ".#{System.unique_integer([:positive])}.tmp"
 
     payload =
-      {:cure_module_interface, 2, macro_home_cache_fingerprint(), Path.expand(path), module_name, source_hash, result}
+      {:cure_module_interface, @module_interface_cache_version, macro_home_cache_fingerprint(), Path.expand(path),
+       module_name, source_hash, result}
       |> :erlang.term_to_binary(compressed: 6)
 
     with :ok <- File.mkdir_p(directory),
@@ -2722,7 +2804,7 @@ defmodule Cure.Elab.Program do
   # are stored; corrupt or stale files are ignored and replaced atomically.
   defp read_macro_home_cache(path) do
     with {:ok, binary} <- File.read(macro_home_cache_path(path)),
-         {:cure_macro_home, 2, fingerprint, expanded_path, {:ok, %Env{}} = result} <-
+         {:cure_macro_home, @macro_home_cache_version, fingerprint, expanded_path, {:ok, %Env{}} = result} <-
            :erlang.binary_to_term(binary),
          true <- fingerprint == macro_home_cache_fingerprint(),
          true <- expanded_path == Path.expand(path) do
@@ -2740,7 +2822,7 @@ defmodule Cure.Elab.Program do
     temporary = destination <> ".#{System.unique_integer([:positive])}.tmp"
 
     payload =
-      {:cure_macro_home, 2, macro_home_cache_fingerprint(), Path.expand(path), result}
+      {:cure_macro_home, @macro_home_cache_version, macro_home_cache_fingerprint(), Path.expand(path), result}
       |> :erlang.term_to_binary(compressed: 6)
 
     with :ok <- File.mkdir_p(directory),
@@ -2806,25 +2888,56 @@ defmodule Cure.Elab.Program do
       key = {__MODULE__, :module_interface, path}
       source_hash = current_source_hash(path)
 
-      case :persistent_term.get(key, :missing) do
-        {:cached, ^source_hash, {:ok, %ModuleInterface{}} = cached}
-        when not is_nil(source_hash) ->
-          cached
+      case canonical_published_interface(module_name, source_hash) do
+        {:ok, %ModuleInterface{}} = canonical ->
+          :persistent_term.put(key, {:cached, source_hash, canonical})
+          canonical
 
-        _missing_or_stale ->
-          case read_module_interface_cache(path, module_name, source_hash) do
-            {:ok, %ModuleInterface{}} = cached ->
-              :persistent_term.put(key, {:cached, source_hash, cached})
+        :error ->
+          case :persistent_term.get(key, :missing) do
+            {:cached, ^source_hash, {:ok, %ModuleInterface{}} = cached}
+            when not is_nil(source_hash) ->
               cached
 
-            nil ->
-              compile_and_cache_module_interface(key, source_hash, module_name, path)
+            _missing_or_stale ->
+              case read_module_interface_cache(path, module_name, source_hash) do
+                {:ok, %ModuleInterface{}} = cached ->
+                  :persistent_term.put(key, {:cached, source_hash, cached})
+                  cached
+
+                nil ->
+                  compile_and_cache_module_interface(key, source_hash, module_name, path)
+              end
           end
       end
     else
       compile_module_interface(module_name, path)
     end
   end
+
+  # Once the canonical stdlib sweep has published a generation produced by this
+  # exact host compiler, that checked interface is the authority for every
+  # consumer in the VM.  Re-elaborating the same source through the transitional
+  # source loader created a second compiler with different SCC and inference
+  # behavior.  A cold build (no generation, changed toolchain, or changed source)
+  # falls through to source elaboration and publishes a fresh generation later.
+  defp canonical_published_interface(module_name, source_hash) when is_binary(source_hash) do
+    with {:ok, set} <-
+           Artifacts.open_verified_set(
+             kind: :stdlib,
+             candidates: Paths.beam_dirs(),
+             verification: :full
+           ),
+         true <- get_in(set, [:context, :compiler_hash]) == BuildManifest.toolchain_fingerprint(),
+         {:ok, interface} <- PipelineInterface.read(PipelineInterface.path(set.artifact_root, module_name)),
+         true <- interface.source_hash == source_hash do
+      {:ok, interface}
+    else
+      _ -> :error
+    end
+  end
+
+  defp canonical_published_interface(_module_name, _source_hash), do: :error
 
   defp compile_and_cache_module_interface(key, source_hash, module_name, path) do
     case compile_module_interface(module_name, path) do
