@@ -28,16 +28,14 @@ defmodule Cure.Elab.CrossModuleCoherenceTest do
       Path.join(System.tmp_dir!(), "cure_cross_module_coherence_#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(tmp)
-    File.cp_r!(Cure.Stdlib.Paths.source_dir(), tmp)
 
-    previous = Application.get_env(:cure, :stdlib_source_dir)
-    Application.put_env(:cure, :stdlib_source_dir, tmp)
+    previous = Process.get(:cure_source_roots)
+    Process.put(:cure_source_roots, [tmp])
 
     on_exit(fn ->
-      case previous do
-        nil -> Application.delete_env(:cure, :stdlib_source_dir)
-        value -> Application.put_env(:cure, :stdlib_source_dir, value)
-      end
+      if previous,
+        do: Process.put(:cure_source_roots, previous),
+        else: Process.delete(:cure_source_roots)
 
       File.rm_rf!(tmp)
     end)

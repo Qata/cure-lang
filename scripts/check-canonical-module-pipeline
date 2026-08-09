@@ -60,5 +60,5 @@ if [ "${1:-}" = "--full" ]; then
 "
 fi
 
-MIX_ENV=test elixir -pa _build/test/lib/cure/ebin -e "ExUnit.start()
+MIX_ENV=test mix run --no-compile --no-start -e "ExUnit.start()
 $suites"

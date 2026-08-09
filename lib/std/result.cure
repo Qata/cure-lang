@@ -38,9 +38,11 @@ mod Std.Result
   type Result(t, e) = Ok(t) | Error(e)
 
   ## Build an `Ok(value)` Result.
+  @reducible
   fn ok(value: t) -> Result(t, e) = Ok(value)
 
   ## Build an `Error(reason)` Result.
+  @reducible
   fn error(reason: e) -> Result(t, e) = Error(reason)
 
   ## `true` when the result is in the `Ok` arm.

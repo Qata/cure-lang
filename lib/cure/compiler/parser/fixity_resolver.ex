@@ -40,19 +40,49 @@ defmodule Cure.Compiler.Parser.FixityResolver do
 
       case SourceResolver.module_path(name) do
         {:ok, path} ->
-          case File.read(path) do
-            {:ok, source} ->
-              scan = FixityScan.harvest_source(source, diagnostic_source_path(path), base)
+          case cached_harvest(path, base) do
+            {:ok, scan} ->
               next = rest ++ Enum.map(scan.uses, & &1.target)
               gather(next, seen, acc ++ scan.fixity, base)
 
-            {:error, _} ->
+            :error ->
               gather(rest, seen, acc, base)
           end
 
         :not_found ->
           gather(rest, seen, acc, base)
       end
+    end
+  end
+
+  # A parser process commonly checks many small sources against the same
+  # imported/prelude closure (diagnostic corpora and generated properties are
+  # the standing examples). The closure's source files and base fixity table are
+  # immutable for that process, so harvesting every transitive module for every
+  # parse is pure repeated work. Include file identity and the base table in the
+  # key so edited fixtures and alternate editions cannot reuse a stale scan.
+  defp cached_harvest(path, base) do
+    stat =
+      case File.stat(path, time: :posix) do
+        {:ok, %File.Stat{size: size, mtime: mtime}} -> {size, mtime}
+        _ -> :nostat
+      end
+
+    key = {__MODULE__, :harvest, path, stat, :erlang.phash2(base)}
+
+    case Process.get(key) do
+      nil ->
+        result =
+          case File.read(path) do
+            {:ok, source} -> {:ok, FixityScan.harvest_source(source, diagnostic_source_path(path), base)}
+            {:error, _} -> :error
+          end
+
+        Process.put(key, result)
+        result
+
+      cached ->
+        cached
     end
   end
 

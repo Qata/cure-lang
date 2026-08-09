@@ -269,32 +269,37 @@ defmodule Cure.Elab.DefiningEquationTest do
   end
 
   test "polymorphic constructor fields and dependent result carriers remain kernel checked" do
-    assert {:ok, list} = Program.module_interface("Std.List", "lib/std/list.cure")
+    assert {:ok, set} =
+             Cure.Compiler.Artifacts.open_verified_set(
+               kind: :stdlib,
+               candidates: Cure.Stdlib.Paths.beam_dirs()
+             )
 
-    assert append_equations = Env.equations(list.export_env, :append)
+    assert {:ok, interfaces} =
+             Cure.Compiler.ModulePipeline.Interface.load_roots([set.artifact_root])
+
+    assert {:ok, universe} = Cure.Compiler.ModulePipeline.Interface.environment(interfaces)
+
+    assert append_equations = Env.equations(universe, :"Std.List#append")
     assert Enum.map(append_equations, & &1.pattern_key) |> Enum.sort() == ["append/Cons", "append/Nil"]
     cons_equation = Enum.find(append_equations, &(&1.pattern_key == "append/Cons"))
-    assert :ok = Kernel.check_def(list.export_env, cons_equation.theorem)
+    assert :ok = Kernel.check_def(universe, cons_equation.theorem)
 
-    assert {:ok, sigma} = Program.module_interface("Std.Sigma", "lib/std/sigma.cure")
-    assert [second_equation] = Env.equations(sigma.export_env, :sigma_second)
+    assert [second_equation] = Env.equations(universe, :"Std.Sigma#sigma_second")
     assert second_equation.pattern_key == "sigma_second/mk_pair"
-    assert :ok = Kernel.check_def(sigma.export_env, second_equation.theorem)
+    assert :ok = Kernel.check_def(universe, second_equation.theorem)
 
-    assert {:ok, equivalent} = Program.module_interface("Std.Equivalent", "lib/std/equivalent.cure")
-
-    for owner <- [:sym, :trans, :cong] do
-      assert [equation] = Env.equations(equivalent.export_env, owner)
-      assert :ok = Kernel.check_def(equivalent.export_env, equation.theorem)
+    for owner <- [:"Std.Equivalent#sym", :"Std.Equivalent#trans", :"Std.Equivalent#cong"] do
+      assert [equation] = Env.equations(universe, owner)
+      assert :ok = Kernel.check_def(universe, equation.theorem)
     end
 
-    assert {:ok, vector} = Program.module_interface("Std.Vector", "lib/std/vector.cure")
-
-    assert Enum.map(Env.equations(vector.export_env, :lookup), & &1.pattern_key) |> Enum.sort() ==
+    assert Enum.map(Env.equations(universe, :"Std.Vector#lookup"), & &1.pattern_key)
+           |> Enum.sort() ==
              ["lookup/First/prepend", "lookup/Next/prepend"]
 
-    for equation <- Env.equations(vector.export_env, :lookup) do
-      assert :ok = Kernel.check_def(vector.export_env, equation.theorem)
+    for equation <- Env.equations(universe, :"Std.Vector#lookup") do
+      assert :ok = Kernel.check_def(universe, equation.theorem)
     end
   end
 

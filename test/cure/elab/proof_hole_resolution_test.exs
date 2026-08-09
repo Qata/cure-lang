@@ -187,7 +187,8 @@ defmodule Cure.Elab.ProofHoleResolutionTest do
 
     ids =
       env.defs
-      |> Map.values()
+      |> Enum.filter(fn {name, _definition} -> Cure.Elab.Name.owner(name) == env.module_owner end)
+      |> Enum.map(&elem(&1, 1))
       |> Enum.flat_map(fn %{body: body} -> hole_ids_in(body) end)
 
     assert length(ids) == 2

@@ -21,7 +21,8 @@ defmodule Cure.Elab.HoleIdentityTest do
 
   defp hole_ids(env) do
     env.defs
-    |> Map.values()
+    |> Enum.filter(fn {name, _definition} -> Cure.Elab.Name.owner(name) == env.module_owner end)
+    |> Enum.map(&elem(&1, 1))
     |> Enum.map(& &1.body)
     |> Enum.filter(&match?({:hole, _}, &1))
     |> Enum.map(fn {:hole, id} -> id end)

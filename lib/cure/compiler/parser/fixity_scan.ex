@@ -166,6 +166,13 @@ defmodule Cure.Compiler.Parser.FixityScan do
 
     acc =
       case node do
+        # Interpolation lowers to canonical `Std.String#concat` calls during
+        # elaboration. Record that compiler-authored qualified dependency at
+        # the same graph-construction site as authored qualified calls, before
+        # the lowering occurs.
+        {:string_interpolation, _meta, _segments} ->
+          [%{target: "Std.String", line: line || 1} | acc]
+
         {:function_call, call_meta, _args} when is_list(call_meta) ->
           case qualified_owner(Keyword.get(call_meta, :name)) do
             nil -> acc

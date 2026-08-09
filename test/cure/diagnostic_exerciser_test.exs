@@ -511,10 +511,8 @@ defmodule Cure.DiagnosticExerciserTest do
   defp compiler_case_fixture_ids({_label, _code, _source, fixture_id}), do: [fixture_id]
 
   defp exercise_ambiguous_name_fixture do
-    real_src = Cure.Stdlib.Paths.source_dir()
     tmp = Path.join(System.tmp_dir!(), "cure_diagnostic_ambiguity_#{System.unique_integer([:positive])}")
     File.mkdir_p!(tmp)
-    File.cp_r!(real_src, tmp)
 
     File.write!(Path.join(tmp, "fixture_left.cure"), """
     mod Std.FixtureLeft
@@ -528,8 +526,8 @@ defmodule Cure.DiagnosticExerciserTest do
     end
     """)
 
-    previous = Application.get_env(:cure, :stdlib_source_dir)
-    Application.put_env(:cure, :stdlib_source_dir, tmp)
+    previous = Process.get(:cure_source_roots)
+    Process.put(:cure_source_roots, [tmp])
 
     for fixture <- ["fixture_left.cure", "fixture_right.cure"] do
       path = Path.join(tmp, fixture)
@@ -569,9 +567,9 @@ defmodule Cure.DiagnosticExerciserTest do
 
       :ambiguous_name
     after
-      if previous == nil,
-        do: Application.delete_env(:cure, :stdlib_source_dir),
-        else: Application.put_env(:cure, :stdlib_source_dir, previous)
+      if previous,
+        do: Process.put(:cure_source_roots, previous),
+        else: Process.delete(:cure_source_roots)
 
       for module <- [:"Cure.Std.FixtureLeft", :"Cure.Std.FixtureRight"] do
         :code.purge(module)

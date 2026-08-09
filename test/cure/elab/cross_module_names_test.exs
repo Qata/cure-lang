@@ -41,6 +41,16 @@ defmodule Cure.Elab.CrossModuleNamesTest do
       src = "mod Client\n  use Std.Result\n  use Std.Vector\n  fn f() -> Int = 1\nend\n"
       assert {:ok, _} = check(src)
     end
+
+    test "overlapping published dependency closures merge without re-entering cyclic source loading" do
+      # Both interfaces carry dependencies from the legal Prelude SCC.  Once a
+      # canonical stdlib generation exists, importing them together must merge
+      # that checked interface graph directly; rebuilding source skeletons for
+      # the already-published cycle used to leave a bare `Result` Core key.
+      src = "mod Client\n  use Std.Otp\n  use Std.ExitReason\n  fn value() -> Int = 1\nend\n"
+
+      assert {:ok, _} = check(src)
+    end
   end
 
   describe "sibling modules in ONE compilation unit may not share a name" do

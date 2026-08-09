@@ -122,7 +122,15 @@ defmodule Cure.Elab.TypealiasFunctionReferenceTest do
 
     root = File.cwd!()
     stdlib_source = Path.expand("lib/std", root)
-    stdlib_ebin = Path.expand("_build/cure/ebin", root)
+
+    assert {:ok, resident_set} =
+             Cure.Compiler.Artifacts.open_verified_set(
+               kind: :stdlib,
+               candidates: Cure.Stdlib.Paths.beam_dirs(),
+               verification: :full
+             )
+
+    stdlib_ebin = resident_set.artifact_root
     previous_cure_lib = System.get_env("CURE_LIB")
     previous_source = Application.get_env(:cure, :stdlib_source_dir)
     previous_ebin = Application.get_env(:cure, :stdlib_beam_dir)

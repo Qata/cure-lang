@@ -44,8 +44,10 @@ mod Std.String
   rec String
     characters: List(Char)
 
+  @reducible
   fn from_characters(value: List(Char)) -> String = String{characters: value}
 
+  @reducible
   fn characters(value: String) -> List(Char) =
     match value
       String(chars) -> chars

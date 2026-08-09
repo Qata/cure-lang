@@ -7,10 +7,13 @@ defmodule Cure.Elab.ModuleInterfaceTest do
 
   @moduletag :tmp_dir
 
-  test "module_interface/2 returns the export_env and source_hash for a stdlib module" do
+  test "module_interface/2 returns canonical declarations and source identity for a stdlib module" do
     path = "lib/std/core.cure"
     assert {:ok, %ModuleInterface{} = iface} = Program.module_interface("Std.Core", path)
-    assert is_map(iface.export_env)
+    assert is_nil(iface.export_env)
+    assert is_nil(iface.owned_env)
+    assert is_map(iface.canonical_declarations)
+    assert {:ok, %Cure.Core.Env{}} = Cure.Compiler.ModulePipeline.Interface.to_env(iface)
     assert is_binary(iface.source_hash) and byte_size(iface.source_hash) == 32
     assert is_binary(iface.interface_hash) and byte_size(iface.interface_hash) == 32
     assert :ok = ModuleInterface.validate(iface)
@@ -26,8 +29,10 @@ defmodule Cure.Elab.ModuleInterfaceTest do
              is_binary(module_name) and is_binary(hash) and byte_size(hash) == 32
            end)
 
+    interface_dependencies = Enum.reject(iface.dependency_names, &Cure.Compiler.ModuleIndex.compiler_owned?/1)
+
     assert Enum.sort(Map.keys(iface.dependency_interface_hashes)) ==
-             Enum.sort(iface.dependency_names)
+             Enum.sort(interface_dependencies)
   end
 
   test "module_interface/2 is a cache hit after priming (identical stored term)" do
@@ -42,6 +47,37 @@ defmodule Cure.Elab.ModuleInterfaceTest do
     # Two cache reads of the same key return the identical off-heap term, proving
     # the stdlib interface is served from the persistent_term cache, not recomputed.
     assert :erts_debug.same(a, b)
+  end
+
+  test "one check verifies a canonical artifact generation at most once" do
+    mfa = {Cure.Compiler.Artifacts, :verify_artifact, 3}
+    :erlang.trace_pattern(mfa, true, [:local, :call_count])
+
+    on_exit(fn -> :erlang.trace_pattern(mfa, false, [:local, :call_count]) end)
+
+    source = """
+    mod CanonicalGenerationVerification
+      use Std.Syntax
+      fn build() -> MacroResult = Expanded(Leaf(:literal, [], SInt(7)))
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+    assert {:call_count, count} = :erlang.trace_info(mfa, :call_count)
+
+    {:ok, set} =
+      Cure.Compiler.Artifacts.open_verified_set(
+        kind: :stdlib,
+        candidates: Cure.Stdlib.Paths.beam_dirs()
+      )
+
+    artifact_count =
+      set.modules
+      |> Map.values()
+      |> Enum.flat_map(& &1.artifacts)
+      |> length()
+
+    assert count <= artifact_count,
+           "one elaboration reverified #{count} artifacts from a #{artifact_count}-artifact generation"
   end
 
   test "ordinary checking keeps prelude-bootstrap modules out of the ambient prelude" do

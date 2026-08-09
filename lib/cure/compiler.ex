@@ -505,7 +505,10 @@ defmodule Cure.Compiler do
   # imported-module elaboration and parallel callers cannot leak project state.
   defp with_source_roots(file, opts, fun) do
     roots =
-      Keyword.get(opts, :source_roots, default_source_roots(file))
+      case Keyword.fetch(opts, :source_roots) do
+        {:ok, explicit} -> explicit
+        :error -> Process.get(:cure_source_roots) || default_source_roots(file)
+      end
       |> List.wrap()
       |> Enum.filter(&is_binary/1)
       |> Enum.map(&Path.expand/1)

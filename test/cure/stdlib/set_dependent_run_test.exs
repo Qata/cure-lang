@@ -53,8 +53,6 @@ defmodule Cure.Stdlib.SetDependentRunTest do
     # is installed at full surface by the preload — so emitting the full owner
     # surface here mirrors the shipping behaviour. Because this now emits under a
     # per-test prefix, it no longer touches the shared canonical slot at all.
-    map_surface = env.defs |> Map.keys() |> Enum.filter(&(Name.owner(&1) == "Std.Map"))
-
     fns =
       Program.reachable_def_names(
         env,
@@ -69,8 +67,9 @@ defmodule Cure.Stdlib.SetDependentRunTest do
           :remove,
           :new,
           :size
-        ] ++ map_surface
+        ]
       )
+      |> Enum.filter(&(Name.owner(&1) == "Std.Set"))
 
     prefix = prefix_for(__MODULE__)
     owners = fns |> Enum.map(&Name.owner/1) |> Enum.reject(&is_nil/1) |> Enum.uniq()

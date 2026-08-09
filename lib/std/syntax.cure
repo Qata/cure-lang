@@ -158,24 +158,33 @@ mod Std.Syntax
   fn node(name: Atom, values: List(Attr), terms: List(Syntax)) -> Syntax =
     Node(name, values, terms)
 
+  @reducible
   fn leaf(name: Atom, values: List(Attr), value: SynLit) -> Syntax =
     Leaf(name, values, value)
 
+  @reducible
   fn expand(value: Syntax) -> MacroResult = Expanded(value)
 
+  @reducible
   fn reject(diagnostic: Diagnostic) -> MacroResult = Rejected([diagnostic])
 
+  @reducible
   fn reject_all(diagnostics: List(Diagnostic)) -> MacroResult = Rejected(diagnostics)
 
+  @reducible
   fn attr_value(name: Atom, value: SynLit) -> Attr = KV(name, value)
 
+  @reducible
   fn syntax_atom(value: Atom) -> SynLit = SAtom(value)
+  @reducible
   fn syntax_string(value: String) -> SynLit = SStr(value)
+  @reducible
   fn syntax_bool(value: Bool) -> SynLit = SBool(value)
   fn syntax_int(value: Int) -> SynLit = SInt(value)
 
   ## Lift ordinary primitive values into literal syntax. These constructors are
   ## explicit so a string can never be mistaken for an identifier or raw syntax.
+  @reducible
   fn int_literal(value: Int) -> Syntax = integer(value)
 
   fn float_literal(value: Float) -> Syntax =
@@ -197,6 +206,7 @@ mod Std.Syntax
         SList(values) -> SList([SSyntax(head) | values])
         _ -> SList([])
 
+  @reducible
   fn variable(name: String) -> Syntax =
     Leaf(:variable, [KV(:scope, SAtom(:local))], SStr(name))
 
@@ -216,9 +226,11 @@ mod Std.Syntax
   ## share a binding; syntax reflected from the caller remains untouched. The
   ## marker is compile-time syntax and disappears before ordinary elaboration;
   ## it is not a runtime name generator.
+  @reducible
   fn fresh(name: String) -> Syntax =
     Leaf(:fresh_name, [], SStr(name))
 
+  @reducible
   fn atom_literal(value: Atom) -> Syntax =
     Leaf(:literal, [KV(:subtype, SAtom(:symbol))], SAtom(value))
 
@@ -228,12 +240,17 @@ mod Std.Syntax
   fn unit_literal() -> Syntax =
     Node(:unit_value, [], [])
 
+  ## `call` is part of the compile-time reflection API. Core-evaluator macro
+  ## execution must unfold it across the Std.Syntax interface boundary, so its
+  ## body is semantic interface data rather than an opaque runtime detail.
+  @reducible
   fn call(name: String, args: List(Syntax)) -> Syntax =
     Node(:function_call, [KV(:name, SStr(name))], args)
 
   fn use_module(name: String) -> Syntax =
     Node(:import, [KV(:source, SStr(name)), KV(:import_type, SAtom(:use))], [])
 
+  @reducible
   fn tuple(items: List(Syntax)) -> Syntax = Node(:tuple, [], items)
 
   fn list(items: List(Syntax)) -> Syntax = Node(:list, [], items)
@@ -309,6 +326,7 @@ mod Std.Syntax
   fn typed_let_binding(name: String, kind: Syntax, value: Syntax) -> Syntax =
     Node(:assignment, [KV(:let, SBool(true)), KV(:type_annotation, SSyntax(kind))], [variable(name), value])
 
+  @reducible
   fn parameter_literals(params: List(Syntax)) -> SynLit =
     match params
       [] -> SList([])
@@ -316,6 +334,7 @@ mod Std.Syntax
         SList(values) -> SList([SSyntax(head) | values])
         _ -> SList([])
 
+  @reducible
   fn function(name: String, params: List(Syntax), return_type: Syntax, body: Syntax) -> Syntax =
     Node(:function_def, [
       KV(:name, SStr(name)),
@@ -475,8 +494,10 @@ mod Std.Syntax
       _ -> false
     Missing -> false
 
+  @reducible
   fn block(items: List(Syntax)) -> Syntax = Node(:block, [], items)
 
+  @reducible
   fn lift_module(module: SynLit, behaviour: Atom, declarations: List(Syntax)) -> Syntax =
     Node(:lift_module, [
       KV(:module, module),

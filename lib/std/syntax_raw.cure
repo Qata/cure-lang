@@ -7,10 +7,13 @@ mod Std.Syntax.Raw
   ## typed builders in Std.Syntax for ordinary macro code.
   use Std.Syntax
 
+  @reducible
   fn unsafe_node(name: Atom, values: List(Attr), terms: List(Syntax)) -> Syntax =
     Node(name, values, terms)
 
+  @reducible
   fn unsafe_leaf(name: Atom, values: List(Attr), value: SynLit) -> Syntax =
     Leaf(name, values, value)
 
+  @reducible
   fn unsafe_raw(value: SynLit) -> Syntax = Raw(value)

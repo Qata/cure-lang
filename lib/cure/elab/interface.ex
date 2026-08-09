@@ -43,6 +43,7 @@ defmodule Cure.Elab.Interface do
       desc =
         Metadata.strip_diagnostics(%{
           name: name_atom,
+          owner: Env.owner(env),
           head_var: head_var,
           head_kind: head_kind,
           methods: build_method_map(methods),

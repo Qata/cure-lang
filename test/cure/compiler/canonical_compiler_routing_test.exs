@@ -87,6 +87,34 @@ defmodule Cure.Compiler.CanonicalCompilerRoutingTest do
     assert warm.reused == ["Routed.Incremental"]
   end
 
+  test "single-source compilation inherits the active canonical source roots", %{tmp_dir: dir} do
+    provider =
+      write!(dir, "provider.cure", "mod Routed.ContextProvider\n  fn value() -> Int = 41\n")
+
+    previous = Process.get(:cure_source_roots)
+    Process.put(:cure_source_roots, [dir])
+
+    try do
+      assert {:ok, :"Cure.Routed.ContextProvider"} =
+               Cure.Compiler.compile_and_load(File.read!(provider),
+                 file: provider,
+                 source_roots: [dir],
+                 emit_events: false
+               )
+
+      assert {:ok, :"Cure.Routed.ContextConsumer", _warnings} =
+               Cure.Compiler.compile_string(
+                 "mod Routed.ContextConsumer\n  use Routed.ContextProvider\n  fn result() -> Int = value() + 1\n",
+                 file: "virtual/context_consumer.cure",
+                 emit_events: false
+               )
+    after
+      if previous,
+        do: Process.put(:cure_source_roots, previous),
+        else: Process.delete(:cure_source_roots)
+    end
+  end
+
   defp write!(dir, name, source) do
     path = Path.join(dir, name)
     File.write!(path, source)

@@ -22,17 +22,17 @@ defmodule Cure.Stdlib.TypeclassMigrationTest do
       # and selects the imported instance's method — proving `interface`/`instance`
       # state crosses the `use` boundary (merge_env unions interfaces + coherence).
       assert {:ok, env} = Program.elaborate(src)
-      assert :"Std.Functor#__impl_Functor_Std.List#List_fmap" in Program.impl_def_names(env)
+      refute :"Std.Functor#__impl_Functor_Std.List#List_fmap" in Program.impl_def_names(env)
 
       assert inspect(Map.get(env.defs, :"M#bump").body) =~
                "__impl_Functor_Std.List#List_fmap"
     end
 
-    test "the imported instance's delegate global is re-keyed to match the moved def" do
-      # Std.Functor's List instance body calls `Std.List.map`. When M imports both
-      # Std.List and Std.Functor, `map` collides (owned via two reachable edges) and
-      # its def KEY moves to `:"Std.List#map"`. The instance body's `{:global, :map}`
-      # reference MUST follow — otherwise it dangles and emit fails with {:map, N}.
+    test "the imported instance remains owned and emitted by Std.Functor" do
+      # An importer needs the instance signature and coherence entry, not its
+      # ordinary runtime body. The canonical interface keeps that body opaque;
+      # calls retain the qualified instance identity and route to the single
+      # implementation emitted by Std.Functor.
       src = """
       mod M
         use Std.List
@@ -42,9 +42,10 @@ defmodule Cure.Stdlib.TypeclassMigrationTest do
 
       {:ok, env} = Program.elaborate(src)
       impl = Map.get(env.defs, :"Std.Functor#__impl_Functor_Std.List#List_fmap")
-      body = inspect(impl.body)
-      assert body =~ "Std.List#map"
-      refute body =~ "{:global, :map}"
+      assert impl.body == {:hole, "__interface_opaque__"}
+
+      assert inspect(Map.get(env.defs, :"M#bump").body) =~
+               "Std.Functor#__impl_Functor_Std.List#List_fmap"
     end
 
     test "fmap over a List runs end-to-end (#23 cross-module polymorphic calls)" do
@@ -56,7 +57,7 @@ defmodule Cure.Stdlib.TypeclassMigrationTest do
       """
 
       {:ok, env} = Program.elaborate(src)
-      # Co-emit the transitive closure: bump -> impl fmap -> Std.List#map.
+      # Only M's body is emitted here; the qualified instance call stays remote.
       roots = [:bump | Program.impl_def_names(env)]
       functions = Program.reachable_def_names(env, roots)
       {:ok, m} = Emit.compile_and_load(env, module: :"Cure.M", functions: functions)

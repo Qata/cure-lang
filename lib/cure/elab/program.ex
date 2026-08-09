@@ -7,8 +7,18 @@ defmodule Cure.Elab.Program do
   totality-certified signature.
   """
 
-  alias Cure.Compiler.{Artifacts, BuildManifest, Lexer, MacroFamily, MacroSyntax, MacroValidate, ModuleIndex,
-    ModuleInterface, Parser}
+  alias Cure.Compiler.{
+    Artifacts,
+    BuildManifest,
+    Lexer,
+    MacroFamily,
+    MacroSyntax,
+    MacroValidate,
+    ModuleIndex,
+    ModuleInterface,
+    Parser
+  }
+
   alias Cure.Compiler.ModulePipeline.Interface, as: PipelineInterface
   alias Cure.Compiler.Parser.FixityScan
   alias Cure.Core.{Env, Inductive, Validator}
@@ -1814,17 +1824,23 @@ defmodule Cure.Elab.Program do
   """
   @spec impl_def_names(Env.t()) :: [atom()]
   def impl_def_names(env) do
-    case Env.coherence(env) do
-      nil ->
-        []
+    names =
+      case Env.coherence(env) do
+        nil ->
+          []
 
-      %{anon: anon, named: named} ->
-        refs = Map.values(anon) ++ Map.values(named)
+        %{anon: anon, named: named} ->
+          refs = Map.values(anon) ++ Map.values(named)
 
-        method_defs = Enum.flat_map(refs, &Map.values(&1.methods))
-        dict_defs = Enum.flat_map(refs, fn ref -> List.wrap(Map.get(ref, :dict)) end)
+          method_defs = Enum.flat_map(refs, &Map.values(&1.methods))
+          dict_defs = Enum.flat_map(refs, fn ref -> List.wrap(Map.get(ref, :dict)) end)
 
-        Enum.uniq(method_defs ++ dict_defs)
+          Enum.uniq(method_defs ++ dict_defs)
+      end
+
+    case env.module_owner do
+      nil -> names
+      owner -> Enum.filter(names, &(Cure.Elab.Name.owner(&1) in [nil, owner]))
     end
   end
 
@@ -1952,7 +1968,9 @@ defmodule Cure.Elab.Program do
   blocks codegen until filled.
   """
   @spec hole_goals(Env.t()) :: [%{function: atom(), goal: term(), context: [term()]}]
-  def hole_goals(%Env{defs: defs}) do
+  def hole_goals(%Env{} = env) do
+    defs = program_owned_definitions(env)
+
     for {name, %{type: type, body: body}} <- defs, Erase.has_hole?(body) do
       {context, goal} = split_pi(type, [])
       %{function: name, goal: goal, context: context}
@@ -1969,7 +1987,9 @@ defmodule Cure.Elab.Program do
   """
   @spec check_codegen_ready(Env.t()) ::
           :ok | {:error, {:unfilled_hole, atom() | %{required(:definition) => atom()}}}
-  def check_codegen_ready(%Env{defs: defs}) do
+  def check_codegen_ready(%Env{} = env) do
+    defs = program_owned_definitions(env)
+
     # Route through the single Final-Core enforcement point (K3): the validator
     # descends into every node (prim args, rewrite proof/motive, eq/refl args)
     # where the hand-rolled `has_hole?` walker had gaps.
@@ -2004,6 +2024,19 @@ defmodule Cure.Elab.Program do
           source -> {:error, {:unfilled_hole, Map.merge(%{definition: name, hole_id: hole_id}, source)}}
         end
     end
+  end
+
+  # A checked program environment contains the semantic bodies of its imported
+  # interfaces so conversion, proof search, and reachability can use them.  They
+  # are dependencies, not declarations being released by this program.  Global
+  # hole scans must therefore be scoped by the same canonical owner identity as
+  # interface publication; emission separately validates the explicit reachable
+  # closure it was asked to emit.  Ownerless synthetic environments retain the
+  # historical all-definitions behavior used by kernel-level tests.
+  defp program_owned_definitions(%Env{module_owner: nil, defs: defs}), do: defs
+
+  defp program_owned_definitions(%Env{module_owner: owner, defs: defs}) do
+    Map.filter(defs, fn {name, _definition} -> Cure.Elab.Name.owner(name) == owner end)
   end
 
   # Flatten a parsed program into a flat list of top-level declarations,
@@ -2525,8 +2558,8 @@ defmodule Cure.Elab.Program do
   # lexical `use` import of the consumer while retaining its canonical families,
   # definitions, builtin registrations, coherence, and totality evidence.
   defp complete_interface_environment(%ModuleInterface{} = interface) do
-    with {:ok, owned} <- Cure.Compiler.ModulePipeline.Interface.to_env(interface),
-         {:ok, dependencies} <- load_interface_dependency_environments(interface.dependency_names),
+    with {:ok, owned} <- PipelineInterface.to_env(interface),
+         {:ok, dependencies} <- interface_dependency_environment(interface),
          {:ok, merged} <- merge_env(dependencies, owned) do
       owned_bindings = MapSet.new(all_global_keys(owned))
       owner_visibility = MapSet.new([interface.module_name])
@@ -2541,6 +2574,100 @@ defmodule Cure.Elab.Program do
            qualified_modules: owner_visibility,
            current_def: nil
        }}
+    end
+  end
+
+  # A verified canonical generation is already the complete interface table for
+  # its source graph.  Re-entering the source loader for each dependency creates
+  # a second, order-sensitive compiler and turns legal SCC back-edges into
+  # provisional skeletons.  Build the transitive closure directly from the
+  # published table instead.  Cold/user compilation still uses the source
+  # loader until it publishes a canonical generation.
+  defp interface_dependency_environment(%ModuleInterface{} = interface) do
+    case canonical_published_dependency_environment(interface) do
+      {:ok, %Env{} = dependencies} -> {:ok, dependencies}
+      :not_published -> load_interface_dependency_environments(interface.dependency_names)
+      {:error, _} = error -> error
+    end
+  end
+
+  defp canonical_published_dependency_environment(%ModuleInterface{} = interface) do
+    with {:ok, set} <- canonical_published_set(),
+         {:ok, interfaces} <- canonical_published_interface_table(set),
+         {:ok, published} <- Map.fetch(interfaces, interface.module_name),
+         true <- published.interface_hash == interface.interface_hash do
+      cached_published_dependency_environment(set, interfaces, interface)
+    else
+      false -> :not_published
+      :error -> :not_published
+      {:error, {:no_verified_artifact_set, _}} -> :not_published
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp cached_published_dependency_environment(set, interfaces, interface) do
+    digest = Map.get(set, :artifact_digest) || Map.get(set, :input_snapshot)
+    key = {__MODULE__, :canonical_dependency_environment, set.artifact_root, digest, interface.interface_hash}
+
+    case :persistent_term.get(key, :missing) do
+      {:ok, %Env{}} = cached ->
+        cached
+
+      :missing ->
+        with {:ok, names} <- interface_dependency_closure(interfaces, interface.dependency_names),
+             dependency_interfaces = Map.take(interfaces, names),
+             {:ok, dependencies} <- PipelineInterface.environment(dependency_interfaces) do
+          result = {:ok, semantic_dependency_environment(dependencies)}
+          :persistent_term.put(key, result)
+          result
+        end
+    end
+  end
+
+  defp canonical_published_interface_table(set) do
+    digest = Map.get(set, :artifact_digest) || Map.get(set, :input_snapshot)
+    key = {__MODULE__, :canonical_published_interface_table, set.artifact_root, digest}
+
+    case :persistent_term.get(key, :missing) do
+      {:ok, interfaces} ->
+        {:ok, interfaces}
+
+      :missing ->
+        case PipelineInterface.load_roots([set.artifact_root]) do
+          {:ok, interfaces} = result ->
+            :persistent_term.put(key, result)
+            {:ok, interfaces}
+
+          {:error, _} = error ->
+            error
+        end
+    end
+  end
+
+  defp interface_dependency_closure(interfaces, roots) do
+    interface_dependency_closure(interfaces, Enum.uniq(roots), MapSet.new())
+  end
+
+  defp interface_dependency_closure(_interfaces, [], seen),
+    do: {:ok, MapSet.to_list(seen)}
+
+  defp interface_dependency_closure(interfaces, [name | rest], seen) do
+    cond do
+      ModuleIndex.compiler_owned?(name) or MapSet.member?(seen, name) ->
+        interface_dependency_closure(interfaces, rest, seen)
+
+      true ->
+        case Map.fetch(interfaces, name) do
+          {:ok, dependency} ->
+            interface_dependency_closure(
+              interfaces,
+              rest ++ dependency.dependency_names,
+              MapSet.put(seen, name)
+            )
+
+          :error ->
+            {:error, {:module_not_found, name}}
+        end
     end
   end
 
@@ -2744,8 +2871,7 @@ defmodule Cure.Elab.Program do
     with true <- not is_nil(source_hash),
          {:ok, binary} <- File.read(module_interface_cache_path(path)),
          {:cure_module_interface, @module_interface_cache_version, fingerprint, expanded_path, ^module_name,
-          ^source_hash,
-          {:ok, %ModuleInterface{} = interface} = result} <- :erlang.binary_to_term(binary),
+          ^source_hash, {:ok, %ModuleInterface{} = interface} = result} <- :erlang.binary_to_term(binary),
          true <- fingerprint == macro_home_cache_fingerprint(),
          true <- expanded_path == Path.expand(path),
          :ok <- ModuleInterface.validate(interface) do
@@ -2922,14 +3048,9 @@ defmodule Cure.Elab.Program do
   # behavior.  A cold build (no generation, changed toolchain, or changed source)
   # falls through to source elaboration and publishes a fresh generation later.
   defp canonical_published_interface(module_name, source_hash) when is_binary(source_hash) do
-    with {:ok, set} <-
-           Artifacts.open_verified_set(
-             kind: :stdlib,
-             candidates: Paths.beam_dirs(),
-             verification: :full
-           ),
-         true <- get_in(set, [:context, :compiler_hash]) == BuildManifest.toolchain_fingerprint(),
-         {:ok, interface} <- PipelineInterface.read(PipelineInterface.path(set.artifact_root, module_name)),
+    with {:ok, set} <- canonical_published_set(),
+         {:ok, interfaces} <- canonical_published_interface_table(set),
+         {:ok, interface} <- Map.fetch(interfaces, module_name),
          true <- interface.source_hash == source_hash do
       {:ok, interface}
     else
@@ -2938,6 +3059,39 @@ defmodule Cure.Elab.Program do
   end
 
   defp canonical_published_interface(_module_name, _source_hash), do: :error
+
+  defp canonical_published_set do
+    # `beam_dirs/0` resolves publication pointers to immutable,
+    # content-addressed generation directories.  That resolved candidate list
+    # is therefore the cache identity: publishing a new generation changes the
+    # path and cannot reuse this entry.  Without this cache every imported
+    # interface performed a full manifest verification; one tiny Std.Syntax
+    # consumer consequently rehashed 5,400 artifacts.
+    candidates = Paths.beam_dirs()
+    compiler_hash = BuildManifest.toolchain_fingerprint()
+    key = {__MODULE__, :canonical_published_set, candidates, compiler_hash}
+
+    case :persistent_term.get(key, :missing) do
+      {:ok, set} ->
+        {:ok, set}
+
+      :missing ->
+        with {:ok, set} <-
+               Artifacts.open_verified_set(
+                 kind: :stdlib,
+                 candidates: candidates,
+                 verification: :full
+               ),
+             true <- get_in(set, [:context, :compiler_hash]) == compiler_hash do
+          result = {:ok, set}
+          :persistent_term.put(key, result)
+          result
+        else
+          false -> {:error, :canonical_artifact_toolchain_mismatch}
+          {:error, _} = error -> error
+        end
+    end
+  end
 
   defp compile_and_cache_module_interface(key, source_hash, module_name, path) do
     case compile_module_interface(module_name, path) do
@@ -3330,8 +3484,9 @@ defmodule Cure.Elab.Program do
   defp interface_extensions(%Env{} = env, owner) do
     %{
       interfaces:
-        Map.filter(env.interfaces, fn {name, _descriptor} ->
-          Map.has_key?(env.families, Cure.Elab.Name.qualify(owner, name))
+        Map.filter(env.interfaces, fn {name, descriptor} ->
+          Map.get(descriptor, :owner) == owner or
+            Map.has_key?(env.families, Cure.Elab.Name.qualify(owner, name))
         end),
       coherence: owned_coherence(env.coherence, owner),
       primitives: env.primitives,

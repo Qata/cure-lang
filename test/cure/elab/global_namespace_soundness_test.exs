@@ -71,19 +71,13 @@ defmodule Cure.Elab.GlobalNamespaceSoundnessTest do
   # global `helper/1` silently overwrites in `env.defs` (last-merge-wins). The
   # fixture points the dependent elaborator's ONLY import path
   # (`import_source_path/1`, which resolves "Std.<Name>" -> "<source_dir>/<name>.cure")
-  # at a tmp dir via the `:stdlib_source_dir` override — the established pattern
-  # from `test/cure/stdlib/paths_test.exs`. The real stdlib dir is copied in FIRST
-  # so every fixture module's auto-prelude (Std.Bool + Std.Nat) still resolves.
+  # at a tmp source root. Canonical module discovery keeps the real stdlib as its
+  # sole provider and adds only the two fixture modules from this root.
   # ---------------------------------------------------------------------------
   describe "cross-module global def collisions (design 2026-07-08)" do
     setup do
-      real_src = Cure.Stdlib.Paths.source_dir()
       tmp = Path.join(System.tmp_dir!(), "cure_global_coll_test_#{System.unique_integer([:positive])}")
       File.mkdir_p!(tmp)
-      # Copy the real stdlib source in BEFORE the override takes effect: once
-      # `:stdlib_source_dir` is set it is the ONLY source_dir candidate consulted
-      # (no fallback), so auto-prelude's Std.Bool/Std.Nat must live inside `tmp`.
-      File.cp_r!(real_src, tmp)
 
       # `import_source_path/1` lowercases the module tail: Std.CollA -> colla.cure.
       # `dmeet` is a SECOND colliding name (also in collb.cure), a total, structural
@@ -110,14 +104,13 @@ defmodule Cure.Elab.GlobalNamespaceSoundnessTest do
       end
       """)
 
-      previous = Application.get_env(:cure, :stdlib_source_dir)
-      Application.put_env(:cure, :stdlib_source_dir, tmp)
+      previous = Process.get(:cure_source_roots)
+      Process.put(:cure_source_roots, [tmp])
 
       on_exit(fn ->
-        case previous do
-          nil -> Application.delete_env(:cure, :stdlib_source_dir)
-          value -> Application.put_env(:cure, :stdlib_source_dir, value)
-        end
+        if previous,
+          do: Process.put(:cure_source_roots, previous),
+          else: Process.delete(:cure_source_roots)
 
         File.rm_rf!(tmp)
       end)

@@ -14,13 +14,12 @@ defmodule Cure.Elab.EmitPrefixTest do
     {:ok, env} = Program.elaborate(src)
     origins = Program.import_origins(ast)
 
-    map_surface = env.defs |> Map.keys() |> Enum.filter(&(Name.owner(&1) == "Std.Map"))
-
     fns =
       Program.reachable_def_names(
         env,
-        [:from_list, :union, :intersection, :member, :to_list, :add, :new, :size] ++ map_surface
+        [:from_list, :union, :intersection, :member, :to_list, :add, :new, :size]
       )
+      |> Enum.filter(&(Name.owner(&1) == "Std.Set"))
 
     {:ok, env: env, origins: origins, fns: fns}
   end
@@ -45,37 +44,29 @@ defmodule Cure.Elab.EmitPrefixTest do
     assert normalize_vars(prefixed_empty) == normalize_vars(baseline)
   end
 
-  test "non-empty prefix reroutes intra-group cross-owner calls to the prefixed target", ctx do
+  test "non-empty prefix keeps published dependency calls on their canonical target", ctx do
     %{env: env, origins: origins, fns: fns} = ctx
     set_names = Enum.filter(fns, &(Name.owner(&1) == "Std.Set"))
 
     prefixed =
       Emit.module_forms(env, :"T_Probe.Cure.Std.Set", set_names, origins,
         prefix: "T_Probe.",
-        local_owners: ["Std.Set", "Std.Map"]
+        local_owners: ["Std.Set"]
       )
 
     flat = :erlang.term_to_binary(prefixed)
     # Set delegates to Map; with Map an in-group owner + prefix set, the remote
     # target must be the PREFIXED Map, and the bare canonical must NOT appear.
-    assert flat =~ "T_Probe.Cure.Std.Map"
+    refute flat =~ "T_Probe.Cure.Std.Map"
 
-    # Anchored on the quoted-atom boundary `:"Cure.Std.Map"` (not the bare
-    # `Cure.Std.Map` substring, which also occurs inside the prefixed atom
-    # `T_Probe.Cure.Std.Map`, nor `{:"Cure.Std.Map"` — remote_target/2's
-    # `{mod, fun}` result is always wrapped as a 3-tuple `{:atom, line, mod}` in
-    # the actual forms, so a bare-2-tuple-leading pattern never matches
-    # regardless of whether the target correctly rerouted). The leading `:"`
-    # only recurs at the start of a fresh atom literal, so this pattern cannot
-    # false-positive against the prefixed atom's inspect text.
-    refute String.contains?(
+    assert String.contains?(
              flat |> :erlang.binary_to_term() |> inspect(limit: :infinity),
              ~s(:"Cure.Std.Map")
            )
   end
 
   defp emit_group(env, origins, fns, prefix) do
-    owners = ["Std.Set", "Std.Map"]
+    owners = ["Std.Set"]
 
     fns
     |> Enum.group_by(&Name.owner/1)

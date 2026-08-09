@@ -30,11 +30,13 @@ mod Std.Sigma
   ## it to this global (inlined to `element(1, p)` at codegen, keeping the bare
   ## 2-tuple ABI). `a`/`b` are erased at runtime. The parameter type is written with
   ## the `Sigma(x: T, U)` surface (a plain `Sigma(a, b)` is reserved by the parser).
+  @reducible
   fn sigma_first({a: Type}, {b: (a) -> Type}, p: Sigma(x: a, b(x))) -> a = match p
     mk_pair(x, y) -> x
 
   ## Second projection: the dependent payload, at type `b(sigma_first(p))`. Surface
   ## users write `p.2`; lowered to this global (inlined to `element(2, p)`).
+  @reducible
   fn sigma_second({a: Type}, {b: (a) -> Type}, p: Sigma(x: a, b(x))) -> b(sigma_first(p)) = match p
     mk_pair(x, y) -> y
 
@@ -54,30 +56,37 @@ mod Std.Sigma
   ## `r := Sigma(T3, … Unit)`). Arity ≥ 3 telescopes are non-dependent products,
   ## so the component types do not depend on earlier elements. `.1` stays
   ## `sigma_first` (already correct for any telescope); `Tuple` arity caps at 8.
+  @reducible
   fn tproj2({a: Type}, {b: Type}, {r: Type},
             p: Sigma(x1: a, Sigma(x2: b, r))) -> b =
     sigma_first(sigma_second(p))
 
+  @reducible
   fn tproj3({a: Type}, {b: Type}, {c: Type}, {r: Type},
             p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, r)))) -> c =
     sigma_first(sigma_second(sigma_second(p)))
 
+  @reducible
   fn tproj4({a: Type}, {b: Type}, {c: Type}, {d: Type}, {r: Type},
             p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, r))))) -> d =
     sigma_first(sigma_second(sigma_second(sigma_second(p))))
 
+  @reducible
   fn tproj5({a: Type}, {b: Type}, {c: Type}, {d: Type}, {e: Type}, {r: Type},
             p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, Sigma(x5: e, r)))))) -> e =
     sigma_first(sigma_second(sigma_second(sigma_second(sigma_second(p)))))
 
+  @reducible
   fn tproj6({a: Type}, {b: Type}, {c: Type}, {d: Type}, {e: Type}, {f: Type}, {r: Type},
             p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, Sigma(x5: e, Sigma(x6: f, r))))))) -> f =
     sigma_first(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(p))))))
 
+  @reducible
   fn tproj7({a: Type}, {b: Type}, {c: Type}, {d: Type}, {e: Type}, {f: Type}, {g: Type}, {r: Type},
             p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, Sigma(x5: e, Sigma(x6: f, Sigma(x7: g, r)))))))) -> g =
     sigma_first(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(p)))))))
 
+  @reducible
   fn tproj8({a: Type}, {b: Type}, {c: Type}, {d: Type}, {e: Type}, {f: Type}, {g: Type}, {h: Type}, {r: Type},
             p: Sigma(x1: a, Sigma(x2: b, Sigma(x3: c, Sigma(x4: d, Sigma(x5: e, Sigma(x6: f, Sigma(x7: g, Sigma(x8: h, r))))))))) -> h =
     sigma_first(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(sigma_second(p))))))))

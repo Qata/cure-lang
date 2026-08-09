@@ -54,3 +54,6 @@ cure-*.tar
 
 # Local agent workflow guidance; intentionally machine-specific.
 /AGENTS.md
+
+# Local investigation probes and handover notes.
+/scratchpad/

@@ -17,17 +17,20 @@ mod Std.Bounded
   ## Preserve a bounded value while extending its upper bound on the right.
   ## The recursion follows the value itself, so no unchecked conversion from
   ## `Nat` is involved.
+  @reducible
   fn widen({n: Nat}, {extra: Nat}, value: Bounded(n)) -> Bounded(plus(n, extra)) = match value
     First() -> First()
     Next(previous) -> Next(widen(previous))
 
   ## Embed the left side of a disjoint `n + m` state space.
+  @reducible
   fn inject_left({n: Nat}, {m: Nat}, value: Bounded(n)) -> Bounded(plus(n, m)) =
     widen(value)
 
   ## Embed the right side of a disjoint `n + m` state space. Each constructor
   ## in the left bound shifts the right value once, making the two images
   ## disjoint by construction.
+  @reducible
   fn inject_right(n: Nat, {m: Nat}, value: Bounded(m)) -> Bounded(plus(n, m)) = match n
     Z() -> value
     S(previous) -> Next(inject_right(previous, value))

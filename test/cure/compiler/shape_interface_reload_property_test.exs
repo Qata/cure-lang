@@ -97,8 +97,14 @@ defmodule Cure.Compiler.ShapeInterfaceReloadPropertyTest do
   end
 
   defp check(paths, root, opts \\ []) do
+    {:ok, stdlib} =
+      Cure.Compiler.Artifacts.open_verified_set(
+        kind: :stdlib,
+        candidates: Cure.Stdlib.Paths.beam_dirs()
+      )
+
     interface_roots =
-      (Keyword.get(opts, :interface_roots, []) ++ Cure.Stdlib.Paths.beam_dirs())
+      (Keyword.get(opts, :interface_roots, []) ++ [stdlib.artifact_root])
       |> Enum.uniq()
 
     Cure.Compiler.ModulePipeline.check(

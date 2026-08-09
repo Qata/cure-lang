@@ -11,9 +11,8 @@ defmodule Cure.Elab.ImportedModuleDupTest do
   duplicate pasted into the top-level module was rejected (`dup_def_test.exs`). Both doors now
   run the same `check_declarations/1`.
 
-  These use the `stdlib_source_dir` override fixture from `global_namespace_soundness_test.exs`:
-  once set, it is the ONLY source_dir candidate, so the real stdlib is copied in first — the
-  auto-prelude's Std.Bool / Std.Nat must still resolve inside the tmp tree.
+  Fixture modules live in a process-local source root. Canonical stdlib modules
+  continue to come from the verified stdlib provider.
   """
   use ExUnit.Case, async: false
 
@@ -27,11 +26,9 @@ defmodule Cure.Elab.ImportedModuleDupTest do
   end
 
   setup do
-    real_src = Cure.Stdlib.Paths.source_dir()
     tmp = Path.join(System.tmp_dir!(), "cure_imported_dup_#{System.unique_integer([:positive])}")
 
     File.mkdir_p!(tmp)
-    File.cp_r!(real_src, tmp)
 
     File.write!(Path.join(tmp, "dupfn.cure"), """
     mod Std.DupFn
@@ -53,14 +50,13 @@ defmodule Cure.Elab.ImportedModuleDupTest do
     end
     """)
 
-    previous = Application.get_env(:cure, :stdlib_source_dir)
-    Application.put_env(:cure, :stdlib_source_dir, tmp)
+    previous = Process.get(:cure_source_roots)
+    Process.put(:cure_source_roots, [tmp])
 
     on_exit(fn ->
-      case previous do
-        nil -> Application.delete_env(:cure, :stdlib_source_dir)
-        value -> Application.put_env(:cure, :stdlib_source_dir, value)
-      end
+      if previous,
+        do: Process.put(:cure_source_roots, previous),
+        else: Process.delete(:cure_source_roots)
 
       File.rm_rf!(tmp)
     end)

@@ -13,6 +13,7 @@ defmodule Cure.Migrate do
   """
 
   alias Cure.Compiler.MacroFamily
+  alias Cure.Compiler.Parser.{BuiltinFixity, FixityScan}
   alias Cure.Migrate.Rule
 
   defmodule Warning do
@@ -674,7 +675,7 @@ defmodule Cure.Migrate do
   defp compute_exported_names_of_file(path) do
     with {:ok, src} <- File.read(path),
          {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(src, emit_events: false),
-         {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, emit_events: false) do
+         ast <- Cure.Compiler.Parser.harvest(tokens, path, BuiltinFixity.table(), Cure.Edition.current()) do
       {:ok, MapSet.union(declared_type_names(ast), declared_ctor_names(ast))}
     else
       _ -> :error
@@ -719,27 +720,12 @@ defmodule Cure.Migrate do
   # string, mirroring `Cure.Elab.Program.find_module_name/1`. Fail-open.
   defp module_name_of_file(path) do
     with {:ok, src} <- File.read(path),
-         {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(src, emit_events: false),
-         {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, emit_events: false),
-         name when is_binary(name) <- module_name(ast) do
+         name when is_binary(name) <- FixityScan.harvest_source(src, path, BuiltinFixity.table()).module do
       {:ok, name}
     else
       _ -> :error
     end
   end
-
-  defp module_name({:container, meta, _body}) when is_list(meta) do
-    if Keyword.get(meta, :container_type) in [:module, :proof],
-      do: Keyword.get(meta, :name)
-  end
-
-  defp module_name({_tag, _meta, children}) when is_list(children),
-    do: Enum.find_value(children, &module_name/1)
-
-  defp module_name(list) when is_list(list),
-    do: Enum.find_value(list, &module_name/1)
-
-  defp module_name(_other), do: nil
 
   # Resolve a `Std.<Name>` import source to its `.cure` file, searching the same
   # stdlib source directories the elaborator uses (`import_source_path/1`). Only
