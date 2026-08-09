@@ -592,12 +592,12 @@ defmodule Cure.Compiler.CanonicalArtifactIncrementalTest do
     assert {:ok, _} = compile(src, out)
     published_before = File.read!(Path.join(out, "current"))
     write.("leaf.cure", "mod Leaf\n  fn pubval() -> Int = nonexistent_fn()\n")
-    assert {:error, diagnostics} = compile(src, out)
-    assert Enum.any?(diagnostics, &match?(%{module: "Leaf", severity: :error}, &1))
+    assert {:error, {:artifact_sweep_failed, diagnostics}} = compile(src, out)
+    assert_leaf_unresolved_diagnostic(diagnostics)
     assert File.read!(Path.join(out, "current")) == published_before
     # manifest NOT advanced: next run still sees Leaf as dirty
-    assert {:error, diagnostics2} = compile(src, out)
-    assert Enum.any?(diagnostics2, &match?(%{module: "Leaf", severity: :error}, &1))
+    assert {:error, {:artifact_sweep_failed, diagnostics2}} = compile(src, out)
+    assert_leaf_unresolved_diagnostic(diagnostics2)
   end
 
   test "a dependency failing to compile treats its dependent as dirty too",
@@ -606,9 +606,25 @@ defmodule Cure.Compiler.CanonicalArtifactIncrementalTest do
     published_before = File.read!(Path.join(out, "current"))
     # break Leaf; Mid `use`s Leaf. Mid must not be recorded fresh against a broken dep.
     write.("leaf.cure", "mod Leaf\n  fn pubval() -> Int = nonexistent_fn()\n")
-    assert {:error, diagnostics} = compile(src, out)
-    assert Enum.any?(diagnostics, &match?(%{module: "Leaf", severity: :error}, &1))
+    assert {:error, {:artifact_sweep_failed, diagnostics}} = compile(src, out)
+    assert_leaf_unresolved_diagnostic(diagnostics)
     assert File.read!(Path.join(out, "current")) == published_before
+  end
+
+  defp assert_leaf_unresolved_diagnostic(diagnostics) do
+    assert [
+             {_path,
+              {:unresolved_global,
+               %{
+                 key: {"root", "Leaf", :value, "nonexistent_fn"},
+                 origin: %Cure.Diagnostic.Span{},
+                 closure_path: [
+                   {"root", "Leaf", :value, "pubval"},
+                   {"root", "Leaf", :value, "nonexistent_fn"}
+                 ],
+                 source_context: %{core_term: {:global, :nonexistent_fn}}
+               }}}
+           ] = diagnostics
   end
 
   test "a source with a genuine parse error is reported, not silently dropped", %{src: src, out: out} do

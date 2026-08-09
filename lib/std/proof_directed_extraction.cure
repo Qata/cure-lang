@@ -1,12 +1,12 @@
 mod Std.ProofDirectedExtraction
-  use Std.Data.Suffix
-
   ## A deliberately small proof-directed data pipeline.
   ##
   ## `Accepted(shape)` stores data together with erased evidence for the indexed
   ## constructor that accepted it. Once the package exists, `extract` is total:
   ## matching the package refines the result of `Sem`, so there is no runtime
   ## validation branch and no `Option` in the accepted path.
+
+  use Std.Data.Suffix
 
   type Shape = NumberShape | FlagShape
 

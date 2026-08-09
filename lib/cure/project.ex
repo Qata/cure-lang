@@ -382,7 +382,7 @@ defmodule Cure.Project do
            output_dir: dep_ebin,
            kind: :dependency,
            repair: true,
-           compile_opts: [emit_events: false, project_dir: base]
+           project_dir: base
          ) do
       {:ok, _result} ->
         :ok

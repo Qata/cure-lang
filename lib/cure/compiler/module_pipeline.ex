@@ -700,7 +700,15 @@ defmodule Cure.Compiler.ModulePipeline do
     [
       package: request.package || "root",
       source_roots: request.source_roots,
-      known_modules: Map.keys(external_interfaces) ++ Builtins.provided_modules()
+      edition: request.edition || Cure.Edition.current(),
+      known_modules: Map.keys(external_interfaces) ++ Builtins.provided_modules(),
+      prelude_modules:
+        external_interfaces
+        |> Enum.filter(fn {_module, interface} ->
+          Map.get(interface.source_metadata, :prelude_provider?, false)
+        end)
+        |> Enum.map(&elem(&1, 0))
+        |> Enum.sort()
     ]
   end
 

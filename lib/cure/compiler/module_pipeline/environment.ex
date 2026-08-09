@@ -53,7 +53,12 @@ defmodule Cure.Compiler.ModulePipeline.Environment do
       ctors: sorted(env.ctors, & &1),
       ctor_to_family: Enum.sort(env.ctor_to_family),
       interfaces: sorted(env.interfaces, & &1),
-      primitives: sorted(env.primitives, & &1)
+      primitives: sorted(env.primitives, & &1),
+      builtins: Enum.sort(env.builtins),
+      constrained: Enum.sort(env.constrained),
+      coherence: env.coherence,
+      equations: Enum.sort(env.equations),
+      lemmas: Enum.sort(env.lemmas)
     }
   end
 

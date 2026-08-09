@@ -65,6 +65,27 @@ defmodule Cure.Diagnostic.Adapter do
     TypeAdapter.empty_type_failure(opts)
   end
 
+  def from_error(
+        {:unresolved_global, %{key: {_package, _module, _namespace, name}, closure_path: closure_path} = details},
+        opts
+      ) do
+    opts =
+      opts
+      |> Keyword.put_new(:span, Map.get(details, :origin))
+      |> Keyword.put(:provenance, Map.get(details, :provenance, []))
+
+    %Diagnostic{} = diagnostic = NameAdapter.from_error({:unknown_global, name, details}, opts)
+
+    %Diagnostic{
+      diagnostic
+      | payload:
+          diagnostic.payload
+          |> Map.put(:unresolved_global, details.key)
+          |> Map.put(:closure_path, closure_path)
+          |> Map.put(:source_context, Map.get(details, :source_context))
+    }
+  end
+
   def from_error({:type_mismatch, _, _} = error, opts), do: TypeAdapter.from_error(error, opts)
 
   def from_error({:unknown_erasure_class, _name, _class} = error, opts),

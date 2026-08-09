@@ -204,6 +204,7 @@ defmodule Cure.Compiler.Parser do
     prelude? = Keyword.get(opts, :prelude_macros, true)
     supplied_macros = Keyword.get(opts, :builtin_macros)
     prelude_providers = Keyword.get(opts, :prelude_providers, [])
+    imported_fixity = Keyword.get(opts, :imported_fixity, [])
     validate_fixity_cycles? = Keyword.get(opts, :validate_fixity_cycles, false)
 
     # The built-in fixity table (memoized). Both passes seed from it; the
@@ -225,7 +226,9 @@ defmodule Cure.Compiler.Parser do
     own_uses = Enum.map(uses, & &1.target)
 
     module_fixity =
-      case FixityResolver.assemble(builtin_fixity, own_fixity, own_uses, prelude_providers) do
+      case FixityResolver.assemble(builtin_fixity, own_fixity, own_uses, prelude_providers,
+             imported_fixity: imported_fixity
+           ) do
         {:ok, table} ->
           case {validate_fixity_cycles?, FixityTable.cyclic_groups(table)} do
             {true, [_ | _] = groups} ->
@@ -4696,9 +4699,7 @@ defmodule Cure.Compiler.Parser do
   # A sign immediately applied to numeric syntax is part of that literal's
   # exact descriptor, not a later call to Additive.negate. Non-literal operands
   # remain ordinary overloadable unary operations.
-  defp fold_signed_numeric_literal(
-         {:unary_op, meta, [{:literal, literal_meta, value}]} = expression
-       )
+  defp fold_signed_numeric_literal({:unary_op, meta, [{:literal, literal_meta, value}]} = expression)
        when is_number(value) do
     if Keyword.get(meta, :operator) == :- and
          Keyword.get(literal_meta, :subtype) in [:integer, :float] do

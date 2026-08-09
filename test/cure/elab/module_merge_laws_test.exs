@@ -185,6 +185,29 @@ defmodule Cure.Elab.ModuleMergeLawsTest do
     assert first.alias.body == {:data, :"Std.Bounded#Bounded", [], [nat_lit: 3]}
   end
 
+  test "published interface merges retain the complete coherence universe in every order" do
+    assert {:ok, set} = Cure.Compiler.Artifacts.open_verified_set(Cure.Stdlib.Paths.beam_dir())
+
+    interfaces =
+      for module <- ["Std.Equatable", "Std.Literal", "Std.String"] do
+        path = Cure.Compiler.ModulePipeline.Interface.path(set.artifact_root, module)
+        assert {:ok, interface} = Cure.Compiler.ModulePipeline.Interface.read(path)
+        interface
+      end
+
+    expected_env =
+      Enum.reduce(interfaces, Cure.Core.Env.empty(), fn interface, env ->
+        assert {:ok, next} = Cure.Compiler.ModulePipeline.Interface.to_env(interface)
+        assert {:ok, merged} = Program.merge_canonical_environments(env, next)
+        merged
+      end)
+
+    for ordered <- [interfaces, Enum.reverse(interfaces)] do
+      assert {:ok, merged} = Cure.Compiler.ModulePipeline.Environment.merge(ordered)
+      assert merged.env.coherence == expected_env.coherence
+    end
+  end
+
   defp collect_loader_events(acc \\ []) do
     receive do
       {:cure_module_loader, event} -> collect_loader_events([event | acc])

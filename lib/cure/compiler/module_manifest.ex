@@ -7,6 +7,7 @@ defmodule Cure.Compiler.ModuleManifest.Entry do
             source_path: nil,
             source_hash: nil,
             dependencies: [],
+            fixity: [],
             prelude_provider?: false
 
   @type t :: %__MODULE__{}
@@ -25,7 +26,7 @@ defmodule Cure.Compiler.ModuleManifest do
   alias Cure.Compiler.Parser.{BuiltinFixity, FixityScan}
 
   @enforce_keys [:package]
-  defstruct package: nil, entries: %{}, paths: %{}, dependencies: %{}
+  defstruct package: nil, entries: %{}, paths: %{}, dependencies: %{}, external_prelude_providers: []
 
   @type identity :: {String.t(), String.t()}
   @type dependency :: %{
@@ -39,7 +40,8 @@ defmodule Cure.Compiler.ModuleManifest do
           package: String.t(),
           entries: %{identity() => Entry.t()},
           paths: %{Path.t() => identity()},
-          dependencies: %{identity() => [dependency()]}
+          dependencies: %{identity() => [dependency()]},
+          external_prelude_providers: [identity()]
         }
 
   @spec build([Path.t()], keyword()) :: {:ok, t()} | {:error, term()}
@@ -50,7 +52,7 @@ defmodule Cure.Compiler.ModuleManifest do
     with :ok <- validate_package(package),
          {:ok, entries} <- scan_entries(paths, package),
          :ok <- reject_duplicates(entries),
-         manifest = assemble(package, entries),
+         manifest = assemble(package, entries, Keyword.get(opts, :prelude_modules, [])),
          :ok <- validate_dependencies(manifest, opts) do
       {:ok, manifest}
     end
@@ -84,7 +86,7 @@ defmodule Cure.Compiler.ModuleManifest do
         end
       end)
 
-    extended = assemble(manifest.package, Map.values(entries))
+    extended = assemble(manifest.package, Map.values(entries), manifest.external_prelude_providers)
 
     with :ok <- validate_dependencies(extended, opts), do: {:ok, extended}
   end
@@ -143,6 +145,7 @@ defmodule Cure.Compiler.ModuleManifest do
   def canonical_dump(%__MODULE__{} = manifest) do
     %{
       package: manifest.package,
+      external_prelude_providers: manifest.external_prelude_providers,
       modules:
         manifest.entries
         |> Map.values()
@@ -195,6 +198,7 @@ defmodule Cure.Compiler.ModuleManifest do
              source_path: path,
              source_hash: :crypto.hash(:sha256, source),
              dependencies: normalize_dependencies(dependencies),
+             fixity: facts.fixity,
              prelude_provider?: facts.prelude?
            }}
 
@@ -235,8 +239,18 @@ defmodule Cure.Compiler.ModuleManifest do
     end)
   end
 
-  defp assemble(package, entries) do
+  defp assemble(package, entries, external_prelude_modules) do
     entries = Map.new(entries, &{&1.identity, &1})
+
+    external_prelude_providers =
+      external_prelude_modules
+      |> Enum.map(fn
+        {_package, _module} = identity -> identity
+        module when is_binary(module) -> {package, module}
+      end)
+      |> Enum.reject(&Map.has_key?(entries, &1))
+      |> Enum.uniq()
+      |> Enum.sort()
 
     prelude_providers =
       entries
@@ -267,7 +281,17 @@ defmodule Cure.Compiler.ModuleManifest do
             }
           end)
 
-        entry = %{entry | dependencies: normalize_dependencies(entry.dependencies ++ ambient)}
+        external_ambient =
+          Enum.map(external_prelude_providers, fn provider ->
+            %{
+              kind: :prelude_symbol_use,
+              source: identity,
+              target: provider,
+              span: %{path: entry.source_path, line: 1}
+            }
+          end)
+
+        entry = %{entry | dependencies: normalize_dependencies(entry.dependencies ++ ambient ++ external_ambient)}
         {identity, entry}
       end)
 
@@ -275,7 +299,8 @@ defmodule Cure.Compiler.ModuleManifest do
       package: package,
       entries: entries,
       paths: Map.new(entries, fn {identity, entry} -> {entry.source_path, identity} end),
-      dependencies: Map.new(entries, fn {identity, entry} -> {identity, entry.dependencies} end)
+      dependencies: Map.new(entries, fn {identity, entry} -> {identity, entry.dependencies} end),
+      external_prelude_providers: external_prelude_providers
     }
   end
 

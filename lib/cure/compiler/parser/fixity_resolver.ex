@@ -16,13 +16,14 @@ defmodule Cure.Compiler.Parser.FixityResolver do
 
   @spec assemble(FixityTable.t(), [tuple()], [String.t()], [String.t()], keyword()) ::
           {:ok, FixityTable.t()} | {:error, term()}
-  def assemble(base, own_fixity, own_uses, prelude_providers, _opts \\ []) do
+  def assemble(base, own_fixity, own_uses, prelude_providers, opts \\ []) do
     seeds = Enum.uniq(own_uses ++ prelude_providers)
+    imported_fixity = Keyword.get(opts, :imported_fixity, [])
 
     with {:ok, reached_fixity} <- gather(seeds, MapSet.new(), [], base) do
       # own(M) is folded LAST so M's own declarations are still subject to the
       # same conflict rule against everything it imports.
-      fold(base, reached_fixity ++ own_fixity)
+      fold(base, reached_fixity ++ imported_fixity ++ own_fixity)
     end
   end
 

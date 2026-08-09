@@ -478,10 +478,14 @@ defmodule Cure.Elab.Emit do
   # this boundary through `Env.resolve_key/3`: its lexical unique-provider
   # fallback is correct during elaboration but would let a missing local root be
   # guessed from an unrelated imported definition with the same suffix.
-  defp emission_root_key(%Env{module_owner: owner}, name) when is_atom(name) do
+  defp emission_root_key(%Env{module_owner: owner, defs: defs}, name) when is_atom(name) do
+    local = if is_binary(owner), do: Name.qualify(owner, name)
+
     cond do
+      not is_nil(local) and Map.has_key?(defs, local) -> local
+      Map.has_key?(defs, name) -> name
       Name.qualified?(name) -> name
-      is_binary(owner) -> Name.qualify(owner, name)
+      not is_nil(local) -> local
       true -> name
     end
   end

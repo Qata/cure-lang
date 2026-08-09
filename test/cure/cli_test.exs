@@ -250,7 +250,7 @@ defmodule Cure.CLITest do
       path = Path.join(System.tmp_dir!(), "cure_cli_diagnostic_#{System.unique_integer([:positive])}.cure")
       output_dir = Path.join(System.tmp_dir!(), "cure_cli_diagnostic_#{System.unique_integer([:positive])}")
 
-      File.write!(path, "fn run() -> Int = missing_name\n")
+      File.write!(path, "mod DiagnosticFailure\n  fn run() -> Int = missing_name\n")
 
       on_exit(fn ->
         File.rm(path)

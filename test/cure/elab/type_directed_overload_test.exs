@@ -623,6 +623,7 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
   # can assert on the overload diagnostic directly.
   defp unwrap_inner({:compile_failed, inner}), do: unwrap_inner(inner)
   defp unwrap_inner({:codegen_error, inner}), do: unwrap_inner(inner)
+  defp unwrap_inner({:module_body_check_failed, {_package, _module}, inner}), do: unwrap_inner(inner)
   defp unwrap_inner({:source_context, inner, _context}), do: unwrap_inner(inner)
   defp unwrap_inner(other), do: other
 

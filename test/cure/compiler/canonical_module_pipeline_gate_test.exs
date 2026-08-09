@@ -8,7 +8,7 @@ defmodule Cure.Compiler.CanonicalModulePipelineGateTest do
     do: apply(Cure.Compiler.ModulePipeline.Request, function, arguments)
 
   test "the gate has one explicit canonical spelling" do
-    assert {:ok, :default} = selection(:normalize, [[]])
+    assert {:ok, :canonical} = selection(:normalize, [[]])
     assert {:ok, :canonical} = selection(:normalize, [[module_pipeline: :canonical]])
 
     for invalid <- [:existing, :new, :v2, "canonical", true, false] do
@@ -48,8 +48,10 @@ defmodule Cure.Compiler.CanonicalModulePipelineGateTest do
     assert child.selection == :canonical
     assert child.entry_point == :macro_check
 
-    assert {:error, {:module_pipeline_mismatch, :canonical, :default}} =
+    assert {:ok, inherited} =
              request(:child, [parent, [module_pipeline: nil, entry_point: :macro_check]])
+
+    assert inherited.selection == :canonical
   end
 
   test "unknown request fields fail rather than disappearing" do

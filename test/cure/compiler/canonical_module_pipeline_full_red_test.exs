@@ -361,7 +361,7 @@ defmodule Cure.Compiler.CanonicalModulePipelineFullRedTest do
                }}} = check([broken], dir)
 
       assert origin.path == broken
-      assert origin.line == 2
+      assert origin.start_line == 2
     end
 
     test "one provider failure suppresses dependent missing-module cascades", %{tmp_dir: dir} do

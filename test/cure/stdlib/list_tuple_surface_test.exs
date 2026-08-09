@@ -22,9 +22,9 @@ defmodule Cure.Stdlib.ListTupleSurfaceTest do
     """
 
     assert {:ok, env} = Program.elaborate(src)
-    # uncons is a cross-module (Std.List) call lowered to a local reference, so emit
-    # it into the same module as head_or to keep the loaded BEAM self-contained.
-    {:ok, m} = Emit.compile_and_load(env, module: :"Cure.M", functions: [:head_or, :uncons])
+    # Qualified calls use the ordinary Std.List runtime module; an importing
+    # module must never re-emit the provider's implementation locally.
+    {:ok, m} = Emit.compile_and_load(env, module: :"Cure.M", functions: [:head_or])
     assert apply(m, :head_or, [[5, 6, 7], 0]) == 5
     assert apply(m, :head_or, [[], 0]) == 0
   end

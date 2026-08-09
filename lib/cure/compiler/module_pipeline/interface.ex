@@ -143,7 +143,11 @@ defmodule Cure.Compiler.ModulePipeline.Interface do
         :ok
 
       {:ok, existing} ->
-        {:error, {:duplicate_interface_provider, interface.module_name, existing.source_path, artifact}}
+        if existing.interface_hash == interface.interface_hash do
+          :ok
+        else
+          {:error, {:duplicate_interface_provider, interface.module_name, existing.source_path, artifact}}
+        end
     end
   end
 
@@ -166,7 +170,7 @@ defmodule Cure.Compiler.ModulePipeline.Interface do
       canonical_declarations: declarations,
       canonical_externs: partition.externs,
       extension_payloads: Map.put(partition.extensions, :canonical_identity, {package, owner}),
-      source_metadata: %{package: package},
+      source_metadata: %{package: package, prelude_provider?: entry.prelude_provider?},
       owned_env: nil,
       export_env: nil
     })
@@ -215,7 +219,8 @@ defmodule Cure.Compiler.ModulePipeline.Interface do
   def verify(%ModuleInterface{} = interface, %Env{} = dependencies \\ Env.empty()) do
     with {:ok, interface_env} <- to_env(interface),
          seeded = Program.canonical_base_environment(),
-         env = seeded |> merge_for_verification(dependencies) |> merge_for_verification(interface_env),
+         {:ok, env} <- Program.merge_canonical_environments(seeded, dependencies),
+         {:ok, env} <- Program.merge_canonical_environments(env, interface_env),
          :ok <- verify_families(env, interface),
          :ok <- verify_constructors(env, interface),
          :ok <- verify_definitions(env, interface) do
@@ -229,8 +234,10 @@ defmodule Cure.Compiler.ModulePipeline.Interface do
     |> Map.values()
     |> Enum.uniq_by(&{&1.module_name, &1.interface_hash})
     |> Enum.reduce_while({:ok, Env.empty()}, fn interface, {:ok, env} ->
-      case to_env(interface) do
-        {:ok, next} -> {:cont, {:ok, merge_for_verification(env, next)}}
+      with {:ok, next} <- to_env(interface),
+           {:ok, merged} <- Program.merge_canonical_environments(env, next) do
+        {:cont, {:ok, merged}}
+      else
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
@@ -247,37 +254,6 @@ defmodule Cure.Compiler.ModulePipeline.Interface do
         {:error, reason} -> {:halt, {:error, {:invalid_checked_interface, interface.module_name, reason}}}
       end
     end)
-  end
-
-  # Every field `to_env/1` restores has to survive the merge, or publishing it was
-  # pointless: the verification environment IS what a consumer sees.
-  #
-  # `builtins` in particular. `Std.Char`'s `@builtin(:char)` is how the kernel
-  # finds the family a compact `{:bounded_lit, k}` inhabits — that rule is the
-  # ONLY introduction form for `Char`. Dropped here, `Inductive.builtin/2`
-  # answers `nil`, the rule cannot fire, and any published type containing a
-  # string literal (an escape message inside a generated equation, say) fails as
-  # `{:conversion_failure, {:bounded_lit, 105}, Std.Char#Char}` — the family
-  # plainly present and the key that selects it gone.
-  #
-  # `equations` likewise: they are the δ-rules of a pattern-matching definition,
-  # so a published type that needs one to reduce is unverifiable without them.
-  defp merge_for_verification(%Env{} = base, %Env{} = interface) do
-    %Env{
-      base
-      | defs: Map.merge(base.defs, interface.defs),
-        families: Map.merge(base.families, interface.families),
-        ctors: Map.merge(base.ctors, interface.ctors),
-        ctor_to_family: Map.merge(base.ctor_to_family, interface.ctor_to_family),
-        equations: Map.merge(base.equations, interface.equations),
-        interfaces: Map.merge(base.interfaces, interface.interfaces),
-        primitives: Map.merge(base.primitives, interface.primitives),
-        builtins: Map.merge(base.builtins, interface.builtins),
-        constrained: Map.merge(base.constrained, interface.constrained),
-        lemmas: Map.merge(base.lemmas, interface.lemmas, fn _head, a, b -> a ++ b end),
-        certified: MapSet.union(base.certified, interface.certified),
-        coherence: interface.coherence
-    }
   end
 
   # The interface carries a body exactly where checking a published type requires

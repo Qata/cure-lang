@@ -47,7 +47,7 @@ defmodule Cure.Elab.EmitTest do
     assert {:error, {:unfilled_hole, details}} =
              Emit.compile_and_load(env, module: :"Cure.Slice1Hole", functions: [:run, :sketch])
 
-    assert details.definition == :sketch
+    assert details.definition == :"Main#sketch"
     assert binary_part(src, details.span.start_byte, details.span.end_byte - details.span.start_byte) == "?todo"
   end
 end

@@ -22,19 +22,21 @@ defmodule Cure.Compiler.ModulePipeline.Diagnosis do
   @spec body_failure({String.t(), String.t()}, ModuleSkeleton.t() | nil, term()) :: term()
   def body_failure(identity, skeleton, reason) do
     case unknown_global(reason) do
-      {:ok, name, span} -> unresolved_global(identity, skeleton, name, span)
+      {:ok, name, span, context} -> unresolved_global(identity, skeleton, name, span, context)
       :error -> {:module_body_check_failed, identity, reason}
     end
   end
 
-  defp unresolved_global({package, module_name} = identity, skeleton, name, span) do
+  defp unresolved_global({package, module_name} = identity, skeleton, name, span, context) do
     key = global_key(package, module_name, name)
 
     {:unresolved_global,
      %{
        key: key,
        origin: origin(span),
-       closure_path: closure_path(identity, skeleton, span, key)
+       closure_path: closure_path(identity, skeleton, span, key),
+       source_context: context,
+       provenance: provenance(context)
      }}
   end
 
@@ -47,8 +49,14 @@ defmodule Cure.Compiler.ModulePipeline.Diagnosis do
     end
   end
 
-  defp origin(%Span{} = span), do: %{path: span.path, line: span.start_line, column: span.start_column}
+  defp origin(%Span{} = span), do: span
   defp origin(_span), do: nil
+
+  defp provenance(context) when is_map(context) do
+    Map.get(context, :expansion_provenance, Map.get(context, :provenance, []))
+  end
+
+  defp provenance(_context), do: []
 
   # The predecessor is the declaration whose source range encloses the failure:
   # that is the definition whose emission closure would have demanded the key.
@@ -136,13 +144,17 @@ defmodule Cure.Compiler.ModulePipeline.Diagnosis do
 
   defp unknown_global({:source_context, inner, context}) do
     case unknown_global(inner) do
-      {:ok, name, nil} -> {:ok, name, context_span(context)}
+      {:ok, name, nil, inner_context} -> {:ok, name, context_span(context), Map.merge(inner_context, context)}
+      {:ok, name, span, inner_context} -> {:ok, name, span, Map.merge(inner_context, context)}
       other -> other
     end
   end
 
-  defp unknown_global({:unknown_global, name, _details}), do: {:ok, to_string(name), nil}
-  defp unknown_global({:unknown_global, name}), do: {:ok, to_string(name), nil}
+  defp unknown_global({:unknown_global, name, details}) when is_map(details),
+    do: {:ok, to_string(name), Map.get(details, :span), details}
+
+  defp unknown_global({:unknown_global, name, _details}), do: {:ok, to_string(name), nil, %{}}
+  defp unknown_global({:unknown_global, name}), do: {:ok, to_string(name), nil, %{}}
 
   defp unknown_global(reason) when is_tuple(reason) do
     reason |> Tuple.to_list() |> unknown_global()
@@ -153,7 +165,7 @@ defmodule Cure.Compiler.ModulePipeline.Diagnosis do
 
   defp find_unknown(candidate) do
     case unknown_global(candidate) do
-      {:ok, _name, _span} = found -> found
+      {:ok, _name, _span, _context} = found -> found
       :error -> nil
     end
   end

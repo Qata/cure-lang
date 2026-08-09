@@ -39,6 +39,17 @@ defmodule Cure.Compiler.Artifacts.Sweep do
   end
 
   defp repair_canonical(opts, source_paths, source_roots, output_dir) do
+    with {:ok, edition} <- canonical_edition(opts) do
+      opts = Keyword.put(opts, :edition, edition)
+      do_repair_canonical(opts, source_paths, source_roots, output_dir)
+    else
+      {:error, reason} ->
+        target = Keyword.get(opts, :project_dir, List.first(source_paths) || "<project>")
+        {:error, {:artifact_sweep_failed, [{target, {:edition_error, reason}}]}}
+    end
+  end
+
+  defp do_repair_canonical(opts, source_paths, source_roots, output_dir) do
     refresh_prelude_manifest_if_needed(opts, source_roots)
     prior = canonical_prior_generation(opts, output_dir, source_roots)
     interface_roots = canonical_interface_roots(opts)
@@ -67,7 +78,7 @@ defmodule Cure.Compiler.Artifacts.Sweep do
       |> maybe_request_option(opts, :edition)
       |> maybe_request_option(opts, :compiler_options)
 
-    with {:ok, checked} <- ModulePipeline.check_entry_point(:artifact_sweep, source_paths, request_opts),
+    with {:ok, checked} <- check_canonical_pipeline(source_paths, request_opts),
          {:ok, staged} <-
            Writer.transact(output_dir, fn stage ->
              publish_canonical_generation(stage, checked, opts, source_roots)
@@ -76,6 +87,40 @@ defmodule Cure.Compiler.Artifacts.Sweep do
       {:ok, canonical_result(manifest, checked, prior)}
     end
   end
+
+  defp canonical_edition(opts) do
+    case Keyword.fetch(opts, :edition) do
+      {:ok, edition} -> Cure.Edition.parse(edition)
+      :error -> Cure.Edition.resolve(%{project_dir: Keyword.get(opts, :project_dir)})
+    end
+  end
+
+  # Collected module failures are causal records, not an opaque error list.
+  # Normalize them once at the artifact boundary into the long-standing sweep
+  # contract consumed by CLI, Mix, project, bundle, and stdlib entry points.
+  # The original reason is deliberately retained verbatim so its source
+  # context, Core trace, closure path, and macro provenance reach the shared
+  # diagnostic adapter unchanged.
+  defp check_canonical_pipeline(source_paths, request_opts) do
+    case ModulePipeline.check_entry_point(:artifact_sweep, source_paths, request_opts) do
+      {:error, diagnostics} when is_list(diagnostics) ->
+        {:error,
+         {:artifact_sweep_failed,
+          Enum.map(diagnostics, fn diagnostic ->
+            {pipeline_failure_target(diagnostic), pipeline_failure_reason(diagnostic)}
+          end)}}
+
+      result ->
+        result
+    end
+  end
+
+  defp pipeline_failure_target(%{primary: %{span: %{path: path}}}) when is_binary(path), do: path
+  defp pipeline_failure_target(%{module: module}) when is_binary(module), do: module
+  defp pipeline_failure_target(_diagnostic), do: "<module-pipeline>"
+
+  defp pipeline_failure_reason(%{reason: reason}), do: reason
+  defp pipeline_failure_reason(diagnostic), do: diagnostic
 
   defp refresh_prelude_manifest_if_needed(opts, source_roots) do
     configured = Cure.Stdlib.Paths.source_dirs() |> Enum.map(&Path.expand/1) |> MapSet.new()

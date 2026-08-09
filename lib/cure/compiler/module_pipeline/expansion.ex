@@ -44,7 +44,7 @@ defmodule Cure.Compiler.ModulePipeline.Expansion do
   end
 
   defp run(manifest, manifest_options, round, generated) do
-    with {:ok, units} <- parse_units(manifest) do
+    with {:ok, units} <- parse_units(manifest, manifest_options) do
       case discovered_references(manifest, units) do
         [] ->
           {:ok, finish(manifest, units, generated, round)}
@@ -171,15 +171,16 @@ defmodule Cure.Compiler.ModulePipeline.Expansion do
   # can see has been harvested. A cycle among macro providers has no such order;
   # its members are parsed with whatever their peers published in an earlier
   # round, which is the same answer the round loop converges on anyway.
-  defp parse_units(manifest) do
+  defp parse_units(manifest, manifest_options) do
     manifest.entries
     |> Map.values()
     |> Enum.sort_by(& &1.identity)
     |> provider_order(manifest)
     |> Enum.reduce_while({:ok, %{}, %{}}, fn entry, {:ok, units, rules} ->
       imported = imported_rules(manifest, entry.identity, rules)
+      imported_fixity = imported_fixity(manifest, entry.identity)
 
-      case parse_unit(entry, imported) do
+      case parse_unit(entry, imported, imported_fixity, manifest_options) do
         {:ok, unit} ->
           {:cont, {:ok, Map.put(units, entry.identity, unit), Map.put(rules, entry.identity, unit.rules)}}
 
@@ -193,11 +194,18 @@ defmodule Cure.Compiler.ModulePipeline.Expansion do
     end
   end
 
-  defp parse_unit(entry, imported) do
+  defp parse_unit(entry, imported, imported_fixity, manifest_options) do
     with {:ok, source} <- File.read(entry.source_path),
-         {:ok, tokens} <- Lexer.tokenize(source, file: entry.source_path, emit_events: false),
+         {:ok, edition} <- source_edition(source, manifest_options),
+         {:ok, tokens} <- Lexer.tokenize(source, file: entry.source_path, emit_events: false, edition: edition),
          {:ok, ast} <-
-           Parser.parse(tokens, file: entry.source_path, emit_events: false, imported_macros: imported) do
+           Parser.parse(tokens,
+             file: entry.source_path,
+             emit_events: false,
+             edition: edition,
+             imported_macros: imported,
+             imported_fixity: imported_fixity
+           ) do
       {:ok,
        %{
          ast: ast,
@@ -205,6 +213,43 @@ defmodule Cure.Compiler.ModulePipeline.Expansion do
          skeleton: ModuleSkeleton.collect(ast, entry.identity, entry.source_path),
          rules: Parser.macro_rules(ast, entry.source_path)
        }}
+    end
+  end
+
+  defp source_edition(source, manifest_options) do
+    case Cure.Edition.pragma_edition(source) do
+      nil -> {:ok, Keyword.get(manifest_options, :edition, Cure.Edition.current())}
+      edition -> Cure.Edition.parse(edition) |> wrap_edition_error()
+    end
+  end
+
+  defp wrap_edition_error({:ok, edition}), do: {:ok, edition}
+  defp wrap_edition_error({:error, reason}), do: {:error, {:edition_error, reason}}
+
+  defp imported_fixity(manifest, identity) do
+    manifest
+    |> dependency_closure(identity, MapSet.new())
+    |> MapSet.delete(identity)
+    |> Enum.sort()
+    |> Enum.flat_map(fn dependency ->
+      case Map.fetch(manifest.entries, dependency) do
+        {:ok, entry} -> entry.fixity
+        :error -> []
+      end
+    end)
+  end
+
+  defp dependency_closure(manifest, identity, seen) do
+    if MapSet.member?(seen, identity) do
+      seen
+    else
+      seen = MapSet.put(seen, identity)
+
+      manifest
+      |> ModuleManifest.dependencies(identity)
+      |> Enum.map(& &1.target)
+      |> Enum.filter(&Map.has_key?(manifest.entries, &1))
+      |> Enum.reduce(seen, &dependency_closure(manifest, &1, &2))
     end
   end
 

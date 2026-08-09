@@ -81,7 +81,7 @@ defmodule Mix.Tasks.Cure.CompileTest do
   test "compile diagnostics render through the shared sink", %{dir: dir} do
     path = Path.join(dir, "bad.cure")
     out = Path.join(dir, "ebin")
-    File.write!(path, "fn run() -> Int = missing_name\n")
+    File.write!(path, "mod MixCompileFailure\n  fn run() -> Int = missing_name\n")
     Mix.shell(Mix.Shell.IO)
     Mix.Task.reenable("cure.compile")
 
