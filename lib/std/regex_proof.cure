@@ -635,6 +635,18 @@ mod Std.Regex.Proof
     MkPatternMachine(left_starts, left_next) -> match right_machine
       MkPatternMachine(right_starts, right_next) -> filtered_continue_with_right_state_origin(left_count, right_count, left_starts, right_starts, initial_position_boundary(position, append_characters(input, after_input)), combined, edge)
 
+  @reducible
+  fn position_after_character(char: Char) -> InitialPosition =
+    InitialPosition(False(), Std.Char.is_newline(char), ascii_word(char), option_word(char, True()))
+
+  @reducible
+  fn advance_initial_position(position: InitialPosition, input: List(Char)) -> InitialPosition = match input
+    Nil() -> position
+    Cons(char, rest) -> advance_initial_position(position_after_character(char), rest)
+
+  fn advanced_position_boundary(position: InitialPosition, char: Char, rest: List(Char), after_input: List(Char)) -> Equivalent(Boundary, initial_position_boundary(advance_initial_position(position, Cons(char, Nil())), append_characters(rest, after_input)), transition_boundary_before(char, rest, after_input)) =
+    reflexive(transition_boundary_before(char, rest, after_input))
+
   ## Projection of a complete path that is already inside the left injection.
   ## The child path ends immediately before the alternate's final EmitLeft; the
   ## marker execution then pins the combined path's exact final evidence.
