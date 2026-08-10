@@ -148,6 +148,68 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> Encodes(CharC, final_evidence, empty_evidence()) =
       predicate_machine_acceptance_encodes(accepts_a, 'a', empty_characters(), subject_initial_position(), final_evidence, routine, acceptance)
 
+    fn predicate_arbitrary_input_acceptance_case(
+      input: List(Char),
+      after_input: List(Char),
+      @erased final_evidence: List(Evidence),
+      @erased routine: List(ExtendedInstruction),
+      acceptance: MachineAcceptance(1, predicate_pattern_machine(accepts_a), subject_initial_position(), input, after_input, final_evidence, routine)
+    ) -> Encodes(CharC, final_evidence, empty_evidence()) =
+      predicate_machine_arbitrary_acceptance_encodes(
+        accepts_a,
+        input,
+        after_input,
+        subject_initial_position(),
+        final_evidence,
+        routine,
+        acceptance
+      )
+
+    fn certified_predicate_machine_case() -> CertifiedPatternMachine(CharC, 1, predicate_pattern_machine(accepts_a)) =
+      certify_predicate_pattern_machine(accepts_a)
+
+    fn certified_empty_machine_case() -> CertifiedPatternMachine(UnitC, 0, empty_pattern_machine()) =
+      certify_empty_pattern_machine()
+
+    fn certified_boundary_machine_case(constraint: BoundaryConstraint) -> CertifiedPatternMachine(UnitC, 0, boundary_pattern_machine(constraint)) =
+      certify_boundary_pattern_machine(constraint)
+
+    fn certified_predicate_acceptance_case(
+      input: List(Char),
+      after_input: List(Char),
+      @erased final_evidence: List(Evidence),
+      @erased routine: List(ExtendedInstruction),
+      acceptance: MachineAcceptance(1, predicate_pattern_machine(accepts_a), subject_initial_position(), input, after_input, final_evidence, routine)
+    ) -> Encodes(CharC, final_evidence, empty_evidence()) =
+      certified_pattern_acceptance_encodes(
+        certify_predicate_pattern_machine(accepts_a),
+        input,
+        after_input,
+        subject_initial_position(),
+        final_evidence,
+        routine,
+        acceptance
+      )
+
+    fn certified_empty_acceptance_case(
+      input: List(Char),
+      after_input: List(Char),
+      @erased final_evidence: List(Evidence),
+      @erased routine: List(ExtendedInstruction),
+      acceptance: MachineAcceptance(0, empty_pattern_machine(), subject_initial_position(), input, after_input, final_evidence, routine)
+    ) -> Encodes(UnitC, final_evidence, empty_evidence()) =
+      certified_pattern_acceptance_encodes(certify_empty_pattern_machine(), input, after_input, subject_initial_position(), final_evidence, routine, acceptance)
+
+    fn certified_boundary_acceptance_case(
+      constraint: BoundaryConstraint,
+      input: List(Char),
+      after_input: List(Char),
+      @erased final_evidence: List(Evidence),
+      @erased routine: List(ExtendedInstruction),
+      acceptance: MachineAcceptance(0, boundary_pattern_machine(constraint), subject_initial_position(), input, after_input, final_evidence, routine)
+    ) -> Encodes(UnitC, final_evidence, empty_evidence()) =
+      certified_pattern_acceptance_encodes(certify_boundary_pattern_machine(constraint), input, after_input, subject_initial_position(), final_evidence, routine, acceptance)
+
     fn grouped_predicate_acceptance_case(
       @erased final_evidence: List(Evidence),
       @erased routine: List(ExtendedInstruction),
@@ -345,6 +407,11 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :empty_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :boundary_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_acceptance_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_arbitrary_input_acceptance_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_predicate_machine_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_predicate_acceptance_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_empty_acceptance_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_boundary_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_acceptance_case))
@@ -356,6 +423,40 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
   test "the path proof is erased from the emitted runtime" do
     assert {:ok, module} = Cure.Compiler.compile_and_load(@source, emit_events: false)
     assert apply(module, :one_step_erased, []) == :unit
+  end
+
+  test "a mutated machine cannot reuse the canonical predicate certificate" do
+    source = """
+    mod MutatedPredicateCertificate
+      use Std.Regex
+      use Std.Regex.Proof
+
+      fn accepts(_char: Char) -> Bool = true
+      fn mutated_next(_state: Bounded(1), _char: Char) -> List(MachineState(1)) =
+        [Accepted([EmitUnit()], [])]
+      fn mutated_machine() -> PatternMachine(1) =
+        MkPatternMachine([predicate_machine_start()], mutated_next)
+
+      fn invalid(
+        input: List(Char),
+        after_input: List(Char),
+        @erased final_evidence: List(Evidence),
+        @erased routine: List(ExtendedInstruction),
+        acceptance: MachineAcceptance(1, mutated_machine(), subject_initial_position(), input, after_input, final_evidence, routine)
+      ) -> Encodes(CharC, final_evidence, empty_evidence()) =
+        certified_pattern_acceptance_encodes(
+          certify_predicate_pattern_machine(accepts),
+          input,
+          after_input,
+          subject_initial_position(),
+          final_evidence,
+          routine,
+          acceptance
+        )
+    """
+
+    assert {:error, {:source_context, {:index_mismatch, {:cannot_unify, _, _}}, _}} =
+             Program.elaborate(source)
   end
 
   test "execution produces an accepting certificate with the winning evidence" do

@@ -165,6 +165,24 @@ mod Std.Regex.Proof
               RoutineDone() -> EncodesUnit()
         ListMemberThere(prior) -> impossible_list_member(prior)
 
+  fn empty_machine_arbitrary_acceptance_encodes(input: List(Char), after_input: List(Char), position: InitialPosition, @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), acceptance: MachineAcceptance(Z(), empty_pattern_machine(), position, input, after_input, final_evidence, routine)) -> Encodes(UnitC, final_evidence, empty_evidence()) = match acceptance
+    MachineAccepted(_, initial_evidence, initial_captures, path_routine, edge, initial_execution, _, path) -> match edge
+      ListMemberHere() -> match initial_execution
+        RoutineStep(_, after_emit) -> match after_emit
+          RoutineDone() -> match accepted_path_view(Z(), empty_pattern_machine(), input, after_input, initial_evidence, initial_captures, final_evidence, path_routine, path)
+            AcceptedPathNow() -> EncodesUnit()
+      ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn boundary_machine_arbitrary_acceptance_encodes(constraint: BoundaryConstraint, input: List(Char), after_input: List(Char), position: InitialPosition, @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), acceptance: MachineAcceptance(Z(), boundary_pattern_machine(constraint), position, input, after_input, final_evidence, routine)) -> Encodes(UnitC, final_evidence, empty_evidence()) = match acceptance
+    MachineAccepted(_, initial_evidence, initial_captures, path_routine, edge, initial_execution, _, path) -> match boundary_starts_view(constraint, position, append_characters(input, after_input))
+      BoundaryStartsUnavailable() -> impossible_list_member(edge)
+      BoundaryStartsExact() -> match edge
+        ListMemberHere() -> match initial_execution
+          RoutineStep(_, after_emit) -> match after_emit
+            RoutineDone() -> match accepted_path_view(Z(), boundary_pattern_machine(constraint), input, after_input, initial_evidence, initial_captures, final_evidence, path_routine, path)
+              AcceptedPathNow() -> EncodesUnit()
+        ListMemberThere(prior) -> impossible_list_member(prior)
+
   fn predicate_destinations_view(test: Char -> Bool, char: Char, boundary: Boundary) -> PredicateDestinationsView(test, char, boundary, machine_destinations(S(Z()), predicate_pattern_machine(test), predicate_machine_thread(), char, boundary)) = match test(char)
     False() -> PredicateRejects()
     True() -> PredicateAccepts()
@@ -210,6 +228,49 @@ mod Std.Regex.Proof
     MachineAccepted(destination, initial_evidence, initial_captures, path_routine, edge, initial_execution, routine_certificate, path) ->
       match predicate_initial_path_view(test, char, after_input, position, destination, final_evidence, path_routine, edge, initial_execution, path)
         PredicatePathExact() -> encodes_character_empty(char)
+
+  fn predicate_arbitrary_path_encodes(test: Char -> Bool, input: List(Char), after_input: List(Char), @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), path: AcceptingFrom(S(Z()), predicate_pattern_machine(test), input, after_input, predicate_machine_thread(), empty_evidence(), Nil(), final_evidence, routine)) -> Encodes(CharC, final_evidence, empty_evidence()) = match input
+    Nil() -> match path
+      AcceptingNow() -> impossible
+      AcceptingNextActive(_, _, _, _, _, _, _, _, _) -> impossible
+      AcceptingNextAccepted(_, _, _, _, _, _, _, _) -> impossible
+    Cons(char, rest) -> match path
+      AcceptingNow() -> impossible
+      AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> match predicate_destinations_view(test, char, transition_boundary_before(char, rest, after_input))
+        PredicateRejects() -> impossible_list_member(edge)
+        PredicateAccepts() -> match edge
+          ListMemberThere(prior) -> impossible_list_member(prior)
+      AcceptingNextAccepted(_, _, destination_evidence, destination_captures, suffix_routine, edge, execution, suffix) -> match predicate_destinations_view(test, char, transition_boundary_before(char, rest, after_input))
+        PredicateRejects() -> impossible_list_member(edge)
+        PredicateAccepts() -> match edge
+          ListMemberHere() -> match predicate_execution_view(char, execution)
+            PredicateEvidenceExact() -> match accepted_path_view(S(Z()), predicate_pattern_machine(test), rest, after_input, destination_evidence, destination_captures, final_evidence, suffix_routine, suffix)
+              AcceptedPathNow() -> encodes_character_empty(char)
+          ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn predicate_machine_arbitrary_acceptance_encodes(test: Char -> Bool, input: List(Char), after_input: List(Char), position: InitialPosition, @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), acceptance: MachineAcceptance(S(Z()), predicate_pattern_machine(test), position, input, after_input, final_evidence, routine)) -> Encodes(CharC, final_evidence, empty_evidence()) = match acceptance
+    MachineAccepted(_, _, _, path_routine, edge, initial_execution, _, path) -> match predicate_starts_view(test, position, input, after_input)
+      PredicateStartsExact() -> match edge
+        ListMemberHere() -> match initial_execution
+          RoutineDone() -> predicate_arbitrary_path_encodes(test, input, after_input, final_evidence, path_routine, path)
+        ListMemberThere(prior) -> impossible_list_member(prior)
+
+  type CertifiedPatternMachine indices (shape: ShapeCode, n: Nat, machine: PatternMachine(n))
+    CertifiedEmptyMachine : CertifiedPatternMachine(UnitC, Z(), empty_pattern_machine())
+    CertifiedBoundaryMachine : (constraint: BoundaryConstraint) -> CertifiedPatternMachine(UnitC, Z(), boundary_pattern_machine(constraint))
+    CertifiedPredicateMachine : (test: (Char -> Bool)) -> CertifiedPatternMachine(CharC, S(Z()), predicate_pattern_machine(test))
+
+  fn certify_empty_pattern_machine() -> CertifiedPatternMachine(UnitC, Z(), empty_pattern_machine()) = CertifiedEmptyMachine()
+
+  fn certify_boundary_pattern_machine(constraint: BoundaryConstraint) -> CertifiedPatternMachine(UnitC, Z(), boundary_pattern_machine(constraint)) = CertifiedBoundaryMachine(constraint)
+
+  fn certify_predicate_pattern_machine(test: Char -> Bool) -> CertifiedPatternMachine(CharC, S(Z()), predicate_pattern_machine(test)) =
+    CertifiedPredicateMachine(test)
+
+  fn certified_pattern_acceptance_encodes({shape: ShapeCode}, {n: Nat}, {machine: PatternMachine(n)}, certified: CertifiedPatternMachine(shape, n, machine), input: List(Char), after_input: List(Char), position: InitialPosition, @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), acceptance: MachineAcceptance(n, machine, position, input, after_input, final_evidence, routine)) -> Encodes(shape, final_evidence, empty_evidence()) = match certified
+    CertifiedEmptyMachine() -> empty_machine_arbitrary_acceptance_encodes(input, after_input, position, final_evidence, routine, acceptance)
+    CertifiedBoundaryMachine(constraint) -> boundary_machine_arbitrary_acceptance_encodes(constraint, input, after_input, position, final_evidence, routine, acceptance)
+    CertifiedPredicateMachine(test) -> predicate_machine_arbitrary_acceptance_encodes(test, input, after_input, position, final_evidence, routine, acceptance)
 
   ## Group's Thompson clause brackets the inner machine with a capture frame.
   ## This first complete instance proves the atomic inner machine end-to-end:
