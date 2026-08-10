@@ -47,4 +47,17 @@ defmodule Cure.Elab.CtorArgElaborationTest do
   test "plus(n, Z) — nullary ctor arg (guard, must stay green)" do
     assert {:ok, _env} = Program.elaborate(with_body("plus(n, Z)"))
   end
+
+  test "same-named family constructor lowers canonically inside an index" do
+    source = """
+    type Nat = Z | S(Nat)
+    type List(a: Type) = Nil | Cons(a, List(a))
+    type Frame = Frame(List(Nat))
+    type Holder indices (frame: Frame)
+      held : Holder(Frame(Nil()))
+    fn make_holder() -> Holder(Frame(Nil())) = held()
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
 end

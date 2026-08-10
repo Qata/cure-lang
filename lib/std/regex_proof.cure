@@ -199,6 +199,69 @@ mod Std.Regex.Proof
       match predicate_initial_path_view(test, char, after_input, position, destination, final_evidence, path_routine, edge, initial_execution, path)
         PredicatePathExact() -> encodes_character_empty(char)
 
+  ## Group's Thompson clause brackets the inner machine with a capture frame.
+  ## This first complete instance proves the atomic inner machine end-to-end:
+  ## construction, accepted path, capture execution, and String evidence.
+  type GroupedPredicateStartsView indices (starts: List(MachineState(S(Z()))))
+    GroupedPredicateStartsExact : GroupedPredicateStartsView(Cons(Active(First(), Cons(BeginCapture(), Nil()), Nil()), Nil()))
+
+  type GroupedPredicateDestinationsView indices (holds: Bool, char: Char, destinations: List(MachineState(S(Z()))))
+    GroupedPredicateRejects : GroupedPredicateDestinationsView(false, char, Nil())
+    GroupedPredicateAccepts : GroupedPredicateDestinationsView(true, char, Cons(Accepted(Cons(EmitChar(char), Cons(EndCapture(), Nil())), Nil()), Nil()))
+
+  type GroupedPredicateInitialView indices (evidence: List(Evidence), captures: List(CaptureFrame))
+    GroupedPredicateInitialExact : GroupedPredicateInitialView(Nil(), Cons(CaptureFrame(Nil(), Nil()), Nil()))
+
+  @reducible
+  fn single_character_string(char: Char) -> String = Std.String.from_characters(Cons(char, Nil()))
+
+  fn grouped_predicate_starts_view(test: Char -> Bool, position: InitialPosition, input: List(Char), after_input: List(Char)) -> GroupedPredicateStartsView(initial_machine_destinations(S(Z()), group_pattern_machine(S(Z()), Cons(predicate_machine_start(), Nil()), predicate_machine_next(test)), position, input, after_input)) = GroupedPredicateStartsExact()
+
+  fn grouped_predicate_destinations_view(test: Char -> Bool, char: Char, boundary: Boundary) -> GroupedPredicateDestinationsView(test(char), char, machine_destinations(S(Z()), group_pattern_machine(S(Z()), Cons(predicate_machine_start(), Nil()), predicate_machine_next(test)), ThreadActive(First()), char, boundary)) = match test(char)
+    False() -> GroupedPredicateRejects()
+    True() -> GroupedPredicateAccepts()
+
+  fn grouped_predicate_initial_view({evidence: List(Evidence)}, {captures: List(CaptureFrame)}, execution: RoutineExecution(Cons(BeginCapture(), Nil()), Nil(), Nil(), evidence, captures)) -> GroupedPredicateInitialView(evidence, captures) = match execution
+    RoutineStep(_, suffix) -> match suffix
+      RoutineDone() -> GroupedPredicateInitialExact()
+
+  fn grouped_predicate_active_impossible({a: Type}, test: Char -> Bool, char: Char, boundary: Boundary, {state: Bounded(S(Z()))}, {regular: List(EvidenceInstruction)}, {constraints: List(BoundaryConstraint)}, edge: ListMember(MachineState(S(Z())), Active(state, regular, constraints), machine_destinations(S(Z()), group_pattern_machine(S(Z()), Cons(predicate_machine_start(), Nil()), predicate_machine_next(test)), ThreadActive(First()), char, boundary))) -> a = with grouped_predicate_destinations_view(test, char, boundary)
+    GroupedPredicateRejects() -> impossible_list_member(edge)
+    GroupedPredicateAccepts() -> match edge
+      ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn transport_encodes_output({shape: ShapeCode}, {left: List(Evidence)}, {right: List(Evidence)}, {rest: List(Evidence)}, equality: Equivalent(List(Evidence), left, right), encoded: Encodes(shape, left, rest)) -> Encodes(shape, right, rest) = match equality
+    reflexive() -> encoded
+
+  fn grouped_predicate_final_encodes(char: Char) -> Encodes(StringC, executed_evidence(execute_instruction(EndCapture(), Cons(CharacterEvidence(char), Nil()), record_capture_char(Cons(CaptureFrame(Nil(), Nil()), Nil()), char))), empty_evidence()) =
+    have final_evidence_exact = proof chain
+      Cons(StringEvidence(Std.String.from_characters(evidence_reverse_chars(Cons(char, Nil())))), Nil()) == executed_evidence(execute_instruction(EndCapture(), Cons(CharacterEvidence(char), Nil()), record_capture_char(Cons(CaptureFrame(Nil(), Nil()), Nil()), char)))
+      because simplify
+    transport_encodes_output(final_evidence_exact, EncodesString(Std.String.from_characters(evidence_reverse_chars(Cons(char, Nil())))))
+
+  fn grouped_predicate_accepted_encodes(test: Char -> Bool, char: Char, after_input: List(Char), {regular: List(EvidenceInstruction)}, {constraints: List(BoundaryConstraint)}, {destination_evidence: List(Evidence)}, {destination_captures: List(CaptureFrame)}, {suffix_routine: List(ExtendedInstruction)}, {final_evidence: List(Evidence)}, edge: ListMember(MachineState(S(Z())), Accepted(regular, constraints), machine_destinations(S(Z()), group_pattern_machine(S(Z()), Cons(predicate_machine_start(), Nil()), predicate_machine_next(test)), ThreadActive(First()), char, transition_boundary_before(char, Nil(), after_input))), execution: RoutineExecution(regular, Nil(), record_capture_char(Cons(CaptureFrame(Nil(), Nil()), Nil()), char), destination_evidence, destination_captures), suffix: AcceptingFrom(S(Z()), group_pattern_machine(S(Z()), Cons(predicate_machine_start(), Nil()), predicate_machine_next(test)), Nil(), after_input, ThreadAccepted(), destination_evidence, destination_captures, final_evidence, suffix_routine)) -> Encodes(StringC, final_evidence, empty_evidence()) = with grouped_predicate_destinations_view(test, char, transition_boundary_before(char, Nil(), after_input))
+    GroupedPredicateRejects() -> impossible_list_member(edge)
+    GroupedPredicateAccepts() -> match edge
+      ListMemberHere() -> match execution
+        RoutineStep(_, after_emit) -> match after_emit
+          RoutineStep(_, after_end) -> match after_end
+            RoutineDone() -> match suffix
+              AcceptingNow() -> grouped_predicate_final_encodes(char)
+      ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn grouped_predicate_path_encodes(test: Char -> Bool, char: Char, after_input: List(Char), @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), path: AcceptingFrom(S(Z()), group_pattern_machine(S(Z()), Cons(predicate_machine_start(), Nil()), predicate_machine_next(test)), Cons(char, Nil()), after_input, ThreadActive(First()), Nil(), Cons(CaptureFrame(Nil(), Nil()), Nil()), final_evidence, routine)) -> Encodes(StringC, final_evidence, empty_evidence()) = match path
+    AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> grouped_predicate_active_impossible(test, char, transition_boundary_before(char, Nil(), after_input), edge)
+    AcceptingNextAccepted(_, _, _, _, _, edge, execution, suffix) -> grouped_predicate_accepted_encodes(test, char, after_input, edge, execution, suffix)
+
+  fn grouped_predicate_initial_path_encodes(test: Char -> Bool, char: Char, after_input: List(Char), position: InitialPosition, destination: MachineState(S(Z())), {initial_evidence: List(Evidence)}, {initial_captures: List(CaptureFrame)}, @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), edge: ListMember(MachineState(S(Z())), destination, initial_machine_destinations(S(Z()), group_pattern_machine(S(Z()), Cons(predicate_machine_start(), Nil()), predicate_machine_next(test)), position, Cons(char, empty_characters()), after_input)), initial_execution: RoutineExecution(machine_state_routine(S(Z()), destination), Nil(), Nil(), initial_evidence, initial_captures), path: AcceptingFrom(S(Z()), group_pattern_machine(S(Z()), Cons(predicate_machine_start(), Nil()), predicate_machine_next(test)), Cons(char, Nil()), after_input, machine_state_thread(S(Z()), destination), initial_evidence, initial_captures, final_evidence, routine)) -> Encodes(StringC, final_evidence, empty_evidence()) = match grouped_predicate_starts_view(test, position, Cons(char, empty_characters()), after_input)
+    GroupedPredicateStartsExact() -> match edge
+      ListMemberHere() -> match grouped_predicate_initial_view(initial_execution)
+        GroupedPredicateInitialExact() -> grouped_predicate_path_encodes(test, char, after_input, final_evidence, routine, path)
+      ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn grouped_predicate_machine_acceptance_encodes(test: Char -> Bool, char: Char, after_input: List(Char), position: InitialPosition, @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), acceptance: MachineAcceptance(S(Z()), group_pattern_machine(S(Z()), Cons(predicate_machine_start(), Nil()), predicate_machine_next(test)), position, Cons(char, empty_characters()), after_input, final_evidence, routine)) -> Encodes(StringC, final_evidence, empty_evidence()) = match acceptance
+    MachineAccepted(destination, initial_evidence, initial_captures, path_routine, edge, initial_execution, _, path) -> grouped_predicate_initial_path_encodes(test, char, after_input, position, destination, final_evidence, path_routine, edge, initial_execution, path)
+
   fn predicate_concat_right_execution_encodes(left: Char -> Bool, right: Char -> Bool, left_char: Char, right_char: Char, after_input: List(Char), destination_evidence: List(Evidence), destination_captures: List(CaptureFrame), suffix_routine: List(ExtendedInstruction), @erased final_evidence: List(Evidence), execution: RoutineExecution(Cons(EmitChar(right_char), Cons(EmitPair(), Nil())), Cons(CharacterEvidence(left_char), empty_evidence()), record_capture_char(Nil(), right_char), destination_evidence, destination_captures), suffix: AcceptingFrom(plus(S(Z()), S(Z())), predicate_concat_machine(left, right), empty_characters(), after_input, ThreadAccepted(), destination_evidence, destination_captures, final_evidence, suffix_routine)) -> Encodes(PairC(CharC, CharC), final_evidence, empty_evidence()) = match execution
     RoutineStep(_, after_right) -> match after_right
       RoutineStep(_, after_pair) -> match after_pair

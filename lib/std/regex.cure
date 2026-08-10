@@ -421,8 +421,12 @@ mod Std.Regex
 
   fn empty_machine_next({n: Nat}, _state: Bounded(n), _char: Char) -> List(MachineState(n)) = []
 
+  @reducible
   fn group_machine_next({n: Nat}, next: (Bounded(n)) -> Char -> List(MachineState(n)), state: Bounded(n), char: Char) -> List(MachineState(n)) =
-    finish_capture(next(state, char))
+    match next(state, char)
+      [] -> []
+      [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [EndCapture()]), constraints) | finish_capture(rest)]
+      [Active(active, routine, constraints) | rest] -> [Active(active, routine, constraints) | finish_capture(rest)]
 
   @reducible
   fn concat_machine_next(left_count: Nat, {right_count: Nat}, left_next: (Bounded(left_count)) -> Char -> List(MachineState(left_count)), right_starts: List(MachineState(right_count)), right_next: (Bounded(right_count)) -> Char -> List(MachineState(right_count)), state: Bounded(plus(left_count, right_count)), char: Char) -> List(MachineState(plus(left_count, right_count))) =
@@ -487,6 +491,13 @@ mod Std.Regex
     let starts: List(MachineState(S(Z()))) = [predicate_machine_start()]
     MkPatternMachine(starts, predicate_machine_next(test))
 
+  @reducible
+  fn group_pattern_machine(n: Nat, starts: List(MachineState(n)), next: (Bounded(n)) -> Char -> List(MachineState(n))) -> PatternMachine(n) =
+    MkPatternMachine(
+      finish_capture(prefix_routine(BeginCapture(), starts)),
+      group_machine_next(next)
+    )
+
   fn compile_pattern({shape: ShapeCode}, pattern: Pattern(shape)) -> Sigma(n: Nat, PatternMachine(n)) = match pattern
     PatternEmpty() -> %[Z(), empty_pattern_machine()]
     PatternPredicate(test) -> %[S(Z()), predicate_pattern_machine(test)]
@@ -500,10 +511,7 @@ mod Std.Regex
           )]
     PatternGroup(inner) -> match compile_pattern(inner)
       mk_pair(count, MkPatternMachine(starts, next)) ->
-        %[count, MkPatternMachine(
-          finish_capture(prefix_routine(BeginCapture(), starts)),
-          group_machine_next(next)
-        )]
+        %[count, group_pattern_machine(count, starts, next)]
     PatternAlternate(left, right) -> match compile_pattern(left)
       mk_pair(left_count, MkPatternMachine(left_starts, left_next)) -> match compile_pattern(right)
         mk_pair(right_count, MkPatternMachine(right_starts, right_next)) ->
@@ -786,7 +794,9 @@ mod Std.Regex
 
   type Match(result: Type) = Match(result, String, String, String)
 
+  @reducible
   fn evidence_reverse_chars(input: List(Char)) -> List(Char) = evidence_reverse_chars_into(input, [])
+  @reducible
   fn evidence_reverse_chars_into(input: List(Char), output: List(Char)) -> List(Char) = match input
     [] -> output
     [head | rest] -> evidence_reverse_chars_into(rest, [head | output])

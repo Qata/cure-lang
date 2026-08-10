@@ -3639,15 +3639,16 @@ defmodule Cure.Elab.Declarations do
 
       true ->
         family_key = applied_family_key(atom, fam, env, qualified_key)
+        definition_key = if is_nil(family_key), do: applied_def_key(env, raw_name, atom), else: nil
 
         with {:ok, core_args} <-
-               lower_applied_arguments(args, family_key, scope, fam, env, ctx) do
+               lower_applied_arguments(args, family_key, definition_key, scope, fam, env, ctx) do
           case expand_typealias_application(env, atom, core_args) do
             {:ok, expanded} ->
               {:ok, expanded}
 
             :not_typealias ->
-              lower_applied_type_head(atom, raw_name, core_args, fam, env, qualified_key, scope)
+              lower_applied_type_head(atom, raw_name, args, core_args, fam, env, qualified_key, scope, ctx)
           end
         end
     end
@@ -3663,7 +3664,14 @@ defmodule Cure.Elab.Declarations do
       else: nil
   end
 
-  defp lower_applied_arguments(args, nil, scope, fam, env, ctx),
+  defp lower_applied_arguments(args, nil, definition, scope, fam, env, ctx) when is_atom(definition) do
+    case Env.get_def(env, definition) do
+      %{type: type} -> lower_definition_arguments(args, type, scope, fam, env, ctx)
+      _ -> map_idx_to_core(args, scope, fam, env, ctx)
+    end
+  end
+
+  defp lower_applied_arguments(args, nil, _definition, scope, fam, env, ctx),
     do: map_idx_to_core(args, scope, fam, env, ctx)
 
   # Lower a family application left-to-right against its dependent telescope.
@@ -3672,7 +3680,7 @@ defmodule Cure.Elab.Declarations do
   # family slot (`ListMember(MachineState(2), Accepted(rs, cs), ...)`). Merely
   # copying the written constructor arguments produced malformed Final Core and
   # deferred the failure to a bare kernel `:ctor_arity` during body checking.
-  defp lower_applied_arguments(args, family, scope, fam, env, ctx) do
+  defp lower_applied_arguments(args, family, _definition, scope, fam, env, ctx) do
     tele = (Inductive.param_telescope(env, family) || []) ++ (Inductive.index_telescope(env, family) || [])
 
     if length(args) == length(tele) do
@@ -3685,6 +3693,23 @@ defmodule Cure.Elab.Declarations do
           {:error, _} = error -> {:halt, error}
         end
       end)
+    else
+      map_idx_to_core(args, scope, fam, env, ctx)
+    end
+  end
+
+  defp lower_definition_arguments(args, type, scope, fam, env, ctx) do
+    if pi_arity(type) == length(args) do
+      Enum.reduce_while(args, {:ok, [], type}, fn arg, {:ok, actuals, {:pi, _grade, dom, cod}} ->
+        case idx_to_core_expected(arg, dom, scope, fam, env, ctx) do
+          {:ok, core} -> {:cont, {:ok, actuals ++ [core], Subst.instantiate(cod, [core])}}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+      |> case do
+        {:ok, actuals, _rest} -> {:ok, actuals}
+        {:error, _} = error -> error
+      end
     else
       map_idx_to_core(args, scope, fam, env, ctx)
     end
@@ -3883,7 +3908,7 @@ defmodule Cure.Elab.Declarations do
   defp index_term_has_meta?(term) when is_list(term), do: Enum.any?(term, &index_term_has_meta?/1)
   defp index_term_has_meta?(_term), do: false
 
-  defp lower_applied_type_head(atom, raw_name, core_args, fam, env, qualified_key, scope) do
+  defp lower_applied_type_head(atom, raw_name, raw_args, core_args, fam, env, qualified_key, scope, ctx) do
     cond do
       match?({:ok, _}, qualified_key) ->
         {:ok, key} = qualified_key
@@ -3899,7 +3924,7 @@ defmodule Cure.Elab.Declarations do
       idx = Enum.find_index(scope, &(&1 == raw_name)) ->
         {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
 
-      atom == fam or Inductive.family?(env, atom) ->
+      atom == fam or applied_family_head?(env, atom, length(core_args)) ->
         atom = Env.resolve_key(env, env.families, atom)
         # Split the applied arguments into the family's parameters (prefix) and
         # indices (suffix); the kernel checks each slot against its own
@@ -3908,7 +3933,7 @@ defmodule Cure.Elab.Declarations do
         {:ok, {:data, atom, params, indices}}
 
       Inductive.get_ctor(env, atom) ->
-        lower_index_constructor(atom, core_args, scope, env)
+        lower_index_constructor(atom, raw_args, core_args, scope, fam, env, ctx)
 
       true ->
         # An applied plain (non-family, non-ctor) DEFINITION — e.g. `plus(a, b)`
@@ -3929,6 +3954,18 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  defp applied_family_head?(env, atom, supplied_arity) do
+    if Inductive.family?(env, atom) do
+      key = Env.resolve_key(env, env.families, atom)
+      family = Inductive.get_family(env, key)
+      family_arity = length(family.params) + length(family.indices)
+
+      is_nil(Inductive.get_ctor(env, atom)) or family_arity == supplied_arity
+    else
+      false
+    end
+  end
+
   # Constructor values are legal inside dependent indices (`ThreadAccepted()`
   # inside an accepting-path state index). Surface syntax supplies only explicit
   # fields, while Core constructor nodes contain every implicit telescope slot as
@@ -3942,18 +3979,55 @@ defmodule Cure.Elab.Declarations do
   # from the constructor plicities and the current de Bruijn scope. If a hidden
   # name is genuinely unavailable, preserve the old spine so the kernel reports
   # the honest unsolved/arity error rather than inventing a value.
-  defp lower_index_constructor(atom, explicit_args, scope, env) do
+  defp lower_index_constructor(atom, raw_args, explicit_args, scope, fam, env, ctx) do
     key = Env.resolve_key(env, env.ctors, atom)
     ctor = Inductive.get_ctor(env, key)
     plicities = Inductive.plicities_of(ctor)
 
     if Enum.count(plicities, &(&1 == :explicit)) == length(explicit_args) do
-      case fill_index_constructor_args(ctor.args, plicities, explicit_args, scope, []) do
-        {:ok, args} -> {:ok, {:ctor, key, args}}
-        :unresolved -> {:ok, {:ctor, key, explicit_args}}
+      inferred = infer_index_constructor_args(key, ctor, plicities, raw_args, scope, fam, env, ctx)
+
+      case inferred do
+        {:ok, args} ->
+          {:ok, {:ctor, key, args}}
+
+        :error ->
+          case fill_index_constructor_args(ctor.args, plicities, explicit_args, scope, []) do
+            {:ok, args} -> {:ok, {:ctor, key, args}}
+            :unresolved -> {:ok, {:ctor, key, explicit_args}}
+          end
       end
     else
       {:ok, {:ctor, key, explicit_args}}
+    end
+  end
+
+  defp infer_index_constructor_args(_key, _ctor, _plicities, _explicit, _scope, _fam, _env, nil),
+    do: :error
+
+  defp infer_index_constructor_args(key, ctor, plicities, explicit, scope, fam, env, ctx) do
+    pc = Inductive.param_count(env, Inductive.ctor_family(env, key))
+    {mctx, seed} = fresh_index_seed(MetaCtx.new(), pc + length(ctor.args), [])
+    {params, field_seed} = Enum.split(seed, pc)
+
+    with {:ok, fields, solved} <-
+           lower_index_constructor_fields(
+             ctor.args,
+             plicities,
+             explicit,
+             field_seed,
+             params,
+             mctx,
+             scope,
+             fam,
+             env,
+             ctx,
+             []
+           ) do
+      values = Enum.map(fields, &Unify.zonk(&1, solved))
+      if Enum.any?(values, &index_term_has_meta?/1), do: :error, else: {:ok, values}
+    else
+      _ -> :error
     end
   end
 
@@ -4152,14 +4226,6 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  # A term-level global whose registered signature carries at least one erased
-  # (implicit) parameter — the only shape the bare-spine lowering mis-handles.
-  # Families and constructors are not defs, so they return false here. Mirrors
-  # the precedent `implicit_def?/2` (elaborator.ex:1278-1283) exactly, including
-  # its `is_list(q)` guard: `Env.add_def/4` (the 4-arg form used by some Antigen
-  # synthetic environments, e.g. `lib/antigen/generators/closure_env.ex`) defaults
-  # quantities to `nil`, and `:erased in nil` raises (`nil` is not Enumerable) —
-  # the guard is required for the same reason it is in the precedent function.
   defp implicit_global?(env, atom) do
     case Env.get_def(env, atom) do
       %{plicities: p, quantities: q} when is_list(p) and is_list(q) -> :implicit in p or :erased in q
@@ -4169,10 +4235,6 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  # A surface application argument that `idx_to_core` cannot lower syntactically —
-  # a bare lambda has no domain until CHECKED against the callee's Π-domain, so an
-  # application carrying one must be routed through the bidirectional term
-  # elaborator (see `lower_applied_type`).
   defp args_contain_lambda?(args), do: Enum.any?(args, &match?({:lambda, _, _}, &1))
 
   # The head resolves to a term-level DEFINITION (carries a `:quantities` list),

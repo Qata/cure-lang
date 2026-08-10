@@ -5203,13 +5203,9 @@ defmodule Cure.Elab.Elaborator do
                 result_type_term
 
               computed ->
-                if variable_headed_application?(computed) do
-                  result_type_term
-                  |> expose_reducible_dependency(computed, ctx, env)
-                  |> expose_sibling_result_indices(computed, ctx, env)
-                else
-                  expose_sibling_result_indices(result_type_term, computed, ctx, env)
-                end
+                result_type_term
+                |> expose_reducible_dependency(computed, ctx, env)
+                |> expose_sibling_result_indices(computed, ctx, env)
             end
 
           # The scrutinee's args are parameters ++ indices; split off the leading
@@ -6083,7 +6079,11 @@ defmodule Cure.Elab.Elaborator do
 
   defp collect_index_motive_siblings(scrut_term, idx_terms, names, ctx, env) do
     depth = Context.length(ctx)
-    targets = Enum.filter(idx_terms, &match?({:var, _}, &1))
+
+    targets =
+      idx_terms
+      |> Enum.flat_map(fn target -> [target, expose_reducible_layer(target, ctx, env)] end)
+      |> Enum.uniq()
 
     scrut_idx =
       case scrut_term do
@@ -6098,7 +6098,7 @@ defmodule Cure.Elab.Elaborator do
         if is_binary(name) and i != scrut_idx do
           type_term = resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env)
 
-          if Enum.any?(targets, &contains_term?(type_term, &1)),
+          if Enum.any?(targets, &contains_term_scoped?(type_term, &1)),
             do: [%{name: name, index: i, type_term: type_term}],
             else: []
         else
@@ -6147,8 +6147,174 @@ defmodule Cure.Elab.Elaborator do
   # the resulting term. Opaque, uncertified, open, and recursive occurrences stay
   # folded. The global budget bounds hostile or unusually deep interface graphs.
   defp expose_reducible_dependency(type_term, target, ctx, env) do
-    do_expose_reducible_dependency(type_term, target, ctx, env, MapSet.new(), 32)
+    if contains_term_scoped?(type_term, target) do
+      type_term
+    else
+      raw = raw_expose_reducible_dependency(type_term, target, ctx, env, MapSet.new(), 32)
+
+      if contains_term_scoped?(raw, target) do
+        raw
+      else
+        allowed = reducible_globals_in(type_term, env)
+        do_expose_reducible_dependency(type_term, type_term, target, ctx, env, allowed, 8)
+      end
+    end
+  rescue
+    _ -> type_term
+  catch
+    _, _ -> type_term
   end
+
+  defp do_expose_reducible_dependency(original, _term, _target, _ctx, _env, _allowed, 0),
+    do: original
+
+  defp do_expose_reducible_dependency(original, term, target, ctx, env, allowed, fuel) do
+    if MapSet.size(allowed) == 0 do
+      original
+    else
+      case Normalise.whnf(ctx, term,
+             delta: :reducible,
+             delta_allow: allowed,
+             stuck_cases: :expose,
+             fuel: 512
+           ) do
+        :fuel_exhausted ->
+          original
+
+        exposed ->
+          exposed = resplit_data(exposed, env)
+
+          if contains_term_scoped?(exposed, target) do
+            exposed
+          else
+            expanded_allowed = MapSet.union(allowed, reducible_globals_in(exposed, env))
+
+            if MapSet.size(expanded_allowed) == MapSet.size(allowed),
+              do: original,
+              else:
+                do_expose_reducible_dependency(
+                  original,
+                  exposed,
+                  target,
+                  ctx,
+                  env,
+                  expanded_allowed,
+                  fuel - 1
+                )
+          end
+      end
+    end
+  end
+
+  defp reducible_globals_in({:global, name}, env) do
+    key = Env.resolve_key(env, env.defs, name)
+
+    case Env.get_def(env, key) do
+      %{reducible: true} -> MapSet.new([key])
+      _ -> MapSet.new()
+    end
+  end
+
+  defp reducible_globals_in(term, env) when is_tuple(term) do
+    term
+    |> children()
+    |> Enum.reduce(MapSet.new(), &MapSet.union(reducible_globals_in(&1, env), &2))
+  end
+
+  defp reducible_globals_in(term, env) when is_list(term),
+    do: Enum.reduce(term, MapSet.new(), &MapSet.union(reducible_globals_in(&1, env), &2))
+
+  defp reducible_globals_in(_term, _env), do: MapSet.new()
+
+  defp expose_reducible_layer(term, ctx, env) do
+    allowed = reducible_globals_in(term, env)
+
+    case Normalise.whnf(ctx, term,
+           delta: :reducible,
+           delta_allow: allowed,
+           stuck_cases: :expose,
+           fuel: 512
+         ) do
+      :fuel_exhausted -> term
+      exposed -> resplit_data(exposed, env)
+    end
+  rescue
+    _ -> term
+  catch
+    _, _ -> term
+  end
+
+  defp raw_expose_reducible_dependency(term, _target, _ctx, _env, _seen, 0), do: term
+
+  defp raw_expose_reducible_dependency(term, target, ctx, env, seen, fuel) do
+    if contains_term_scoped?(term, target) do
+      term
+    else
+      {expanded, newly_seen} = expand_published_reducibles(term, env, seen)
+
+      if MapSet.size(newly_seen) == MapSet.size(seen) do
+        term
+      else
+        case dependency_exposure_nf(ctx, expanded) do
+          normalized when normalized not in [:unsafe_to_expose, :fuel_exhausted] ->
+            raw_expose_reducible_dependency(
+              resplit_data(normalized, env),
+              target,
+              ctx,
+              env,
+              newly_seen,
+              fuel - 1
+            )
+
+          _ ->
+            term
+        end
+      end
+    end
+  end
+
+  defp dependency_exposure_nf(ctx, term) do
+    Normalise.nf(ctx, term, delta: :none, fuel: 2_048)
+  rescue
+    _ -> :unsafe_to_expose
+  catch
+    _, _ -> :unsafe_to_expose
+  end
+
+  defp expand_published_reducibles({:global, name} = global, env, seen) do
+    key = Env.resolve_key(env, env.defs, name)
+
+    case Env.get_def(env, key) do
+      %{body: body, reducible: true} when not is_nil(body) ->
+        if not MapSet.member?(seen, key) and Env.certified?(env, key) and Term.closed?(body),
+          do: {body, MapSet.put(seen, key)},
+          else: {global, seen}
+
+      _ ->
+        {global, seen}
+    end
+  end
+
+  defp expand_published_reducibles(term, env, seen) when is_tuple(term) do
+    {children, seen_sets} =
+      term
+      |> children()
+      |> Enum.map(&expand_published_reducibles(&1, env, seen))
+      |> Enum.unzip()
+
+    {rebuild(term, children), Enum.reduce(seen_sets, seen, &MapSet.union/2)}
+  end
+
+  defp expand_published_reducibles(term, env, seen) when is_list(term) do
+    {children, seen_sets} =
+      term
+      |> Enum.map(&expand_published_reducibles(&1, env, seen))
+      |> Enum.unzip()
+
+    {children, Enum.reduce(seen_sets, seen, &MapSet.union/2)}
+  end
+
+  defp expand_published_reducibles(term, _env, seen), do: {term, seen}
 
   defp expose_sibling_result_indices({:data, name, params, indices} = result, target, ctx, env) do
     if Enum.any?(indices, &contains_term_scoped?(&1, target)) do
@@ -6169,95 +6335,6 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp expose_sibling_result_indices(result, _target, _ctx, _env), do: result
-
-  defp variable_headed_application?({:app, function, _argument}),
-    do: variable_headed_application?(function)
-
-  defp variable_headed_application?({:var, _}), do: true
-  defp variable_headed_application?(_term), do: false
-
-  defp do_expose_reducible_dependency(term, target, _ctx, _env, _seen, _fuel)
-       when term == target,
-       do: term
-
-  defp do_expose_reducible_dependency(term, _target, _ctx, _env, _seen, 0),
-    do: term
-
-  defp do_expose_reducible_dependency(term, target, ctx, env, seen, fuel) do
-    if contains_term?(term, target) do
-      term
-    else
-      {expanded, newly_seen} = expand_published_reducibles(term, env, seen)
-
-      if MapSet.size(newly_seen) == MapSet.size(seen) do
-        term
-      else
-        case dependency_exposure_nf(ctx, expanded) do
-          :unsafe_to_expose ->
-            term
-
-          :fuel_exhausted ->
-            term
-
-          normalized ->
-            do_expose_reducible_dependency(
-              resplit_data(normalized, env),
-              target,
-              ctx,
-              env,
-              newly_seen,
-              fuel - 1
-            )
-        end
-      end
-    end
-  end
-
-  defp dependency_exposure_nf(ctx, term) do
-    Normalise.nf(ctx, term, delta: :none, fuel: 2_048)
-  rescue
-    _ -> :unsafe_to_expose
-  catch
-    _, _ -> :unsafe_to_expose
-  end
-
-  defp expand_published_reducibles({:global, name} = global, env, seen) do
-    key = Env.resolve_key(env, env.defs, name)
-
-    case Env.get_def(env, key) do
-      %{body: body, reducible: true}
-      when not is_nil(body) ->
-        if not MapSet.member?(seen, key) and Env.certified?(env, key) and Term.closed?(body) do
-          {body, MapSet.put(seen, key)}
-        else
-          {global, seen}
-        end
-
-      _ ->
-        {global, seen}
-    end
-  end
-
-  defp expand_published_reducibles(term, env, seen) when is_tuple(term) do
-    {children, seen_sets} =
-      term
-      |> children()
-      |> Enum.map(fn child -> expand_published_reducibles(child, env, seen) end)
-      |> Enum.unzip()
-
-    {rebuild(term, children), Enum.reduce(seen_sets, seen, &MapSet.union/2)}
-  end
-
-  defp expand_published_reducibles(term, env, seen) when is_list(term) do
-    {children, seen_sets} =
-      term
-      |> Enum.map(fn child -> expand_published_reducibles(child, env, seen) end)
-      |> Enum.unzip()
-
-    {children, Enum.reduce(seen_sets, seen, &MapSet.union/2)}
-  end
-
-  defp expand_published_reducibles(term, _env, seen), do: {term, seen}
 
   defp sibling_dependency(gen, gen_set, names, ctx, env, depth) do
     generated_dependency =
@@ -6651,7 +6728,7 @@ defmodule Cure.Elab.Elaborator do
 
     with {:ok, inner} <-
            elaborate_branch_body(body_expr, cod_expected, branch_names, branch_ctx, env) do
-      emitted_subst = emission_branch_subst(branch_subst, arity)
+      emitted_subst = emission_branch_subst(branch_subst, quantities)
 
       inner =
         if map_size(emitted_subst) == 0,
@@ -6666,13 +6743,25 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp emission_branch_subst(subst, arity) do
+  defp emission_branch_subst(subst, quantities) do
+    arity = length(quantities)
+
+    erased_fields =
+      quantities
+      |> Enum.with_index()
+      |> Enum.filter(fn {quantity, _position} -> Grade.erased?(quantity) end)
+      |> MapSet.new(fn {_quantity, position} -> arity - 1 - position end)
+
     Enum.reduce(subst, %{}, fn
       {field, {:var, outer}}, acc when field < arity and outer >= arity ->
-        Map.put(acc, outer, {:var, field})
+        if MapSet.member?(erased_fields, field),
+          do: acc,
+          else: Map.put(acc, outer, {:var, field})
 
       {outer, term}, acc when outer >= arity ->
-        Map.put(acc, outer, term)
+        if MapSet.disjoint?(free_indices(term, 0), erased_fields),
+          do: Map.put(acc, outer, term),
+          else: acc
 
       _, acc ->
         acc

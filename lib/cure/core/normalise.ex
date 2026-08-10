@@ -12,10 +12,11 @@ defmodule Cure.Core.Normalise do
 
   @fuel_key {__MODULE__, :fuel}
 
-  @type delta_mode :: :certified | :none
+  @type delta_mode :: :certified | :reducible | :none
   @type fuel :: pos_integer() | :infinity
   @type opts :: [
           delta: delta_mode(),
+          delta_allow: MapSet.t(atom()) | nil,
           mode: :whnf | :nf,
           fuel: fuel(),
           stuck_cases: :preserve | :expose
@@ -109,17 +110,23 @@ defmodule Cure.Core.Normalise do
     opts =
       opts
       |> Keyword.put_new(:delta, :certified)
+      |> Keyword.put_new(:delta_allow, nil)
       |> Keyword.put_new(:mode, :nf)
       |> Keyword.put_new(:fuel, :infinity)
       |> Keyword.put_new(:stuck_cases, :preserve)
 
     delta = Keyword.fetch!(opts, :delta)
+    delta_allow = Keyword.fetch!(opts, :delta_allow)
     mode = Keyword.fetch!(opts, :mode)
     fuel = Keyword.fetch!(opts, :fuel)
     stuck_cases = Keyword.fetch!(opts, :stuck_cases)
 
-    unless delta in [:certified, :none] do
-      raise ArgumentError, "expected :delta to be :certified or :none, got: #{inspect(delta)}"
+    unless delta in [:certified, :reducible, :none] do
+      raise ArgumentError, "expected :delta to be :certified, :reducible, or :none, got: #{inspect(delta)}"
+    end
+
+    unless is_nil(delta_allow) or match?(%MapSet{}, delta_allow) do
+      raise ArgumentError, "expected :delta_allow to be a MapSet or nil"
     end
 
     unless mode in [:whnf, :nf] do
@@ -139,7 +146,7 @@ defmodule Cure.Core.Normalise do
   rescue
     MatchError ->
       raise ArgumentError,
-            "expected normalization options delta: :certified | :none, mode: :whnf | :nf, " <>
+            "expected normalization options delta: :certified | :reducible | :none, mode: :whnf | :nf, " <>
               "fuel: pos_integer() | :infinity, stuck_cases: :preserve | :expose"
   end
 
@@ -260,21 +267,34 @@ defmodule Cure.Core.Normalise do
         # body-less op def never reaches the generic `Eval.eval(body, [])` path
         # (which would crash on the nil body). The certified-body path below is
         # unchanged for ordinary defs.
-        case Env.get_def(sig, name) do
-          %{builtin_op: bop} when not is_nil(bop) ->
-            builtin_op_fold(bop, args, sig, opts)
+        definition = Env.get_def(sig, name)
+        delta_allowed? = is_nil(opts[:delta_allow]) or MapSet.member?(opts[:delta_allow], name)
 
-          _ ->
-            with true <- Env.certified?(sig, name),
-                 %{body: body} <- Env.get_def(sig, name),
-                 true <- Cure.Core.Term.closed?(body) do
-              case eval_certified_application(body, args) do
-                {:ok, value} -> reduce_unfolded(value, sig, opts)
-                :stuck -> :stuck
+        if not delta_allowed? or
+             (opts[:delta] == :reducible and not match?(%{reducible: true}, definition)) do
+          :stuck
+        else
+          case definition do
+            %{builtin_op: bop} when not is_nil(bop) ->
+              builtin_op_fold(bop, args, sig, opts)
+
+            _ ->
+              with true <- Env.certified?(sig, name),
+                   %{body: body} <- definition,
+                   true <- Cure.Core.Term.closed?(body) do
+                case eval_certified_application(body, args) do
+                  {:ok, value} ->
+                    if opts[:stuck_cases] == :expose,
+                      do: {:ok, value},
+                      else: reduce_unfolded(value, sig, opts)
+
+                  :stuck ->
+                    :stuck
+                end
+              else
+                _ -> :stuck
               end
-            else
-              _ -> :stuck
-            end
+          end
         end
 
       # ι on `case`: mirrors the ctor branch of `eval({:case,…})` — reduce the

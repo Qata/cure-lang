@@ -148,6 +148,29 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> Encodes(CharC, final_evidence, empty_evidence()) =
       predicate_machine_acceptance_encodes(accepts_a, 'a', empty_characters(), subject_initial_position(), final_evidence, routine, acceptance)
 
+    fn grouped_predicate_acceptance_case(
+      @erased final_evidence: List(Evidence),
+      @erased routine: List(ExtendedInstruction),
+      acceptance: MachineAcceptance(
+        1,
+        group_pattern_machine(1, Cons(predicate_machine_start(), Nil()), predicate_machine_next(accepts_a)),
+        subject_initial_position(),
+        Cons('a', empty_characters()),
+        empty_characters(),
+        final_evidence,
+        routine
+      )
+    ) -> Encodes(StringC, final_evidence, empty_evidence()) =
+      grouped_predicate_machine_acceptance_encodes(
+        accepts_a,
+        'a',
+        empty_characters(),
+        subject_initial_position(),
+        final_evidence,
+        routine,
+        acceptance
+      )
+
     fn predicate_concat_acceptance_case(
       @erased final_evidence: List(Evidence),
       @erased routine: List(ExtendedInstruction),
@@ -207,6 +230,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :empty_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :boundary_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_acceptance_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
   end
 

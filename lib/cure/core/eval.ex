@@ -240,6 +240,19 @@ defmodule Cure.Core.Eval do
   @doc false
   def reduce_branch_body(body, base_env, cargs, arity) do
     fields = drop_leading_params(cargs, arity)
+    missing = max(0, arity - length(fields))
+
+    # Indexed constructors erase implicit index witnesses from their value
+    # spine, while the checked branch body retains those grade-zero binders in
+    # its de Bruijn frame. Relevance proves that these missing binders cannot be
+    # used computationally; their dead slots must still be present so later
+    # fields and outer variables retain their checked indices. Emission mirrors
+    # this contract with erased names in its lowering context.
+    erased_slots =
+      for position <- 0..(missing - 1)//1,
+          do: {:vneutral, {:nhole, "$erased_case_slot_#{arity}_#{position}"}}
+
+    fields = erased_slots ++ fields
     eval(body, Enum.reverse(fields) ++ base_env)
   end
 

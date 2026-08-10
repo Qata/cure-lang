@@ -72,6 +72,69 @@ defmodule Cure.Elab.ValueInGoalMatchTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "computed scrutinee refines a goal through published reducible definitions" do
+    src =
+      mod("""
+        type Bool = False | True
+        type BoolView indices (value: Bool)
+          false_view : BoolView(False())
+          true_view : BoolView(True())
+        fn parity(n: Nat) -> Bool = match n
+          Z() -> False()
+          S(_) -> True()
+        @reducible
+        fn wrapped_once(value: Bool) -> Bool = value
+        @reducible
+        fn wrapped_twice(value: Bool) -> Bool = wrapped_once(value)
+        fn parity_view(n: Nat) -> BoolView(wrapped_twice(parity(n))) =
+          match parity(n)
+            False() -> false_view()
+            True() -> true_view()
+      """)
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "case evaluation reserves erased constructor-index binder slots" do
+    src =
+      mod("""
+        type IBox indices (n: Nat)
+          IBoxed : Nat -> IBox(n)
+        @reducible
+        fn boxed_zero() -> IBox(Z()) = IBoxed(Z())
+        @reducible
+        fn unbox({n: Nat}, boxed: IBox(n)) -> Nat = match boxed
+          IBoxed(value) -> value
+      """)
+
+    assert {:ok, env} = Program.elaborate(src)
+
+    zero = {:ctor, :"P#Z", []}
+
+    term =
+      {:app, {:app, {:global, :"P#unbox"}, zero}, {:global, :"P#boxed_zero"}}
+
+    assert {:ctor, :"P#Z", []} =
+             Cure.Core.Normalise.nf(Cure.Core.Context.empty(env), term,
+               delta: :certified,
+               stuck_cases: :expose
+             )
+  end
+
+  test "index refinement does not replace a runtime value with an erased branch witness" do
+    src =
+      mod("""
+        type Bool = False | True
+        type BoolView indices (value: Bool)
+          true_view : BoolView(True())
+        fn runtime_identity(value: Bool) -> Bool = value
+        fn retain_runtime_value(value: Bool, view: BoolView(value)) -> Bool = with view
+          true_view() -> runtime_identity(value)
+      """)
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "soundness control: an ill-typed body at the refined goal is rejected" do
     # In the vz branch the goal refines to `Equivalent(NV(Z), vz, vz)`. Returning
     # `reflexive(vs(...))` (: Equivalent(NV(S _), vs _, vs _)) must be rejected — the value
