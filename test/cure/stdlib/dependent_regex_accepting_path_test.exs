@@ -165,13 +165,13 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
         acceptance
       )
 
-    fn certified_predicate_machine_case() -> CertifiedPatternMachine(CharC, 1, predicate_pattern_machine(accepts_a)) =
+    fn certified_predicate_machine_case() -> CertifiedPatternMachine =
       certify_predicate_pattern_machine(accepts_a)
 
-    fn certified_empty_machine_case() -> CertifiedPatternMachine(UnitC, 0, empty_pattern_machine()) =
+    fn certified_empty_machine_case() -> CertifiedPatternMachine =
       certify_empty_pattern_machine()
 
-    fn certified_boundary_machine_case(constraint: BoundaryConstraint) -> CertifiedPatternMachine(UnitC, 0, boundary_pattern_machine(constraint)) =
+    fn certified_boundary_machine_case(constraint: BoundaryConstraint) -> CertifiedPatternMachine =
       certify_boundary_pattern_machine(constraint)
 
     fn certified_predicate_acceptance_case(
@@ -457,6 +457,22 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
 
     assert {:error, {:source_context, {:index_mismatch, {:cannot_unify, _, _}}, _}} =
              Program.elaborate(source)
+  end
+
+  test "published certificate constructors reduce through their machine projections" do
+    source = """
+    mod ProjectedPatternCertificate
+      use Std.Regex
+      use Std.Regex.Proof
+
+      fn accepts(_char: Char) -> Bool = true
+      fn projected_state_count() -> Equivalent(Nat, certified_pattern_state_count(certify_predicate_pattern_machine(accepts)), S(Z())) =
+        reflexive(S(Z()))
+      fn projected_machine() -> Equivalent(PatternMachine(S(Z())), certified_pattern_machine(certify_predicate_pattern_machine(accepts)), predicate_pattern_machine(accepts)) =
+        reflexive(predicate_pattern_machine(accepts))
+    """
+
+    assert {:ok, _} = Program.elaborate(source)
   end
 
   test "execution produces an accepting certificate with the winning evidence" do

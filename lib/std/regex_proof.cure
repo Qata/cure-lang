@@ -255,19 +255,37 @@ mod Std.Regex.Proof
           RoutineDone() -> predicate_arbitrary_path_encodes(test, input, after_input, final_evidence, path_routine, path)
         ListMemberThere(prior) -> impossible_list_member(prior)
 
-  type CertifiedPatternMachine indices (shape: ShapeCode, n: Nat, machine: PatternMachine(n))
-    CertifiedEmptyMachine : CertifiedPatternMachine(UnitC, Z(), empty_pattern_machine())
-    CertifiedBoundaryMachine : (constraint: BoundaryConstraint) -> CertifiedPatternMachine(UnitC, Z(), boundary_pattern_machine(constraint))
-    CertifiedPredicateMachine : (test: (Char -> Bool)) -> CertifiedPatternMachine(CharC, S(Z()), predicate_pattern_machine(test))
+  type CertifiedPatternMachine = CertifiedEmptyMachine | CertifiedBoundaryMachine(BoundaryConstraint) | CertifiedPredicateMachine(Char -> Bool)
 
-  fn certify_empty_pattern_machine() -> CertifiedPatternMachine(UnitC, Z(), empty_pattern_machine()) = CertifiedEmptyMachine()
+  @reducible
+  fn certified_pattern_shape(certified: CertifiedPatternMachine) -> ShapeCode = match certified
+    CertifiedEmptyMachine() -> UnitC()
+    CertifiedBoundaryMachine(_) -> UnitC()
+    CertifiedPredicateMachine(_) -> CharC()
 
-  fn certify_boundary_pattern_machine(constraint: BoundaryConstraint) -> CertifiedPatternMachine(UnitC, Z(), boundary_pattern_machine(constraint)) = CertifiedBoundaryMachine(constraint)
+  @reducible
+  fn certified_pattern_state_count(certified: CertifiedPatternMachine) -> Nat = match certified
+    CertifiedEmptyMachine() -> Z()
+    CertifiedBoundaryMachine(_) -> Z()
+    CertifiedPredicateMachine(_) -> S(Z())
 
-  fn certify_predicate_pattern_machine(test: Char -> Bool) -> CertifiedPatternMachine(CharC, S(Z()), predicate_pattern_machine(test)) =
+  @reducible
+  fn certified_pattern_machine(certified: CertifiedPatternMachine) -> PatternMachine(certified_pattern_state_count(certified)) = match certified
+    CertifiedEmptyMachine() -> empty_pattern_machine()
+    CertifiedBoundaryMachine(constraint) -> boundary_pattern_machine(constraint)
+    CertifiedPredicateMachine(test) -> predicate_pattern_machine(test)
+
+  @reducible
+  fn certify_empty_pattern_machine() -> CertifiedPatternMachine = CertifiedEmptyMachine()
+
+  @reducible
+  fn certify_boundary_pattern_machine(constraint: BoundaryConstraint) -> CertifiedPatternMachine = CertifiedBoundaryMachine(constraint)
+
+  @reducible
+  fn certify_predicate_pattern_machine(test: Char -> Bool) -> CertifiedPatternMachine =
     CertifiedPredicateMachine(test)
 
-  fn certified_pattern_acceptance_encodes({shape: ShapeCode}, {n: Nat}, {machine: PatternMachine(n)}, certified: CertifiedPatternMachine(shape, n, machine), input: List(Char), after_input: List(Char), position: InitialPosition, @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), acceptance: MachineAcceptance(n, machine, position, input, after_input, final_evidence, routine)) -> Encodes(shape, final_evidence, empty_evidence()) = match certified
+  fn certified_pattern_acceptance_encodes(certified: CertifiedPatternMachine, input: List(Char), after_input: List(Char), position: InitialPosition, @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), acceptance: MachineAcceptance(certified_pattern_state_count(certified), certified_pattern_machine(certified), position, input, after_input, final_evidence, routine)) -> Encodes(certified_pattern_shape(certified), final_evidence, empty_evidence()) = match certified
     CertifiedEmptyMachine() -> empty_machine_arbitrary_acceptance_encodes(input, after_input, position, final_evidence, routine, acceptance)
     CertifiedBoundaryMachine(constraint) -> boundary_machine_arbitrary_acceptance_encodes(constraint, input, after_input, position, final_evidence, routine, acceptance)
     CertifiedPredicateMachine(test) -> predicate_machine_arbitrary_acceptance_encodes(test, input, after_input, position, final_evidence, routine, acceptance)
