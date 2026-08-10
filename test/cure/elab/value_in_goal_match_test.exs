@@ -60,6 +60,16 @@ defmodule Cure.Elab.ValueInGoalMatchTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "an explicit erased parameter is consumed before a dependent present argument" do
+    src =
+      mod("""
+        fn retain(@erased marker: Nat, value: Nat) -> Nat = value
+        fn f(marker: Nat, value: Nat) -> Nat = retain(marker, value)
+      """)
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "goal Equivalent(NV(n), view(n), view(n)), computed scrutinee" do
     src =
       mod("""

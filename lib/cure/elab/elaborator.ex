@@ -13056,15 +13056,42 @@ defmodule Cure.Elab.Elaborator do
   # down the whole compilation and hiding every later diagnostic in the run.
   defp elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx, expected \\ nil) do
     case Env.get_def(env, name) do
-      %{type: pi_type, quantities: quantities} ->
-        elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx, expected, pi_type, quantities)
+      %{type: pi_type, quantities: quantities} = defn ->
+        plicities =
+          Map.get(defn, :plicities) ||
+            Enum.map(quantities, fn
+              :erased -> :implicit
+              _ -> :explicit
+            end)
+
+        elaborate_implicit_app_bidirectional(
+          env,
+          name,
+          arg_asts,
+          names,
+          ctx,
+          expected,
+          pi_type,
+          quantities,
+          plicities
+        )
 
       nil ->
         {:error, {:unknown_global, name}}
     end
   end
 
-  defp elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx, expected, pi_type, quantities) do
+  defp elaborate_implicit_app_bidirectional(
+         env,
+         name,
+         arg_asts,
+         names,
+         ctx,
+         expected,
+         pi_type,
+         quantities,
+         plicities
+       ) do
     {domains, codomain} = peel_pi(pi_type, length(quantities))
 
     # Transparent aliases in an expected result must be unfolded before the
@@ -13081,7 +13108,11 @@ defmodule Cure.Elab.Elaborator do
         end
       end
 
-    slots = Enum.zip(domains, quantities)
+    # Quantity controls relevance; plicity controls whether a surface argument is
+    # consumed. In particular `@erased witness : T` is explicit-but-erased, while
+    # `{witness : T}` is implicit-and-erased. Collapsing both to `:erased` shifted
+    # every later argument in the goal-directed path.
+    slots = Enum.zip([domains, quantities, plicities])
     init = {:ok, MetaCtx.new(), [], arg_asts, []}
 
     # GOAL-DIRECTED solving from the concrete return-type goal — ordinary
@@ -13133,7 +13164,7 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp bidir_seed_goal_prefix(
-         [slot = {_dom, :erased} | rest],
+         [slot = {_dom, _grade, :implicit} | rest],
          acc,
          names,
          ctx,
@@ -13168,7 +13199,7 @@ defmodule Cure.Elab.Elaborator do
          remaining
        ) do
     {mctx_padded, padded} =
-      Enum.reduce(remaining, {mctx, chosen}, fn {dom, _q}, {m, acc} ->
+      Enum.reduce(remaining, {mctx, chosen}, fn {dom, _q, _plicity}, {m, acc} ->
         {m, id} = MetaCtx.fresh(m, Subst.instantiate(dom, acc))
         {m, acc ++ [{:meta, id}]}
       end)
@@ -13193,13 +13224,24 @@ defmodule Cure.Elab.Elaborator do
     elaborate_implicit_app_bidirectional(env, name, arg_asts, names, ctx)
   end
 
-  defp bidir_app_slot({dom, :erased}, {:ok, mctx, chosen, args, deferred}, _names, _ctx, _env) do
+  defp bidir_app_slot(
+         {dom, _grade, :implicit},
+         {:ok, mctx, chosen, args, deferred},
+         _names,
+         _ctx,
+         _env
+       ) do
     {mctx, id} = MetaCtx.fresh(mctx, Subst.instantiate(dom, chosen))
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], args, deferred}}
   end
 
-  defp bidir_app_slot({_dom, grade}, {:ok, _mctx, _chosen, [], _deferred}, _names, _ctx, _env)
-       when grade in [:unrestricted, :linear, :affine],
+  defp bidir_app_slot(
+         {_dom, _grade, :explicit},
+         {:ok, _mctx, _chosen, [], _deferred},
+         _names,
+         _ctx,
+         _env
+       ),
        do: {:halt, {:error, :too_few_arguments}}
 
   # An explicit `_` in call-argument position is a goal-directed placeholder,
@@ -13209,23 +13251,28 @@ defmodule Cure.Elab.Elaborator do
   # unsolved, and the assembled application is kernel-checked by the caller, so
   # no placeholder can escape into Core.
   defp bidir_app_slot(
-         {dom, grade},
+         {dom, _grade, :explicit},
          {:ok, mctx, chosen, [{:variable, _meta, "_"} | rest], deferred},
          _names,
          _ctx,
          _env
-       )
-       when grade in [:unrestricted, :linear, :affine] do
+       ) do
     dom_inst = Enum.map(chosen, &Unify.zonk(&1, mctx)) |> then(&Subst.instantiate(dom, &1))
     {mctx, id} = MetaCtx.fresh(mctx, dom_inst)
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], rest, deferred}}
   end
 
   # A supplied explicit argument — grade governs later USAGE counting
-  # (`relevance.ex`), not slot mechanics: :unrestricted / :linear / :affine all
-  # consume one surface argument here, mirroring `solve_arg/3`'s telescope slot.
-  defp bidir_app_slot({dom, grade}, {:ok, mctx, chosen, [arg | rest], deferred}, names, ctx, env)
-       when grade in [:unrestricted, :linear, :affine] do
+  # (`relevance.ex`), not slot mechanics: unrestricted, linear, affine, and
+  # explicit-erased binders all consume one surface argument here, mirroring
+  # `solve_arg/3`'s telescope slot.
+  defp bidir_app_slot(
+         {dom, _grade, :explicit},
+         {:ok, mctx, chosen, [arg | rest], deferred},
+         names,
+         ctx,
+         env
+       ) do
     # ZONK-then-instantiate, not instantiate-then-zonk: `Subst.instantiate` shifts a
     # substituted term across binders, `Unify.zonk` does not. A domain that is a Π
     # (a function-typed argument, `(a) -> a`) whose earlier sibling already solved the

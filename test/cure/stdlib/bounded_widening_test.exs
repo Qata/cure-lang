@@ -4,7 +4,7 @@ defmodule Cure.Stdlib.BoundedWideningTest do
 
   alias Cure.Core.Env
 
-  @source """
+  @runtime_source """
   mod BoundedWideningRuntime
     use Std.Bounded
 
@@ -14,8 +14,14 @@ defmodule Cure.Stdlib.BoundedWideningTest do
     fn split_3_2(value: Bounded(plus(3, 2))) -> BoundedSum(3, 2) = split_sum(3, value)
   """
 
+  @proof_source """
+  mod BoundedWideningProofs
+    use Std.Bounded
+    use Std.Equivalent
+  """
+
   setup_all do
-    assert {:ok, module} = Cure.Compiler.compile_and_load(@source, emit_events: false)
+    assert {:ok, module} = Cure.Compiler.compile_and_load(@runtime_source, emit_events: false)
     {:ok, runtime_module: module}
   end
 
@@ -46,7 +52,7 @@ defmodule Cure.Stdlib.BoundedWideningTest do
   end
 
   test "widening and both injections are kernel-checked and certified total" do
-    assert {:ok, env} = Cure.Elab.Program.elaborate(@source)
+    assert {:ok, env} = Cure.Elab.Program.elaborate(@proof_source)
 
     for name <- [
           :"Std.Bounded#widen",
@@ -58,6 +64,9 @@ defmodule Cure.Stdlib.BoundedWideningTest do
       assert Env.get_def(env, name)
       assert Env.certified?(env, name)
     end
+
+    assert Env.get_def(env, :"Std.Bounded#split_injected_left")
+    assert Env.get_def(env, :"Std.Bounded#split_injected_right")
   end
 
   test "erasure drops every index while retaining the right injection's runtime offset" do
