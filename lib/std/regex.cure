@@ -377,6 +377,7 @@ mod Std.Regex
     [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [EmitPair()]), constraints) | finish_pair(rest)]
     [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | finish_pair(rest)]
 
+  @reducible
   fn mark_branch({n: Nat}, states: List(MachineState(n)), marker: EvidenceInstruction) -> List(MachineState(n)) = match states
     [] -> []
     [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [marker]), constraints) | mark_branch(rest, marker)]
@@ -436,6 +437,7 @@ mod Std.Regex
       fn(right_state) -> inject_right_states(left_count, finish_pair(right_next(right_state, char)))
     )
 
+  @reducible
   fn alternate_machine_next(left_count: Nat, {right_count: Nat}, left_next: (Bounded(left_count)) -> Char -> List(MachineState(left_count)), right_next: (Bounded(right_count)) -> Char -> List(MachineState(right_count)), state: Bounded(plus(left_count, right_count)), char: Char) -> List(MachineState(plus(left_count, right_count))) =
     fold_sum(
       split_sum(left_count, state),
@@ -443,6 +445,7 @@ mod Std.Regex
       fn(right_state) -> inject_right_states(left_count, mark_branch(right_next(right_state, char), EmitRight()))
     )
 
+  @reducible
   fn alternate_machine_starts(left_count: Nat, {right_count: Nat}, left_starts: List(MachineState(left_count)), right_starts: List(MachineState(right_count)), prefer_right: Bool) -> List(MachineState(plus(left_count, right_count))) =
     let marked_left: List(MachineState(plus(left_count, right_count))) = inject_left_states(mark_branch(left_starts, EmitLeft()))
     let marked_right: List(MachineState(plus(left_count, right_count))) = inject_right_states(left_count, mark_branch(right_starts, EmitRight()))

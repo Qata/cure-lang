@@ -316,6 +316,93 @@ mod Std.Regex.Proof
       PredicateConcatInitialDestinationExact() -> match initial_execution
         RoutineDone() -> predicate_concat_start_path_encodes(left, right, left_char, right_char, after_input, final_evidence, routine, path)
 
+  ## Alternate preserves the chosen branch in the evidence stream. This atomic
+  ## instance proves both injected halves of the finite-state sum, including the
+  ## right-hand state shift and the final EmitLeft/EmitRight marker.
+  @reducible
+  fn predicate_alternate_machine(left: Char -> Bool, right: Char -> Bool) -> PatternMachine(plus(S(Z()), S(Z()))) =
+    MkPatternMachine(
+      alternate_machine_starts(S(Z()), Cons(predicate_machine_start(), Nil()), Cons(predicate_machine_start(), Nil()), false),
+      alternate_machine_next(S(Z()), predicate_machine_next(left), predicate_machine_next(right))
+    )
+
+  @reducible
+  fn predicate_alternate_left_start() -> MachineState(plus(S(Z()), S(Z()))) = Active(First(), Nil(), Nil())
+
+  @reducible
+  fn predicate_alternate_right_start() -> MachineState(plus(S(Z()), S(Z()))) = Active(Next(First()), Nil(), Nil())
+
+  type PredicateAlternateStartsView indices (starts: List(MachineState(plus(S(Z()), S(Z())))))
+    PredicateAlternateStartsExact : PredicateAlternateStartsView(Cons(predicate_alternate_left_start(), Cons(predicate_alternate_right_start(), Nil())))
+
+  type PredicateAlternateInitialView indices (destination: MachineState(plus(S(Z()), S(Z()))))
+    PredicateAlternateInitialLeft : PredicateAlternateInitialView(predicate_alternate_left_start())
+    PredicateAlternateInitialRight : PredicateAlternateInitialView(predicate_alternate_right_start())
+
+  type PredicateAlternateLeftDestinationsView indices (holds: Bool, char: Char, destinations: List(MachineState(plus(S(Z()), S(Z())))))
+    PredicateAlternateLeftRejects : PredicateAlternateLeftDestinationsView(false, char, Nil())
+    PredicateAlternateLeftAccepts : PredicateAlternateLeftDestinationsView(true, char, Cons(Accepted(Cons(EmitChar(char), Cons(EmitLeft(), Nil())), Nil()), Nil()))
+
+  type PredicateAlternateRightDestinationsView indices (holds: Bool, char: Char, destinations: List(MachineState(plus(S(Z()), S(Z())))))
+    PredicateAlternateRightRejects : PredicateAlternateRightDestinationsView(false, char, Nil())
+    PredicateAlternateRightAccepts : PredicateAlternateRightDestinationsView(true, char, Cons(Accepted(Cons(EmitChar(char), Cons(EmitRight(), Nil())), Nil()), Nil()))
+
+  fn predicate_alternate_starts_view(left: Char -> Bool, right: Char -> Bool, position: InitialPosition, input: List(Char), after_input: List(Char)) -> PredicateAlternateStartsView(initial_machine_destinations(plus(S(Z()), S(Z())), predicate_alternate_machine(left, right), position, input, after_input)) = PredicateAlternateStartsExact()
+
+  fn predicate_alternate_initial_view(left: Char -> Bool, right: Char -> Bool, position: InitialPosition, input: List(Char), after_input: List(Char), destination: MachineState(plus(S(Z()), S(Z()))), edge: ListMember(MachineState(plus(S(Z()), S(Z()))), destination, initial_machine_destinations(plus(S(Z()), S(Z())), predicate_alternate_machine(left, right), position, input, after_input))) -> PredicateAlternateInitialView(destination) = match predicate_alternate_starts_view(left, right, position, input, after_input)
+    PredicateAlternateStartsExact() -> match edge
+      ListMemberHere() -> PredicateAlternateInitialLeft()
+      ListMemberThere(prior) -> match prior
+        ListMemberHere() -> PredicateAlternateInitialRight()
+        ListMemberThere(impossible) -> impossible_list_member(impossible)
+
+  fn predicate_alternate_left_destinations_view(left: Char -> Bool, right: Char -> Bool, char: Char, boundary: Boundary) -> PredicateAlternateLeftDestinationsView(left(char), char, machine_destinations(plus(S(Z()), S(Z())), predicate_alternate_machine(left, right), ThreadActive(First()), char, boundary)) = match left(char)
+    False() -> PredicateAlternateLeftRejects()
+    True() -> PredicateAlternateLeftAccepts()
+
+  fn predicate_alternate_right_destinations_view(left: Char -> Bool, right: Char -> Bool, char: Char, boundary: Boundary) -> PredicateAlternateRightDestinationsView(right(char), char, machine_destinations(plus(S(Z()), S(Z())), predicate_alternate_machine(left, right), ThreadActive(Next(First())), char, boundary)) = match right(char)
+    False() -> PredicateAlternateRightRejects()
+    True() -> PredicateAlternateRightAccepts()
+
+  fn predicate_alternate_left_path_encodes(left: Char -> Bool, right: Char -> Bool, char: Char, after_input: List(Char), @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), path: AcceptingFrom(plus(S(Z()), S(Z())), predicate_alternate_machine(left, right), Cons(char, Nil()), after_input, ThreadActive(First()), Nil(), Nil(), final_evidence, routine)) -> Encodes(ChoiceC(CharC, CharC), final_evidence, empty_evidence()) = match path
+    AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> match predicate_alternate_left_destinations_view(left, right, char, transition_boundary_before(char, Nil(), after_input))
+      PredicateAlternateLeftRejects() -> impossible_list_member(edge)
+      PredicateAlternateLeftAccepts() -> match edge
+        ListMemberThere(prior) -> impossible_list_member(prior)
+    AcceptingNextAccepted(_, _, _, _, _, edge, execution, suffix) -> match predicate_alternate_left_destinations_view(left, right, char, transition_boundary_before(char, Nil(), after_input))
+      PredicateAlternateLeftRejects() -> impossible_list_member(edge)
+      PredicateAlternateLeftAccepts() -> match edge
+        ListMemberHere() -> match execution
+          RoutineStep(_, after_char) -> match after_char
+            RoutineStep(_, after_marker) -> match after_marker
+              RoutineDone() -> match suffix
+                AcceptingNow() -> EncodesLeft(encodes_character_empty(char))
+        ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn predicate_alternate_right_path_encodes(left: Char -> Bool, right: Char -> Bool, char: Char, after_input: List(Char), @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), path: AcceptingFrom(plus(S(Z()), S(Z())), predicate_alternate_machine(left, right), Cons(char, Nil()), after_input, ThreadActive(Next(First())), Nil(), Nil(), final_evidence, routine)) -> Encodes(ChoiceC(CharC, CharC), final_evidence, empty_evidence()) = match path
+    AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> match predicate_alternate_right_destinations_view(left, right, char, transition_boundary_before(char, Nil(), after_input))
+      PredicateAlternateRightRejects() -> impossible_list_member(edge)
+      PredicateAlternateRightAccepts() -> match edge
+        ListMemberThere(prior) -> impossible_list_member(prior)
+    AcceptingNextAccepted(_, _, _, _, _, edge, execution, suffix) -> match predicate_alternate_right_destinations_view(left, right, char, transition_boundary_before(char, Nil(), after_input))
+      PredicateAlternateRightRejects() -> impossible_list_member(edge)
+      PredicateAlternateRightAccepts() -> match edge
+        ListMemberHere() -> match execution
+          RoutineStep(_, after_char) -> match after_char
+            RoutineStep(_, after_marker) -> match after_marker
+              RoutineDone() -> match suffix
+                AcceptingNow() -> EncodesRight(encodes_character_empty(char))
+        ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn predicate_alternate_initial_path_encodes(left: Char -> Bool, right: Char -> Bool, char: Char, after_input: List(Char), position: InitialPosition, destination: MachineState(plus(S(Z()), S(Z()))), {initial_evidence: List(Evidence)}, {initial_captures: List(CaptureFrame)}, @erased final_evidence: List(Evidence), @erased path_routine: List(ExtendedInstruction), edge: ListMember(MachineState(plus(S(Z()), S(Z()))), destination, initial_machine_destinations(plus(S(Z()), S(Z())), predicate_alternate_machine(left, right), position, Cons(char, Nil()), after_input)), initial_execution: RoutineExecution(machine_state_routine(plus(S(Z()), S(Z())), destination), Nil(), Nil(), initial_evidence, initial_captures), path: AcceptingFrom(plus(S(Z()), S(Z())), predicate_alternate_machine(left, right), Cons(char, Nil()), after_input, machine_state_thread(plus(S(Z()), S(Z())), destination), initial_evidence, initial_captures, final_evidence, path_routine)) -> Encodes(ChoiceC(CharC, CharC), final_evidence, empty_evidence()) = match predicate_alternate_initial_view(left, right, position, Cons(char, Nil()), after_input, destination, edge)
+    PredicateAlternateInitialLeft() -> match initial_execution
+      RoutineDone() -> predicate_alternate_left_path_encodes(left, right, char, after_input, final_evidence, path_routine, path)
+    PredicateAlternateInitialRight() -> match initial_execution
+      RoutineDone() -> predicate_alternate_right_path_encodes(left, right, char, after_input, final_evidence, path_routine, path)
+
+  fn predicate_alternate_machine_acceptance_encodes(left: Char -> Bool, right: Char -> Bool, char: Char, after_input: List(Char), position: InitialPosition, @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), acceptance: MachineAcceptance(plus(S(Z()), S(Z())), predicate_alternate_machine(left, right), position, Cons(char, Nil()), after_input, final_evidence, routine)) -> Encodes(ChoiceC(CharC, CharC), final_evidence, empty_evidence()) = match acceptance
+    MachineAccepted(destination, initial_evidence, initial_captures, path_routine, edge, initial_execution, _, path) -> predicate_alternate_initial_path_encodes(left, right, char, after_input, position, destination, final_evidence, path_routine, edge, initial_execution, path)
+
   fn predicate_path_routine_view(test: Char -> Bool, char: Char, after_input: List(Char), {path_evidence: List(Evidence)}, {path_captures: List(CaptureFrame)}, {path_final_evidence: List(Evidence)}, {routine: List(ExtendedInstruction)}, path: AcceptingFrom(S(Z()), predicate_pattern_machine(test), Cons(char, Nil()), after_input, predicate_machine_thread(), path_evidence, path_captures, path_final_evidence, routine)) -> PredicateRoutineView(char, routine) = match path
     AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> match predicate_destinations_view(test, char, transition_boundary_before(char, [], after_input))
       PredicateRejects() -> impossible_list_member(edge)
