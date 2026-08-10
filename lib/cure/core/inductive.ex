@@ -26,6 +26,7 @@ defmodule Cure.Core.Env do
             ctor_to_family: %{},
             defs: %{},
             certified: nil,
+            totality_certified: nil,
             builtins: %{},
             interfaces: %{},
             interface_methods: %{},
@@ -47,6 +48,7 @@ defmodule Cure.Core.Env do
           ctor_to_family: %{atom() => atom()},
           defs: %{atom() => map()},
           certified: MapSet.t() | nil,
+          totality_certified: MapSet.t() | nil,
           builtins: %{atom() => atom()},
           interfaces: %{atom() => map()},
           interface_methods: %{atom() => map()},
@@ -96,7 +98,7 @@ defmodule Cure.Core.Env do
 
   @doc "An empty signature."
   @spec empty() :: t()
-  def empty, do: %__MODULE__{certified: MapSet.new()}
+  def empty, do: %__MODULE__{certified: MapSet.new(), totality_certified: MapSet.new()}
 
   @doc "Attach the source-module owner used for canonical declaration identity."
   @spec with_owner(t(), String.t() | atom() | nil) :: t()
@@ -193,6 +195,9 @@ defmodule Cure.Core.Env do
     name = owned_name(env, name)
     certified = if is_nil(env.certified), do: nil, else: MapSet.delete(env.certified, name)
 
+    totality_certified =
+      if is_nil(env.totality_certified), do: nil, else: MapSet.delete(env.totality_certified, name)
+
     %{
       env
       | defs:
@@ -203,7 +208,8 @@ defmodule Cure.Core.Env do
             quantities: quantities,
             plicities: plicities
           }),
-        certified: certified
+        certified: certified,
+        totality_certified: totality_certified
     }
   end
 
@@ -573,7 +579,7 @@ defmodule Cure.Core.Env do
   public seam. (A5)
   """
   @spec certify(t(), atom()) :: t()
-  def certify(%__MODULE__{certified: c} = env, name) do
+  def certify(%__MODULE__{certified: c, totality_certified: t} = env, name) do
     name = resolve_key(env, env.defs, name)
 
     case get_def(env, name) do
@@ -588,12 +594,22 @@ defmodule Cure.Core.Env do
         :ok
     end
 
-    %{env | certified: MapSet.put(c, name)}
+    %{
+      env
+      | certified: MapSet.put(c || MapSet.new(), name),
+        totality_certified: MapSet.put(t || MapSet.new(), name)
+    }
   end
 
   @doc "Is the global `name` certified total (δ-reducible)?"
   @spec certified?(t(), atom()) :: boolean()
   def certified?(%__MODULE__{} = env, name), do: MapSet.member?(env.certified, resolve_key(env, env.defs, name))
+
+  @doc "Is `name` kernel-certified total, independently of whether its body is available for δ-unfolding?"
+  @spec total?(t(), atom()) :: boolean()
+  def total?(%__MODULE__{} = env, name) do
+    MapSet.member?(env.totality_certified || MapSet.new(), resolve_key(env, env.defs, name))
+  end
 
   @doc """
   Mark an already-registered global def as a builtin arithmetic/comparison op,

@@ -393,20 +393,36 @@ defmodule Cure.Diagnostic.Adapter.Operational do
   def impossible_return(context, value, opts \\ []) do
     internal_context = Cure.Diagnostic.InternalContext.normalize(opts)
     fingerprint = fingerprint({context, value, internal_context})
+    impossible_shape = Cure.Diagnostic.InternalContext.bounded_term(value)
+
+    evidence =
+      [
+        "Boundary: `#{context}`.",
+        if(internal_context.declaration, do: "Declaration: `#{internal_context.declaration}`."),
+        if(internal_context.core_term, do: "Failing Core term: `#{internal_context.core_term}`."),
+        if(internal_context.expected_type, do: "Expected type: `#{internal_context.expected_type}`."),
+        if(internal_context.inferred_type, do: "Inferred type: `#{internal_context.inferred_type}`."),
+        if(internal_context.unresolved_global,
+          do: "Unresolved global: `#{internal_context.unresolved_global}`."
+        ),
+        "Received: `#{impossible_shape}`."
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" ")
 
     Diagnostic.new(
       code: "E101",
       key: :internal_compiler_error,
       severity: :error,
       title: "Internal compiler error",
-      message: "The compiler reached an impossible state. Please report fingerprint `#{fingerprint}`.",
+      message: "The compiler reached an impossible state. #{evidence} Please report fingerprint `#{fingerprint}`.",
       primary: internal_primary(internal_context.span),
       provenance: internal_context.provenance,
       payload:
         Map.merge(internal_context, %{
           fingerprint: fingerprint,
           context: context,
-          impossible_shape: if(Keyword.get(opts, :debug, false), do: inspect(value), else: nil)
+          impossible_shape: impossible_shape
         })
     )
   end

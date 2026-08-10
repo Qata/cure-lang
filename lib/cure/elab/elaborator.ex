@@ -13,7 +13,7 @@ defmodule Cure.Elab.Elaborator do
   name resolves to its de Bruijn index by position.
   """
 
-  alias Cure.Core.{Context, Conv, Env, Eval, Grade, Inductive, Kernel, Normalise, Quote}
+  alias Cure.Core.{Context, Conv, Env, Eval, Grade, Inductive, Kernel, Normalise, Quote, Term}
   alias Cure.Elab.{CallAttemptProfile, GuardLint, MetaCtx, Rewrite, Subst, Unify}
 
   import Cure.Elab.Rewrite,
@@ -3264,8 +3264,34 @@ defmodule Cure.Elab.Elaborator do
 
       _ ->
         expected = Eval.eval(expected_core, Context.env(ctx))
+        atom = String.to_atom(name)
+        resolved = resolve_def_key(env, name, atom)
+        residual = residual_explicit_arity(env, resolved, 0)
+        implicit_global? = implicit_def?(env, resolved)
 
         case {name in names, expected} do
+          # A bare reference to an implicit-carrying definition is a partial
+          # application too.  Give it the same goal-directed eta expansion as
+          # an authored under-saturated call: `no_next` at
+          # `(Bounded(n)) -> List(State(n))` becomes
+          # `fn(state) -> no_next(state)`, allowing the call elaborator to solve
+          # the hidden `n` from the expected function type.  Inferring the bare
+          # global first leaves its leading `{n : Nat}` in the Pi telescope and
+          # the kernel then compares that domain with `Bounded(n)`, producing the
+          # misleading `Expected Nat, Found Bounded(n)` seen by Std.Regex.
+          # Locals still shadow globals, and the synthesized term is kernel
+          # checked through the ordinary lambda/call paths.
+          {false, {:vpi, _, _, _}} when residual > 0 and implicit_global? ->
+            call_meta = Keyword.put(meta, :name, name)
+
+            elaborate_expr_checked(
+              eta_expand_call(call_meta, [], residual),
+              expected_core,
+              names,
+              ctx,
+              env
+            )
+
           {false, {:vtype, _level}} ->
             case resolve_type_free(name, env) do
               {:ok, term} ->
@@ -4736,6 +4762,8 @@ defmodule Cure.Elab.Elaborator do
 
   defp implicit_def?(env, atom) do
     case Env.get_def(env, atom) do
+      %{plicities: p, quantities: q} when is_list(p) and is_list(q) -> :implicit in p or :erased in q
+      %{plicities: p} when is_list(p) -> :implicit in p
       %{quantities: q} when is_list(q) -> :erased in q
       _ -> false
     end
@@ -5160,6 +5188,24 @@ defmodule Cure.Elab.Elaborator do
       case Normalise.whnf_value(scrut_type, Context.signature(ctx)) do
         {:vdata, dname, combined_vals} ->
           family = Inductive.get_family(env, dname)
+          # A computed scrutinee can occur in the goal only behind one or more
+          # published reducible definitions. Expose that dependency before both
+          # motive construction and per-branch goal refinement; otherwise
+          # `replace_term` cannot abstract the discriminant and every branch is
+          # checked against the original, unrefined result index.
+          result_type_term =
+            case scrut_term do
+              {:var, _} ->
+                result_type_term
+
+              computed ->
+                if variable_headed_application?(computed) do
+                  expose_reducible_dependency(result_type_term, computed, ctx, env)
+                else
+                  result_type_term
+                end
+            end
+
           # The scrutinee's args are parameters ++ indices; split off the leading
           # parameters. Only the indices are abstracted by the motive and refined
           # per branch — parameters are uniform (never matched).
@@ -5232,7 +5278,17 @@ defmodule Cure.Elab.Elaborator do
                 _ -> []
               end
 
-            retry = fn ->
+            index_siblings =
+              if family.indices != [] do
+                case collect_index_motive_siblings(scrut_term, idx_terms, names, ctx, env) do
+                  {:ok, s} -> s
+                  {:error, _} -> []
+                end
+              else
+                []
+              end
+
+            retry_value_siblings = fn ->
               elaborate_motivegen_case(
                 scrut_term,
                 scrut_type,
@@ -5247,11 +5303,39 @@ defmodule Cure.Elab.Elaborator do
               )
             end
 
+            retry_index_siblings = fn ->
+              elaborate_index_motivegen_case(
+                scrut_term,
+                dname,
+                family.indices,
+                param_terms,
+                idx_terms,
+                param_vals,
+                index_siblings,
+                arms,
+                result_type_term,
+                names,
+                ctx,
+                env
+              )
+            end
+
             cond do
-              siblings == [] -> standard
-              match?({:error, _}, standard) -> retry.()
-              match_term_kernel_rejects?(elem(standard, 1), result_type_term, ctx) -> retry.()
-              true -> standard
+              siblings != [] and match?({:error, _}, standard) ->
+                retry_value_siblings.()
+
+              siblings != [] and match_term_kernel_rejects?(elem(standard, 1), result_type_term, ctx) ->
+                retry_value_siblings.()
+
+              index_siblings != [] and match?({:error, _}, standard) ->
+                retry_index_siblings.()
+
+              index_siblings != [] and
+                  match_term_kernel_rejects?(elem(standard, 1), result_type_term, ctx) ->
+                retry_index_siblings.()
+
+              true ->
+                standard
             end
           end
 
@@ -5959,6 +6043,7 @@ defmodule Cure.Elab.Elaborator do
       |> Enum.flat_map(fn {name, i} ->
         if is_binary(name) do
           type_term = resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env)
+          type_term = expose_reducible_dependency(type_term, scrut_term, ctx, env)
 
           if contains_term?(type_term, scrut_term),
             do: [%{name: name, index: i, type_term: type_term}],
@@ -5979,6 +6064,142 @@ defmodule Cure.Elab.Elaborator do
         {:error, {:source_context, {:with_sibling_dependency_unsupported, reason}, Map.delete(details, :reason)}}
     end
   end
+
+  defp collect_index_motive_siblings(scrut_term, idx_terms, names, ctx, env) do
+    depth = Context.length(ctx)
+    targets = Enum.filter(idx_terms, &match?({:var, _}, &1))
+
+    scrut_idx =
+      case scrut_term do
+        {:var, i} -> i
+        _ -> -1
+      end
+
+    gen =
+      names
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {name, i} ->
+        if is_binary(name) and i != scrut_idx do
+          type_term = resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env)
+
+          if Enum.any?(targets, &contains_term?(type_term, &1)),
+            do: [%{name: name, index: i, type_term: type_term}],
+            else: []
+        else
+          []
+        end
+      end)
+      |> Enum.sort_by(& &1.index, :desc)
+
+    gen_set = gen |> Enum.map(& &1.index) |> MapSet.new()
+
+    case sibling_dependency(gen, gen_set, names, ctx, env, depth) do
+      nil -> {:ok, gen}
+      details -> {:error, details}
+    end
+  end
+
+  # Normalisation deliberately keeps a certified global folded when unfolding it
+  # would merely expose a case stuck on a neutral (Core.Normalise's A6 rule). That
+  # is the right canonical-form policy, but it can hide a convoy dependency from
+  # the elaborator: a sibling type such as `View(f(x))` may reach `x` only through
+  # one or more explicitly published `@reducible` definitions.
+  #
+  # Dependency discovery is untrusted elaboration, so it may inspect those bodies
+  # more aggressively without changing conversion. Expand only certified, closed,
+  # author-published bodies, at most once per global, then beta/iota-normalise with
+  # delta reduction disabled. If this exposes the scrutinee, the ordinary convoy
+  # machinery uses the exposed (definitionally equal) type and the kernel checks
+  # the resulting term. Opaque, uncertified, open, and recursive occurrences stay
+  # folded. The global budget bounds hostile or unusually deep interface graphs.
+  defp expose_reducible_dependency(type_term, target, ctx, env) do
+    do_expose_reducible_dependency(type_term, target, ctx, env, MapSet.new(), 32)
+  end
+
+  defp variable_headed_application?({:app, function, _argument}),
+    do: variable_headed_application?(function)
+
+  defp variable_headed_application?({:var, _}), do: true
+  defp variable_headed_application?(_term), do: false
+
+  defp do_expose_reducible_dependency(term, target, _ctx, _env, _seen, _fuel)
+       when term == target,
+       do: term
+
+  defp do_expose_reducible_dependency(term, _target, _ctx, _env, _seen, 0),
+    do: term
+
+  defp do_expose_reducible_dependency(term, target, ctx, env, seen, fuel) do
+    if contains_term?(term, target) do
+      term
+    else
+      {expanded, newly_seen} = expand_published_reducibles(term, env, seen)
+
+      if MapSet.size(newly_seen) == MapSet.size(seen) do
+        term
+      else
+        case dependency_exposure_nf(ctx, expanded) do
+          :unsafe_to_expose ->
+            term
+
+          :fuel_exhausted ->
+            term
+
+          normalized ->
+            do_expose_reducible_dependency(
+              resplit_data(normalized, env),
+              target,
+              ctx,
+              env,
+              newly_seen,
+              fuel - 1
+            )
+        end
+      end
+    end
+  end
+
+  defp dependency_exposure_nf(ctx, term) do
+    Normalise.nf(ctx, term, delta: :none, fuel: 2_048)
+  rescue
+    _ -> :unsafe_to_expose
+  catch
+    _, _ -> :unsafe_to_expose
+  end
+
+  defp expand_published_reducibles({:global, name} = global, env, seen) do
+    key = Env.resolve_key(env, env.defs, name)
+
+    case Env.get_def(env, key) do
+      %{body: body, reducible: true}
+      when not is_nil(body) ->
+        if not MapSet.member?(seen, key) and Env.certified?(env, key) and Term.closed?(body) do
+          {body, MapSet.put(seen, key)}
+        else
+          {global, seen}
+        end
+
+      _ ->
+        {global, seen}
+    end
+  end
+
+  defp expand_published_reducibles(term, env, seen) when is_tuple(term) do
+    {children, seen} =
+      Enum.map_reduce(children(term), seen, fn child, acc ->
+        expand_published_reducibles(child, env, acc)
+      end)
+
+    {rebuild(term, children), seen}
+  end
+
+  defp expand_published_reducibles(term, env, seen) when is_list(term) do
+    Enum.map_reduce(term, seen, fn child, acc ->
+      expand_published_reducibles(child, env, acc)
+    end)
+  end
+
+  defp expand_published_reducibles(term, _env, seen), do: {term, seen}
 
   defp sibling_dependency(gen, gen_set, names, ctx, env, depth) do
     generated_dependency =
@@ -6218,6 +6439,48 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  defp elaborate_index_motivegen_case(
+         scrut_term,
+         dname,
+         index_tele,
+         param_terms,
+         idx_terms,
+         param_vals,
+         siblings,
+         arms,
+         result_type_term,
+         names,
+         ctx,
+         env
+       ) do
+    generalized_result =
+      siblings
+      |> Enum.reverse()
+      |> Enum.reduce(result_type_term, fn %{type_term: domain}, codomain ->
+        {:pi, Grade.unrestricted(), domain, Subst.shift(codomain, 1, 0)}
+      end)
+
+    motive = build_motive(dname, index_tele, param_terms, idx_terms, scrut_term, generalized_result)
+
+    cfg = %{
+      names: names,
+      ctx: ctx,
+      env: env,
+      dname: dname,
+      param_vals: param_vals,
+      idx_vals: Enum.map(idx_terms, &Eval.eval(&1, Context.env(ctx))),
+      motive: motive,
+      sibling_names: Enum.map(siblings, & &1.name),
+      indexed_motive?: true
+    }
+
+    with {:ok, branches} <- elaborate_with_motivegen_branches(arms, cfg) do
+      case_term = {:case, scrut_term, motive, branches}
+      applied = Enum.reduce(siblings, case_term, fn %{index: idx}, acc -> {:app, acc, {:var, idx}} end)
+      {:ok, applied}
+    end
+  end
+
   # Motive-generalization branches (single sibling, no proof). Each branch binds the
   # REFINED sibling as a fresh λ, at the type `motive @ ctor` computes, and rebinds
   # the sibling's ORIGINAL name to it so the body sees the refined type. No Eq, no
@@ -6244,15 +6507,39 @@ defmodule Cure.Elab.Elaborator do
     %{names: names, ctx: ctx, env: env, param_vals: param_vals, motive: motive, sibling_names: snames} = cfg
 
     {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
-    %{args: telescope, quantities: quantities, plicities: plicities} = Inductive.get_ctor(env, cname)
+
+    %{args: telescope, quantities: quantities, plicities: plicities, result_indices: result_indices} =
+      Inductive.get_ctor(env, cname)
+
     arity = length(telescope)
     branch_names0 = branch_scope(telescope, quantities, plicities, pattern_vars) ++ names
-    branch_ctx0 = extend_context(ctx, telescope, param_vals)
+
+    {branch_ctx0, branch_subst} =
+      if Map.get(cfg, :indexed_motive?, false) do
+        subst =
+          case Kernel.branch_unify(ctx, cfg.dname, cname, cfg.idx_vals, param_vals) do
+            {:solved, s} -> s
+            _ -> %{}
+          end
+
+        {ctx |> extend_context(telescope, param_vals) |> specialize_branch_context_subst(subst), subst}
+      else
+        {extend_context(ctx, telescope, param_vals), %{}}
+      end
 
     ctor_term = branch_constructor_term(cname, arity)
     motive_shifted = Subst.shift(motive, arity, 0)
     # applied = Π(s₁: H₁[e↦pat]) … Π(sₘ: Hₘ[e↦pat]). G[e↦pat]
-    applied = Kernel.normalize(branch_ctx0, {:app, motive_shifted, ctor_term})
+    motive_application =
+      if Map.get(cfg, :indexed_motive?, false) do
+        Enum.reduce(result_indices ++ [ctor_term], motive_shifted, fn argument, function ->
+          {:app, function, argument}
+        end)
+      else
+        {:app, motive_shifted, ctor_term}
+      end
+
+    applied = Kernel.normalize(branch_ctx0, motive_application)
 
     # Peel one Π per sibling, extending the branch context and rebinding each
     # refined sibling under its original name (so the arm body reads the refined
@@ -6269,12 +6556,32 @@ defmodule Cure.Elab.Elaborator do
 
     with {:ok, inner} <-
            elaborate_branch_body(body_expr, cod_expected, branch_names, branch_ctx, env) do
+      emitted_subst = emission_branch_subst(branch_subst, arity)
+
+      inner =
+        if map_size(emitted_subst) == 0,
+          do: inner,
+          else: replace_branch_vars(inner, shift_subst(emitted_subst, length(snames)))
+
       # doms_rev is innermost-first; folding wraps λs₁'. … λsₘ'. inner (s₁ outermost).
       wrapped =
         Enum.reduce(doms_rev, inner, fn {g, dom_term}, acc -> {:lam, g, dom_term, acc} end)
 
       {:ok, {cname, arity, wrapped}}
     end
+  end
+
+  defp emission_branch_subst(subst, arity) do
+    Enum.reduce(subst, %{}, fn
+      {field, {:var, outer}}, acc when field < arity and outer >= arity ->
+        Map.put(acc, outer, {:var, field})
+
+      {outer, term}, acc when outer >= arity ->
+        Map.put(acc, outer, term)
+
+      _, acc ->
+        acc
+    end)
   end
 
   # motive = λ(j₀:T₀)…λ(jₙ:Tₙ).λ(x : D j̄). ResultType[scrutinee-indices ↦ j̄]
@@ -6351,24 +6658,40 @@ defmodule Cure.Elab.Elaborator do
     |> Enum.reduce(body, fn type, acc -> {:lam, Cure.Core.Grade.unrestricted(), type, acc} end)
   end
 
-  # Step 3b detection. Return `nil` unless the scrutinee has EXACTLY ONE computed
-  # (non-variable) index position whose term is mentioned by at least one sibling
-  # in scope (a context variable other than the scrutinee). In that case return
+  # Step 3b detection. Return `nil` unless the scrutinee has exactly one MAXIMAL
+  # computed index position whose term is mentioned by a sibling. A sibling can
+  # mention both `boundary(x)` and the enclosing `destinations(..., boundary(x))`;
+  # the outer equation subsumes the inner one, so those are one dependency rather
+  # than two unrelated equations. In the singleton maximal case return
   # `%{pos, idx_term, idx_type_term, siblings}` describing the equation to carry.
   # Restricted to a single computed index with a closed index type (SList, Dec —
   # the FRP carriers); anything else falls back to the plain 3a motive (the kernel
   # then rejects an un-transportable sibling, never mis-accepts it).
   defp detect_carried_index(index_tele, idx_terms, scrut_term, names, ctx, env) do
-    computed =
+    candidates =
       idx_terms
       |> Enum.with_index()
       |> Enum.reject(fn {t, _pos} -> invertible_index?(t) end)
+      |> Enum.flat_map(fn {idx_term, pos} ->
+        {_name, idx_type_term} = Enum.at(index_tele, pos)
+        siblings = collect_index_siblings(scrut_term, idx_term, names, ctx, env)
 
-    with [{idx_term, pos}] <- computed,
-         {_name, idx_type_term} <- Enum.at(index_tele, pos),
-         true <- MapSet.size(free_indices(idx_type_term, 0)) == 0,
-         [_ | _] = siblings <- collect_index_siblings(scrut_term, idx_term, names, ctx, env) do
-      %{pos: pos, idx_term: idx_term, idx_type_term: idx_type_term, siblings: siblings}
+        if MapSet.size(free_indices(idx_type_term, 0)) == 0 and siblings != [] do
+          [%{pos: pos, idx_term: idx_term, idx_type_term: idx_type_term, siblings: siblings}]
+        else
+          []
+        end
+      end)
+
+    maximal =
+      Enum.reject(candidates, fn candidate ->
+        Enum.any?(candidates, fn other ->
+          other.pos != candidate.pos and contains_term?(other.idx_term, candidate.idx_term)
+        end)
+      end)
+
+    with [carried] <- maximal do
+      carried
     else
       _ -> nil
     end
@@ -6413,8 +6736,9 @@ defmodule Cure.Elab.Elaborator do
     |> Enum.flat_map(fn {name, i} ->
       if is_binary(name) and i != scrut_idx do
         type_term = resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env)
+        {type_term, found?} = canonicalize_convoy_occurrence(type_term, idx_term, ctx)
 
-        if contains_term?(type_term, idx_term),
+        if found?,
           do: [%{name: name, index: i, type_term: type_term}],
           else: []
       else
@@ -6422,6 +6746,61 @@ defmodule Cure.Elab.Elaborator do
       end
     end)
     |> Enum.sort_by(& &1.index, :desc)
+  end
+
+  # A sibling and a scrutinee index can use different but definitionally equal
+  # spellings (`ThreadActive(0)` versus a reducible `initial_thread()`). Convoy
+  # abstraction is syntactic, so orient convertible occurrences in the sibling
+  # toward the scrutinee's ORIGINAL folded index term before `abstract_term` runs.
+  # This changes no kernel equality: the final motive and transports are checked.
+  # Binder bodies are left alone because their de Bruijn frame differs from `ctx`;
+  # the dependent sibling types handled here are ordinary data/application spines.
+  defp canonicalize_convoy_occurrence(term, target, _ctx) when term == target,
+    do: {target, true}
+
+  defp canonicalize_convoy_occurrence({tag, _g, _d, _body} = term, _target, _ctx)
+       when tag in [:pi, :lam],
+       do: {term, false}
+
+  defp canonicalize_convoy_occurrence({:case, _s, _m, _branches} = term, _target, _ctx),
+    do: {term, false}
+
+  defp canonicalize_convoy_occurrence(term, target, ctx) when is_tuple(term) do
+    if convertible_convoy_occurrence?(term, target, ctx) do
+      {target, true}
+    else
+      {children, found?} =
+        Enum.map_reduce(children(term), false, fn child, found ->
+          {child, child_found?} = canonicalize_convoy_occurrence(child, target, ctx)
+          {child, found or child_found?}
+        end)
+
+      {rebuild(term, children), found?}
+    end
+  end
+
+  defp canonicalize_convoy_occurrence(term, target, ctx) when is_list(term) do
+    Enum.map_reduce(term, false, fn child, found ->
+      {child, child_found?} = canonicalize_convoy_occurrence(child, target, ctx)
+      {child, found or child_found?}
+    end)
+  end
+
+  defp canonicalize_convoy_occurrence(term, _target, _ctx), do: {term, false}
+
+  defp convertible_convoy_occurrence?(term, target, ctx) do
+    Term.term?(term) and
+      Conv.conv?(
+        term,
+        target,
+        Context.env(ctx),
+        Context.length(ctx),
+        Context.signature(ctx)
+      )
+  rescue
+    _ -> false
+  catch
+    _, _ -> false
   end
 
   # Inject the carried index equation into a 3a motive `λj̄. λx. G'`, yielding
@@ -9583,32 +9962,52 @@ defmodule Cure.Elab.Elaborator do
        ) do
     %{pos: pos, idx_term: idx_term, idx_type_term: idx_type_term, siblings: siblings} = carried
     arity = length(telescope)
-    branch_ctx0 = extend_context(ctx, telescope, scrut_param_vals)
+
+    branch_ctx0 =
+      ctx
+      |> extend_context(telescope, scrut_param_vals)
+      |> specialize_branch_context_subst(subst)
 
     # C-a (spec 2026-07-08 §2.1): run the forced named-implicit check on this
     # carried-eq branch too, in the same pre-proof frame the plain path uses
     # (`branch_ctx0` specialized by the branch-unify subst) — otherwise a wrong
     # dot on a carried branch is silently discarded.
-    check_ctx = specialize_branch_context_subst(branch_ctx0, subst)
+    check_ctx = branch_ctx0
 
     with :ok <- check_named_implicits(pattern, subst, arity, telescope, check_ctx, branch_names, env) do
       # `ctor_idx` — this constructor's result index at the carried position, in the
       # branch_ctx0 frame (telescope bound). `Eq(T, idx, ctor_idx)` is the proof the
       # motive hands each branch (kernel checks the branch at `motive @ ctor_idx`).
-      ctor_idx = Enum.at(result_indices, pos)
-      eq_dom_term = mk_eq(Subst.shift(idx_type_term, arity, 0), Subst.shift(idx_term, arity, 0), ctor_idx)
+      ctor_idx = result_indices |> Enum.at(pos) |> replace_branch_vars(subst)
+
+      idx_branch =
+        idx_term
+        |> Subst.shift(arity, 0)
+        |> replace_branch_vars(subst)
+
+      type_branch =
+        idx_type_term
+        |> Subst.shift(arity, 0)
+        |> replace_branch_vars(subst)
+
+      eq_dom_term = mk_eq(type_branch, idx_branch, ctor_idx)
       branch_ctx1 = Context.extend(branch_ctx0, Eval.eval(eq_dom_term, Context.env(branch_ctx0)))
 
       # Constants in branch_ctx1 (ctx + telescope + prf). `sc` shifts a ctx-frame
       # term past the telescope and the prf binder; `pat_b1` is `ctor_idx` past prf.
       sc = arity + 1
-      idx_b1 = Subst.shift(idx_term, sc, 0)
-      t_b1 = Subst.shift(idx_type_term, sc, 0)
+      idx_b1 = Subst.shift(idx_branch, 1, 0)
+      t_b1 = Subst.shift(type_branch, 1, 0)
       pat_b1 = Subst.shift(ctor_idx, 1, 0)
 
       sib_data =
         Enum.map(siblings, fn %{index: idx, name: sname, type_term: h_ctx} ->
-          h_b1 = Subst.shift(h_ctx, sc, 0)
+          h_b1 =
+            h_ctx
+            |> Subst.shift(arity, 0)
+            |> replace_branch_vars(subst)
+            |> Subst.shift(1, 0)
+
           motive_j = {:lam, Cure.Core.Grade.unrestricted(), t_b1, abstract_term(h_b1, idx_b1, 0)}
           # J/subst transport (Phase B): prf {:var,0} : Eq(T, idx, ctor_idx); the
           # case's type is (M_j@idx) -> (M_j@ctor_idx), applied to the sibling.
@@ -9630,13 +10029,20 @@ defmodule Cure.Elab.Elaborator do
 
       body_names = Enum.reduce(sib_data, [carried_prf_name() | branch_names], fn %{name: s}, acc -> [s | acc] end)
 
-      # Refined goal for this branch (`result_type[idx ↦ ctor_idx]`) in the full
-      # frame (ctx + telescope + prf + siblings), for checking-mode body forms.
-      over = sc + m
+      # Compose the carried equation with every ordinary constructor-index
+      # substitution. Previously this path replaced only `idx`; activating a
+      # convoy could therefore leave unrelated result indices abstract even
+      # though the same branch unifier had solved them.
+      branch_goal0 =
+        result_type_term
+        |> Subst.shift(arity, 0)
+        |> replace_branch_vars(subst)
+        |> then(&Kernel.normalize(check_ctx, &1))
+        |> replace_term(idx_branch, ctor_idx)
 
       cod_expected =
-        Subst.shift(result_type_term, over, 0)
-        |> replace_term(Subst.shift(idx_term, over, 0), Subst.shift(ctor_idx, 1 + m, 0))
+        branch_goal0
+        |> Subst.shift(1 + m, 0)
         |> then(&Kernel.normalize(branch_ctx_full, &1))
 
       with {:ok, inner} <- elaborate_branch_body(body_expr, cod_expected, body_names, branch_ctx_full, env) do

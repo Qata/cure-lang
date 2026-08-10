@@ -1,7 +1,7 @@
 defmodule Cure.Core.NormaliseTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Core.{Context, Env, Inductive, Kernel, Normalise}
+  alias Cure.Core.{Context, Conv, Env, Inductive, Kernel, Normalise}
 
   @dec {:data, :Dec, [], []}
   @dcoupled {:ctor, :Dcoupled, []}
@@ -100,6 +100,22 @@ defmodule Cure.Core.NormaliseTest do
 
     assert {:app, {:global, :step}, {:var, 0}} == Normalise.whnf(ctx, term, fuel: 5)
     assert {:app, {:global, :step}, {:var, 0}} == Normalise.nf(ctx, term, fuel: 5)
+  end
+
+  test "conversion relates a folded reducible call to its exposed stuck case" do
+    env = step_env()
+    value_env = [{:vneutral, {:nvar, 0}}]
+    folded = {:app, {:global, :step}, {:var, 0}}
+
+    exposed =
+      {:case, {:var, 0}, @dec_motive,
+       [
+         {:Dcoupled, 0, @dcoupled},
+         {:Causal, 0, {:app, {:global, :step}, {:var, 0}}}
+       ]}
+
+    assert Conv.conv?(folded, exposed, value_env, 1, env)
+    assert Conv.conv?(exposed, folded, value_env, 1, env)
   end
 
   test "certified recursive globals still ι-reduce under constructor scrutinees" do

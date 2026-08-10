@@ -43,4 +43,5 @@ defmodule Cure.Elab.SiblingContextRefinementTest do
 
     assert {:ok, _env} = Program.elaborate(source)
   end
+
 end

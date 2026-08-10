@@ -2595,12 +2595,16 @@ defmodule Cure.Elab.Declarations do
       bound_names =
         for dom <- dom_exprs, name = bound_dom_name(dom), name != nil, into: MapSet.new(), do: name
 
+      parameter_names = MapSet.new(param_scope)
+
       infer_exprs = Enum.map(dom_exprs, &strip_named_dom/1) ++ [result_expr]
 
       implicits =
         infer_exprs
         |> infer_implicits(fam, index_tele, env, param_count, param_scope)
-        |> Enum.reject(fn {n, _t} -> MapSet.member?(bound_names, n) end)
+        |> Enum.reject(fn {n, _t} ->
+          MapSet.member?(bound_names, n) or MapSet.member?(parameter_names, n)
+        end)
 
       impl_names = Enum.map(implicits, &elem(&1, 0))
 
@@ -2609,17 +2613,26 @@ defmodule Cure.Elab.Declarations do
           full_scope = Enum.reverse(impl_names ++ expl_names) ++ param_scope
           {param_exprs, index_exprs} = Enum.split(applied_exprs, param_count)
 
-          with {:ok, result_params} <- map_idx_to_core(param_exprs, full_scope, fam, env),
-               {:ok, result_indices} <- map_idx_to_core(index_exprs, full_scope, fam, env) do
-            # Each inferred binder pushes the family's parameters one slot
-            # farther out. `infer_implicits/6` returns types in the bare
-            # parameter frame, so lift them over the preceding inferred
-            # binders as the telescope is assembled.
-            impl_tele =
-              implicits
-              |> Enum.with_index()
-              |> Enum.map(fn {{n, ty}, i} -> {String.to_atom(n), Term.shift(ty, i, 0)} end)
+          # Each inferred binder pushes the family's parameters one slot
+          # farther out. `infer_implicits/6` returns types in the bare
+          # parameter frame, so lift them over the preceding inferred binders
+          # as the telescope is assembled.
+          impl_tele =
+            implicits
+            |> Enum.with_index()
+            |> Enum.map(fn {{n, ty}, i} -> {String.to_atom(n), Term.shift(ty, i, 0)} end)
 
+          # Result indices are full term expressions, not merely syntax trees.
+          # Give their lowering the constructor telescope's real typing context
+          # so an implicit global application nested in an index can solve its
+          # hidden arguments (`step_evidence_thread(...)` inside an intrinsic
+          # accepting-path index). Without this context `idx_to_core` emitted an
+          # explicit-only application spine and interface registration leaked
+          # `:arg_arity`.
+          result_ctx = build_context(env, param_tele ++ impl_tele ++ expl_tele)
+
+          with {:ok, result_params} <- map_idx_to_core(param_exprs, full_scope, fam, env, result_ctx),
+               {:ok, result_indices} <- map_idx_to_core(index_exprs, full_scope, fam, env, result_ctx) do
             # Inferred index variables are erased (quantity 0); every
             # source-position domain — explicit `(k:T)` OR relevant implicit
             # `{k:T}` — is runtime-relevant (quantity ω). See M8.3 / M9.
@@ -3609,7 +3622,7 @@ defmodule Cure.Elab.Declarations do
         {:ok, {:data, atom, params, indices}}
 
       Inductive.get_ctor(env, atom) ->
-        {:ok, {:ctor, Env.resolve_key(env, env.ctors, atom), core_args}}
+        lower_index_constructor(atom, core_args, scope, env)
 
       true ->
         # An applied plain (non-family, non-ctor) DEFINITION — e.g. `plus(a, b)`
@@ -3629,6 +3642,60 @@ defmodule Cure.Elab.Declarations do
         end
     end
   end
+
+  # Constructor values are legal inside dependent indices (`ThreadAccepted()`
+  # inside an accepting-path state index). Surface syntax supplies only explicit
+  # fields, while Core constructor nodes contain every implicit telescope slot as
+  # well. The ordinary expression elaborator inserts those slots; the
+  # syntax-directed type/index lowering historically copied only the written
+  # arguments, leaking a bare `:ctor_arity` from interface registration.
+  #
+  # In a declaration result index the omitted implicit is commonly an already
+  # bound outer index with the same telescope name (`n` in
+  # `ThreadAccepted : ThreadState(n)`). Reconstruct that canonical Core spine
+  # from the constructor plicities and the current de Bruijn scope. If a hidden
+  # name is genuinely unavailable, preserve the old spine so the kernel reports
+  # the honest unsolved/arity error rather than inventing a value.
+  defp lower_index_constructor(atom, explicit_args, scope, env) do
+    key = Env.resolve_key(env, env.ctors, atom)
+    ctor = Inductive.get_ctor(env, key)
+    plicities = Inductive.plicities_of(ctor)
+
+    if Enum.count(plicities, &(&1 == :explicit)) == length(explicit_args) do
+      case fill_index_constructor_args(ctor.args, plicities, explicit_args, scope, []) do
+        {:ok, args} -> {:ok, {:ctor, key, args}}
+        :unresolved -> {:ok, {:ctor, key, explicit_args}}
+      end
+    else
+      {:ok, {:ctor, key, explicit_args}}
+    end
+  end
+
+  defp fill_index_constructor_args([], [], [], _scope, acc), do: {:ok, Enum.reverse(acc)}
+
+  defp fill_index_constructor_args(
+         [{name, _type} | fields],
+         [:implicit | plicities],
+         explicit,
+         scope,
+         acc
+       ) do
+    case Enum.find_index(scope, &(&1 == Atom.to_string(name))) do
+      nil -> :unresolved
+      index -> fill_index_constructor_args(fields, plicities, explicit, scope, [{:var, index} | acc])
+    end
+  end
+
+  defp fill_index_constructor_args(
+         [_field | fields],
+         [:explicit | plicities],
+         [argument | explicit],
+         scope,
+         acc
+       ),
+       do: fill_index_constructor_args(fields, plicities, explicit, scope, [argument | acc])
+
+  defp fill_index_constructor_args(_fields, _plicities, _explicit, _scope, _acc), do: :unresolved
 
   # Resolve an applied definition head to its exact registry key. `raw_name` is
   # the surface spelling (possibly dotted), `atom` its bare-tail atom. A qualified
@@ -3809,6 +3876,8 @@ defmodule Cure.Elab.Declarations do
   # the guard is required for the same reason it is in the precedent function.
   defp implicit_global?(env, atom) do
     case Env.get_def(env, atom) do
+      %{plicities: p, quantities: q} when is_list(p) and is_list(q) -> :implicit in p or :erased in q
+      %{plicities: p} when is_list(p) -> :implicit in p
       %{quantities: q} when is_list(q) -> :erased in q
       _ -> false
     end

@@ -935,7 +935,20 @@ defmodule Cure.Elab.Program do
         nil -> nil
       end
 
-    %{env | defs: defs, equations: equations, certified: certified, coherence: coherence}
+    totality_certified =
+      case env.totality_certified do
+        %MapSet{} = names -> MapSet.filter(names, &(Cure.Elab.Name.owner(&1) != owner))
+        nil -> nil
+      end
+
+    %{
+      env
+      | defs: defs,
+        equations: equations,
+        certified: certified,
+        totality_certified: totality_certified,
+        coherence: coherence
+    }
   end
 
   defp reject_owned(table, owner),
@@ -1437,6 +1450,7 @@ defmodule Cure.Elab.Program do
         primitives: Map.take(env.primitives, name_list),
         equations: kept_equations,
         certified: env.certified,
+        totality_certified: env.totality_certified,
         module_owner: env.module_owner
     }
   end
@@ -2157,7 +2171,11 @@ defmodule Cure.Elab.Program do
          {:ok, base} <- merge_env(imported, own),
          base = Env.with_owner(base, module_name),
          base = install_module_visibility(base, ast),
-         base = %{base | certified: base.certified || MapSet.new()},
+         base = %{
+           base
+           | certified: base.certified || MapSet.new(),
+             totality_certified: base.totality_certified || MapSet.new()
+         },
          {:ok, with_types} <-
            Enum.reduce_while(declarations(ast), {:ok, base}, fn
              declaration, {:ok, acc}
@@ -2263,6 +2281,12 @@ defmodule Cure.Elab.Program do
         nil -> nil
       end
 
+    totality_certified =
+      case env.totality_certified do
+        %MapSet{} = names -> MapSet.filter(names, owned?)
+        nil -> nil
+      end
+
     %{
       env
       | defs: defs,
@@ -2270,6 +2294,7 @@ defmodule Cure.Elab.Program do
         ctors: ctors,
         ctor_to_family: ctor_to_family,
         certified: certified,
+        totality_certified: totality_certified,
         coherence: owned_coherence(env.coherence, owner),
         import_modules: MapSet.new(),
         bare_modules: MapSet.new(),
@@ -4109,7 +4134,7 @@ defmodule Cure.Elab.Program do
   # boundaries, making an imported interface's instances invisible to the importer
   # and quietly breaking global coherence. The assertion below turns the next such
   # omission into a compile error rather than a runtime mystery.
-  @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
+  @merged_env_keys ~w(families ctors ctor_to_family defs certified totality_certified builtins
                       primitives interfaces interface_methods coherence constrained import_modules bare_modules bare_bindings
                       qualified_modules lemmas equations module_owner current_def)a
 
@@ -4134,6 +4159,11 @@ defmodule Cure.Elab.Program do
           ctor_to_family: Map.merge(left.ctor_to_family, right.ctor_to_family),
           defs: merge_defs(left.defs, right.defs),
           certified: MapSet.union(left.certified || MapSet.new(), right.certified || MapSet.new()),
+          totality_certified:
+            MapSet.union(
+              left.totality_certified || MapSet.new(),
+              right.totality_certified || MapSet.new()
+            ),
           builtins: Map.merge(left.builtins, right.builtins),
           primitives: Map.merge(left.primitives, right.primitives),
           interfaces: merged_interfaces,

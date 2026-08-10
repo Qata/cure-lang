@@ -81,7 +81,7 @@ defmodule Cure.Elab.TotalityClosure do
       closure
       |> MapSet.to_list()
       |> Enum.reject(&extern_def?(env, &1))
-      |> Enum.reject(&(not is_nil(env.certified) and Env.certified?(env, &1)))
+      |> Enum.reject(&(not is_nil(env.totality_certified) and Env.total?(env, &1)))
       |> Enum.reduce_while({:ok, env}, fn name, {:ok, acc} ->
         case Kernel.validate_certificate(acc, name) do
           {:ok, acc2} -> {:cont, {:ok, acc2}}
@@ -110,12 +110,12 @@ defmodule Cure.Elab.TotalityClosure do
   bodies, not the `certified` set, so a single pass over the complete env is exact.
   """
   @spec certify_deferred(Env.t()) :: Env.t()
-  def certify_deferred(%Env{certified: nil} = env), do: env
+  def certify_deferred(%Env{totality_certified: nil} = env), do: env
 
   def certify_deferred(%Env{defs: defs} = env) do
     Enum.reduce(defs, env, fn {name, def}, acc ->
       cond do
-        Env.certified?(acc, name) ->
+        Env.total?(acc, name) ->
           acc
 
         is_nil(def.body) ->

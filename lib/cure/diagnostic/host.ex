@@ -104,8 +104,37 @@ defmodule Cure.Diagnostic.Host do
     end
   rescue
     Cure.Diagnostic.UnhandledError ->
-      {:ok, Operational.impossible_return(:unregistered_diagnostic, reason), nil}
+      {underlying_reason, internal_context} = unregistered_context(reason)
+
+      {:ok,
+       Operational.impossible_return(
+         :unregistered_diagnostic,
+         underlying_reason,
+         Map.to_list(internal_context)
+       ), nil}
   end
+
+  defp unregistered_context({:source_context, reason, context}) when is_map(context) do
+    declaration = Map.get(context, :declaration) || Map.get(context, :checking)
+
+    internal_context =
+      context
+      |> Map.take([
+        :span,
+        :core_term,
+        :core_trace,
+        :expected_type,
+        :inferred_type,
+        :unresolved_global,
+        :closure_path,
+        :provenance
+      ])
+      |> Map.put(:declaration, declaration)
+
+    {reason, internal_context}
+  end
+
+  defp unregistered_context(reason), do: {reason, %{}}
 
   defp read_source(file) do
     case File.read(file) do

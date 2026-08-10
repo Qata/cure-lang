@@ -8,8 +8,8 @@ defmodule Cure.Elab.FirstClassFunctionTest do
     * a lambda `fn(y) -> body` is elaborated in checking mode against the
       expected Π (`elaborator.ex` `elaborate_lambda`), currying multi-parameter
       lambdas;
-    * codegen erases a lambda to a curried 1-arg BEAM fun, applies a closure one
-      argument at a time, and passes a named function as `fun name/arity`
+    * codegen erases every function value—lambdas and named definitions alike—to
+      the same curried 1-arg BEAM closure ABI and applies one argument at a time
       (`emit.ex`).
 
   Oracle `func/fn01_higher_order` + `func/fn02_lambda_body` pin accept/accept.
@@ -32,6 +32,19 @@ defmodule Cure.Elab.FirstClassFunctionTest do
 
     # ap(inc, S(Z)) = inc(S(Z)) = S(S(Z)).
     assert apply(mod, :g, []) == {:S, {:S, :Z}}
+  end
+
+  test "a multi-argument named function value uses the curried closure ABI" do
+    src =
+      @nat <>
+        "  fn apply2(f: (Nat) -> (Nat) -> Nat, x: Nat, y: Nat) -> Nat = f(x, y)\n" <>
+        "  fn first(x: Nat, _y: Nat) -> Nat = x\n" <>
+        "  fn g() -> Nat = apply2(first, S(Z()), Z())\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.FcfNamedCurry", functions: [:apply2, :first, :g])
+
+    assert apply(mod, :g, []) == {:S, :Z}
   end
 
   test "a lambda returned by a function is a curried BEAM fun" do

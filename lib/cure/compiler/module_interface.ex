@@ -16,8 +16,9 @@ defmodule Cure.Compiler.ModuleInterface do
   # Version 2 introduced the checked-module handoff: `owned_env` is the exact
   # certified environment and `export_env` is its canonical consumer
   # projection. Version 3 separates dependency-validation hashes from a
-  # module's own public identity so cyclic interface graphs converge.
-  @schema_version 3
+  # module's own public identity so cyclic interface graphs converge. Version 4
+  # separates checked totality from permission to δ-unfold a published body.
+  @schema_version 4
 
   @enforce_keys [
     :module_name,

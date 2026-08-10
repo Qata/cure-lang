@@ -18,7 +18,7 @@ defmodule Cure.Core.Normalise do
           delta: delta_mode(),
           mode: :whnf | :nf,
           fuel: fuel(),
-          stuck_cases: :preserve
+          stuck_cases: :preserve | :expose
         ]
 
   @doc "Reduce `term` to weak-head normal form in `ctx` and read it back."
@@ -116,7 +116,7 @@ defmodule Cure.Core.Normalise do
     delta = Keyword.fetch!(opts, :delta)
     mode = Keyword.fetch!(opts, :mode)
     fuel = Keyword.fetch!(opts, :fuel)
-    :preserve = Keyword.fetch!(opts, :stuck_cases)
+    stuck_cases = Keyword.fetch!(opts, :stuck_cases)
 
     unless delta in [:certified, :none] do
       raise ArgumentError, "expected :delta to be :certified or :none, got: #{inspect(delta)}"
@@ -124,6 +124,11 @@ defmodule Cure.Core.Normalise do
 
     unless mode in [:whnf, :nf] do
       raise ArgumentError, "expected :mode to be :whnf or :nf, got: #{inspect(mode)}"
+    end
+
+    unless stuck_cases in [:preserve, :expose] do
+      raise ArgumentError,
+            "expected :stuck_cases to be :preserve or :expose, got: #{inspect(stuck_cases)}"
     end
 
     unless fuel == :infinity or (is_integer(fuel) and fuel > 0) do
@@ -135,7 +140,7 @@ defmodule Cure.Core.Normalise do
     MatchError ->
       raise ArgumentError,
             "expected normalization options delta: :certified | :none, mode: :whnf | :nf, " <>
-              "fuel: pos_integer() | :infinity, stuck_cases: :preserve"
+              "fuel: pos_integer() | :infinity, stuck_cases: :preserve | :expose"
   end
 
   defp nf_value(value, sig, depth, opts) do
@@ -349,7 +354,7 @@ defmodule Cure.Core.Normalise do
             end
 
           _ ->
-            :stuck
+            if opts[:stuck_cases] == :expose, do: {:ok, value}, else: :stuck
         end
 
       _ ->

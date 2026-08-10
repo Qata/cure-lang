@@ -46,6 +46,28 @@ defmodule Cure.Elab.CtorIndexFromGoalTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "an indexed constructor inherits its family index through higher-order fields" do
+    src = """
+    mod IndexedConstructorGoal
+      use Std.Bounded
+
+      type State indices (n: Nat)
+        Stop : State(n)
+
+      type Machine indices (n: Nat)
+        MkMachine : List(State(n)) -> ((Bounded(n)) -> List(State(n))) -> Machine(n)
+
+      fn no_next({n: Nat}, _state: Bounded(n)) -> List(State(n)) = []
+
+      fn build() -> Machine(Z()) =
+        let starts: List(State(Z())) = [Stop()]
+        MkMachine(starts, no_next)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "the trichotomy pattern (owoto returning proof-carrying GADT ctors) elaborates" do
     src = """
     mod OwotoTrichotomy

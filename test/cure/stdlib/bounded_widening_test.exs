@@ -11,6 +11,7 @@ defmodule Cure.Stdlib.BoundedWideningTest do
     fn widen_3_by_2(value: Bounded(3)) -> Bounded(plus(3, 2)) = widen(value)
     fn inject_left_3_2(value: Bounded(3)) -> Bounded(plus(3, 2)) = inject_left(value)
     fn inject_right_3_2(value: Bounded(2)) -> Bounded(plus(3, 2)) = inject_right(3, value)
+    fn split_3_2(value: Bounded(plus(3, 2))) -> BoundedSum(3, 2) = split_sum(3, value)
   """
 
   setup_all do
@@ -32,13 +33,27 @@ defmodule Cure.Stdlib.BoundedWideningTest do
     assert Enum.sort(left ++ right) == Enum.to_list(0..4)
   end
 
+  test "splitting the combined range recovers the exact injection side and value", %{
+    runtime_module: module
+  } do
+    assert Enum.map(0..4, &apply(module, :split_3_2, [&1])) == [
+             {:BoundedLeft, 0},
+             {:BoundedLeft, 1},
+             {:BoundedLeft, 2},
+             {:BoundedRight, 0},
+             {:BoundedRight, 1}
+           ]
+  end
+
   test "widening and both injections are kernel-checked and certified total" do
     assert {:ok, env} = Cure.Elab.Program.elaborate(@source)
 
     for name <- [
           :"Std.Bounded#widen",
           :"Std.Bounded#inject_left",
-          :"Std.Bounded#inject_right"
+          :"Std.Bounded#inject_right",
+          :"Std.Bounded#split_sum",
+          :"Std.Bounded#fold_sum"
         ] do
       assert Env.get_def(env, name)
       assert Env.certified?(env, name)
@@ -62,6 +77,8 @@ defmodule Cure.Stdlib.BoundedWideningTest do
     assert Enum.any?(exports, &match?({:widen, 1, _}, &1))
     assert Enum.any?(exports, &match?({:inject_left, 1, _}, &1))
     assert Enum.any?(exports, &match?({:inject_right, 2, _}, &1))
+    assert Enum.any?(exports, &match?({:split_sum, 2, _}, &1))
+    assert Enum.any?(exports, &match?({:fold_sum, 3, _}, &1))
     refute Enum.any?(exports, &match?({:inject_right, 3, _}, &1))
   end
 

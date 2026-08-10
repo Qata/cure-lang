@@ -108,7 +108,8 @@ defmodule Cure.Compiler.ModulePipeline.Environment do
         ctor_to_family: Map.merge(seeded.ctor_to_family, env.ctor_to_family),
         defs: Map.merge(seeded.defs, env.defs),
         primitives: Map.merge(seeded.primitives, env.primitives),
-        certified: MapSet.union(seeded.certified, env.certified)
+        certified: MapSet.union(seeded.certified, env.certified),
+        totality_certified: MapSet.union(seeded.totality_certified, env.totality_certified)
     }
   end
 

@@ -1,0 +1,111 @@
+@group(:text)
+mod Std.Regex.Proof
+  use Std.Regex
+
+  ## The atomic case of the thesis's generalized Thompson theorem. It is
+  ## independent of the NFA and of any evidence/captures already in the VM.
+  fn predicate_transition_routine_encodes(char: Char, {input_evidence: List(Evidence)}, {input_captures: List(CaptureFrame)}, {output_evidence: List(Evidence)}, {output_captures: List(CaptureFrame)}, execution: ExtendedEvidenceRoutineExecution(transition_routine(char, Cons(EmitChar(char), Nil())), input_evidence, input_captures, output_evidence, output_captures)) -> Encodes(CharC, output_evidence, input_evidence) = match execution
+    ExtendedEvidenceObserve(_, after_observe) -> match after_observe
+      ExtendedEvidenceRegular(_, after_emit) -> match after_emit
+        ExtendedEvidenceDone() -> EncodesCharacter(char)
+
+  type PredicateRoutineView indices (char: Char, routine: List(ExtendedInstruction))
+    PredicateRoutineExact : PredicateRoutineView(char, transition_routine(char, Cons(EmitChar(char), Nil())))
+
+  type PredicatePathView indices (char: Char, final_evidence: List(Evidence), routine: List(ExtendedInstruction))
+    PredicatePathExact : PredicatePathView(char, Cons(CharacterEvidence(char), Nil()), transition_routine(char, Cons(EmitChar(char), Nil())))
+
+  type PredicateEvidenceView indices (char: Char, evidence: List(Evidence), captures: List(CaptureFrame))
+    PredicateEvidenceExact : PredicateEvidenceView(char, Cons(CharacterEvidence(char), Nil()), Nil())
+
+  type PredicateDestinationsView indices (test: Char -> Bool, char: Char, boundary: Boundary, destinations: List(MachineState(S(Z()))))
+    PredicateRejects : PredicateDestinationsView(test, char, boundary, Nil())
+    PredicateAccepts : PredicateDestinationsView(test, char, boundary, Cons(predicate_accepting_destination(char), Nil()))
+
+  type PredicateStartsView indices (starts: List(MachineState(S(Z()))))
+    PredicateStartsExact : PredicateStartsView(Cons(predicate_machine_start(), Nil()))
+
+  fn impossible_list_member({item_type: Type}, {item: item_type}, {result: Type}, membership: ListMember(item_type, item, Nil())) -> result = match membership
+
+  @reducible
+  fn empty_evidence() -> List(Evidence) = Nil()
+
+  @reducible
+  fn empty_characters() -> List(Char) = Nil()
+
+  fn encodes_character_empty(char: Char) -> Encodes(CharC, Cons(CharacterEvidence(char), empty_evidence()), empty_evidence()) = EncodesCharacter(char)
+
+  fn predicate_execution_view(char: Char, {evidence: List(Evidence)}, {captures: List(CaptureFrame)}, execution: RoutineExecution(Cons(EmitChar(char), Nil()), Nil(), Nil(), evidence, captures)) -> PredicateEvidenceView(char, evidence, captures) = match execution
+    RoutineStep(_, suffix) -> match suffix
+      RoutineDone() -> PredicateEvidenceExact()
+
+  fn predicate_starts_view(test: Char -> Bool, position: InitialPosition, input: List(Char), after_input: List(Char)) -> PredicateStartsView(initial_machine_destinations(S(Z()), predicate_pattern_machine(test), position, input, after_input)) = PredicateStartsExact()
+
+  ## The nullable base case of the generalized Thompson theorem.  Unlike the
+  ## predicate case, its evidence is emitted by the initial accepting edge and
+  ## the accepting path consumes no input.
+  fn empty_machine_acceptance_encodes(position: InitialPosition, after_input: List(Char), input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, {routine: List(ExtendedInstruction)}, {output_evidence: List(Evidence)}, {output_captures: List(CaptureFrame)}, acceptance: MachineAcceptance(Z(), empty_pattern_machine(), position, Nil(), after_input, final_evidence, routine), execution: ExtendedEvidenceRoutineExecution(routine, input_evidence, input_captures, output_evidence, output_captures)) -> Encodes(UnitC, output_evidence, input_evidence) = match acceptance
+    MachineAccepted(_, _, _, _, edge, _, _, path) -> match edge
+      ListMemberHere() -> match path
+        AcceptingNow() -> match execution
+          ExtendedEvidenceRegular(_, suffix) -> match suffix
+            ExtendedEvidenceDone() -> EncodesUnit()
+      ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn predicate_destinations_view(test: Char -> Bool, char: Char, boundary: Boundary) -> PredicateDestinationsView(test, char, boundary, machine_destinations(S(Z()), predicate_pattern_machine(test), predicate_machine_thread(), char, boundary)) = match test(char)
+    False() -> PredicateRejects()
+    True() -> PredicateAccepts()
+
+  fn predicate_path_routine_encodes(test: Char -> Bool, char: Char, after_input: List(Char), input_evidence: List(Evidence), input_captures: List(CaptureFrame), {path_evidence: List(Evidence)}, {path_captures: List(CaptureFrame)}, {path_final_evidence: List(Evidence)}, {routine: List(ExtendedInstruction)}, {output_evidence: List(Evidence)}, {output_captures: List(CaptureFrame)}, path: AcceptingFrom(S(Z()), predicate_pattern_machine(test), Cons(char, Nil()), after_input, predicate_machine_thread(), path_evidence, path_captures, path_final_evidence, routine), execution: ExtendedEvidenceRoutineExecution(routine, input_evidence, input_captures, output_evidence, output_captures)) -> Encodes(CharC, output_evidence, input_evidence) =
+    match predicate_path_routine_view(test, char, after_input, path)
+      PredicateRoutineExact() -> predicate_transition_routine_encodes(char, execution)
+
+  fn predicate_exact_path_view(test: Char -> Bool, char: Char, after_input: List(Char), {final_evidence: List(Evidence)}, path: AcceptingFrom(S(Z()), predicate_pattern_machine(test), Cons(char, Nil()), after_input, predicate_machine_thread(), Nil(), Nil(), final_evidence, transition_routine(char, Cons(EmitChar(char), Nil())))) -> PredicatePathView(char, final_evidence, transition_routine(char, Cons(EmitChar(char), Nil()))) = match path
+    AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> match predicate_destinations_view(test, char, transition_boundary_before(char, [], after_input))
+      PredicateRejects() -> impossible_list_member(edge)
+      PredicateAccepts() -> match edge
+        ListMemberThere(prior) -> impossible_list_member(prior)
+    AcceptingNextAccepted(_, _, _, _, _, edge, execution, suffix) -> match predicate_destinations_view(test, char, transition_boundary_before(char, [], after_input))
+      PredicateRejects() -> impossible_list_member(edge)
+      PredicateAccepts() -> match edge
+        ListMemberHere() -> match predicate_execution_view(char, execution)
+          PredicateEvidenceExact() -> match suffix
+            AcceptingNow() -> PredicatePathExact()
+        ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn predicate_path_view(test: Char -> Bool, char: Char, after_input: List(Char), @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), path: AcceptingFrom(S(Z()), predicate_pattern_machine(test), Cons(char, Nil()), after_input, predicate_machine_thread(), Nil(), Nil(), final_evidence, routine)) -> PredicatePathView(char, final_evidence, routine) = match predicate_path_routine_view(test, char, after_input, path)
+    PredicateRoutineExact() -> predicate_exact_path_view(test, char, after_input, path)
+
+  fn predicate_initial_path_view(test: Char -> Bool, char: Char, after_input: List(Char), position: InitialPosition, destination: MachineState(S(Z())), {initial_evidence: List(Evidence)}, {initial_captures: List(CaptureFrame)}, @erased final_evidence: List(Evidence), @erased path_routine: List(ExtendedInstruction), edge: ListMember(MachineState(S(Z())), destination, initial_machine_destinations(S(Z()), predicate_pattern_machine(test), position, Cons(char, Nil()), after_input)), initial_execution: RoutineExecution(machine_state_routine(S(Z()), destination), Nil(), Nil(), initial_evidence, initial_captures), path: AcceptingFrom(S(Z()), predicate_pattern_machine(test), Cons(char, Nil()), after_input, machine_state_thread(S(Z()), destination), initial_evidence, initial_captures, final_evidence, path_routine)) -> PredicatePathView(char, final_evidence, path_routine) = match predicate_starts_view(test, position, [char], after_input)
+    PredicateStartsExact() -> match edge
+      ListMemberHere() -> match initial_execution
+        RoutineDone() -> match path
+          AcceptingNextActive(_, _, _, _, _, _, path_edge, _, _) -> match predicate_destinations_view(test, char, transition_boundary_before(char, [], after_input))
+            PredicateRejects() -> impossible_list_member(path_edge)
+            PredicateAccepts() -> match path_edge
+              ListMemberThere(prior) -> impossible_list_member(prior)
+          AcceptingNextAccepted(_, _, _, _, _, path_edge, execution, suffix) -> match predicate_destinations_view(test, char, transition_boundary_before(char, [], after_input))
+            PredicateRejects() -> impossible_list_member(path_edge)
+            PredicateAccepts() -> match path_edge
+              ListMemberHere() -> match predicate_execution_view(char, execution)
+                PredicateEvidenceExact() -> match suffix
+                  AcceptingNow() -> PredicatePathExact()
+              ListMemberThere(prior) -> impossible_list_member(prior)
+      ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn predicate_machine_acceptance_encodes(test: Char -> Bool, char: Char, after_input: List(Char), position: InitialPosition, @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), acceptance: MachineAcceptance(S(Z()), predicate_pattern_machine(test), position, Cons(char, empty_characters()), after_input, final_evidence, routine)) -> Encodes(CharC, final_evidence, empty_evidence()) = match acceptance
+    MachineAccepted(destination, initial_evidence, initial_captures, path_routine, edge, initial_execution, routine_certificate, path) ->
+      match predicate_initial_path_view(test, char, after_input, position, destination, final_evidence, path_routine, edge, initial_execution, path)
+        PredicatePathExact() -> encodes_character_empty(char)
+
+  fn predicate_path_routine_view(test: Char -> Bool, char: Char, after_input: List(Char), {path_evidence: List(Evidence)}, {path_captures: List(CaptureFrame)}, {path_final_evidence: List(Evidence)}, {routine: List(ExtendedInstruction)}, path: AcceptingFrom(S(Z()), predicate_pattern_machine(test), Cons(char, Nil()), after_input, predicate_machine_thread(), path_evidence, path_captures, path_final_evidence, routine)) -> PredicateRoutineView(char, routine) = match path
+    AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> match predicate_destinations_view(test, char, transition_boundary_before(char, [], after_input))
+      PredicateRejects() -> impossible_list_member(edge)
+      PredicateAccepts() -> match edge
+        ListMemberThere(prior) -> impossible_list_member(prior)
+    AcceptingNextAccepted(_, _, _, _, _, edge, _, suffix) -> match predicate_destinations_view(test, char, transition_boundary_before(char, [], after_input))
+      PredicateRejects() -> impossible_list_member(edge)
+      PredicateAccepts() -> match edge
+        ListMemberHere() -> match suffix
+          AcceptingNow() -> PredicateRoutineExact()
+        ListMemberThere(prior) -> impossible_list_member(prior)

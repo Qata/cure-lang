@@ -219,12 +219,12 @@ defmodule Cure.Audit.Ledger do
   # A completeness limit, not an assumption: an uncertified def never δ-unfolds,
   # so the kernel cannot use it to inhabit a type. Externs have no body to
   # certify, and builtin ops are a kernel baseline; both are excluded.
-  defp not_proven_total(%Env{certified: nil}, _reachable), do: []
+  defp not_proven_total(%Env{totality_certified: nil}, _reachable), do: []
 
   defp not_proven_total(%Env{} = env, reachable) do
     for name <- reachable,
         def = Map.fetch!(env.defs, name),
-        not MapSet.member?(env.certified, name),
+        not Env.total?(env, name),
         is_nil(Map.get(def, :builtin_op)),
         not match?({:extern, _}, def.body),
         do: name

@@ -157,8 +157,19 @@ defmodule Cure.Compiler.ModulePipeline.Interface do
     owner = entry.module_name
     partition = Program.canonical_owned_partition(env, owner)
 
+    owned_def_keys = partition.declarations.defs |> Map.keys() |> MapSet.new()
+
     declarations =
-      Map.update!(partition.declarations, :defs, &published_definitions/1)
+      partition.declarations
+      |> Map.update!(:defs, &published_definitions/1)
+      |> Map.put(
+        :totality_certified,
+        MapSet.intersection(env.totality_certified || MapSet.new(), owned_def_keys)
+      )
+      |> Map.put(
+        :delta_certified,
+        MapSet.intersection(env.certified || MapSet.new(), owned_def_keys)
+      )
 
     ModuleInterface.new(%{
       module_name: owner,
@@ -197,7 +208,12 @@ defmodule Cure.Compiler.ModulePipeline.Interface do
             builtins: Map.get(extensions, :builtins, %{}),
             constrained: Map.get(extensions, :constrained, %{}),
             lemmas: Map.get(extensions, :lemmas, %{}),
-            certified: transparent_definitions(Map.get(declarations, :defs, %{})),
+            certified:
+              MapSet.intersection(
+                Map.get(declarations, :delta_certified, MapSet.new()),
+                transparent_definitions(Map.get(declarations, :defs, %{}))
+              ),
+            totality_certified: Map.get(declarations, :totality_certified, MapSet.new()),
             module_owner: interface.module_name
         }
 

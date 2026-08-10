@@ -988,6 +988,48 @@ defmodule Cure.Diagnostic.HostTest do
 
     assert rendered =~ "[E101]"
     assert rendered =~ "fingerprint"
-    refute rendered =~ ":unregistered_compiler_reason"
+    assert rendered =~ "unregistered_compiler_reason"
+    assert rendered =~ "detail"
+  end
+
+  test "an unregistered source-context reason retains the failing declaration and type evidence" do
+    reason =
+      {:source_context, {:index_mismatch, {:global, :left}, {:global, :right}},
+       %{
+         checking: :"Std.Regex#compile_pattern",
+         expected_type: {:global, :Expected},
+         inferred_type: {:global, :Inferred},
+         core_term: {:global, :offending_state}
+       }}
+
+    {diagnostic, _registry} = Host.to_diagnostic(reason, "lib/std/regex.cure")
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, nil, width: 100)
+
+    assert diagnostic.code == "E101"
+    assert diagnostic.payload.declaration == :"Std.Regex#compile_pattern"
+    assert diagnostic.payload.expected_type =~ "Expected"
+    assert diagnostic.payload.inferred_type =~ "Inferred"
+    assert diagnostic.payload.core_term =~ "offending_state"
+    assert diagnostic.payload.impossible_shape =~ "index_mismatch"
+    assert rendered =~ "Std.Regex#compile_pattern"
+    assert rendered =~ "index_mismatch"
+  end
+
+  test "canonical interface registration renders non-uniform parameters as an actionable source error" do
+    reason =
+      {:module_interface_registration_failed, {"root", "Std.Bounded"},
+       {:non_uniform_parameter, %{position: 0, family: :"Std.Bounded#BoundedSum", ctor: :BoundedLeft}}}
+
+    {diagnostic, registry} = Host.to_diagnostic(reason, "lib/std/bounded.cure")
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 100)
+
+    refute diagnostic.code == "E101"
+    assert rendered =~ "CONSTRUCTOR CHANGES A TYPE PARAMETER"
+    assert rendered =~ "BoundedSum"
+    assert rendered =~ "BoundedLeft"
+    assert rendered =~ "values that vary belong in"
+    assert rendered =~ "the `indices` telescope"
+    assert diagnostic.payload.pipeline_stage == :interface_registration
+    assert diagnostic.payload.module_identity == {"root", "Std.Bounded"}
   end
 end

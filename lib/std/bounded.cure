@@ -34,3 +34,25 @@ mod Std.Bounded
   fn inject_right(n: Nat, {m: Nat}, value: Bounded(m)) -> Bounded(plus(n, m)) = match n
     Z() -> value
     S(previous) -> Next(inject_right(previous, value))
+
+  ## Structural view of a value in a disjoint `n + m` state space. This is the
+  ## elimination counterpart to `inject_left`/`inject_right`: callers learn
+  ## which side owns the value and recover a value with that side's exact bound,
+  ## without converting through an unchecked Nat.
+  type BoundedSum indices (left: Nat, right: Nat)
+    BoundedLeft : Bounded(left) -> BoundedSum(left, right)
+    BoundedRight : Bounded(right) -> BoundedSum(left, right)
+
+  @reducible
+  fn split_sum(left: Nat, {right: Nat}, value: Bounded(plus(left, right))) -> BoundedSum(left, right) = match left
+    Z() -> BoundedRight(value)
+    S(previous) -> match value
+      First() -> BoundedLeft(First())
+      Next(rest) -> match split_sum(previous, rest)
+        BoundedLeft(left_value) -> BoundedLeft(Next(left_value))
+        BoundedRight(right_value) -> BoundedRight(right_value)
+
+  @reducible
+  fn fold_sum({left: Nat}, {right: Nat}, {a: Type}, side: BoundedSum(left, right), on_left: (Bounded(left)) -> a, on_right: (Bounded(right)) -> a) -> a = match side
+    BoundedLeft(value) -> on_left(value)
+    BoundedRight(value) -> on_right(value)

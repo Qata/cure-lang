@@ -57,12 +57,32 @@ defmodule Cure.Core.Conv do
 
   # δ-whnf both sides (unfold certified-global heads), then compare structurally.
   defp conv_val?({:vneutral, n1} = v1, {:vneutral, n2} = v2, depth, sig) do
+    # Canonical normalization freezes a global application when its body only
+    # exposes a case stuck on a neutral. Conversion must nevertheless relate
+    # that folded form to the explicitly exposed body (for example a motive
+    # produced by dependent-match elaboration). Retry on demand with one stuck
+    # case exposed on each side; subsequent comparison remains structural and
+    # recursive calls retain the ordinary lazy policy.
     same_neutral_no_delta?(n1, n2, depth, sig) or
-      conv_struct?(Normalise.whnf_value(v1, sig), Normalise.whnf_value(v2, sig), depth, sig)
+      conv_struct?(Normalise.whnf_value(v1, sig), Normalise.whnf_value(v2, sig), depth, sig) or
+      conv_exposed_stuck?(v1, v2, depth, sig)
   end
 
   defp conv_val?(v1, v2, depth, sig) do
     conv_struct?(Normalise.whnf_value(v1, sig), Normalise.whnf_value(v2, sig), depth, sig)
+  end
+
+  defp conv_exposed_stuck?(v1, v2, depth, sig) do
+    conv_struct?(
+      Normalise.whnf_value(v1, sig, stuck_cases: :expose),
+      Normalise.whnf_value(v2, sig, stuck_cases: :expose),
+      depth,
+      sig
+    )
+  rescue
+    _ -> false
+  catch
+    _, _ -> false
   end
 
   # A λ's GRADE is part of the term's identity, exactly as a Π's is part of the type's.

@@ -11,6 +11,9 @@ mod Std.Regex
   use Std.Option
   use Std.String
   use Std.Syntax
+  use Std.Bounded
+  use Std.Equivalent
+  use Std.Sigma
 
   ## Cure does not otherwise expose a general-purpose Either in the current
   ## prelude. Keep the branch witness local to the typed regex result universe;
@@ -316,14 +319,22 @@ mod Std.Regex
 
   type BoundaryConstraint = BoundaryConstraint(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)
   type Boundary = Boundary(Bool, Bool, Bool, Bool, Bool, Bool, Bool)
-  type MachineState = Active(Nat, List(EvidenceInstruction), List(BoundaryConstraint)) | Accepted(List(EvidenceInstruction), List(BoundaryConstraint))
-  type PatternMachine = PatternMachine(Nat, List(MachineState), Nat -> Char -> List(MachineState))
+  type MachineState indices (n: Nat)
+    Active : Bounded(n) -> List(EvidenceInstruction) -> List(BoundaryConstraint) -> MachineState(n)
+    Accepted : List(EvidenceInstruction) -> List(BoundaryConstraint) -> MachineState(n)
+  type PatternMachine indices (n: Nat)
+    MkPatternMachine : List(MachineState(n)) -> ((Bounded(n)) -> Char -> List(MachineState(n))) -> PatternMachine(n)
+
+  @reducible
+  fn machine_state_routine(n: Nat, state: MachineState(n)) -> List(EvidenceInstruction) = match state
+    Active(_, routine, _) -> routine
+    Accepted(routine, _) -> routine
 
   fn append_routine(left: List(EvidenceInstruction), right: List(EvidenceInstruction)) -> List(EvidenceInstruction) = match left
     [] -> right
     [head | rest] -> [head | append_routine(rest, right)]
 
-  fn append_states(left: List(MachineState), right: List(MachineState)) -> List(MachineState) = match left
+  fn append_states({n: Nat}, left: List(MachineState(n)), right: List(MachineState(n))) -> List(MachineState(n)) = match left
     [] -> right
     [head | rest] -> [head | append_states(rest, right)]
 
@@ -331,168 +342,196 @@ mod Std.Regex
     [] -> right
     [head | rest] -> [head | append_constraints(rest, right)]
 
-  fn shift_states(offset: Nat, states: List(MachineState)) -> List(MachineState) = match states
+  fn inject_left_states({left_count: Nat}, {right_count: Nat}, states: List(MachineState(left_count))) -> List(MachineState(plus(left_count, right_count))) = match states
     [] -> []
-    [Accepted(routine, constraints) | rest] -> [Accepted(routine, constraints) | shift_states(offset, rest)]
-    [Active(state, routine, constraints) | rest] -> [Active(plus(offset, state), routine, constraints) | shift_states(offset, rest)]
+    [Accepted(routine, constraints) | rest] -> [Accepted(routine, constraints) | inject_left_states(rest)]
+    [Active(state, routine, constraints) | rest] -> [Active(inject_left(state), routine, constraints) | inject_left_states(rest)]
 
-  fn nat_less(left: Nat, right: Nat) -> Bool = match left
-    Z() -> match right
-      Z() -> false
-      S(_) -> true
-    S(left_rest) -> match right
-      Z() -> false
-      S(right_rest) -> nat_less(left_rest, right_rest)
+  fn inject_right_states(left_count: Nat, {right_count: Nat}, states: List(MachineState(right_count))) -> List(MachineState(plus(left_count, right_count))) = match states
+    [] -> []
+    [Accepted(routine, constraints) | rest] -> [Accepted(routine, constraints) | inject_right_states(left_count, rest)]
+    [Active(state, routine, constraints) | rest] -> [Active(inject_right(left_count, state), routine, constraints) | inject_right_states(left_count, rest)]
 
-  fn nat_subtract(value: Nat, amount: Nat) -> Nat = match amount
-    Z() -> value
-    S(amount_rest) -> match value
-      Z() -> Z()
-      S(value_rest) -> nat_subtract(value_rest, amount_rest)
-
-  fn enter_right_with_constraints(offset: Nat, left_routine: List(EvidenceInstruction), left_constraints: List(BoundaryConstraint), right_starts: List(MachineState)) -> List(MachineState) = match right_starts
+  fn enter_right_with_constraints(left_count: Nat, {right_count: Nat}, left_routine: List(EvidenceInstruction), left_constraints: List(BoundaryConstraint), right_starts: List(MachineState(right_count))) -> List(MachineState(plus(left_count, right_count))) = match right_starts
     [] -> []
     [Accepted(right_routine, right_constraints) | rest] ->
-      [Accepted(append_routine(append_routine(left_routine, right_routine), [EmitPair()]), append_constraints(left_constraints, right_constraints)) | enter_right_with_constraints(offset, left_routine, left_constraints, rest)]
+      [Accepted(append_routine(append_routine(left_routine, right_routine), [EmitPair()]), append_constraints(left_constraints, right_constraints)) | enter_right_with_constraints(left_count, left_routine, left_constraints, rest)]
     [Active(state, right_routine, right_constraints) | rest] ->
-      [Active(plus(offset, state), append_routine(left_routine, right_routine), append_constraints(left_constraints, right_constraints)) | enter_right_with_constraints(offset, left_routine, left_constraints, rest)]
+      [Active(inject_right(left_count, state), append_routine(left_routine, right_routine), append_constraints(left_constraints, right_constraints)) | enter_right_with_constraints(left_count, left_routine, left_constraints, rest)]
 
-  fn enter_right(offset: Nat, left_routine: List(EvidenceInstruction), right_starts: List(MachineState)) -> List(MachineState) =
-    enter_right_with_constraints(offset, left_routine, [], right_starts)
+  fn enter_right(left_count: Nat, {right_count: Nat}, left_routine: List(EvidenceInstruction), right_starts: List(MachineState(right_count))) -> List(MachineState(plus(left_count, right_count))) =
+    enter_right_with_constraints(left_count, left_routine, [], right_starts)
 
-  fn continue_with_right(offset: Nat, left_states: List(MachineState), right_starts: List(MachineState)) -> List(MachineState) = match left_states
+  fn continue_with_right(left_count: Nat, {right_count: Nat}, left_states: List(MachineState(left_count)), right_starts: List(MachineState(right_count))) -> List(MachineState(plus(left_count, right_count))) = match left_states
     [] -> []
-    [Accepted(left_routine, constraints) | rest] -> append_states(enter_right_with_constraints(offset, left_routine, constraints, right_starts), continue_with_right(offset, rest, right_starts))
-    [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | continue_with_right(offset, rest, right_starts)]
+    [Accepted(left_routine, constraints) | rest] -> append_states(enter_right_with_constraints(left_count, left_routine, constraints, right_starts), continue_with_right(left_count, rest, right_starts))
+    [Active(state, routine, constraints) | rest] -> [Active(inject_left(state), routine, constraints) | continue_with_right(left_count, rest, right_starts)]
 
-  fn finish_pair(states: List(MachineState)) -> List(MachineState) = match states
+  fn finish_pair({n: Nat}, states: List(MachineState(n))) -> List(MachineState(n)) = match states
     [] -> []
     [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [EmitPair()]), constraints) | finish_pair(rest)]
     [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | finish_pair(rest)]
 
-  fn mark_branch(states: List(MachineState), marker: EvidenceInstruction) -> List(MachineState) = match states
+  fn mark_branch({n: Nat}, states: List(MachineState(n)), marker: EvidenceInstruction) -> List(MachineState(n)) = match states
     [] -> []
     [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [marker]), constraints) | mark_branch(rest, marker)]
     [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | mark_branch(rest, marker)]
 
-  fn prefix_routine(instruction: EvidenceInstruction, states: List(MachineState)) -> List(MachineState) = match states
+  fn prefix_routine({n: Nat}, instruction: EvidenceInstruction, states: List(MachineState(n))) -> List(MachineState(n)) = match states
     [] -> []
     [Accepted(routine, constraints) | rest] -> [Accepted([instruction | routine], constraints) | prefix_routine(instruction, rest)]
     [Active(state, routine, constraints) | rest] -> [Active(state, [instruction | routine], constraints) | prefix_routine(instruction, rest)]
 
-  fn finish_capture(states: List(MachineState)) -> List(MachineState) = match states
+  fn finish_capture({n: Nat}, states: List(MachineState(n))) -> List(MachineState(n)) = match states
     [] -> []
     [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [EndCapture()]), constraints) | finish_capture(rest)]
     [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | finish_capture(rest)]
 
-  fn repeat_accepting(routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint)) -> List(MachineState) =
+  fn repeat_accepting({n: Nat}, routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint)) -> List(MachineState(n)) =
     [Accepted(append_routine(routine, [EndList()]), constraints)]
 
-  fn repeat_destination_order(routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState), lazy: Bool) -> List(MachineState) = pickup
+  fn repeat_destination_order({n: Nat}, routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState(n)), lazy: Bool) -> List(MachineState(n)) = pickup
     lazy -> append_states(repeat_accepting(routine, constraints), enter_repeat_with_constraints(routine, constraints, starts))
     else -> append_states(enter_repeat_with_constraints(routine, constraints, starts), repeat_accepting(routine, constraints))
 
-  fn repeat_destinations(destinations: List(MachineState), starts: List(MachineState), lazy: Bool) -> List(MachineState) = match destinations
+  fn repeat_destinations({n: Nat}, destinations: List(MachineState(n)), starts: List(MachineState(n)), lazy: Bool) -> List(MachineState(n)) = match destinations
     [] -> []
     [Accepted(routine, constraints) | rest] ->
       append_states(repeat_destination_order(routine, constraints, starts, lazy), repeat_destinations(rest, starts, lazy))
     [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | repeat_destinations(rest, starts, lazy)]
 
-  fn enter_repeat_with_constraints(routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState)) -> List(MachineState) = match starts
+  fn enter_repeat_with_constraints({n: Nat}, routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState(n))) -> List(MachineState(n)) = match starts
     [] -> []
     [Accepted(_, _) | rest] -> enter_repeat_with_constraints(routine, constraints, rest)
     [Active(state, next_routine, next_constraints) | rest] ->
       [Active(state, append_routine(routine, next_routine), append_constraints(constraints, next_constraints)) | enter_repeat_with_constraints(routine, constraints, rest)]
 
-  fn enter_repeat(routine: List(EvidenceInstruction), starts: List(MachineState)) -> List(MachineState) =
+  fn enter_repeat({n: Nat}, routine: List(EvidenceInstruction), starts: List(MachineState(n))) -> List(MachineState(n)) =
     enter_repeat_with_constraints(routine, [], starts)
 
-  fn predicate_machine_next(test: Char -> Bool, _state: Nat, char: Char) -> List(MachineState) = pickup
+  @reducible
+  fn predicate_machine_next(test: Char -> Bool, _state: Bounded(S(Z())), char: Char) -> List(MachineState(S(Z()))) = pickup
     test(char) -> [Accepted([EmitChar(char)], [])]
     else -> []
 
-  fn concat_machine_next(left_count: Nat, left_next: Nat -> Char -> List(MachineState), right_starts: List(MachineState), right_next: Nat -> Char -> List(MachineState), state: Nat, char: Char) -> List(MachineState) = pickup
-    nat_less(state, left_count) -> continue_with_right(left_count, left_next(state)(char), right_starts)
-    else -> shift_states(left_count, finish_pair(right_next(nat_subtract(state, left_count))(char)))
+  fn empty_machine_next({n: Nat}, _state: Bounded(n), _char: Char) -> List(MachineState(n)) = []
 
-  fn alternate_machine_next(left_count: Nat, left_next: Nat -> Char -> List(MachineState), right_next: Nat -> Char -> List(MachineState), state: Nat, char: Char) -> List(MachineState) = pickup
-    nat_less(state, left_count) -> mark_branch(left_next(state)(char), EmitLeft())
-    else -> shift_states(left_count, mark_branch(right_next(nat_subtract(state, left_count))(char), EmitRight()))
+  fn group_machine_next({n: Nat}, next: (Bounded(n)) -> Char -> List(MachineState(n)), state: Bounded(n), char: Char) -> List(MachineState(n)) =
+    finish_capture(next(state, char))
 
-  fn alternate_machine_starts(left_count: Nat, left_starts: List(MachineState), right_starts: List(MachineState), prefer_right: Bool) -> List(MachineState) =
-    let marked_left = mark_branch(left_starts, EmitLeft())
-    let marked_right = shift_states(left_count, mark_branch(right_starts, EmitRight()))
+  fn concat_machine_next(left_count: Nat, {right_count: Nat}, left_next: (Bounded(left_count)) -> Char -> List(MachineState(left_count)), right_starts: List(MachineState(right_count)), right_next: (Bounded(right_count)) -> Char -> List(MachineState(right_count)), state: Bounded(plus(left_count, right_count)), char: Char) -> List(MachineState(plus(left_count, right_count))) =
+    fold_sum(
+      split_sum(left_count, state),
+      fn(left_state) -> continue_with_right(left_count, left_next(left_state, char), right_starts),
+      fn(right_state) -> inject_right_states(left_count, finish_pair(right_next(right_state, char)))
+    )
+
+  fn alternate_machine_next(left_count: Nat, {right_count: Nat}, left_next: (Bounded(left_count)) -> Char -> List(MachineState(left_count)), right_next: (Bounded(right_count)) -> Char -> List(MachineState(right_count)), state: Bounded(plus(left_count, right_count)), char: Char) -> List(MachineState(plus(left_count, right_count))) =
+    fold_sum(
+      split_sum(left_count, state),
+      fn(left_state) -> inject_left_states(mark_branch(left_next(left_state, char), EmitLeft())),
+      fn(right_state) -> inject_right_states(left_count, mark_branch(right_next(right_state, char), EmitRight()))
+    )
+
+  fn alternate_machine_starts(left_count: Nat, {right_count: Nat}, left_starts: List(MachineState(left_count)), right_starts: List(MachineState(right_count)), prefer_right: Bool) -> List(MachineState(plus(left_count, right_count))) =
+    let marked_left: List(MachineState(plus(left_count, right_count))) = inject_left_states(mark_branch(left_starts, EmitLeft()))
+    let marked_right: List(MachineState(plus(left_count, right_count))) = inject_right_states(left_count, mark_branch(right_starts, EmitRight()))
     pickup
       prefer_right -> append_states(marked_right, marked_left)
       else -> append_states(marked_left, marked_right)
 
-  fn repeat_machine_starts(starts: List(MachineState), lazy: Bool) -> List(MachineState) =
-    let empty = [Accepted([BeginList(), EndList()], [])]
-    let consuming = enter_repeat([BeginList()], starts)
+  fn repeat_machine_starts({n: Nat}, starts: List(MachineState(n)), lazy: Bool) -> List(MachineState(n)) =
+    let empty: List(MachineState(n)) = [Accepted([BeginList(), EndList()], [])]
+    let consuming: List(MachineState(n)) = enter_repeat([BeginList()], starts)
     pickup
       lazy -> append_states(empty, consuming)
       else -> append_states(consuming, empty)
 
-  fn compile_pattern({shape: ShapeCode}, pattern: Pattern(shape)) -> PatternMachine = match pattern
-    PatternEmpty() -> PatternMachine(Z(), [Accepted([EmitUnit()], [])], fn(_state, _char) -> [])
-    PatternPredicate(test) -> PatternMachine(S(Z()), [Active(Z(), [], [])], fn(state, char) -> predicate_machine_next(test, state, char))
-    PatternBoundary(constraint) -> PatternMachine(Z(), [Accepted([EmitUnit()], [constraint])], fn(_state, _char) -> [])
-    PatternConcat(left, right) -> match compile_pattern(left)
-      PatternMachine(left_count, left_starts, left_next) -> match compile_pattern(right)
-        PatternMachine(right_count, right_starts, right_next) ->
-          PatternMachine(
-            plus(left_count, right_count),
-            continue_with_right(left_count, left_starts, right_starts),
-            fn(state, char) -> concat_machine_next(left_count, left_next, right_starts, right_next, state, char)
-          )
-    PatternGroup(inner) -> match compile_pattern(inner)
-      PatternMachine(count, starts, next) ->
-        PatternMachine(
-          count,
-          finish_capture(prefix_routine(BeginCapture(), starts)),
-          fn(state, char) -> finish_capture(next(state)(char))
-        )
-    PatternAlternate(left, right) -> match compile_pattern(left)
-      PatternMachine(left_count, left_starts, left_next) -> match compile_pattern(right)
-        PatternMachine(right_count, right_starts, right_next) ->
-          PatternMachine(
-            plus(left_count, right_count),
-            append_states(mark_branch(left_starts, EmitLeft()), shift_states(left_count, mark_branch(right_starts, EmitRight()))),
-            fn(state, char) -> alternate_machine_next(left_count, left_next, right_next, state, char)
-          )
-    PatternAlternateMode(left, right, prefer_right) -> match compile_pattern(left)
-      PatternMachine(left_count, left_starts, left_next) -> match compile_pattern(right)
-        PatternMachine(right_count, right_starts, right_next) ->
-          PatternMachine(
-            plus(left_count, right_count),
-            alternate_machine_starts(left_count, left_starts, right_starts, prefer_right),
-            fn(state, char) -> alternate_machine_next(left_count, left_next, right_next, state, char)
-          )
-    PatternRepeat(inner) -> match compile_pattern(inner)
-      PatternMachine(count, starts, next) ->
-        PatternMachine(
-          count,
-          repeat_machine_starts(starts, false),
-          fn(state, char) -> repeat_destinations(next(state)(char), starts, false)
-        )
-    PatternRepeatMode(inner, lazy) -> match compile_pattern(inner)
-      PatternMachine(count, starts, next) ->
-        PatternMachine(
-          count,
-          repeat_machine_starts(starts, lazy),
-          fn(state, char) -> repeat_destinations(next(state)(char), starts, lazy)
-        )
+  fn repeat_machine_next({n: Nat}, starts: List(MachineState(n)), lazy: Bool, next: (Bounded(n)) -> Char -> List(MachineState(n)), state: Bounded(n), char: Char) -> List(MachineState(n)) =
+    repeat_destinations(next(state, char), starts, lazy)
 
-  fn machine_has_accept(states: List(MachineState)) -> Bool = match states
+  fn empty_pattern_machine() -> PatternMachine(Z()) =
+    let starts: List(MachineState(Z())) = [Accepted([EmitUnit()], [])]
+    MkPatternMachine(starts, empty_machine_next)
+
+  fn boundary_pattern_machine(constraint: BoundaryConstraint) -> PatternMachine(Z()) =
+    let starts: List(MachineState(Z())) = [Accepted([EmitUnit()], [constraint])]
+    MkPatternMachine(starts, empty_machine_next)
+
+  @reducible
+  fn predicate_machine_start() -> MachineState(S(Z())) =
+    let routine: List(EvidenceInstruction) = []
+    let constraints: List(BoundaryConstraint) = []
+    Active(First(), routine, constraints)
+
+  @reducible
+  fn predicate_machine_thread() -> ThreadState(S(Z())) = ThreadActive(First())
+
+  @reducible
+  fn predicate_accepting_destination(char: Char) -> MachineState(S(Z())) =
+    let routine: List(EvidenceInstruction) = [EmitChar(char)]
+    let constraints: List(BoundaryConstraint) = []
+    Accepted(routine, constraints)
+
+  @reducible
+  fn predicate_pattern_machine(test: Char -> Bool) -> PatternMachine(S(Z())) =
+    let starts: List(MachineState(S(Z()))) = [predicate_machine_start()]
+    MkPatternMachine(starts, predicate_machine_next(test))
+
+  fn compile_pattern({shape: ShapeCode}, pattern: Pattern(shape)) -> Sigma(n: Nat, PatternMachine(n)) = match pattern
+    PatternEmpty() -> %[Z(), empty_pattern_machine()]
+    PatternPredicate(test) -> %[S(Z()), predicate_pattern_machine(test)]
+    PatternBoundary(constraint) -> %[Z(), boundary_pattern_machine(constraint)]
+    PatternConcat(left, right) -> match compile_pattern(left)
+      mk_pair(left_count, MkPatternMachine(left_starts, left_next)) -> match compile_pattern(right)
+        mk_pair(right_count, MkPatternMachine(right_starts, right_next)) ->
+          %[plus(left_count, right_count), MkPatternMachine(
+            continue_with_right(left_count, left_starts, right_starts),
+            concat_machine_next(left_count, left_next, right_starts, right_next)
+          )]
+    PatternGroup(inner) -> match compile_pattern(inner)
+      mk_pair(count, MkPatternMachine(starts, next)) ->
+        %[count, MkPatternMachine(
+          finish_capture(prefix_routine(BeginCapture(), starts)),
+          group_machine_next(next)
+        )]
+    PatternAlternate(left, right) -> match compile_pattern(left)
+      mk_pair(left_count, MkPatternMachine(left_starts, left_next)) -> match compile_pattern(right)
+        mk_pair(right_count, MkPatternMachine(right_starts, right_next)) ->
+          %[plus(left_count, right_count), MkPatternMachine(
+            append_states(inject_left_states(mark_branch(left_starts, EmitLeft())), inject_right_states(left_count, mark_branch(right_starts, EmitRight()))),
+            alternate_machine_next(left_count, left_next, right_next)
+          )]
+    PatternAlternateMode(left, right, prefer_right) -> match compile_pattern(left)
+      mk_pair(left_count, MkPatternMachine(left_starts, left_next)) -> match compile_pattern(right)
+        mk_pair(right_count, MkPatternMachine(right_starts, right_next)) ->
+          %[plus(left_count, right_count), MkPatternMachine(
+            alternate_machine_starts(left_count, left_starts, right_starts, prefer_right),
+            alternate_machine_next(left_count, left_next, right_next)
+          )]
+    PatternRepeat(inner) -> match compile_pattern(inner)
+      mk_pair(count, MkPatternMachine(starts, next)) ->
+        %[count, MkPatternMachine(
+          repeat_machine_starts(starts, false),
+          repeat_machine_next(starts, false, next)
+        )]
+    PatternRepeatMode(inner, lazy) -> match compile_pattern(inner)
+      mk_pair(count, MkPatternMachine(starts, next)) ->
+        %[count, MkPatternMachine(
+          repeat_machine_starts(starts, lazy),
+          repeat_machine_next(starts, lazy, next)
+        )]
+
+  fn machine_has_accept({n: Nat}, states: List(MachineState(n))) -> Bool = match states
     [] -> false
     [Accepted(_, _) | _] -> true
     [Active(_, _, _) | rest] -> machine_has_accept(rest)
 
-  fn machine_step_one(next: Nat -> Char -> List(MachineState), char: Char, current: MachineState) -> List(MachineState) = match current
+  fn machine_step_one({n: Nat}, next: (Bounded(n)) -> Char -> List(MachineState(n)), char: Char, current: MachineState(n)) -> List(MachineState(n)) = match current
     Accepted(_, _) -> []
-    Active(state, _, _) -> next(state)(char)
+    Active(state, _, _) -> next(state, char)
 
-  fn machine_step(next: Nat -> Char -> List(MachineState), char: Char, current: List(MachineState)) -> List(MachineState) = match current
+  fn machine_step({n: Nat}, next: (Bounded(n)) -> Char -> List(MachineState(n)), char: Char, current: List(MachineState(n))) -> List(MachineState(n)) = match current
     [] -> []
     [head | rest] -> append_states(machine_step_one(next, char, head), machine_step(next, char, rest))
 
@@ -528,11 +567,13 @@ mod Std.Regex
   fn unicode_word_constraint(expected: Bool) -> BoundaryConstraint =
     BoundaryConstraint(false, false, false, false, false, false, false, true, expected)
 
+  @reducible
   fn constraints_hold(constraints: List(BoundaryConstraint), boundary: Boundary) -> Bool = match constraints
     [] -> true
     [head | rest] -> constraint_holds(head, boundary) and constraints_hold(rest, boundary)
 
-  fn filter_boundary_states(states: List(MachineState), boundary: Boundary) -> List(MachineState) = match states
+  @reducible
+  fn filter_boundary_states({n: Nat}, states: List(MachineState(n)), boundary: Boundary) -> List(MachineState(n)) = match states
     [] -> []
     [Accepted(routine, constraints) | rest] -> pickup
       constraints_hold(constraints, boundary) -> [Accepted(routine, []) | filter_boundary_states(rest, boundary)]
@@ -573,16 +614,18 @@ mod Std.Regex
     [] -> true
     _ -> false
 
-  fn machine_accepts_chars(next: Nat -> Char -> List(MachineState), input: List(Char), current: List(MachineState)) -> Bool = match input
+  fn machine_accepts_chars({n: Nat}, next: (Bounded(n)) -> Char -> List(MachineState(n)), input: List(Char), current: List(MachineState(n))) -> Bool = match input
     [] -> machine_has_accept(current)
     [char | rest] ->
       machine_accepts_chars(next, rest, filter_boundary_states(machine_step(next, char, current), position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)))
 
   fn pattern_accepts({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Bool =
     match compile_pattern(pattern)
-      PatternMachine(_count, starts, next) ->
+      mk_pair(count, machine) ->
         let chars = Std.String.characters(input)
-        machine_accepts_chars(next, chars, filter_boundary_states(starts, position_boundary(true, true, false, false, chars)))
+        match search_machine_acceptance(count, machine, subject_initial_position(), chars, [])
+          MachineNoAcceptingPath() -> false
+          MachineAcceptingPath(_, _, _) -> true
 
   ## Evidence is a postfix program result stored in reverse order, so emitting
   ## is constant-time. Pair/branch/list markers precede their operands in the
@@ -720,8 +763,16 @@ mod Std.Regex
 
   type CaptureFrame = CaptureFrame(List(Char), List(Evidence))
   type EvidenceExecution = EvidenceExecution(List(Evidence), List(CaptureFrame))
-  type ThreadState = ThreadActive(Nat) | ThreadAccepted
-  type EvidenceThread = EvidenceThread(ThreadState, List(Evidence), List(CaptureFrame))
+  type ThreadState indices (n: Nat)
+    ThreadActive : Bounded(n) -> ThreadState(n)
+    ThreadAccepted : ThreadState(n)
+
+  @reducible
+  fn machine_state_thread(n: Nat, state: MachineState(n)) -> ThreadState(n) = match state
+    Active(destination, _, _) -> ThreadActive(destination)
+    Accepted(_, _) -> ThreadAccepted()
+  type EvidenceThread indices (n: Nat)
+    EvidenceThread : ThreadState(n) -> List(Evidence) -> List(CaptureFrame) -> EvidenceThread(n)
   type EvidencePrefix = EvidencePrefix(List(Evidence), List(Char))
 
   type Match(result: Type) = Match(result, String, String, String)
@@ -731,10 +782,12 @@ mod Std.Regex
     [] -> output
     [head | rest] -> evidence_reverse_chars_into(rest, [head | output])
 
+  @reducible
   fn record_capture_char(frames: List(CaptureFrame), char: Char) -> List(CaptureFrame) = match frames
     [] -> []
     [CaptureFrame(chars, saved) | rest] -> [CaptureFrame([char | chars], saved) | record_capture_char(rest, char)]
 
+  @reducible
   fn execute_instruction(instruction: EvidenceInstruction, evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceExecution = match instruction
     EmitChar(char) -> EvidenceExecution([CharacterEvidence(char) | evidence], captures)
     EmitUnit() -> EvidenceExecution([UnitEvidence() | evidence], captures)
@@ -748,85 +801,355 @@ mod Std.Regex
       [] -> EvidenceExecution(evidence, [])
       [CaptureFrame(chars, saved) | rest] -> EvidenceExecution([StringEvidence(Std.String.from_characters(evidence_reverse_chars(chars))) | saved], rest)
 
+  @reducible
   fn execute_routine(routine: List(EvidenceInstruction), evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceExecution = match routine
     [] -> EvidenceExecution(evidence, captures)
-    [instruction | rest] -> match execute_instruction(instruction, evidence, captures)
-      EvidenceExecution(next_evidence, next_captures) -> execute_routine(rest, next_evidence, next_captures)
+    [instruction | rest] ->
+      execute_routine(
+        rest,
+        executed_evidence(execute_instruction(instruction, evidence, captures)),
+        executed_captures(execute_instruction(instruction, evidence, captures))
+      )
 
-  fn initial_thread(destination: MachineState) -> EvidenceThread = match destination
+  @reducible
+  fn executed_evidence(execution: EvidenceExecution) -> List(Evidence) = match execution
+    EvidenceExecution(evidence, _) -> evidence
+
+  @reducible
+  fn executed_captures(execution: EvidenceExecution) -> List(CaptureFrame) = match execution
+    EvidenceExecution(_, captures) -> captures
+
+  ## The generalized Thompson proof uses an NFA-independent stream. `Observe`
+  ## advances capture input; `Regular` embeds the evidence VM language.
+  type ExtendedInstruction = Regular(EvidenceInstruction) | Observe(Char)
+
+  @reducible
+  fn regular_routine(routine: List(EvidenceInstruction)) -> List(ExtendedInstruction) = match routine
+    [] -> []
+    [instruction | rest] -> [Regular(instruction) | regular_routine(rest)]
+
+  type ExtendedEvidenceRoutineExecution indices (routine: List(ExtendedInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame))
+    ExtendedEvidenceDone : {input_evidence: List(Evidence)} -> {input_captures: List(CaptureFrame)} -> ExtendedEvidenceRoutineExecution(Nil(), input_evidence, input_captures, input_evidence, input_captures)
+    ExtendedEvidenceObserve : (char: Char) -> {input_captures: List(CaptureFrame)} -> (suffix : ExtendedEvidenceRoutineExecution(rest, input_evidence, record_capture_char(input_captures, char), output_evidence, output_captures)) -> ExtendedEvidenceRoutineExecution(Cons(Observe(char), rest), input_evidence, input_captures, output_evidence, output_captures)
+    ExtendedEvidenceRegular : (instruction: EvidenceInstruction) -> {input_evidence: List(Evidence)} -> {input_captures: List(CaptureFrame)} -> (suffix : ExtendedEvidenceRoutineExecution(rest, executed_evidence(execute_instruction(instruction, input_evidence, input_captures)), executed_captures(execute_instruction(instruction, input_evidence, input_captures)), output_evidence, output_captures)) -> ExtendedEvidenceRoutineExecution(Cons(Regular(instruction), rest), input_evidence, input_captures, output_evidence, output_captures)
+
+  type RoutineExecution indices (routine: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame))
+    RoutineDone : {evidence: List(Evidence)} -> {captures: List(CaptureFrame)} -> RoutineExecution(Nil(), evidence, captures, evidence, captures)
+    RoutineStep : (instruction: EvidenceInstruction) -> {input_evidence: List(Evidence)} -> {input_captures: List(CaptureFrame)} -> (suffix : RoutineExecution(rest, executed_evidence(execute_instruction(instruction, input_evidence, input_captures)), executed_captures(execute_instruction(instruction, input_evidence, input_captures)), output_evidence, output_captures)) -> RoutineExecution(Cons(instruction, rest), input_evidence, input_captures, output_evidence, output_captures)
+
+  type CertifiedRoutineExecution indices (routine: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame))
+    CertifiedRoutineExecuted : (output_evidence: List(Evidence)) -> (output_captures: List(CaptureFrame)) -> (certificate : RoutineExecution(routine, input_evidence, input_captures, output_evidence, output_captures)) -> (extended_certificate : ExtendedEvidenceRoutineExecution(regular_routine(routine), input_evidence, input_captures, output_evidence, output_captures)) -> CertifiedRoutineExecution(routine, input_evidence, input_captures)
+
+  fn execute_routine_certified(routine: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame)) -> CertifiedRoutineExecution(routine, input_evidence, input_captures) =
+    match routine
+      [] -> CertifiedRoutineExecuted(input_evidence, input_captures, RoutineDone(), ExtendedEvidenceDone())
+      [instruction | rest] ->
+        let instruction_execution = execute_instruction(instruction, input_evidence, input_captures)
+        let next_evidence = executed_evidence(instruction_execution)
+        let next_captures = executed_captures(instruction_execution)
+        match execute_routine_certified(rest, next_evidence, next_captures)
+          CertifiedRoutineExecuted(output_evidence, output_captures, suffix, extended_suffix) ->
+            CertifiedRoutineExecuted(output_evidence, output_captures, RoutineStep(instruction, suffix), ExtendedEvidenceRegular(instruction, extended_suffix))
+
+  ## Thompson's evidence proof reasons over one NFA-independent instruction
+  ## stream. `Observe` records the consumed character (and advances open capture
+  ## frames); `Regular` embeds the existing VM instruction language.
+  type ExtendedExecution = ExtendedExecution(Option(Char), List(Evidence), List(CaptureFrame))
+
+  @reducible
+  fn transition_routine(char: Char, routine: List(EvidenceInstruction)) -> List(ExtendedInstruction) =
+    [Observe(char) | regular_routine(routine)]
+
+  @reducible
+  fn append_extended_routines(left: List(ExtendedInstruction), right: List(ExtendedInstruction)) -> List(ExtendedInstruction) = match left
+    [] -> right
+    [instruction | rest] -> [instruction | append_extended_routines(rest, right)]
+
+  fn execute_extended_instruction(instruction: ExtendedInstruction, current: Option(Char), evidence: List(Evidence), captures: List(CaptureFrame)) -> ExtendedExecution = match instruction
+    Observe(char) -> ExtendedExecution(Some(char), evidence, record_capture_char(captures, char))
+    Regular(regular) -> match execute_instruction(regular, evidence, captures)
+      EvidenceExecution(next_evidence, next_captures) -> ExtendedExecution(current, next_evidence, next_captures)
+
+  fn execute_extended_routine(routine: List(ExtendedInstruction), current: Option(Char), evidence: List(Evidence), captures: List(CaptureFrame)) -> ExtendedExecution = match routine
+    [] -> ExtendedExecution(current, evidence, captures)
+    [instruction | rest] -> match execute_extended_instruction(instruction, current, evidence, captures)
+      ExtendedExecution(next_current, next_evidence, next_captures) -> execute_extended_routine(rest, next_current, next_evidence, next_captures)
+
+  fn extended_evidence(execution: ExtendedExecution) -> List(Evidence) = match execution
+    ExtendedExecution(_, evidence, _) -> evidence
+
+  fn extended_captures(execution: ExtendedExecution) -> List(CaptureFrame) = match execution
+    ExtendedExecution(_, _, captures) -> captures
+
+  fn extended_current(execution: ExtendedExecution) -> Option(Char) = match execution
+    ExtendedExecution(current, _, _) -> current
+
+  type ExtendedRoutineExecution indices (routine: List(ExtendedInstruction), input_current: Option(Char), input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_current: Option(Char), output_evidence: List(Evidence), output_captures: List(CaptureFrame))
+    ExtendedRoutineExecuted : ExtendedRoutineExecution(routine, input_current, input_evidence, input_captures, extended_current(execute_extended_routine(routine, input_current, input_evidence, input_captures)), extended_evidence(execute_extended_routine(routine, input_current, input_evidence, input_captures)), extended_captures(execute_extended_routine(routine, input_current, input_evidence, input_captures)))
+
+  fn certify_extended_routine(routine: List(ExtendedInstruction), input_current: Option(Char), input_evidence: List(Evidence), input_captures: List(CaptureFrame)) -> ExtendedRoutineExecution(routine, input_current, input_evidence, input_captures, extended_current(execute_extended_routine(routine, input_current, input_evidence, input_captures)), extended_evidence(execute_extended_routine(routine, input_current, input_evidence, input_captures)), extended_captures(execute_extended_routine(routine, input_current, input_evidence, input_captures))) = ExtendedRoutineExecuted()
+
+  ## Evidence execution deliberately forgets `ExtendedExecution.current`.
+  ## `Observe` still advances every open capture frame, while the current
+  ## character is observational bookkeeping and cannot affect evidence.
+  fn execute_extended_evidence_instruction(instruction: ExtendedInstruction, evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceExecution = match instruction
+    Observe(char) -> EvidenceExecution(evidence, record_capture_char(captures, char))
+    Regular(regular) -> execute_instruction(regular, evidence, captures)
+
+  fn execute_extended_evidence_routine(routine: List(ExtendedInstruction), evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceExecution = match routine
+    [] -> EvidenceExecution(evidence, captures)
+    [instruction | rest] -> match execute_extended_evidence_instruction(instruction, evidence, captures)
+      EvidenceExecution(next_evidence, next_captures) -> execute_extended_evidence_routine(rest, next_evidence, next_captures)
+
+  type CertifiedPathRoutine indices (routine: List(ExtendedInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence))
+    PathRoutineDone : CertifiedPathRoutine(Nil(), evidence, captures, evidence)
+    PathRoutineTransition : (char: Char) -> (regular: List(EvidenceInstruction)) -> (suffix_routine: List(ExtendedInstruction)) -> (destination_evidence: List(Evidence)) -> (destination_captures: List(CaptureFrame)) -> (regular_execution : ExtendedEvidenceRoutineExecution(regular_routine(regular), source_evidence, record_capture_char(source_captures, char), destination_evidence, destination_captures)) -> (suffix : CertifiedPathRoutine(suffix_routine, destination_evidence, destination_captures, final_evidence)) -> CertifiedPathRoutine(append_extended_routines(transition_routine(char, regular), suffix_routine), source_evidence, source_captures, final_evidence)
+    PathRoutineInitial : (regular: List(EvidenceInstruction)) -> (suffix_routine: List(ExtendedInstruction)) -> (initial_evidence: List(Evidence)) -> (initial_captures: List(CaptureFrame)) -> (regular_execution : ExtendedEvidenceRoutineExecution(regular_routine(regular), Nil(), Nil(), initial_evidence, initial_captures)) -> (suffix : CertifiedPathRoutine(suffix_routine, initial_evidence, initial_captures, final_evidence)) -> CertifiedPathRoutine(append_extended_routines(regular_routine(regular), suffix_routine), Nil(), Nil(), final_evidence)
+
+  fn initial_thread({n: Nat}, destination: MachineState(n)) -> EvidenceThread(n) = match destination
     Active(state, routine, _) -> match execute_routine(routine, [], [])
       EvidenceExecution(evidence, captures) -> EvidenceThread(ThreadActive(state), evidence, captures)
     Accepted(routine, _) -> match execute_routine(routine, [], [])
       EvidenceExecution(evidence, captures) -> EvidenceThread(ThreadAccepted(), evidence, captures)
 
-  fn initial_threads(starts: List(MachineState)) -> List(EvidenceThread) = match starts
+  fn initial_threads({n: Nat}, starts: List(MachineState(n))) -> List(EvidenceThread(n)) = match starts
     [] -> []
     [head | rest] -> [initial_thread(head) | initial_threads(rest)]
 
-  fn destination_thread(destination: MachineState, evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceThread = match destination
+  fn destination_thread({n: Nat}, destination: MachineState(n), evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceThread(n) = match destination
     Active(state, routine, _) -> match execute_routine(routine, evidence, captures)
       EvidenceExecution(next_evidence, next_captures) -> EvidenceThread(ThreadActive(state), next_evidence, next_captures)
     Accepted(routine, _) -> match execute_routine(routine, evidence, captures)
       EvidenceExecution(next_evidence, next_captures) -> EvidenceThread(ThreadAccepted(), next_evidence, next_captures)
 
-  fn destination_threads(destinations: List(MachineState), evidence: List(Evidence), captures: List(CaptureFrame)) -> List(EvidenceThread) = match destinations
+  fn destination_threads({n: Nat}, destinations: List(MachineState(n)), evidence: List(Evidence), captures: List(CaptureFrame)) -> List(EvidenceThread(n)) = match destinations
     [] -> []
     [head | rest] -> [destination_thread(head, evidence, captures) | destination_threads(rest, evidence, captures)]
 
-  fn step_evidence_thread(next: Nat -> Char -> List(MachineState), char: Char, boundary: Boundary, thread: EvidenceThread) -> List(EvidenceThread) = match thread
+  fn step_evidence_thread({n: Nat}, next: (Bounded(n)) -> Char -> List(MachineState(n)), char: Char, boundary: Boundary, thread: EvidenceThread(n)) -> List(EvidenceThread(n)) = match thread
     EvidenceThread(ThreadAccepted(), _, _) -> []
     EvidenceThread(ThreadActive(state), evidence, captures) ->
-      destination_threads(filter_boundary_states(next(state)(char), boundary), evidence, record_capture_char(captures, char))
+      destination_threads(filter_boundary_states(next(state, char), boundary), evidence, record_capture_char(captures, char))
 
-  fn append_threads(left: List(EvidenceThread), right: List(EvidenceThread)) -> List(EvidenceThread) = match left
+  fn append_threads({n: Nat}, left: List(EvidenceThread(n)), right: List(EvidenceThread(n))) -> List(EvidenceThread(n)) = match left
     [] -> right
     [head | rest] -> [head | append_threads(rest, right)]
 
-  fn step_evidence_threads(next: Nat -> Char -> List(MachineState), char: Char, boundary: Boundary, threads: List(EvidenceThread)) -> List(EvidenceThread) = match threads
+  fn step_evidence_threads({n: Nat}, next: (Bounded(n)) -> Char -> List(MachineState(n)), char: Char, boundary: Boundary, threads: List(EvidenceThread(n))) -> List(EvidenceThread(n)) = match threads
     [] -> []
     [head | rest] -> append_threads(step_evidence_thread(next, char, boundary, head), step_evidence_threads(next, char, boundary, rest))
 
-  fn nat_same(left: Nat, right: Nat) -> Bool = match left
-    Z() -> match right
-      Z() -> true
-      S(_) -> false
-    S(left_rest) -> match right
-      Z() -> false
-      S(right_rest) -> nat_same(left_rest, right_rest)
+  fn transition_boundary(char: Char, rest: List(Char)) -> Boundary =
+    position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)
 
-  fn same_thread_state(left: ThreadState, right: ThreadState) -> Bool = match left
+  fn append_characters(left: List(Char), right: List(Char)) -> List(Char) = match left
+    [] -> right
+    [head | rest] -> [head | append_characters(rest, right)]
+
+  fn transition_boundary_before(char: Char, rest: List(Char), after_input: List(Char)) -> Boundary =
+    transition_boundary(char, append_characters(rest, after_input))
+
+  type InitialPosition = InitialPosition(Bool, Bool, Bool, Bool)
+
+  fn initial_position_boundary(position: InitialPosition, input: List(Char)) -> Boundary = match position
+    InitialPosition(subject_start, line_start, previous_ascii_word, previous_unicode_word) ->
+      position_boundary(subject_start, line_start, previous_ascii_word, previous_unicode_word, input)
+
+  fn subject_initial_position() -> InitialPosition = InitialPosition(true, true, false, false)
+
+  @reducible
+  fn machine_destinations(n: Nat, machine: PatternMachine(n), state: ThreadState(n), char: Char, boundary: Boundary) -> List(MachineState(n)) = match state
+    ThreadAccepted() -> []
+    ThreadActive(active) -> match machine
+      MkPatternMachine(_, next) -> filter_boundary_states(next(active, char), boundary)
+
+  ## Intrinsic list membership. The witness is erased at every accepting-run
+  ## boundary; its only purpose is to make every path edge name a destination
+  ## that the checked transition relation actually produced.
+  type ListMember(a: Type) indices (value: a, values: List(a))
+    ListMemberHere : ListMember(a, value, Cons(value, rest))
+    ListMemberThere : (prior : ListMember(a, value, rest)) -> ListMember(a, value, Cons(other, rest))
+
+  fn member_here({a: Type}, value: a, rest: List(a)) -> ListMember(a, value, Cons(value, rest)) = ListMemberHere()
+
+  fn member_there({a: Type}, head: a, {value: a}, {rest: List(a)}, member: ListMember(a, value, rest)) -> ListMember(a, value, Cons(head, rest)) = ListMemberThere(member)
+
+  ## A candidate list whose every element is paired with erased evidence that it
+  ## belongs to the original transition result. State and proof are introduced by
+  ## the same constructor, so dependent pattern refinement never has to relate two
+  ## sibling scrutinees.
+  type MachineStateMembers(n: Nat) indices (whole: List(MachineState(n)), remaining_values: List(MachineState(n)))
+    MachineStateMembersNil : MachineStateMembers(n, whole, Nil())
+    MachineStateMembersActive : (state: Bounded(n)) -> (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (member : ListMember(MachineState(n), Active(state, routine, constraints), whole)) -> (remaining: MachineStateMembers(n, whole, values)) -> MachineStateMembers(n, whole, Cons(Active(state, routine, constraints), values))
+    MachineStateMembersAccepted : (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (member : ListMember(MachineState(n), Accepted(routine, constraints), whole)) -> (remaining: MachineStateMembers(n, whole, values)) -> MachineStateMembers(n, whole, Cons(Accepted(routine, constraints), values))
+
+  fn weaken_machine_state_members({n: Nat}, head: MachineState(n), {whole: List(MachineState(n))}, {values: List(MachineState(n))}, members: MachineStateMembers(n, whole, values)) -> MachineStateMembers(n, Cons(head, whole), values) = match members
+    MachineStateMembersNil() -> MachineStateMembersNil()
+    MachineStateMembersActive(state, routine, constraints, member, remaining) -> MachineStateMembersActive(state, routine, constraints, member_there(head, member), weaken_machine_state_members(head, remaining))
+    MachineStateMembersAccepted(routine, constraints, member, remaining) -> MachineStateMembersAccepted(routine, constraints, member_there(head, member), weaken_machine_state_members(head, remaining))
+
+  fn machine_state_members({n: Nat}, values: List(MachineState(n))) -> MachineStateMembers(n, values, values) = match values
+    [] -> MachineStateMembersNil()
+    [Active(state, routine, constraints) | rest] -> MachineStateMembersActive(state, routine, constraints, member_here(Active(state, routine, constraints), rest), weaken_machine_state_members(Active(state, routine, constraints), machine_state_members(rest)))
+    [Accepted(routine, constraints) | rest] -> MachineStateMembersAccepted(routine, constraints, member_here(Accepted(routine, constraints), rest), weaken_machine_state_members(Accepted(routine, constraints), machine_state_members(rest)))
+
+  ## A single winning NFA path through the evidence VM.  Both the starting
+  ## thread and final evidence are indices: `AcceptingNow` can close only at an
+  ## accepted thread carrying exactly that evidence, while `AcceptingNext` can
+  ## advance only to a member of `step_evidence_thread`.  Consequently a path
+  ## cannot invent a state, skip an input character, or claim evidence different
+  ## from the VM thread it reaches.
+  ##
+  ## Boundary filtering is part of the indexed edge, including the exact suffix
+  ## used by the runtime boundary calculation. This covers zero-width boundary
+  ## constraints without adding an unchecked side condition to the theorem.
+  ## One evidence-preserving transition. It separates machine reachability from
+  ## routine execution: `edge` proves the destination came from the checked
+  ## bounded transition relation, and `execution` proves that destination's
+  ## routine produced exactly the evidence/capture state named by the result.
+  type EvidenceStep(n: Nat, machine: PatternMachine(n)) indices (char: Char, boundary: Boundary, source_state: ThreadState(n), source_evidence: List(Evidence), source_captures: List(CaptureFrame), destination_state: ThreadState(n), destination_evidence: List(Evidence), destination_captures: List(CaptureFrame))
+    EvidenceStepActive : (destination: Bounded(n)) -> (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge : ListMember(MachineState(n), Active(destination, routine, constraints), machine_destinations(n, machine, source_state, char, boundary))) -> (execution : RoutineExecution(routine, source_evidence, record_capture_char(source_captures, char), result_evidence, result_captures)) -> EvidenceStep(n, machine, char, boundary, source_state, source_evidence, source_captures, ThreadActive(destination), result_evidence, result_captures)
+    EvidenceStepAccepted : (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge : ListMember(MachineState(n), Accepted(routine, constraints), machine_destinations(n, machine, source_state, char, boundary))) -> (execution : RoutineExecution(routine, source_evidence, record_capture_char(source_captures, char), result_evidence, result_captures)) -> EvidenceStep(n, machine, char, boundary, source_state, source_evidence, source_captures, ThreadAccepted(), result_evidence, result_captures)
+
+  type AcceptingFrom(n: Nat, machine: PatternMachine(n)) indices (input: List(Char), after_input: List(Char), state: ThreadState(n), current_evidence: List(Evidence), captures: List(CaptureFrame), final_evidence: List(Evidence), extended_routine: List(ExtendedInstruction))
+    AcceptingNow : AcceptingFrom(n, machine, Nil(), after_input, ThreadAccepted(), evidence, captures, evidence, Nil())
+    AcceptingNextActive : (destination: Bounded(n)) -> (regular: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (destination_evidence: List(Evidence)) -> (destination_captures: List(CaptureFrame)) -> (suffix_routine: List(ExtendedInstruction)) -> (edge : ListMember(MachineState(n), Active(destination, regular, constraints), machine_destinations(n, machine, state, char, transition_boundary_before(char, rest, after_input)))) -> (execution : RoutineExecution(regular, current_evidence, record_capture_char(captures, char), destination_evidence, destination_captures)) -> (suffix : AcceptingFrom(n, machine, rest, after_input, ThreadActive(destination), destination_evidence, destination_captures, final_evidence, suffix_routine)) -> AcceptingFrom(n, machine, Cons(char, rest), after_input, state, current_evidence, captures, final_evidence, append_extended_routines(transition_routine(char, regular), suffix_routine))
+    AcceptingNextAccepted : (regular: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (destination_evidence: List(Evidence)) -> (destination_captures: List(CaptureFrame)) -> (suffix_routine: List(ExtendedInstruction)) -> (edge : ListMember(MachineState(n), Accepted(regular, constraints), machine_destinations(n, machine, state, char, transition_boundary_before(char, rest, after_input)))) -> (execution : RoutineExecution(regular, current_evidence, record_capture_char(captures, char), destination_evidence, destination_captures)) -> (suffix : AcceptingFrom(n, machine, rest, after_input, ThreadAccepted(), destination_evidence, destination_captures, final_evidence, suffix_routine)) -> AcceptingFrom(n, machine, Cons(char, rest), after_input, state, current_evidence, captures, final_evidence, append_extended_routines(transition_routine(char, regular), suffix_routine))
+
+  type AcceptingSearch(n: Nat, machine: PatternMachine(n)) indices (input: List(Char), after_input: List(Char), state: ThreadState(n), current_evidence: List(Evidence), captures: List(CaptureFrame))
+    NoAcceptingPath : AcceptingSearch(n, machine, input, after_input, state, current_evidence, captures)
+    AcceptingPath : (final_evidence: List(Evidence)) -> (extended_routine: List(ExtendedInstruction)) -> (routine_certificate : CertifiedPathRoutine(extended_routine, current_evidence, captures, final_evidence)) -> (@erased path : AcceptingFrom(n, machine, input, after_input, state, current_evidence, captures, final_evidence, extended_routine)) -> AcceptingSearch(n, machine, input, after_input, state, current_evidence, captures)
+
+  fn prepend_transition_certificate(char: Char, routine: List(EvidenceInstruction), suffix_routine: List(ExtendedInstruction), source_evidence: List(Evidence), source_captures: List(CaptureFrame), destination_evidence: List(Evidence), destination_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, regular_execution: ExtendedEvidenceRoutineExecution(regular_routine(routine), source_evidence, record_capture_char(source_captures, char), destination_evidence, destination_captures), suffix_certificate: CertifiedPathRoutine(suffix_routine, destination_evidence, destination_captures, final_evidence)) -> CertifiedPathRoutine(append_extended_routines(transition_routine(char, routine), suffix_routine), source_evidence, source_captures, final_evidence) =
+    PathRoutineTransition(char, routine, suffix_routine, destination_evidence, destination_captures, regular_execution, suffix_certificate)
+
+  fn search_accepting_from(n: Nat, machine: PatternMachine(n), input: List(Char), after_input: List(Char), state: ThreadState(n), current_evidence: List(Evidence), captures: List(CaptureFrame)) -> AcceptingSearch(n, machine, input, after_input, state, current_evidence, captures) = match input
+    [] -> match state
+      ThreadAccepted() -> AcceptingPath(current_evidence, [], PathRoutineDone(), AcceptingNow())
+      ThreadActive(_) -> NoAcceptingPath()
+    [char | rest] ->
+      let destinations = machine_destinations(n, machine, state, char, transition_boundary_before(char, rest, after_input))
+      search_accepting_members(n, machine, char, rest, after_input, state, current_evidence, captures, machine_state_members(destinations))
+
+  fn search_accepting_members(n: Nat, machine: PatternMachine(n), char: Char, rest: List(Char), after_input: List(Char), source_state: ThreadState(n), source_evidence: List(Evidence), source_captures: List(CaptureFrame), {current: List(MachineState(n))}, members: MachineStateMembers(n, machine_destinations(n, machine, source_state, char, transition_boundary_before(char, rest, after_input)), current)) -> AcceptingSearch(n, machine, Cons(char, rest), after_input, source_state, source_evidence, source_captures) = match members
+    MachineStateMembersNil() -> NoAcceptingPath()
+    MachineStateMembersActive(state, routine, constraints, edge, remaining) -> match execute_routine_certified(routine, source_evidence, record_capture_char(source_captures, char))
+      CertifiedRoutineExecuted(next_evidence, next_captures, execution, regular_execution) -> match search_accepting_from(n, machine, rest, after_input, ThreadActive(state), next_evidence, next_captures)
+        NoAcceptingPath() -> search_accepting_members(n, machine, char, rest, after_input, source_state, source_evidence, source_captures, remaining)
+        AcceptingPath(final_evidence, suffix_routine, suffix_certificate, suffix) -> AcceptingPath(final_evidence, append_extended_routines(transition_routine(char, routine), suffix_routine), prepend_transition_certificate(char, routine, suffix_routine, source_evidence, source_captures, next_evidence, next_captures, regular_execution, suffix_certificate), AcceptingNextActive(state, routine, constraints, next_evidence, next_captures, suffix_routine, edge, execution, suffix))
+    MachineStateMembersAccepted(routine, constraints, edge, remaining) -> match execute_routine_certified(routine, source_evidence, record_capture_char(source_captures, char))
+      CertifiedRoutineExecuted(next_evidence, next_captures, execution, regular_execution) -> match search_accepting_from(n, machine, rest, after_input, ThreadAccepted(), next_evidence, next_captures)
+        NoAcceptingPath() -> search_accepting_members(n, machine, char, rest, after_input, source_state, source_evidence, source_captures, remaining)
+        AcceptingPath(final_evidence, suffix_routine, suffix_certificate, suffix) -> AcceptingPath(final_evidence, append_extended_routines(transition_routine(char, routine), suffix_routine), prepend_transition_certificate(char, routine, suffix_routine, source_evidence, source_captures, next_evidence, next_captures, regular_execution, suffix_certificate), AcceptingNextAccepted(routine, constraints, next_evidence, next_captures, suffix_routine, edge, execution, suffix))
+
+  @reducible
+  fn initial_machine_destinations(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char)) -> List(MachineState(n)) = match machine
+    MkPatternMachine(starts, _) -> filter_boundary_states(starts, initial_position_boundary(position, append_characters(input, after_input)))
+
+  type InitialEvidenceStep(n: Nat, machine: PatternMachine(n)) indices (position: InitialPosition, input: List(Char), after_input: List(Char), destination_state: ThreadState(n), destination_evidence: List(Evidence), destination_captures: List(CaptureFrame))
+    InitialEvidenceActive : (destination: Bounded(n)) -> (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge : ListMember(MachineState(n), Active(destination, routine, constraints), initial_machine_destinations(n, machine, position, input, after_input))) -> (execution : RoutineExecution(routine, Nil(), Nil(), result_evidence, result_captures)) -> InitialEvidenceStep(n, machine, position, input, after_input, ThreadActive(destination), result_evidence, result_captures)
+    InitialEvidenceAccepted : (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge : ListMember(MachineState(n), Accepted(routine, constraints), initial_machine_destinations(n, machine, position, input, after_input))) -> (execution : RoutineExecution(routine, Nil(), Nil(), result_evidence, result_captures)) -> InitialEvidenceStep(n, machine, position, input, after_input, ThreadAccepted(), result_evidence, result_captures)
+
+  type MachineAcceptance(n: Nat, machine: PatternMachine(n)) indices (position: InitialPosition, input: List(Char), after_input: List(Char), final_evidence: List(Evidence), extended_routine: List(ExtendedInstruction))
+    MachineAccepted : (destination: MachineState(n)) -> (initial_evidence: List(Evidence)) -> (initial_captures: List(CaptureFrame)) -> (path_routine: List(ExtendedInstruction)) -> (edge : ListMember(MachineState(n), destination, initial_machine_destinations(n, machine, position, input, after_input))) -> (execution : RoutineExecution(machine_state_routine(n, destination), Nil(), Nil(), initial_evidence, initial_captures)) -> (routine_certificate : CertifiedPathRoutine(append_extended_routines(regular_routine(machine_state_routine(n, destination)), path_routine), Nil(), Nil(), final_evidence)) -> (path : AcceptingFrom(n, machine, input, after_input, machine_state_thread(n, destination), initial_evidence, initial_captures, final_evidence, path_routine)) -> MachineAcceptance(n, machine, position, input, after_input, final_evidence, append_extended_routines(regular_routine(machine_state_routine(n, destination)), path_routine))
+
+  type MachineAcceptingSearch(n: Nat, machine: PatternMachine(n)) indices (position: InitialPosition, input: List(Char), after_input: List(Char))
+    MachineNoAcceptingPath : MachineAcceptingSearch(n, machine, position, input, after_input)
+    MachineAcceptingPath : (final_evidence: List(Evidence)) -> (extended_routine: List(ExtendedInstruction)) -> (@erased acceptance : MachineAcceptance(n, machine, position, input, after_input, final_evidence, extended_routine)) -> MachineAcceptingSearch(n, machine, position, input, after_input)
+
+  fn prepend_initial_certificate(routine: List(EvidenceInstruction), path_routine: List(ExtendedInstruction), initial_evidence: List(Evidence), initial_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, regular_execution: ExtendedEvidenceRoutineExecution(regular_routine(routine), Nil(), Nil(), initial_evidence, initial_captures), path_certificate: CertifiedPathRoutine(path_routine, initial_evidence, initial_captures, final_evidence)) -> CertifiedPathRoutine(append_extended_routines(regular_routine(routine), path_routine), Nil(), Nil(), final_evidence) =
+    PathRoutineInitial(routine, path_routine, initial_evidence, initial_captures, regular_execution, path_certificate)
+
+  fn search_machine_acceptance(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char)) -> MachineAcceptingSearch(n, machine, position, input, after_input) =
+    let starts = initial_machine_destinations(n, machine, position, input, after_input)
+    search_initial_members(n, machine, position, input, after_input, machine_state_members(starts))
+
+  fn search_initial_members(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char), {current: List(MachineState(n))}, members: MachineStateMembers(n, initial_machine_destinations(n, machine, position, input, after_input), current)) -> MachineAcceptingSearch(n, machine, position, input, after_input) = match members
+    MachineStateMembersNil() -> MachineNoAcceptingPath()
+    MachineStateMembersActive(state, routine, constraints, edge, remaining) -> match execute_routine_certified(routine, [], [])
+      CertifiedRoutineExecuted(initial_evidence, initial_captures, execution, regular_execution) -> match search_accepting_from(n, machine, input, after_input, ThreadActive(state), initial_evidence, initial_captures)
+        NoAcceptingPath() -> search_initial_members(n, machine, position, input, after_input, remaining)
+        AcceptingPath(final_evidence, path_routine, path_certificate, path) ->
+          let extended_routine = append_extended_routines(regular_routine(routine), path_routine)
+          let routine_certificate = prepend_initial_certificate(routine, path_routine, initial_evidence, initial_captures, regular_execution, path_certificate)
+          MachineAcceptingPath(final_evidence, extended_routine, MachineAccepted(Active(state, routine, constraints), initial_evidence, initial_captures, path_routine, edge, execution, routine_certificate, path))
+    MachineStateMembersAccepted(routine, constraints, edge, remaining) -> match execute_routine_certified(routine, [], [])
+      CertifiedRoutineExecuted(initial_evidence, initial_captures, execution, regular_execution) -> match search_accepting_from(n, machine, input, after_input, ThreadAccepted(), initial_evidence, initial_captures)
+        NoAcceptingPath() -> search_initial_members(n, machine, position, input, after_input, remaining)
+        AcceptingPath(final_evidence, path_routine, path_certificate, path) ->
+          let extended_routine = append_extended_routines(regular_routine(routine), path_routine)
+          let routine_certificate = prepend_initial_certificate(routine, path_routine, initial_evidence, initial_captures, regular_execution, path_certificate)
+          MachineAcceptingPath(final_evidence, extended_routine, MachineAccepted(Accepted(routine, constraints), initial_evidence, initial_captures, path_routine, edge, execution, routine_certificate, path))
+
+  type CertifiedPrefixSearch(n: Nat, machine: PatternMachine(n)) indices (position: InitialPosition)
+    NoCertifiedPrefix : CertifiedPrefixSearch(n, machine, position)
+    CertifiedPrefixPath : (matched_input: List(Char)) -> (remaining_input: List(Char)) -> (final_evidence: List(Evidence)) -> (extended_routine: List(ExtendedInstruction)) -> (@erased acceptance : MachineAcceptance(n, machine, position, matched_input, remaining_input, final_evidence, extended_routine)) -> CertifiedPrefixSearch(n, machine, position)
+
+  fn search_first_machine_prefix(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char)) -> CertifiedPrefixSearch(n, machine, position) =
+    search_first_machine_prefix_loop(n, machine, position, [], input)
+
+  fn search_first_machine_prefix_loop(n: Nat, machine: PatternMachine(n), position: InitialPosition, reversed_prefix: List(Char), remaining_input: List(Char)) -> CertifiedPrefixSearch(n, machine, position) =
+    let matched_input = evidence_reverse_chars(reversed_prefix)
+    match search_machine_acceptance(n, machine, position, matched_input, remaining_input)
+      MachineAcceptingPath(evidence, routine, acceptance) -> CertifiedPrefixPath(matched_input, remaining_input, evidence, routine, acceptance)
+      MachineNoAcceptingPath() -> match remaining_input
+        [] -> NoCertifiedPrefix()
+        [char | rest] -> search_first_machine_prefix_loop(n, machine, position, [char | reversed_prefix], rest)
+
+  fn search_last_machine_prefix(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char)) -> CertifiedPrefixSearch(n, machine, position) =
+    search_last_machine_prefix_loop(n, machine, position, [], input, NoCertifiedPrefix())
+
+  fn search_last_machine_prefix_loop(n: Nat, machine: PatternMachine(n), position: InitialPosition, reversed_prefix: List(Char), remaining_input: List(Char), previous: CertifiedPrefixSearch(n, machine, position)) -> CertifiedPrefixSearch(n, machine, position) =
+    let matched_input = evidence_reverse_chars(reversed_prefix)
+    match search_machine_acceptance(n, machine, position, matched_input, remaining_input)
+      MachineNoAcceptingPath() -> continue_last_machine_prefix(n, machine, position, reversed_prefix, remaining_input, previous)
+      MachineAcceptingPath(evidence, routine, acceptance) -> continue_last_machine_prefix(n, machine, position, reversed_prefix, remaining_input, CertifiedPrefixPath(matched_input, remaining_input, evidence, routine, acceptance))
+
+  fn continue_last_machine_prefix(n: Nat, machine: PatternMachine(n), position: InitialPosition, reversed_prefix: List(Char), remaining_input: List(Char), previous: CertifiedPrefixSearch(n, machine, position)) -> CertifiedPrefixSearch(n, machine, position) = match remaining_input
+    [] -> previous
+    [char | rest] -> search_last_machine_prefix_loop(n, machine, position, [char | reversed_prefix], rest, previous)
+
+  fn bounded_same({n: Nat}, left: Bounded(n), right: Bounded(n)) -> Bool = match left
+    First() -> match right
+      First() -> true
+      Next(_) -> false
+    Next(left_rest) -> match right
+      First() -> false
+      Next(right_rest) -> bounded_same(left_rest, right_rest)
+
+  fn same_thread_state({n: Nat}, left: ThreadState(n), right: ThreadState(n)) -> Bool = match left
     ThreadAccepted() -> match right
       ThreadAccepted() -> true
       ThreadActive(_) -> false
     ThreadActive(left_state) -> match right
       ThreadAccepted() -> false
-      ThreadActive(right_state) -> nat_same(left_state, right_state)
+      ThreadActive(right_state) -> bounded_same(left_state, right_state)
 
-  fn contains_thread_state(state: ThreadState, threads: List(EvidenceThread)) -> Bool = match threads
+  fn contains_thread_state({n: Nat}, state: ThreadState(n), threads: List(EvidenceThread(n))) -> Bool = match threads
     [] -> false
     [EvidenceThread(other, _, _) | rest] -> pickup
       same_thread_state(state, other) -> true
       else -> contains_thread_state(state, rest)
 
-  fn distinct_threads(threads: List(EvidenceThread)) -> List(EvidenceThread) = distinct_threads_seen(threads, [])
-  fn distinct_threads_seen(threads: List(EvidenceThread), seen: List(EvidenceThread)) -> List(EvidenceThread) = match threads
+  fn distinct_threads({n: Nat}, threads: List(EvidenceThread(n))) -> List(EvidenceThread(n)) = distinct_threads_seen(threads, [])
+  fn distinct_threads_seen({n: Nat}, threads: List(EvidenceThread(n)), seen: List(EvidenceThread(n))) -> List(EvidenceThread(n)) = match threads
     [] -> []
     [EvidenceThread(state, evidence, captures) | rest] -> pickup
       contains_thread_state(state, seen) -> distinct_threads_seen(rest, seen)
       else -> [EvidenceThread(state, evidence, captures) | distinct_threads_seen(rest, [EvidenceThread(state, evidence, captures) | seen])]
 
-  fn first_accepted_evidence(threads: List(EvidenceThread)) -> Option(List(Evidence)) = match threads
+  fn first_accepted_evidence({n: Nat}, threads: List(EvidenceThread(n))) -> Option(List(Evidence)) = match threads
     [] -> None()
     [EvidenceThread(ThreadAccepted(), evidence, _) | _] -> Some(evidence)
     [_ | rest] -> first_accepted_evidence(rest)
 
-  fn run_evidence(next: Nat -> Char -> List(MachineState), input: List(Char), threads: List(EvidenceThread)) -> Option(List(Evidence)) = match input
+  fn run_evidence({n: Nat}, next: (Bounded(n)) -> Char -> List(MachineState(n)), input: List(Char), threads: List(EvidenceThread(n))) -> Option(List(Evidence)) = match input
     [] -> first_accepted_evidence(threads)
     [char | rest] ->
       let boundary = position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)
       run_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)))
 
-  fn run_first_prefix_evidence(next: Nat -> Char -> List(MachineState), input: List(Char), threads: List(EvidenceThread)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
+  fn run_first_prefix_evidence({n: Nat}, next: (Bounded(n)) -> Char -> List(MachineState(n)), input: List(Char), threads: List(EvidenceThread(n))) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
     Some(evidence) -> Some(EvidencePrefix(evidence, input))
     None() -> match input
       [] -> None()
@@ -834,11 +1157,11 @@ mod Std.Regex
         let boundary = position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)
         run_first_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)))
 
-  fn remember_prefix(threads: List(EvidenceThread), rest: List(Char), previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
+  fn remember_prefix({n: Nat}, threads: List(EvidenceThread(n)), rest: List(Char), previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
     Some(evidence) -> Some(EvidencePrefix(evidence, rest))
     None() -> previous
 
-  fn run_last_prefix_evidence(next: Nat -> Char -> List(MachineState), input: List(Char), threads: List(EvidenceThread), previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) =
+  fn run_last_prefix_evidence({n: Nat}, next: (Bounded(n)) -> Char -> List(MachineState(n)), input: List(Char), threads: List(EvidenceThread(n)), previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) =
     let remembered = remember_prefix(threads, input, previous)
     match input
       [] -> remembered
@@ -849,15 +1172,19 @@ mod Std.Regex
           run_last_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)), remembered)
 
   fn pattern_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: List(Char)) -> Option(List(Evidence)) = match compile_pattern(pattern)
-    PatternMachine(_count, starts, next) ->
-      run_evidence(next, input, distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(true, true, false, false, input)))))
+    mk_pair(count, machine) -> match search_machine_acceptance(count, machine, subject_initial_position(), input, [])
+      MachineNoAcceptingPath() -> None()
+      MachineAcceptingPath(evidence, _, _) -> Some(evidence)
 
   fn pattern_prefix_evidence_at({shape: ShapeCode}, pattern: Pattern(shape), input: List(Char), greedy: Bool, subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool) -> Option(EvidencePrefix) = match compile_pattern(pattern)
-    PatternMachine(_count, starts, next) ->
-      let threads = distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(subject_start, line_start, previous_ascii_word, previous_unicode_word, input))))
-      pickup
-        greedy -> run_last_prefix_evidence(next, input, threads, None())
-        else -> run_first_prefix_evidence(next, input, threads)
+    mk_pair(count, machine) ->
+      let position = InitialPosition(subject_start, line_start, previous_ascii_word, previous_unicode_word)
+      let result = pickup
+        greedy -> search_last_machine_prefix(count, machine, position, input)
+        else -> search_first_machine_prefix(count, machine, position, input)
+      match result
+        NoCertifiedPrefix() -> None()
+        CertifiedPrefixPath(_, remaining, evidence, _, _) -> Some(EvidencePrefix(evidence, remaining))
 
   fn pattern_prefix_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: List(Char), greedy: Bool) -> Option(EvidencePrefix) =
     pattern_prefix_evidence_at(pattern, input, greedy, true, true, false, false)

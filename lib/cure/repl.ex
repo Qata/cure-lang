@@ -930,7 +930,7 @@ defmodule Cure.REPL do
         case Cure.Elab.Program.elaborate(source) do
           {:ok, env} ->
             key = Cure.Core.Env.resolve_key(env, env.defs, String.to_atom(name))
-            verdict = if MapSet.member?(env.certified, key), do: "total", else: "not total"
+            verdict = if Cure.Core.Env.total?(env, key), do: "total", else: "not total"
             render_info(state, "#{entry.label} is #{verdict}")
 
           {:error, reason} ->

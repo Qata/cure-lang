@@ -474,15 +474,19 @@ defmodule Cure.Core.Certificate do
   end
 
   defp pending_body?(env, g) do
-    match?(%{body: {:hole, _}}, Env.get_def(env, g))
+    not Env.total?(env, g) and match?(%{body: {:hole, _}}, Env.get_def(env, g))
   end
 
   defp callees_of_body(body), do: body |> called_globals() |> MapSet.to_list()
 
   defp callees_env(env, g) do
-    case Env.get_def(env, g) do
-      %{body: b} -> callees_of_body(b)
-      _ -> []
+    if Env.total?(env, g) do
+      []
+    else
+      case Env.get_def(env, g) do
+        %{body: b} -> callees_of_body(b)
+        _ -> []
+      end
     end
   end
 

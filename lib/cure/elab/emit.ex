@@ -794,13 +794,13 @@ defmodule Cure.Elab.Emit do
             end
 
           n ->
-            case remote_target(name) do
-              :local ->
-                {:fun, @line, {:function, emitted_name(name), n}}
+            callee =
+              case remote_target(name) do
+                :local -> {:atom, @line, emitted_name(name)}
+                {mod, fun} -> {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}
+              end
 
-              {mod, fun} ->
-                {:fun, @line, {:function, {:atom, @line, mod}, {:atom, @line, fun}, {:integer, @line, n}}}
-            end
+            curried_global_wrapper(callee, n)
         end
 
       op ->
@@ -1049,6 +1049,20 @@ defmodule Cure.Elab.Emit do
           {:call, @line, acc, [lower(env, arg, ctx)]}
         end)
     end
+  end
+
+  # Core functions are curried, and first-class lambdas lower to nested unary
+  # BEAM closures. A named N-ary definition used as a value must obey that same
+  # ABI: `add` becomes `fn(a) -> fn(b) -> add(a, b) end end`, not `fun add/2`.
+  # Direct named calls remain native N-ary calls in `lower_app_spine/4`; only the
+  # first-class value representation is wrapped.
+  defp curried_global_wrapper(callee, arity) when arity > 0 do
+    vars = for _ <- 1..arity, do: fresh_var("Gf")
+    call = {:call, @line, callee, Enum.map(vars, &{:var, @line, &1})}
+
+    Enum.reduce(Enum.reverse(vars), call, fn var, body ->
+      {:fun, @line, {:clauses, [{:clause, @line, [{:var, @line, var}], [], [body]}]}}
+    end)
   end
 
   defp present_arity(env, name) do

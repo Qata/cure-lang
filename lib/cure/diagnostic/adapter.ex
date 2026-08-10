@@ -2251,6 +2251,9 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:non_uniform_parameter, first, second}, opts),
     do: contextual_type_failure(:non_uniform_parameter, %{first: first, second: second}, opts)
 
+  def from_error({:non_uniform_parameter, details}, opts) when is_map(details),
+    do: contextual_type_failure(:non_uniform_parameter, details, opts)
+
   def from_error({:rewrite_no_match, _first, _second, _goal} = error, opts),
     do: TypeAdapter.from_error(error, opts)
 
@@ -2339,6 +2342,15 @@ defmodule Cure.Diagnostic.Adapter do
   defp contextual_type_failure(kind, details, opts) do
     {title, message, label} =
       case kind do
+        :non_uniform_parameter ->
+          family = name_to_string(Map.get(details, :family, :type))
+          constructor = name_to_string(Map.get(details, :ctor, :constructor))
+          position = Map.get(details, :position, :unknown)
+
+          {"Constructor changes a type parameter",
+           "The constructor `#{constructor}` does not return the family `#{family}` with parameter #{position} unchanged. Parameters must be uniform across every constructor result; values that vary belong in the `indices` telescope.",
+           "return the declared parameter unchanged or make it an index"}
+
         :no_instance ->
           {"No instance found",
            "Cure could not find an implementation of `#{name_to_string(details.interface)}` for the required type `#{surface_type(details.head)}`.",

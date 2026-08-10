@@ -65,6 +65,65 @@ defmodule Cure.Stdlib.DependentRegexNfaPropertyTest do
         kind == 8 -> evidence_present(pattern_evidence(grouped(), Std.String.characters(input)))
         else -> evidence_present(pattern_evidence(empty_then_a(), Std.String.characters(input)))
 
+      fn legacy_pattern_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: List(Char)) -> Option(List(Evidence)) = match compile_pattern(pattern)
+        mk_pair(_count, MkPatternMachine(starts, next)) ->
+          run_evidence(next, input, distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(true, true, false, false, input)))))
+
+      fn current_evidence(kind: Int, input: String) -> Option(List(Evidence)) = pickup
+        kind == 0 -> pattern_evidence(empty(), Std.String.characters(input))
+        kind == 1 -> pattern_evidence(atom('a'), Std.String.characters(input))
+        kind == 2 -> pattern_evidence(ab(), Std.String.characters(input))
+        kind == 3 -> pattern_evidence(either(), Std.String.characters(input))
+        kind == 4 -> pattern_evidence(many_a(), Std.String.characters(input))
+        kind == 5 -> pattern_evidence(many_either(), Std.String.characters(input))
+        kind == 6 -> pattern_evidence(many_a_then_b(), Std.String.characters(input))
+        kind == 7 -> pattern_evidence(nullable_star(), Std.String.characters(input))
+        kind == 8 -> pattern_evidence(grouped(), Std.String.characters(input))
+        else -> pattern_evidence(empty_then_a(), Std.String.characters(input))
+
+      fn legacy_evidence(kind: Int, input: String) -> Option(List(Evidence)) = pickup
+        kind == 0 -> legacy_pattern_evidence(empty(), Std.String.characters(input))
+        kind == 1 -> legacy_pattern_evidence(atom('a'), Std.String.characters(input))
+        kind == 2 -> legacy_pattern_evidence(ab(), Std.String.characters(input))
+        kind == 3 -> legacy_pattern_evidence(either(), Std.String.characters(input))
+        kind == 4 -> legacy_pattern_evidence(many_a(), Std.String.characters(input))
+        kind == 5 -> legacy_pattern_evidence(many_either(), Std.String.characters(input))
+        kind == 6 -> legacy_pattern_evidence(many_a_then_b(), Std.String.characters(input))
+        kind == 7 -> legacy_pattern_evidence(nullable_star(), Std.String.characters(input))
+        kind == 8 -> legacy_pattern_evidence(grouped(), Std.String.characters(input))
+        else -> legacy_pattern_evidence(empty_then_a(), Std.String.characters(input))
+
+      fn legacy_prefix({shape: ShapeCode}, pattern: Pattern(shape), input: List(Char), greedy: Bool) -> Option(EvidencePrefix) = match compile_pattern(pattern)
+        mk_pair(_count, MkPatternMachine(starts, next)) ->
+          let threads = distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(true, true, false, false, input))))
+          pickup
+            greedy -> run_last_prefix_evidence(next, input, threads, None())
+            else -> run_first_prefix_evidence(next, input, threads)
+
+      fn current_prefix(kind: Int, input: String, greedy: Bool) -> Option(EvidencePrefix) = pickup
+        kind == 0 -> pattern_prefix_evidence(empty(), Std.String.characters(input), greedy)
+        kind == 1 -> pattern_prefix_evidence(atom('a'), Std.String.characters(input), greedy)
+        kind == 2 -> pattern_prefix_evidence(ab(), Std.String.characters(input), greedy)
+        kind == 3 -> pattern_prefix_evidence(either(), Std.String.characters(input), greedy)
+        kind == 4 -> pattern_prefix_evidence(many_a(), Std.String.characters(input), greedy)
+        kind == 5 -> pattern_prefix_evidence(many_either(), Std.String.characters(input), greedy)
+        kind == 6 -> pattern_prefix_evidence(many_a_then_b(), Std.String.characters(input), greedy)
+        kind == 7 -> pattern_prefix_evidence(nullable_star(), Std.String.characters(input), greedy)
+        kind == 8 -> pattern_prefix_evidence(grouped(), Std.String.characters(input), greedy)
+        else -> pattern_prefix_evidence(empty_then_a(), Std.String.characters(input), greedy)
+
+      fn legacy_prefix_for(kind: Int, input: String, greedy: Bool) -> Option(EvidencePrefix) = pickup
+        kind == 0 -> legacy_prefix(empty(), Std.String.characters(input), greedy)
+        kind == 1 -> legacy_prefix(atom('a'), Std.String.characters(input), greedy)
+        kind == 2 -> legacy_prefix(ab(), Std.String.characters(input), greedy)
+        kind == 3 -> legacy_prefix(either(), Std.String.characters(input), greedy)
+        kind == 4 -> legacy_prefix(many_a(), Std.String.characters(input), greedy)
+        kind == 5 -> legacy_prefix(many_either(), Std.String.characters(input), greedy)
+        kind == 6 -> legacy_prefix(many_a_then_b(), Std.String.characters(input), greedy)
+        kind == 7 -> legacy_prefix(nullable_star(), Std.String.characters(input), greedy)
+        kind == 8 -> legacy_prefix(grouped(), Std.String.characters(input), greedy)
+        else -> legacy_prefix(empty_then_a(), Std.String.characters(input), greedy)
+
       fn parsed({value: Type}, result: Option(value)) -> Bool = match result
         Some(_) -> true
         None() -> false
@@ -143,5 +202,19 @@ defmodule Cure.Stdlib.DependentRegexNfaPropertyTest do
       assert apply(module, :parses, [kind, cure_string(input)]) == reference(kind, input),
              "typed parse kind=#{kind} input=#{inspect(input)}"
     end
+  end
+
+  test "certified execution replays the legacy winner's exact evidence", %{runtime_module: module} do
+    assert :ok =
+             Property.check_all(case_gen(), @runs, fn {kind, input} ->
+               subject = cure_string(input)
+
+               apply(module, :current_evidence, [kind, subject]) ==
+                 apply(module, :legacy_evidence, [kind, subject]) and
+                 apply(module, :current_prefix, [kind, subject, false]) ==
+                   apply(module, :legacy_prefix_for, [kind, subject, false]) and
+                 apply(module, :current_prefix, [kind, subject, true]) ==
+                   apply(module, :legacy_prefix_for, [kind, subject, true])
+             end)
   end
 end
