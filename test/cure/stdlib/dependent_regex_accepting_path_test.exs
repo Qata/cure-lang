@@ -348,6 +348,18 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> AlternateRightPathProjection(right_count, right_machine, input, after_input, source, current_evidence, captures, final_evidence) =
       project_alternate_right_path(left_count, left_machine, right_count, right_machine, prefer_right, input, after_input, source, current_evidence, captures, path)
 
+    fn acceptance_path_case(
+      n: Nat,
+      machine: PatternMachine(n),
+      position: InitialPosition,
+      input: List(Char),
+      after_input: List(Char),
+      {final_evidence: List(Evidence)},
+      {routine: List(ExtendedInstruction)},
+      acceptance: MachineAcceptance(n, machine, position, input, after_input, final_evidence, routine)
+    ) -> AcceptancePath(n, machine, position, input, after_input, final_evidence) =
+      machine_acceptance_path(n, machine, position, input, after_input, acceptance)
+
     fn certified_predicate_acceptance_case(
       input: List(Char),
       after_input: List(Char),
@@ -602,6 +614,9 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :left_marker_encodes_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :project_alternate_left_path_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :project_alternate_right_path_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :acceptance_path_case))
+    assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_left_acceptance")
+    assert Env.total?(env, :"Std.Regex.Proof#project_alternate_left_acceptance")
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_acceptance_case))

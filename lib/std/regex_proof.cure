@@ -22,6 +22,14 @@ mod Std.Regex.Proof
     RoutineStep(_, suffix) -> match suffix
       RoutineDone() -> EncodesRight(branch)
 
+  ## The proof-relevant core of MachineAcceptance. The replay certificate is an
+  ## execution artifact; Thompson induction needs only the checked initial edge,
+  ## its routine execution, and the accepting path that follows it.
+  typealias AcceptancePath(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char), final_evidence: List(Evidence)) = Sigma(destination: MachineState(n), Sigma(initial_evidence: List(Evidence), Sigma(initial_captures: List(CaptureFrame), Sigma(path_routine: List(ExtendedInstruction), Sigma(edge: ListMember(MachineState(n), destination, initial_machine_destinations(n, machine, position, input, after_input)), Sigma(execution: RoutineExecution(machine_state_routine(n, destination), Nil(), Nil(), initial_evidence, initial_captures), AcceptingFrom(n, machine, input, after_input, machine_state_thread(n, destination), initial_evidence, initial_captures, final_evidence, path_routine)))))))
+
+  fn machine_acceptance_path(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char), {final_evidence: List(Evidence)}, {routine: List(ExtendedInstruction)}, acceptance: MachineAcceptance(n, machine, position, input, after_input, final_evidence, routine)) -> AcceptancePath(n, machine, position, input, after_input, final_evidence) = match acceptance
+    MachineAccepted(destination, initial_evidence, initial_captures, path_routine, edge, execution, _, path) -> %[destination, initial_evidence, initial_captures, path_routine, edge, execution, path]
+
   ## The atomic case of the thesis's generalized Thompson theorem. It is
   ## independent of the NFA and of any evidence/captures already in the VM.
   fn predicate_transition_routine_encodes(char: Char, {input_evidence: List(Evidence)}, {input_captures: List(CaptureFrame)}, {output_evidence: List(Evidence)}, {output_captures: List(CaptureFrame)}, execution: ExtendedEvidenceRoutineExecution(transition_routine(char, Cons(EmitChar(char), Nil())), input_evidence, input_captures, output_evidence, output_captures)) -> Encodes(CharC, output_evidence, input_evidence) = match execution
@@ -482,6 +490,19 @@ mod Std.Regex.Proof
                 AppendedRoutineExecuted(child_final_evidence, child_final_captures, child_execution, marker_execution) -> match marker_execution
                   RoutineStep(_, marker_suffix) -> match marker_suffix
                     RoutineDone() -> %[child_final_evidence, append_extended_routines(transition_routine(char, child_regular), Nil()), AcceptingNextAccepted(child_regular, Nil(), child_final_evidence, child_final_captures, Nil(), child_edge, child_execution, AcceptingNow()), reflexive(Cons(RightEvidence(), child_final_evidence))]
+
+  typealias AlternateLeftAcceptanceProjection(left_count: Nat, left_machine: PatternMachine(left_count), position: InitialPosition, input: List(Char), after_input: List(Char), final_evidence: List(Evidence)) = Sigma(child_final_evidence: List(Evidence), Sigma(child_acceptance: AcceptancePath(left_count, left_machine, position, input, after_input, child_final_evidence), Equivalent(List(Evidence), final_evidence, Cons(LeftEvidence(), child_final_evidence))))
+
+  fn project_alternate_left_acceptance(left_count: Nat, left_machine: PatternMachine(left_count), right_count: Nat, right_machine: PatternMachine(right_count), prefer_right: Bool, position: InitialPosition, input: List(Char), after_input: List(Char), destination: MachineState(plus(left_count, right_count)), initial_evidence: List(Evidence), initial_captures: List(CaptureFrame), path_routine: List(ExtendedInstruction), {final_evidence: List(Evidence)}, origin: FilteredLeftMarkedStateOrigin(left_count, right_count, EmitLeft(), initial_machine_destinations(left_count, left_machine, position, input, after_input), destination), execution: RoutineExecution(machine_state_routine(plus(left_count, right_count), destination), Nil(), Nil(), initial_evidence, initial_captures), path: AcceptingFrom(plus(left_count, right_count), alternate_pattern_machine(left_count, left_machine, right_count, right_machine, prefer_right), input, after_input, machine_state_thread(plus(left_count, right_count), destination), initial_evidence, initial_captures, final_evidence, path_routine)) -> AlternateLeftAcceptanceProjection(left_count, left_machine, position, input, after_input, final_evidence) = match left_machine
+    MkPatternMachine(left_starts, left_next) -> match right_machine
+      MkPatternMachine(right_starts, right_next) -> match origin
+        FilteredLeftActiveOrigin(source, regular, child_edge) -> match project_alternate_left_path(left_count, MkPatternMachine(left_starts, left_next), right_count, MkPatternMachine(right_starts, right_next), prefer_right, input, after_input, source, initial_evidence, initial_captures, path)
+          mk_pair(child_final_evidence, mk_pair(child_routine, mk_pair(child_path, final_is_marked))) -> %[child_final_evidence, %[Active(source, regular, Nil()), initial_evidence, initial_captures, child_routine, child_edge, execution, child_path], final_is_marked]
+        FilteredLeftAcceptedOrigin(regular, child_edge) -> match accepted_path_view(plus(left_count, right_count), alternate_pattern_machine(left_count, MkPatternMachine(left_starts, left_next), right_count, MkPatternMachine(right_starts, right_next), prefer_right), input, after_input, initial_evidence, initial_captures, final_evidence, path_routine, path)
+          AcceptedPathNow() -> match split_appended_routine_execution(regular, Cons(EmitLeft(), Nil()), Nil(), Nil(), execution)
+            AppendedRoutineExecuted(child_final_evidence, child_final_captures, child_execution, marker_execution) -> match marker_execution
+              RoutineStep(_, marker_suffix) -> match marker_suffix
+                RoutineDone() -> %[child_final_evidence, %[Accepted(regular, Nil()), child_final_evidence, child_final_captures, Nil(), child_edge, child_execution, AcceptingNow()], reflexive(Cons(LeftEvidence(), child_final_evidence))]
 
   type AlternateInitialOrigin(left_count: Nat, right_count: Nat, left_states: List(MachineState(left_count)), right_states: List(MachineState(right_count))) indices (combined: MachineState(plus(left_count, right_count)))
     AlternateInitialFromLeft : (origin: FilteredLeftMarkedStateOrigin(left_count, right_count, EmitLeft(), left_states, combined)) -> AlternateInitialOrigin(left_count, right_count, left_states, right_states, combined)
