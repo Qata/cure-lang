@@ -260,6 +260,38 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> AlternateInitialOrigin(left_count, right_count, filter_machine_states(left_count, left_starts, boundary), filter_machine_states(right_count, right_starts, boundary), combined) =
       alternate_initial_origin(left_count, left_starts, right_count, right_starts, prefer_right, boundary, combined, edge)
 
+    fn alternate_left_transition_origin_case(
+      left_count: Nat,
+      left_starts: List(MachineState(left_count)),
+      left_next: (Bounded(left_count)) -> Char -> List(MachineState(left_count)),
+      right_count: Nat,
+      right_starts: List(MachineState(right_count)),
+      right_next: (Bounded(right_count)) -> Char -> List(MachineState(right_count)),
+      prefer_right: Bool,
+      source: Bounded(left_count),
+      char: Char,
+      boundary: Boundary,
+      combined: MachineState(plus(left_count, right_count)),
+      edge: ListMember(MachineState(plus(left_count, right_count)), combined, machine_destinations(plus(left_count, right_count), alternate_pattern_machine(left_count, MkPatternMachine(left_starts, left_next), right_count, MkPatternMachine(right_starts, right_next), prefer_right), ThreadActive(inject_alternate_left(left_count, right_count, source)), char, boundary))
+    ) -> FilteredLeftMarkedStateOrigin(left_count, right_count, EmitLeft(), filter_machine_states(left_count, left_next(source, char), boundary), combined) =
+      alternate_left_transition_origin(left_count, left_starts, left_next, right_count, right_starts, right_next, prefer_right, source, char, boundary, combined, edge)
+
+    fn alternate_right_transition_origin_case(
+      left_count: Nat,
+      left_starts: List(MachineState(left_count)),
+      left_next: (Bounded(left_count)) -> Char -> List(MachineState(left_count)),
+      right_count: Nat,
+      right_starts: List(MachineState(right_count)),
+      right_next: (Bounded(right_count)) -> Char -> List(MachineState(right_count)),
+      prefer_right: Bool,
+      source: Bounded(right_count),
+      char: Char,
+      boundary: Boundary,
+      combined: MachineState(plus(left_count, right_count)),
+      edge: ListMember(MachineState(plus(left_count, right_count)), combined, machine_destinations(plus(left_count, right_count), alternate_pattern_machine(left_count, MkPatternMachine(left_starts, left_next), right_count, MkPatternMachine(right_starts, right_next), prefer_right), ThreadActive(inject_alternate_right(left_count, right_count, source)), char, boundary))
+    ) -> FilteredRightMarkedStateOrigin(left_count, right_count, EmitRight(), filter_machine_states(right_count, right_next(source, char), boundary), combined) =
+      alternate_right_transition_origin(left_count, left_starts, left_next, right_count, right_starts, right_next, prefer_right, source, char, boundary, combined, edge)
+
     fn certified_predicate_acceptance_case(
       input: List(Char),
       after_input: List(Char),
@@ -508,6 +540,8 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :left_filtered_alternate_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :right_filtered_alternate_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :alternate_initial_origin_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :alternate_left_transition_origin_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :alternate_right_transition_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_acceptance_case))
