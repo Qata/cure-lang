@@ -68,6 +68,24 @@ defmodule Cure.Elab.CtorIndexFromGoalTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "constructor result numerals are checked against a Bounded index telescope" do
+    # Constructor result indices are bidirectional positions. Lowering `1` as a
+    # Nat before consulting `state : Bounded(2)` loses the compact bounded value
+    # and rejects the declaration during interface registration.
+    src = """
+    mod BoundedConstructorIndex
+      use Std.Bounded
+
+      type Slot indices (state: Bounded(plus(1, 1)))
+        Second : Slot(1)
+
+      fn second() -> Slot(1) = Second()
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "the trichotomy pattern (owoto returning proof-carrying GADT ctors) elaborates" do
     src = """
     mod OwotoTrichotomy

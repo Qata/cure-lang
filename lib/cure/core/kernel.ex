@@ -452,7 +452,7 @@ defmodule Cure.Core.Kernel do
           else: {:error, {:bounded_lit_out_of_range, k, 0x110000}}
 
       {:vdata, ^bounded_fid, [bound_val]} when not is_nil(bounded_fid) ->
-        case concrete_nat(Normalise.whnf_value(bound_val, sig)) do
+        case concrete_nat(bound_val, sig) do
           {:ok, n} when k < n -> :ok
           {:ok, n} -> {:error, {:bounded_lit_out_of_range, k, n}}
           :error -> {:error, {:bounded_bound_not_concrete, Quote.reify(bound_val, depth, sig)}}
@@ -565,17 +565,43 @@ defmodule Cure.Core.Kernel do
   # representations: the compact `{:vnat, n}` and the `Z`/`S` tower (a bound may be
   # written either way). A non-concrete (neutral/symbolic) bound returns `:error`
   # — a literal cannot be checked against an unknown ceiling.
-  defp concrete_nat({:vnat, n}) when is_integer(n) and n >= 0, do: {:ok, n}
-  defp concrete_nat({:vctor, :Z, []}), do: {:ok, 0}
+  # Read a closed Nat value through the canonical builtin-family identity. An
+  # imported interface owns its constructors (`Std.Nat#Z`/`Std.Nat#S`), so
+  # matching the historical bare atoms silently rejected the very canonical
+  # representation used outside Std.Nat. Normalize at every predecessor: a
+  # certified recursive arithmetic function commonly exposes one constructor at
+  # a time (`plus (S m) n` -> `S (plus m n)`).
+  defp concrete_nat(value, sig) do
+    value = Normalise.whnf_value(value, sig)
 
-  defp concrete_nat({:vctor, :S, [pred]}) do
-    case concrete_nat(pred) do
-      {:ok, n} -> {:ok, n + 1}
-      :error -> :error
+    case value do
+      {:vnat, n} when is_integer(n) and n >= 0 ->
+        {:ok, n}
+
+      {:vctor, cname, []} ->
+        if nat_ctor_position(sig, cname) == 0, do: {:ok, 0}, else: :error
+
+      {:vctor, cname, [pred]} ->
+        if nat_ctor_position(sig, cname) == 1 do
+          case concrete_nat(pred, sig) do
+            {:ok, n} -> {:ok, n + 1}
+            :error -> :error
+          end
+        else
+          :error
+        end
+
+      _other ->
+        :error
     end
   end
 
-  defp concrete_nat(_other), do: :error
+  defp nat_ctor_position(sig, cname) do
+    case Inductive.builtin(sig, :nat) do
+      nil -> nil
+      family -> sig |> Inductive.ctors_of(family) |> Enum.find_index(&(&1.name == cname))
+    end
+  end
 
   # The generic checking rule (moduledoc: "falling back to `infer` plus a
   # cumulative conversion test") — shared by the fallthrough clause and the
@@ -1907,9 +1933,10 @@ defmodule Cure.Core.Kernel do
   defp rigid_path_occurs?(key, {:data, _n, ps, is}), do: Enum.any?(ps ++ is, &rigid_path_occurs?(key, &1))
   defp rigid_path_occurs?(_key, _), do: false
 
-  defp specialize_branch_context(ctx, subst) when map_size(subst) == 0, do: ctx
+  @doc false
+  def specialize_branch_context(ctx, subst) when map_size(subst) == 0, do: ctx
 
-  defp specialize_branch_context(ctx, subst) do
+  def specialize_branch_context(ctx, subst) do
     depth = Context.length(ctx)
     env = Context.env(ctx)
 
@@ -1924,6 +1951,8 @@ defmodule Cure.Core.Kernel do
     refined_env =
       for i <- 0..(depth - 1)//1 do
         {:var, i}
+        |> Eval.eval(env)
+        |> Quote.reify(depth)
         |> replace_branch_vars(subst)
         |> Eval.eval(env)
       end

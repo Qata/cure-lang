@@ -33,8 +33,23 @@ defmodule Cure.Elab.CarriedIndexSiblingTest do
       mk : F(as) -> F(bs) -> F(app(as, bs))
     type G indices (xs: SList)
       gwrap : G(cs)
+    type ParameterizedF(tag: SList) indices (xs: SList)
+      parameterized_leaf : ParameterizedF(tag, SNil())
+      parameterized_mk : ParameterizedF(tag, as) -> ParameterizedF(tag, bs) -> ParameterizedF(tag, app(as, bs))
     type Depends(a: Type) indices (value: a)
       depends : (value: a) -> Depends(a, value)
+    fn consume_dep({a: Type}, value: a, proof: Depends(a, value)) -> Nat = Z()
+    @reducible
+    fn nplus(left: Nat, right: Nat) -> Nat = match left
+      Z() -> right
+      S(prior) -> S(nplus(prior, right))
+    type NestedOuter indices (head: Nat, total: Nat)
+      nested_outer : (suffix: Nat) -> NestedOuter(head, nplus(head, suffix))
+    type ZeroView indices (value: Nat)
+      zero_exact : ZeroView(Z())
+    type NatHold indices (value: Nat)
+      nat_hold : NatHold(value)
+    fn consume_hold(value: Nat, proof: NatHold(value)) -> Nat = value
   """
 
   defp mod(body), do: "mod P\n  type Nat = Z | S(Nat)\n" <> @preamble <> body <> "end\n"
@@ -71,6 +86,36 @@ defmodule Cure.Elab.CarriedIndexSiblingTest do
     assert {:ok, _env} = Program.elaborate(src)
   end
 
+  test "three carried siblings survive dependent telescope discharge" do
+    src =
+      mod("""
+        fn keep_third({p: SList}, {q: SList}, v: F(app(p, q)), first: F(app(p, q)), second: F(app(p, q)), third: F(app(p, q))) -> F(app(p, q)) =
+          match v
+            leaf() -> third
+            mk(l, r) -> third
+      """)
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "carried-index motive preserves parameter binders in canonical order" do
+    # The carried Eq wrapper peels and rebuilds all index/scrutinee motive
+    # lambdas. Rebuilding an outermost-first list with a left fold reverses those
+    # binders, placing the scrutinee domain outside the index binders it was
+    # shifted beneath. A family parameter that names an outer function binder
+    # then becomes a free de Bruijn variable in Final Core.
+    src =
+      mod("""
+        fn keep_parameter({tag: SList}, {p: SList}, {q: SList}, v: ParameterizedF(tag, app(p, q)), sibling: ParameterizedF(tag, app(p, q))) -> ParameterizedF(tag, app(p, q)) =
+          match v
+            parameterized_leaf() -> sibling
+            parameterized_mk(l, r) -> sibling
+      """)
+
+    assert {:ok, env} = Program.elaborate(src)
+    assert Cure.Core.Term.closed?(Cure.Core.Env.get_def(env, :"P#keep_parameter").body)
+  end
+
   test "a later carried sibling is reindexed by the transported earlier sibling" do
     # `second` depends on both the refined family index and the VALUE of `first`.
     # Rebinding only its de Bruijn frame leaves it indexed by the original
@@ -78,10 +123,65 @@ defmodule Cure.Elab.CarriedIndexSiblingTest do
     # the branch context.
     src =
       mod("""
-        fn keep_dependent({p: SList}, {q: SList}, v: F(app(p, q)), first: F(app(p, q)), second: Depends(F(app(p, q)), first)) -> Depends(F(app(p, q)), first) =
+        fn keep_dependent({p: SList}, {q: SList}, v: F(app(p, q)), first: F(app(p, q)), second: Depends(F(app(p, q)), first)) -> Nat =
+          match v
+            leaf() -> consume_dep(first, second)
+            mk(l, r) -> consume_dep(first, second)
+      """)
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "a carried branch goal is reindexed by the transported sibling values" do
+    # The branch goal itself mentions both transported siblings: its family
+    # index contains the carried index, and its value index is `first`. Rebinding
+    # only the branch context leaves the goal pointing at the original outer
+    # `first`, so returning the transported `second` is rejected even though it
+    # is definitionally the requested proof.
+    src =
+      mod("""
+        fn keep_dependent_proof({p: SList}, {q: SList}, v: F(app(p, q)), first: F(app(p, q)), second: Depends(F(app(p, q)), first)) -> Depends(F(app(p, q)), first) =
           match v
             leaf() -> second
             mk(l, r) -> second
+      """)
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "nested carried matches do not re-transport synthetic proof binders" do
+    # The outer match introduces `$carried_idx_prf`. It is compiler evidence, not
+    # an addressable source sibling; collecting it again in the inner match used
+    # to recursively inflate the transported telescope and leave family bounds
+    # as unsolved metavariables.
+    src =
+      mod("""
+        fn nested({p: SList}, {q: SList}, v: F(app(p, q)), first: F(app(p, q)), second: Depends(F(app(p, q)), first)) -> Nat =
+          match v
+            leaf() -> match first
+              leaf() -> consume_dep(first, second)
+              mk(fl, fr) -> consume_dep(first, second)
+            mk(l, r) -> match first
+              leaf() -> consume_dep(first, second)
+              mk(fl, fr) -> consume_dep(first, second)
+      """)
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "nested branch refinement composes through contextual values" do
+    # The outer branch records `total = nplus(head, suffix)` in the context
+    # environment. The inner branch then records `head = Z`. Specializing only
+    # direct environment variables leaves the stored value for `total` stuck at
+    # the old `head`, even though context TYPES are correctly rewritten. The
+    # nested substitution must enter that prior value, reducing `total` to
+    # `suffix`, so the explicit `total` argument agrees with `proof`'s index.
+    src =
+      mod("""
+        fn nested_context_value(head: Nat, total: Nat, outer: NestedOuter(head, total), view: ZeroView(head), proof: NatHold(total)) -> Nat =
+          match outer
+            nested_outer(suffix) -> match view
+              zero_exact() -> consume_hold(total, proof)
       """)
 
     assert {:ok, _env} = Program.elaborate(src)

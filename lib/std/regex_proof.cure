@@ -57,12 +57,8 @@ mod Std.Regex.Proof
     Active(First(), Nil(), Nil())
 
   @reducible
-  fn predicate_concat_middle_state() -> Bounded(plus(S(Z()), S(Z()))) =
-    Next(First())
-
-  @reducible
   fn predicate_concat_middle(char: Char) -> MachineState(plus(S(Z()), S(Z()))) =
-    Active(predicate_concat_middle_state(), Cons(EmitChar(char), Nil()), Nil())
+    Active(1, Cons(EmitChar(char), Nil()), Nil())
 
   @reducible
   fn predicate_concat_start_thread() -> ThreadState(plus(S(Z()), S(Z()))) =
@@ -94,7 +90,7 @@ mod Std.Regex.Proof
     PredicateConcatAcceptedEdgeExact : PredicateConcatAcceptedEdgeView(char, Cons(EmitChar(char), Cons(EmitPair(), Nil())), Nil())
 
   type PredicateConcatActiveEdgeView indices (char: Char, destination: Bounded(plus(S(Z()), S(Z()))), regular: List(EvidenceInstruction), constraints: List(BoundaryConstraint))
-    PredicateConcatActiveEdgeExact : PredicateConcatActiveEdgeView(char, predicate_concat_middle_state(), Cons(EmitChar(char), Nil()), Nil())
+    PredicateConcatActiveEdgeExact : PredicateConcatActiveEdgeView(char, 1, Cons(EmitChar(char), Nil()), Nil())
 
   fn impossible_list_member({item_type: Type}, {item: item_type}, {result: Type}, membership: ListMember(item_type, item, Nil())) -> result = match membership
 

@@ -17,7 +17,7 @@ defmodule Cure.Elab.Declarations do
   """
 
   alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Quote, Term}
-  alias Cure.Elab.{Elaborator, Induction, MacroExpand, Relevance, Subst}
+  alias Cure.Elab.{Elaborator, Induction, MacroExpand, MetaCtx, Relevance, Subst, Unify}
   alias Cure.MetaAST.Metadata
 
   @ceiling 2
@@ -2632,7 +2632,14 @@ defmodule Cure.Elab.Declarations do
           result_ctx = build_context(env, param_tele ++ impl_tele ++ expl_tele)
 
           with {:ok, result_params} <- map_idx_to_core(param_exprs, full_scope, fam, env, result_ctx),
-               {:ok, result_indices} <- map_idx_to_core(index_exprs, full_scope, fam, env, result_ctx) do
+               {:ok, raw_result_indices} <- map_idx_to_core(index_exprs, full_scope, fam, env, result_ctx),
+               {:ok, result_indices} <-
+                 check_compact_result_indices(
+                   raw_result_indices,
+                   result_params,
+                   index_tele,
+                   result_ctx
+                 ) do
             # Inferred index variables are erased (quantity 0); every
             # source-position domain — explicit `(k:T)` OR relevant implicit
             # `{k:T}` — is runtime-relevant (quantity ω). See M8.3 / M9.
@@ -2663,6 +2670,40 @@ defmodule Cure.Elab.Declarations do
       end
     end
   end
+
+  # Constructor result indices are checking positions, not inference positions.
+  # `idx_to_core/5` necessarily lowers an unadorned numeral to compact Nat before
+  # it knows the family telescope. Revisit those numerals against the instantiated
+  # index domain and let the kernel decide whether the compact Bounded introduction
+  # rule applies. This is registry/type directed: Nat indices remain Nat, Bounded
+  # aliases (including Char) become `bounded_lit`, and range failures retain the
+  # kernel's structured diagnostic.
+  defp check_compact_result_indices(indices, result_params, index_tele, ctx) do
+    indices
+    |> Enum.zip(index_tele)
+    |> Enum.reduce_while({:ok, []}, fn {index, {_name, index_type}}, {:ok, checked} ->
+      actuals = result_params ++ checked
+      expected_term = Subst.instantiate(index_type, actuals)
+      expected = Eval.eval(expected_term, Context.env(ctx))
+
+      case check_compact_result_index(index, expected, ctx) do
+        {:ok, checked_index} -> {:cont, {:ok, checked ++ [checked_index]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp check_compact_result_index({:nat_lit, value} = natural, expected, ctx) do
+    bounded = {:bounded_lit, value}
+
+    case Kernel.check(ctx, bounded, expected) do
+      :ok -> {:ok, bounded}
+      {:error, {:bounded_lit_out_of_range, _value, _bound}} = error -> error
+      {:error, _not_a_bounded_domain} -> {:ok, natural}
+    end
+  end
+
+  defp check_compact_result_index(index, _expected, _ctx), do: {:ok, index}
 
   defp attach_constructor_result_context(
          {:error, {:result_type_not_family, _family} = reason},
@@ -3015,6 +3056,15 @@ defmodule Cure.Elab.Declarations do
       type == nil ->
         acc
 
+      # The indexed-type surface parser historically represents a numeral in
+      # an index expression as `{:variable, ..., "1"}`; `idx_to_core` later
+      # lowers that spelling to a compact literal. It is never an inferable
+      # identifier. Binding it here manufactures a hidden constructor argument
+      # named `:"1"` which cannot occur in the result after literal lowering,
+      # so even a nullary exact-view constructor remains spuriously unsolved.
+      index_integer_spelling?(vname) ->
+        acc
+
       MapSet.member?(seen, vname) ->
         # A constructor payload type can initially be open because an omitted
         # implicit slot precedes it in the constructor telescope (`Cons`'s head
@@ -3052,6 +3102,13 @@ defmodule Cure.Elab.Declarations do
 
       true ->
         {ordered ++ [{vname, type}], MapSet.put(seen, vname)}
+    end
+  end
+
+  defp index_integer_spelling?(name) when is_binary(name) do
+    case Integer.parse(name) do
+      {_value, ""} -> true
+      _ -> false
     end
   end
 
@@ -3585,7 +3642,10 @@ defmodule Cure.Elab.Declarations do
         end
 
       true ->
-        with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
+        family_key = applied_family_key(atom, fam, env, qualified_key)
+
+        with {:ok, core_args} <-
+               lower_applied_arguments(args, family_key, scope, fam, env, ctx) do
           case expand_typealias_application(env, atom, core_args) do
             {:ok, expanded} ->
               {:ok, expanded}
@@ -3596,6 +3656,128 @@ defmodule Cure.Elab.Declarations do
         end
     end
   end
+
+  defp applied_family_key(_atom, _fam, env, {:ok, key}) do
+    if Inductive.family?(env, key), do: key, else: nil
+  end
+
+  defp applied_family_key(atom, fam, env, :error) do
+    if atom == fam or Inductive.family?(env, atom),
+      do: Env.resolve_key(env, env.families, atom),
+      else: nil
+  end
+
+  defp lower_applied_arguments(args, nil, scope, fam, env, ctx),
+    do: map_idx_to_core(args, scope, fam, env, ctx)
+
+  # Lower a family application left-to-right against its dependent telescope.
+  # This supplies the expected type of each argument to nested constructors, so
+  # an omitted implicit constructor index can be recovered from the enclosing
+  # family slot (`ListMember(MachineState(2), Accepted(rs, cs), ...)`). Merely
+  # copying the written constructor arguments produced malformed Final Core and
+  # deferred the failure to a bare kernel `:ctor_arity` during body checking.
+  defp lower_applied_arguments(args, family, scope, fam, env, ctx) do
+    tele = (Inductive.param_telescope(env, family) || []) ++ (Inductive.index_telescope(env, family) || [])
+
+    if length(args) == length(tele) do
+      Enum.zip(args, tele)
+      |> Enum.reduce_while({:ok, []}, fn {arg, {_name, dom}}, {:ok, actuals} ->
+        expected = Subst.instantiate(dom, actuals)
+
+        case idx_to_core_expected(arg, expected, scope, fam, env, ctx) do
+          {:ok, core} -> {:cont, {:ok, actuals ++ [core]}}
+          {:error, _} = error -> {:halt, error}
+        end
+      end)
+    else
+      map_idx_to_core(args, scope, fam, env, ctx)
+    end
+  end
+
+  defp idx_to_core_expected({:function_call, fmeta, args} = ast, expected, scope, fam, env, ctx) do
+    atom = fmeta |> Keyword.fetch!(:name) |> String.split(".") |> List.last() |> String.to_atom()
+    key = Env.resolve_key(env, env.ctors, atom)
+
+    if Inductive.get_ctor(env, key) do
+      with {:ok, explicit} <- map_idx_to_core(args, scope, fam, env, ctx),
+           {:ok, term} <- complete_index_constructor(key, explicit, expected, env) do
+        {:ok, term}
+      else
+        _ -> idx_to_core(ast, scope, fam, env, ctx)
+      end
+    else
+      idx_to_core(ast, scope, fam, env, ctx)
+    end
+  end
+
+  defp idx_to_core_expected({:variable, _meta, spelling} = ast, expected, scope, fam, env, ctx) do
+    case numeric_index_value(spelling) do
+      {:ok, value} ->
+        expected_value = Eval.eval(expected, Context.env(ctx))
+        bounded = {:bounded_lit, value}
+
+        case Kernel.check(ctx, bounded, expected_value) do
+          :ok -> {:ok, bounded}
+          {:error, {:bounded_lit_out_of_range, _value, _bound}} = error -> error
+          {:error, _not_bounded} -> idx_to_core(ast, scope, fam, env, ctx)
+        end
+
+      _ ->
+        idx_to_core(ast, scope, fam, env, ctx)
+    end
+  end
+
+  defp idx_to_core_expected(ast, _expected, scope, fam, env, ctx),
+    do: idx_to_core(ast, scope, fam, env, ctx)
+
+  defp complete_index_constructor(cname, explicit, expected, env) do
+    ctor = Inductive.get_ctor(env, cname)
+    plicities = Inductive.plicities_of(ctor)
+
+    if Enum.count(plicities, &(&1 == :explicit)) == length(explicit) do
+      pc = Inductive.param_count(env, Inductive.ctor_family(env, cname))
+      {mctx, seed} = fresh_index_seed(MetaCtx.new(), pc + length(ctor.args), [])
+      {params, field_seed} = Enum.split(seed, pc)
+
+      {fields, []} =
+        plicities
+        |> Enum.with_index()
+        |> Enum.map_reduce(explicit, fn
+          {:explicit, _i}, [value | rest] -> {value, rest}
+          {:implicit, i}, rest -> {Enum.at(field_seed, i), rest}
+        end)
+
+      frame = params ++ fields
+
+      result =
+        {:data, Inductive.ctor_family(env, cname),
+         Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, frame)),
+         Enum.map(ctor.result_indices, &Subst.instantiate(&1, frame))}
+
+      case Unify.unify(result, expected, mctx, env) do
+        {:ok, solved} ->
+          values = Enum.map(fields, &Unify.zonk(&1, solved))
+          if Enum.any?(values, &index_term_has_meta?/1), do: :error, else: {:ok, {:ctor, cname, values}}
+
+        {:error, _} ->
+          :error
+      end
+    else
+      :error
+    end
+  end
+
+  defp fresh_index_seed(mctx, 0, acc), do: {mctx, Enum.reverse(acc)}
+
+  defp fresh_index_seed(mctx, count, acc) do
+    {mctx, id} = MetaCtx.fresh(mctx)
+    fresh_index_seed(mctx, count - 1, [{:meta, id} | acc])
+  end
+
+  defp index_term_has_meta?({:meta, _}), do: true
+  defp index_term_has_meta?(term) when is_tuple(term), do: term |> Tuple.to_list() |> Enum.any?(&index_term_has_meta?/1)
+  defp index_term_has_meta?(term) when is_list(term), do: Enum.any?(term, &index_term_has_meta?/1)
+  defp index_term_has_meta?(_term), do: false
 
   defp lower_applied_type_head(atom, raw_name, core_args, fam, env, qualified_key, scope) do
     cond do

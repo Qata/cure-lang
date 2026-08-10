@@ -10,6 +10,7 @@ mod Std.Nat
   @builtin(:nat)
   type Nat = Z | S(Nat)
 
+  @reducible
   fn plus(m: Nat, n: Nat) -> Nat =
     match m
       Z() -> n
