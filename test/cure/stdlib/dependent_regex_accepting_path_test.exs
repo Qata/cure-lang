@@ -779,6 +779,8 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.total?(env, :"Std.Regex.Proof#thompson_evidence_acceptance_from_encodes")
     assert Env.get_def(env, :"Std.Regex.Proof#concat_right_transition_origin")
     assert Env.total?(env, :"Std.Regex.Proof#concat_right_transition_origin")
+    assert Env.get_def(env, :"Std.Regex.Proof#project_concat_right_path")
+    assert Env.total?(env, :"Std.Regex.Proof#project_concat_right_path")
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_left_acceptance")
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_left_acceptance")
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_right_acceptance")
