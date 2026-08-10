@@ -627,6 +627,14 @@ mod Std.Regex.Proof
   fn concat_left_transition_origin(left_count: Nat, left_starts: List(MachineState(left_count)), left_next: (Bounded(left_count)) -> Char -> List(MachineState(left_count)), right_count: Nat, right_starts: List(MachineState(right_count)), right_next: (Bounded(right_count)) -> Char -> List(MachineState(right_count)), source: Bounded(left_count), char: Char, boundary: Boundary, combined: MachineState(plus(left_count, right_count)), edge: ListMember(MachineState(plus(left_count, right_count)), combined, machine_destinations(plus(left_count, right_count), concat_pattern_machine(left_count, MkPatternMachine(left_starts, left_next), right_count, MkPatternMachine(right_starts, right_next)), ThreadActive(inject_alternate_left(left_count, right_count, source)), char, boundary))) -> FilteredContinueWithRightStateOrigin(left_count, right_count, left_next(source, char), right_starts, boundary, combined) =
     filtered_continue_with_right_state_origin(left_count, right_count, left_next(source, char), right_starts, boundary, combined, transport_alternate_edge(concat_left_destinations_equivalent(left_count, left_starts, left_next, right_count, right_starts, right_next, source, char, boundary), edge))
 
+  @reducible
+  fn proof_machine_starts({n: Nat}, machine: PatternMachine(n)) -> List(MachineState(n)) = match machine
+    MkPatternMachine(starts, next) -> starts
+
+  fn concat_initial_origin(left_count: Nat, left_machine: PatternMachine(left_count), right_count: Nat, right_machine: PatternMachine(right_count), position: InitialPosition, input: List(Char), after_input: List(Char), combined: MachineState(plus(left_count, right_count)), edge: ListMember(MachineState(plus(left_count, right_count)), combined, initial_machine_destinations(plus(left_count, right_count), concat_pattern_machine(left_count, left_machine, right_count, right_machine), position, input, after_input))) -> FilteredContinueWithRightStateOrigin(left_count, right_count, proof_machine_starts(left_machine), proof_machine_starts(right_machine), initial_position_boundary(position, append_characters(input, after_input)), combined) = match left_machine
+    MkPatternMachine(left_starts, left_next) -> match right_machine
+      MkPatternMachine(right_starts, right_next) -> filtered_continue_with_right_state_origin(left_count, right_count, left_starts, right_starts, initial_position_boundary(position, append_characters(input, after_input)), combined, edge)
+
   ## Projection of a complete path that is already inside the left injection.
   ## The child path ends immediately before the alternate's final EmitLeft; the
   ## marker execution then pins the combined path's exact final evidence.
