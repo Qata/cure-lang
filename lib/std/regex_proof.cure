@@ -619,6 +619,8 @@ mod Std.Regex.Proof
         mk_pair(child_final_evidence, mk_pair(child_acceptance, final_is_right)) -> match final_is_right
           reflexive() -> EncodesRight(thompson_evidence_acceptance_encodes(right_proof, input, after_input, position, child_acceptance))
 
+  fn thompson_machine_acceptance_encodes({shape: ShapeCode}, compilation: ThompsonCompilation(shape), proof: ThompsonEvidenceProof(shape, compilation), input: List(Char), after_input: List(Char), position: InitialPosition, {final_evidence: List(Evidence)}, {routine: List(ExtendedInstruction)}, acceptance: MachineAcceptance(thompson_state_count(compilation), thompson_machine(compilation), position, input, after_input, final_evidence, routine)) -> Encodes(shape, final_evidence, empty_evidence()) = thompson_evidence_acceptance_encodes(proof, input, after_input, position, machine_acceptance_path(thompson_state_count(compilation), thompson_machine(compilation), position, input, after_input, acceptance))
+
   type CertifiedPatternMachine = CertifiedEmptyMachine | CertifiedBoundaryMachine(BoundaryConstraint) | CertifiedPredicateMachine(Char -> Bool)
 
   @reducible
