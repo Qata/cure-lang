@@ -486,6 +486,40 @@ mod Std.Regex.Proof
                   RoutineStep(_, marker_suffix) -> match marker_suffix
                     RoutineDone() -> %[child_final_evidence, append_extended_routines(transition_routine(char, child_regular), Nil()), AcceptingNextAccepted(child_regular, Nil(), child_final_evidence, child_final_captures, Nil(), child_edge, child_execution, AcceptingNow()), reflexive(Cons(PairEvidence(), child_final_evidence))]
 
+  type EnterRightStateOrigin(left_count: Nat, right_count: Nat, left_routine: List(EvidenceInstruction), left_constraints: List(BoundaryConstraint), right_starts: List(MachineState(right_count))) indices (combined: MachineState(plus(left_count, right_count)))
+    EnterRightActiveOrigin : (state: Bounded(right_count)) -> (right_routine: List(EvidenceInstruction)) -> (right_constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(right_count), Active(state, right_routine, right_constraints), right_starts)) -> EnterRightStateOrigin(left_count, right_count, left_routine, left_constraints, right_starts, Active(inject_alternate_right(left_count, right_count, state), append_routine(left_routine, right_routine), append_constraints(left_constraints, right_constraints)))
+    EnterRightAcceptedOrigin : (right_routine: List(EvidenceInstruction)) -> (right_constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(right_count), Accepted(right_routine, right_constraints), right_starts)) -> EnterRightStateOrigin(left_count, right_count, left_routine, left_constraints, right_starts, Accepted(append_routine(append_routine(left_routine, right_routine), Cons(EmitPair(), Nil())), append_constraints(left_constraints, right_constraints)))
+
+  fn enter_right_state_origin(left_count: Nat, right_count: Nat, left_routine: List(EvidenceInstruction), left_constraints: List(BoundaryConstraint), right_starts: List(MachineState(right_count)), combined: MachineState(plus(left_count, right_count)), edge: ListMember(MachineState(plus(left_count, right_count)), combined, enter_right_with_constraints(left_count, left_routine, left_constraints, right_starts))) -> EnterRightStateOrigin(left_count, right_count, left_routine, left_constraints, right_starts, combined) = match right_starts
+    Nil() -> impossible_list_member(edge)
+    Cons(Active(state, right_routine, right_constraints), rest) -> match edge
+      ListMemberHere() -> EnterRightActiveOrigin(state, right_routine, right_constraints, ListMemberHere())
+      ListMemberThere(prior) -> match enter_right_state_origin(left_count, right_count, left_routine, left_constraints, rest, combined, prior)
+        EnterRightActiveOrigin(origin_state, origin_routine, origin_constraints, origin_edge) -> EnterRightActiveOrigin(origin_state, origin_routine, origin_constraints, ListMemberThere(origin_edge))
+        EnterRightAcceptedOrigin(origin_routine, origin_constraints, origin_edge) -> EnterRightAcceptedOrigin(origin_routine, origin_constraints, ListMemberThere(origin_edge))
+    Cons(Accepted(right_routine, right_constraints), rest) -> match edge
+      ListMemberHere() -> EnterRightAcceptedOrigin(right_routine, right_constraints, ListMemberHere())
+      ListMemberThere(prior) -> match enter_right_state_origin(left_count, right_count, left_routine, left_constraints, rest, combined, prior)
+        EnterRightActiveOrigin(origin_state, origin_routine, origin_constraints, origin_edge) -> EnterRightActiveOrigin(origin_state, origin_routine, origin_constraints, ListMemberThere(origin_edge))
+        EnterRightAcceptedOrigin(origin_routine, origin_constraints, origin_edge) -> EnterRightAcceptedOrigin(origin_routine, origin_constraints, ListMemberThere(origin_edge))
+
+  type ContinueWithRightStateOrigin(left_count: Nat, right_count: Nat, left_states: List(MachineState(left_count)), right_starts: List(MachineState(right_count))) indices (combined: MachineState(plus(left_count, right_count)))
+    ContinueLeftActiveOrigin : (state: Bounded(left_count)) -> (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(left_count), Active(state, routine, constraints), left_states)) -> ContinueWithRightStateOrigin(left_count, right_count, left_states, right_starts, Active(inject_alternate_left(left_count, right_count, state), routine, constraints))
+    ContinueEnteredRightOrigin : (left_routine: List(EvidenceInstruction)) -> (left_constraints: List(BoundaryConstraint)) -> (left_edge: ListMember(MachineState(left_count), Accepted(left_routine, left_constraints), left_states)) -> (right_origin: EnterRightStateOrigin(left_count, right_count, left_routine, left_constraints, right_starts, combined)) -> ContinueWithRightStateOrigin(left_count, right_count, left_states, right_starts, combined)
+
+  fn prepend_continue_with_right_origin(left_count: Nat, right_count: Nat, head: MachineState(left_count), tail: List(MachineState(left_count)), right_starts: List(MachineState(right_count)), combined: MachineState(plus(left_count, right_count)), origin: ContinueWithRightStateOrigin(left_count, right_count, tail, right_starts, combined)) -> ContinueWithRightStateOrigin(left_count, right_count, Cons(head, tail), right_starts, combined) = match origin
+    ContinueLeftActiveOrigin(state, routine, constraints, edge) -> ContinueLeftActiveOrigin(state, routine, constraints, ListMemberThere(edge))
+    ContinueEnteredRightOrigin(left_routine, left_constraints, left_edge, right_origin) -> ContinueEnteredRightOrigin(left_routine, left_constraints, ListMemberThere(left_edge), right_origin)
+
+  fn continue_with_right_state_origin(left_count: Nat, right_count: Nat, left_states: List(MachineState(left_count)), right_starts: List(MachineState(right_count)), combined: MachineState(plus(left_count, right_count)), edge: ListMember(MachineState(plus(left_count, right_count)), combined, continue_with_right(left_count, left_states, right_starts))) -> ContinueWithRightStateOrigin(left_count, right_count, left_states, right_starts, combined) = match left_states
+    Nil() -> impossible_list_member(edge)
+    Cons(Active(state, routine, constraints), rest) -> match edge
+      ListMemberHere() -> ContinueLeftActiveOrigin(state, routine, constraints, ListMemberHere())
+      ListMemberThere(prior) -> prepend_continue_with_right_origin(left_count, right_count, Active(state, routine, constraints), rest, right_starts, combined, continue_with_right_state_origin(left_count, right_count, rest, right_starts, combined, prior))
+    Cons(Accepted(left_routine, left_constraints), rest) -> match append_member_origin(plus(left_count, right_count), enter_right_with_constraints(left_count, left_routine, left_constraints, right_starts), continue_with_right(left_count, rest, right_starts), combined, edge)
+      AppendMemberLeft(right_edge) -> ContinueEnteredRightOrigin(left_routine, left_constraints, ListMemberHere(), enter_right_state_origin(left_count, right_count, left_routine, left_constraints, right_starts, combined, right_edge))
+      AppendMemberRight(rest_edge) -> prepend_continue_with_right_origin(left_count, right_count, Accepted(left_routine, left_constraints), rest, right_starts, combined, continue_with_right_state_origin(left_count, right_count, rest, right_starts, combined, rest_edge))
+
   ## Projection of a complete path that is already inside the left injection.
   ## The child path ends immediately before the alternate's final EmitLeft; the
   ## marker execution then pins the combined path's exact final evidence.
