@@ -136,6 +136,9 @@ mod Std.Regex.Proof
   fn empty_evidence() -> List(Evidence) = Nil()
 
   @reducible
+  fn empty_captures() -> List(CaptureFrame) = Nil()
+
+  @reducible
   fn empty_characters() -> List(Char) = Nil()
 
   fn encodes_character_empty(char: Char) -> Encodes(CharC, Cons(CharacterEvidence(char), empty_evidence()), empty_evidence()) = EncodesCharacter(char)
@@ -576,7 +579,7 @@ mod Std.Regex.Proof
   fn project_alternate_acceptance(left_count: Nat, left_machine: PatternMachine(left_count), right_count: Nat, right_machine: PatternMachine(right_count), prefer_right: Bool, position: InitialPosition, input: List(Char), after_input: List(Char), {final_evidence: List(Evidence)}, acceptance: AcceptancePath(plus(left_count, right_count), alternate_pattern_machine(left_count, left_machine, right_count, right_machine, prefer_right), position, input, after_input, final_evidence)) -> AlternateAcceptanceProjection(left_count, left_machine, right_count, right_machine, position, input, after_input, final_evidence) = match acceptance
     mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(execution, path)))))) -> project_alternate_acceptance_parts(left_count, left_machine, right_count, right_machine, prefer_right, position, input, after_input, destination, initial_evidence, initial_captures, path_routine, edge, execution, path)
 
-  fn empty_acceptance_path_encodes(input: List(Char), after_input: List(Char), position: InitialPosition, {final_evidence: List(Evidence)}, acceptance: AcceptancePath(Z(), empty_pattern_machine(), position, input, after_input, final_evidence)) -> Encodes(UnitC(), final_evidence, empty_evidence()) = match acceptance
+  fn empty_acceptance_path_from_encodes(input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, acceptance: AcceptancePathFrom(Z(), empty_pattern_machine(), position, input, after_input, input_evidence, input_captures, final_evidence)) -> Encodes(UnitC(), final_evidence, input_evidence) = match acceptance
     mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> match edge
       ListMemberHere() -> match initial_execution
         RoutineStep(_, after_emit) -> match after_emit
@@ -584,7 +587,9 @@ mod Std.Regex.Proof
             AcceptedPathNow() -> EncodesUnit()
       ListMemberThere(prior) -> impossible_list_member(prior)
 
-  fn boundary_acceptance_path_parts(constraint: BoundaryConstraint, input: List(Char), after_input: List(Char), position: InitialPosition, destination: MachineState(Z()), initial_evidence: List(Evidence), initial_captures: List(CaptureFrame), path_routine: List(ExtendedInstruction), {final_evidence: List(Evidence)}, edge: ListMember(MachineState(Z()), destination, initial_machine_destinations(Z(), boundary_pattern_machine(constraint), position, input, after_input)), initial_execution: RoutineExecution(machine_state_routine(Z(), destination), Nil(), Nil(), initial_evidence, initial_captures), path: AcceptingFrom(Z(), boundary_pattern_machine(constraint), input, after_input, machine_state_thread(Z(), destination), initial_evidence, initial_captures, final_evidence, path_routine)) -> Encodes(UnitC(), final_evidence, empty_evidence()) = match boundary_starts_view(constraint, position, append_characters(input, after_input))
+  fn empty_acceptance_path_encodes(input: List(Char), after_input: List(Char), position: InitialPosition, {final_evidence: List(Evidence)}, acceptance: AcceptancePath(Z(), empty_pattern_machine(), position, input, after_input, final_evidence)) -> Encodes(UnitC(), final_evidence, empty_evidence()) = empty_acceptance_path_from_encodes(input, after_input, position, empty_evidence(), empty_captures(), acceptance)
+
+  fn boundary_acceptance_path_from_parts(constraint: BoundaryConstraint, input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), destination: MachineState(Z()), initial_evidence: List(Evidence), initial_captures: List(CaptureFrame), path_routine: List(ExtendedInstruction), {final_evidence: List(Evidence)}, edge: ListMember(MachineState(Z()), destination, initial_machine_destinations(Z(), boundary_pattern_machine(constraint), position, input, after_input)), initial_execution: RoutineExecution(machine_state_routine(Z(), destination), input_evidence, input_captures, initial_evidence, initial_captures), path: AcceptingFrom(Z(), boundary_pattern_machine(constraint), input, after_input, machine_state_thread(Z(), destination), initial_evidence, initial_captures, final_evidence, path_routine)) -> Encodes(UnitC(), final_evidence, input_evidence) = match boundary_starts_view(constraint, position, append_characters(input, after_input))
     BoundaryStartsUnavailable() -> impossible_list_member(edge)
     BoundaryStartsExact() -> match edge
       ListMemberHere() -> match initial_execution
@@ -593,15 +598,40 @@ mod Std.Regex.Proof
             AcceptedPathNow() -> EncodesUnit()
       ListMemberThere(prior) -> impossible_list_member(prior)
 
-  fn boundary_acceptance_path_encodes(constraint: BoundaryConstraint, input: List(Char), after_input: List(Char), position: InitialPosition, {final_evidence: List(Evidence)}, acceptance: AcceptancePath(Z(), boundary_pattern_machine(constraint), position, input, after_input, final_evidence)) -> Encodes(UnitC(), final_evidence, empty_evidence()) = match acceptance
-    mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> boundary_acceptance_path_parts(constraint, input, after_input, position, destination, initial_evidence, initial_captures, path_routine, edge, initial_execution, path)
+  fn boundary_acceptance_path_from_encodes(constraint: BoundaryConstraint, input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, acceptance: AcceptancePathFrom(Z(), boundary_pattern_machine(constraint), position, input, after_input, input_evidence, input_captures, final_evidence)) -> Encodes(UnitC(), final_evidence, input_evidence) = match acceptance
+    mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> boundary_acceptance_path_from_parts(constraint, input, after_input, position, input_evidence, input_captures, destination, initial_evidence, initial_captures, path_routine, edge, initial_execution, path)
 
-  fn predicate_acceptance_path_encodes(test: Char -> Bool, input: List(Char), after_input: List(Char), position: InitialPosition, {final_evidence: List(Evidence)}, acceptance: AcceptancePath(S(Z()), predicate_pattern_machine(test), position, input, after_input, final_evidence)) -> Encodes(CharC(), final_evidence, empty_evidence()) = match acceptance
+  fn boundary_acceptance_path_encodes(constraint: BoundaryConstraint, input: List(Char), after_input: List(Char), position: InitialPosition, {final_evidence: List(Evidence)}, acceptance: AcceptancePath(Z(), boundary_pattern_machine(constraint), position, input, after_input, final_evidence)) -> Encodes(UnitC(), final_evidence, empty_evidence()) = match acceptance
+    mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> boundary_acceptance_path_from_parts(constraint, input, after_input, position, empty_evidence(), empty_captures(), destination, initial_evidence, initial_captures, path_routine, edge, initial_execution, path)
+
+  fn predicate_arbitrary_path_from_encodes(test: Char -> Bool, input: List(Char), after_input: List(Char), current_evidence: List(Evidence), captures: List(CaptureFrame), {final_evidence: List(Evidence)}, {routine: List(ExtendedInstruction)}, path: AcceptingFrom(S(Z()), predicate_pattern_machine(test), input, after_input, predicate_machine_thread(), current_evidence, captures, final_evidence, routine)) -> Encodes(CharC(), final_evidence, current_evidence) = match input
+    Nil() -> match path
+      AcceptingNow() -> impossible
+      AcceptingNextActive(_, _, _, _, _, _, _, _, _) -> impossible
+      AcceptingNextAccepted(_, _, _, _, _, _, _, _) -> impossible
+    Cons(char, rest) -> match path
+      AcceptingNow() -> impossible
+      AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> match predicate_destinations_view(test, char, transition_boundary_before(char, rest, after_input))
+        PredicateRejects() -> impossible_list_member(edge)
+        PredicateAccepts() -> match edge
+          ListMemberThere(prior) -> impossible_list_member(prior)
+      AcceptingNextAccepted(_, _, destination_evidence, destination_captures, suffix_routine, edge, execution, suffix) -> match predicate_destinations_view(test, char, transition_boundary_before(char, rest, after_input))
+        PredicateRejects() -> impossible_list_member(edge)
+        PredicateAccepts() -> match edge
+          ListMemberHere() -> match execution
+            RoutineStep(_, after_emit) -> match after_emit
+              RoutineDone() -> match accepted_path_view(S(Z()), predicate_pattern_machine(test), rest, after_input, destination_evidence, destination_captures, final_evidence, suffix_routine, suffix)
+                AcceptedPathNow() -> encodes_character_on(char, current_evidence)
+          ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn predicate_acceptance_path_from_encodes(test: Char -> Bool, input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, acceptance: AcceptancePathFrom(S(Z()), predicate_pattern_machine(test), position, input, after_input, input_evidence, input_captures, final_evidence)) -> Encodes(CharC(), final_evidence, input_evidence) = match acceptance
     mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> match predicate_starts_view(test, position, input, after_input)
       PredicateStartsExact() -> match edge
         ListMemberHere() -> match initial_execution
-          RoutineDone() -> predicate_arbitrary_path_encodes(test, input, after_input, final_evidence, path_routine, path)
+          RoutineDone() -> predicate_arbitrary_path_from_encodes(test, input, after_input, initial_evidence, initial_captures, path)
         ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn predicate_acceptance_path_encodes(test: Char -> Bool, input: List(Char), after_input: List(Char), position: InitialPosition, {final_evidence: List(Evidence)}, acceptance: AcceptancePath(S(Z()), predicate_pattern_machine(test), position, input, after_input, final_evidence)) -> Encodes(CharC(), final_evidence, empty_evidence()) = predicate_acceptance_path_from_encodes(test, input, after_input, position, empty_evidence(), empty_captures(), acceptance)
 
   type ThompsonEvidenceProof indices (shape: ShapeCode, compilation: ThompsonCompilation(shape))
     ThompsonEvidenceEmpty : ThompsonEvidenceProof(UnitC(), ThompsonEmpty())
