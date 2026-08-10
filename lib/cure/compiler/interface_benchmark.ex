@@ -12,6 +12,7 @@ defmodule Cure.Compiler.InterfaceBenchmark do
   """
 
   alias Cure.Compiler.ModulePipeline
+  alias Cure.Elab.CallAttemptProfile
 
   @type sample :: %{
           total_us: non_neg_integer(),
@@ -19,6 +20,7 @@ defmodule Cure.Compiler.InterfaceBenchmark do
           components: [%{modules: [String.t()], elapsed_us: non_neg_integer()}],
           declarations: [declaration_timing()],
           declaration_stages: [declaration_stage_timing()],
+          call_attempts: [map()],
           rebuilt_modules: [String.t()]
         }
 
@@ -38,6 +40,7 @@ defmodule Cure.Compiler.InterfaceBenchmark do
   @spec run([Path.t()], keyword()) :: {:ok, map()} | {:error, term()}
   def run(paths, opts \\ []) when is_list(paths) do
     iterations = Keyword.get(opts, :warm_iterations, 3)
+    profile_call_attempts? = Keyword.get(opts, :profile_call_attempts, false)
 
     with true <- is_integer(iterations) and iterations > 0,
          expanded when expanded != [] <- paths |> Enum.map(&Path.expand/1) |> Enum.uniq() |> Enum.sort() do
@@ -57,8 +60,8 @@ defmodule Cure.Compiler.InterfaceBenchmark do
           cache: cache_root
         ]
 
-        with {:ok, cold} <- timed_run(expanded, pipeline_opts),
-             {:ok, warm} <- warm_samples(expanded, pipeline_opts, iterations) do
+        with {:ok, cold} <- timed_run(expanded, pipeline_opts, profile_call_attempts?),
+             {:ok, warm} <- warm_samples(expanded, pipeline_opts, iterations, profile_call_attempts?) do
           {:ok,
            %{
              pipeline: :canonical,
@@ -88,9 +91,9 @@ defmodule Cure.Compiler.InterfaceBenchmark do
     |> Enum.take(limit)
   end
 
-  defp warm_samples(paths, opts, iterations) do
+  defp warm_samples(paths, opts, iterations, profile_call_attempts?) do
     Enum.reduce_while(1..iterations, {:ok, []}, fn _, {:ok, samples} ->
-      case timed_run(paths, opts) do
+      case timed_run(paths, opts, profile_call_attempts?) do
         {:ok, sample} -> {:cont, {:ok, [sample | samples]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
@@ -101,13 +104,22 @@ defmodule Cure.Compiler.InterfaceBenchmark do
     end
   end
 
-  defp timed_run(paths, opts) do
+  defp timed_run(paths, opts, profile_call_attempts?) do
     owner = self()
     reference = make_ref()
     event_sink = &send(owner, {reference, &1})
     started = System.monotonic_time(:microsecond)
 
-    case ModulePipeline.check(paths, Keyword.put(opts, :event_sink, event_sink)) do
+    operation = fn -> ModulePipeline.check(paths, Keyword.put(opts, :event_sink, event_sink)) end
+
+    {pipeline_result, call_attempts} =
+      if profile_call_attempts? do
+        CallAttemptProfile.run(operation)
+      else
+        {operation.(), []}
+      end
+
+    case pipeline_result do
       {:ok, result} ->
         total = System.monotonic_time(:microsecond) - started
         events = drain_events(reference, [])
@@ -119,6 +131,7 @@ defmodule Cure.Compiler.InterfaceBenchmark do
            components: component_timings(events),
            declarations: declaration_timings(events),
            declaration_stages: declaration_stage_timings(events),
+           call_attempts: call_attempts,
            rebuilt_modules: ModulePipeline.rebuilt_modules(result)
          }}
 

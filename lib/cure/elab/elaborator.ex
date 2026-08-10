@@ -14,7 +14,7 @@ defmodule Cure.Elab.Elaborator do
   """
 
   alias Cure.Core.{Context, Conv, Env, Eval, Grade, Inductive, Kernel, Normalise, Quote}
-  alias Cure.Elab.{GuardLint, MetaCtx, Rewrite, Subst, Unify}
+  alias Cure.Elab.{CallAttemptProfile, GuardLint, MetaCtx, Rewrite, Subst, Unify}
 
   import Cure.Elab.Rewrite,
     only: [abstract_term: 3, contains_term?: 2, mk_eq: 3, mk_refl: 1, replace_term: 3, transport_case: 4]
@@ -290,6 +290,12 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_named_call_regular(meta, args, names, ctx, env) do
+    profile_named_call(meta, :inference, env, fn ->
+      elaborate_named_call_regular_profiled(meta, args, names, ctx, env)
+    end)
+  end
+
+  defp elaborate_named_call_regular_profiled(meta, args, names, ctx, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
 
@@ -421,6 +427,39 @@ defmodule Cure.Elab.Elaborator do
     ]
   end
 
+  defp profile_named_call(meta, expected_type, env, fun) do
+    if CallAttemptProfile.active?() do
+      source_info = Cure.MetaAST.Metadata.source_info(meta)
+
+      CallAttemptProfile.with_call(
+        %{
+          declaration: profile_declaration(env),
+          span: if(source_info, do: source_info.whole),
+          callee: Keyword.fetch!(meta, :name),
+          expected_type: expected_type
+        },
+        fun
+      )
+    else
+      fun.()
+    end
+  end
+
+  defp profile_attempt(candidate, strategy, fun),
+    do: CallAttemptProfile.attempt(candidate, strategy, fun)
+
+  defp profile_attempt_at(meta, expected_type, env, candidate, strategy, fun) do
+    profile_named_call(meta, expected_type, env, fn -> profile_attempt(candidate, strategy, fun) end)
+  end
+
+  defp profile_declaration(env) do
+    case {Env.current_def(env), Env.owner(env)} do
+      {nil, _owner} -> nil
+      {name, nil} -> name
+      {name, owner} -> if(Cure.Elab.Name.qualified?(name), do: name, else: Cure.Elab.Name.qualify(owner, name))
+    end
+  end
+
   defp elaborate_named_call_resolved(meta, name, atom, args, names, resolved, ctx, env) do
     case require_unsafe_call(meta, name, resolved, env) do
       :ok -> elaborate_named_call_resolved_unchecked(meta, name, atom, args, names, resolved, ctx, env)
@@ -478,10 +517,12 @@ defmodule Cure.Elab.Elaborator do
 
       Inductive.get_ctor(env, resolved) ->
         result =
-          with :ok <- validate_constructor_arity(env, resolved, args, name),
-               {:ok, present} <- map_present_args(args, names, ctx, env) do
-            elaborate_ctor_app(env, resolved, present, ctx)
-          end
+          profile_attempt(resolved, :constructor_infer, fn ->
+            with :ok <- validate_constructor_arity(env, resolved, args, name),
+                 {:ok, present} <- map_present_args(args, names, ctx, env) do
+              elaborate_ctor_app(env, resolved, present, ctx)
+            end
+          end)
 
         # A nested underdetermined constructor in *inference* position —
         # `Cons(Z(), Nil())` as a bare argument, whose inner `Nil()` cannot be
@@ -495,7 +536,9 @@ defmodule Cure.Elab.Elaborator do
             ok
 
           {:error, _} = orig ->
-            case elaborate_ctor_app_infer_bidirectional(env, resolved, args, names, ctx) do
+            case profile_attempt(resolved, :constructor_bidirectional, fn ->
+                   elaborate_ctor_app_infer_bidirectional(env, resolved, args, names, ctx)
+                 end) do
               {:ok, _, _} = ok -> ok
               {:error, _} -> orig
             end
@@ -538,12 +581,16 @@ defmodule Cure.Elab.Elaborator do
           # elaborator is the ONLY path here. It used to be run, and then — on failure —
           # run a second time with identical arguments, which can only reproduce the same
           # error. One attempt, one verdict.
-          elaborate_implicit_app_bidirectional(env, resolved, args, names, ctx)
+          profile_attempt(resolved, :qualified_bidirectional, fn ->
+            elaborate_implicit_app_bidirectional(env, resolved, args, names, ctx)
+          end)
         else
           result =
-            with {:ok, present} <- map_present_args(args, names, ctx, env) do
-              elaborate_global_app(env, resolved, present, ctx)
-            end
+            profile_attempt(resolved, :qualified_infer, fn ->
+              with {:ok, present} <- map_present_args(args, names, ctx, env) do
+                elaborate_global_app(env, resolved, present, ctx)
+              end
+            end)
 
           case result do
             {:ok, _, _} = ok ->
@@ -554,7 +601,9 @@ defmodule Cure.Elab.Elaborator do
               # (direct application of already-elaborated args), so the bidirectional
               # elaborator can still succeed where it failed — e.g. when an implicit
               # argument only becomes solvable in checking mode.
-              case elaborate_implicit_app_bidirectional(env, resolved, args, names, ctx) do
+              case profile_attempt(resolved, :qualified_bidirectional, fn ->
+                     elaborate_implicit_app_bidirectional(env, resolved, args, names, ctx)
+                   end) do
                 {:ok, _, _} = ok -> ok
                 {:error, _} -> orig
               end
@@ -610,7 +659,10 @@ defmodule Cure.Elab.Elaborator do
       Enum.any?(args, &call_placeholder?/1) and
           (Env.get_def(env, atom) != nil or Env.get_def(env, resolved) != nil) ->
         key = if Env.get_def(env, atom), do: Env.resolve_key(env, env.defs, atom), else: resolved
-        elaborate_implicit_app_bidirectional(env, key, args, names, ctx)
+
+        profile_attempt(key, :placeholder_bidirectional, fn ->
+          elaborate_implicit_app_bidirectional(env, key, args, names, ctx)
+        end)
 
       # A global whose telescope carries erased (implicit) parameters: insert
       # fresh metavariables for them and solve from the present arguments, the
@@ -631,9 +683,11 @@ defmodule Cure.Elab.Elaborator do
         key = if Env.get_def(env, atom), do: Env.resolve_key(env, env.defs, atom), else: resolved
 
         result =
-          with {:ok, present} <- map_present_args(args, names, ctx, env) do
-            elaborate_global_app(env, key, present, ctx)
-          end
+          profile_attempt(key, :implicit_infer, fn ->
+            with {:ok, present} <- map_present_args(args, names, ctx, env) do
+              elaborate_global_app(env, key, present, ctx)
+            end
+          end)
 
         # When up-front inference of the arguments fails — an argument that is
         # underdetermined until an implicit parameter is solved (`map(s, Cons(Z(),
@@ -645,7 +699,9 @@ defmodule Cure.Elab.Elaborator do
             ok
 
           {:error, _} = orig ->
-            case elaborate_implicit_app_bidirectional(env, key, args, names, ctx) do
+            case profile_attempt(key, :implicit_bidirectional, fn ->
+                   elaborate_implicit_app_bidirectional(env, key, args, names, ctx)
+                 end) do
               {:ok, _, _} = ok -> ok
               {:error, _} -> orig
             end
@@ -656,15 +712,19 @@ defmodule Cure.Elab.Elaborator do
       # each argument against its Π domain. Restricted to lambda-bearing calls so
       # every other application keeps its exact existing inference path.
       Enum.any?(args, &match?({:lambda, _m, _b}, &1)) ->
-        elaborate_bidirectional_app(name, args, names, ctx, env)
+        profile_attempt(resolved, :lambda_bidirectional, fn ->
+          elaborate_bidirectional_app(name, args, names, ctx, env)
+        end)
 
       true ->
         # Non-constructor application: elaborate to a term, then let the kernel type it.
         result =
-          with {:ok, term} <- elaborate_expr({:function_call, [name: name], args}, names, env),
-               {:ok, type} <- Kernel.infer(ctx, term) do
-            {:ok, term, type}
-          end
+          profile_attempt(resolved, :scoped_infer, fn ->
+            with {:ok, term} <- elaborate_expr({:function_call, [name: name], args}, names, env),
+                 {:ok, type} <- Kernel.infer(ctx, term) do
+              {:ok, term, type}
+            end
+          end)
 
         # The scoped path binds arguments positionally and does not insert
         # metavariables for a *nested* implicit call, so an argument like
@@ -678,7 +738,9 @@ defmodule Cure.Elab.Elaborator do
             ok
 
           {:error, _} = orig ->
-            case elaborate_bidirectional_app(name, args, names, ctx, env) do
+            case profile_attempt(resolved, :scoped_bidirectional, fn ->
+                   elaborate_bidirectional_app(name, args, names, ctx, env)
+                 end) do
               {:ok, _, _} = ok ->
                 ok
 
@@ -1261,8 +1323,10 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # Wave-2 List sugar: rewrite `[]`/`[h|t]`/`[a,b,c]` to Nil/Cons ctor-call form
-  # and delegate, reusing all ctor inference (see desugar_list/1).
+  # List literals have one canonical elaborator. Once the first element fixes
+  # the homogeneous element type, check the remaining spine directly and build
+  # the same `Cons`/`Nil` Core. Falling back retains the blocked-head behaviour
+  # where a later element is needed to infer the type.
   # `()` — the unit value (Swift-style), the sole inhabitant of `Unit`. It is the
   # nullary `unit` constructor of the seeded `Unit` family; the same node emit
   # already understands as the empty-telescope terminator.
@@ -1270,8 +1334,13 @@ defmodule Cure.Elab.Elaborator do
     {:ok, {:ctor, unit_ctor_name(env), []}, {:vdata, unit_family_name(env), []}}
   end
 
-  def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
-    do: elaborate_expr_typed(desugar_list(node), names, ctx, env)
+  def elaborate_expr_typed({:list, meta, elements} = node, names, ctx, env) do
+    case infer_list_literal(meta, elements, names, ctx, env) do
+      :fallback -> elaborate_expr_typed(desugar_list(node), names, ctx, env)
+      {:error, reason} -> {:error, attach_collection_context(reason, elements)}
+      result -> result
+    end
+  end
 
   # `return e` — in tail position it IS the value of the enclosing function or
   # branch, so it elaborates as the identity on `e`. The classic throw/catch
@@ -2628,7 +2697,9 @@ defmodule Cure.Elab.Elaborator do
 
             {:ok, aligned_args} ->
               bidirectional =
-                elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core)
+                profile_attempt_at(meta, expected_core, env, cres, :constructor_checked_bidirectional, fn ->
+                  elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core)
+                end)
 
               case bidirectional do
                 {:ok, _} = ok ->
@@ -2636,11 +2707,13 @@ defmodule Cure.Elab.Elaborator do
 
                 {:error, _} = bidirectional_error ->
                   inferred =
-                    with :ok <- validate_constructor_arity(env, cres, aligned_args, name),
-                         {:ok, present} <- map_present_args(aligned_args, names, ctx, env),
-                         {:ok, term, _type} <- elaborate_ctor_app(env, cres, present, ctx, expected_core) do
-                      {:ok, term}
-                    end
+                    profile_attempt_at(meta, expected_core, env, cres, :constructor_checked_infer, fn ->
+                      with :ok <- validate_constructor_arity(env, cres, aligned_args, name),
+                           {:ok, present} <- map_present_args(aligned_args, names, ctx, env),
+                           {:ok, term, _type} <- elaborate_ctor_app(env, cres, present, ctx, expected_core) do
+                        {:ok, term}
+                      end
+                    end)
 
                   case {inferred, bidirectional_error} do
                     {{:ok, _} = ok, _} ->
@@ -2958,12 +3031,26 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # Wave-2 List sugar in checked position: desugar to Nil/Cons and re-check
-  # against the same expected type.
-  def elaborate_expr_checked({:list, _meta, elements} = node, expected_core, names, ctx, env) do
-    case elaborate_expr_checked(desugar_list(node), expected_core, names, ctx, env) do
+  # A known `List(a)` goal makes every literal cell deterministic. Build the Core
+  # spine directly instead of routing each generated `Cons`/`Nil` through global
+  # name resolution, label alignment, constructor inference, and fallback.
+  def elaborate_expr_checked({:list, meta, elements} = node, expected_core, names, ctx, env) do
+    result =
+      case Kernel.normalize(ctx, expected_core) do
+        {:data, family, [element_type], []} ->
+          if family == Inductive.builtin(env, :list) do
+            check_list_literal(meta, elements, expected_core, element_type, names, ctx, env)
+          else
+            elaborate_expr_checked(desugar_list(node), expected_core, names, ctx, env)
+          end
+
+        _ ->
+          elaborate_expr_checked(desugar_list(node), expected_core, names, ctx, env)
+      end
+
+    case result do
       {:error, reason} -> {:error, attach_collection_context(reason, elements)}
-      result -> result
+      other -> other
     end
   end
 
@@ -3349,6 +3436,16 @@ defmodule Cure.Elab.Elaborator do
     do: collection_offender(reason, elements)
 
   defp collection_offender({:index_mismatch, {:cannot_unify, actual, expected}}, elements) do
+    collection_type_offender(elements, actual, expected)
+  end
+
+  defp collection_offender({:cannot_unify, actual, expected}, elements) do
+    collection_type_offender(elements, actual, expected)
+  end
+
+  defp collection_offender(_reason, _elements), do: nil
+
+  defp collection_type_offender(elements, actual, expected) do
     elements
     |> Enum.with_index()
     |> Enum.reverse()
@@ -3356,8 +3453,6 @@ defmodule Cure.Elab.Elaborator do
       literal_matches_type?(element, actual) or literal_matches_type?(element, expected)
     end)
   end
-
-  defp collection_offender(_reason, _elements), do: nil
 
   defp literal_matches_type?({:literal, _meta, value}, type) when is_boolean(value),
     do: type_family?(type, "Bool")
@@ -3516,7 +3611,21 @@ defmodule Cure.Elab.Elaborator do
   # `elaborate_expr_checked({:function_call,...})` so the eta-expansion path can
   # share `resolved` without duplicating this block. Defined here (after the
   # `elaborate_expr_checked/5` clause group) so those clauses stay grouped.
-  defp elaborate_checked_call_saturated(expr, resolved, expected_core, args, names, ctx, env) do
+  defp elaborate_checked_call_saturated(
+         {:function_call, meta, _} = expr,
+         resolved,
+         expected_core,
+         args,
+         names,
+         ctx,
+         env
+       ) do
+    profile_named_call(meta, expected_core, env, fn ->
+      elaborate_checked_call_saturated_profiled(expr, resolved, expected_core, args, names, ctx, env)
+    end)
+  end
+
+  defp elaborate_checked_call_saturated_profiled(expr, resolved, expected_core, args, names, ctx, env) do
     concrete_goal? = not Unify.has_meta?(expected_core)
 
     goal_first? =
@@ -4527,21 +4636,27 @@ defmodule Cure.Elab.Elaborator do
   # The caller re-checks the assembled term against the goal in either path.
   defp elaborate_global_app_expected(env, atom, args, names, ctx, expected) do
     if Enum.any?(args, &call_placeholder?/1) do
-      elaborate_implicit_app_bidirectional(env, atom, args, names, ctx, expected)
+      profile_attempt(atom, :goal_placeholder_bidirectional, fn ->
+        elaborate_implicit_app_bidirectional(env, atom, args, names, ctx, expected)
+      end)
     else
       elaborate_global_app_expected_eager(env, atom, args, names, ctx, expected)
     end
   end
 
   defp elaborate_global_app_expected_eager(env, atom, args, names, ctx, expected) do
-    case elaborate_implicit_app_bidirectional(env, atom, args, names, ctx, expected) do
+    case profile_attempt(atom, :goal_bidirectional, fn ->
+           elaborate_implicit_app_bidirectional(env, atom, args, names, ctx, expected)
+         end) do
       {:ok, _, _} = ok ->
         ok
 
       {:error, _} = goal_error ->
         case map_present_args(args, names, ctx, env) do
           {:ok, present} ->
-            case elaborate_global_app(env, atom, present, ctx, expected) do
+            case profile_attempt(atom, :goal_eager, fn ->
+                   elaborate_global_app(env, atom, present, ctx, expected)
+                 end) do
               {:ok, _, _} = ok -> ok
               {:error, _} -> goal_error
             end
@@ -4700,7 +4815,9 @@ defmodule Cure.Elab.Elaborator do
       aligned ->
         survivors =
           Enum.flat_map(aligned, fn {key, reordered} ->
-            case elaborate_implicit_app_bidirectional(env, key, reordered, names, ctx) do
+            case profile_attempt(key, :overload_bidirectional, fn ->
+                   elaborate_implicit_app_bidirectional(env, key, reordered, names, ctx)
+                 end) do
               {:ok, term, type} ->
                 [{key, term, type}]
 
@@ -10604,6 +10721,97 @@ defmodule Cure.Elab.Elaborator do
 
   defp desugar_list({:list, m, elems}), do: fold_list_literal(elems, m)
   defp desugar_list(other), do: other
+
+  defp check_list_literal(meta, elements, expected, element_type, names, ctx, env) do
+    cons = resolve_ctor_key(env, :Cons)
+    nil_ctor = resolve_ctor_key(env, :Nil)
+
+    result =
+      if Keyword.get(meta, :cons, false) and length(elements) == 2 do
+        [head, tail] = elements
+
+        with {:ok, head_core} <- check_list_element(head, element_type, names, ctx, env),
+             {:ok, tail_core} <- elaborate_expr_checked(tail, expected, names, ctx, env) do
+          {:ok, {:ctor, cons, [head_core, tail_core]}}
+        end
+      else
+        check_list_elements(elements, element_type, names, ctx, env, cons, {:ctor, nil_ctor, []})
+      end
+
+    with {:ok, term} <- result,
+         :ok <- Kernel.check(ctx, term, Eval.eval(expected, Context.env(ctx))) do
+      {:ok, term}
+    end
+  end
+
+  defp check_list_elements(elements, element_type, names, ctx, env, cons, tail) do
+    Enum.reduce_while(Enum.reverse(elements), {:ok, tail}, fn element, {:ok, acc} ->
+      case check_list_element(element, element_type, names, ctx, env) do
+        {:ok, core} -> {:cont, {:ok, {:ctor, cons, [core, acc]}}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp check_list_element(element, expected, names, ctx, env) do
+    case elaborate_expr_checked(element, expected, names, ctx, env) do
+      {:ok, _core} = ok ->
+        ok
+
+      {:error, reason} ->
+        # Constructor syntax checked against the wrong family reports
+        # `:foreign_ctor` at the low-level boundary (`true` against `Int`, for
+        # example). A homogeneous collection already knows this is a type
+        # mismatch, not a missing name. Infer the authored element independently
+        # to retain the established E093 collection diagnostic; if it is not
+        # independently valid, preserve its original error.
+        case elaborate_expr_typed(element, names, ctx, env) do
+          {:ok, _term, actual_value} ->
+            actual = Quote.reify(actual_value, Context.length(ctx), Context.signature(ctx))
+            {:error, {:cannot_unify, actual, expected}}
+
+          {:error, _} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  defp infer_list_literal(_meta, [], _names, _ctx, _env), do: :fallback
+
+  defp infer_list_literal(meta, [head | rest], names, ctx, env) do
+    case elaborate_expr_typed(head, names, ctx, env) do
+      {:ok, head_core, element_value} ->
+        element_type = Quote.reify(element_value, Context.length(ctx), env)
+        family = Inductive.builtin(env, :list)
+
+        if is_nil(family) do
+          :fallback
+        else
+          expected = {:data, family, [element_type], []}
+          cons = resolve_ctor_key(env, :Cons)
+
+          with {:ok, tail_core} <- infer_list_tail(meta, rest, expected, element_type, names, ctx, env, cons),
+               term = {:ctor, cons, [head_core, tail_core]} do
+            {:ok, term, {:vdata, family, [element_value]}}
+          end
+        end
+
+      {:error, _} ->
+        # A blocked first element (notably an empty nested list) may be solved by
+        # a later element through the constructor solver. Preserve that complete
+        # path instead of turning the optimization into a new rejection.
+        :fallback
+    end
+  end
+
+  defp infer_list_tail(meta, rest, expected, element_type, names, ctx, env, cons) do
+    if Keyword.get(meta, :cons, false) and length(rest) == 1 do
+      elaborate_expr_checked(hd(rest), expected, names, ctx, env)
+    else
+      nil_ctor = resolve_ctor_key(env, :Nil)
+      check_list_elements(rest, element_type, names, ctx, env, cons, {:ctor, nil_ctor, []})
+    end
+  end
 
   # Wadler comprehension translation, right-folded over the qualifier list. The
   # body of an exhausted qualifier list is a singleton `[e]`; a generator wraps

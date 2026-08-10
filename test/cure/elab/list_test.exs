@@ -1,8 +1,8 @@
 defmodule Cure.Elab.ListTest do
   @moduledoc """
   `List` value surface in the dependent pipeline (Wave 2). `[]`/`[h|t]`/`[a,b,c]`
-  desugar to `Nil`/`Cons` ctor calls (reusing all ctor machinery) and emit as
-  native BEAM cons cells. Tests use Int/Nat elements.
+  elaborate through the canonical list-literal path to `Nil`/`Cons` Core and
+  emit as native BEAM cons cells. Tests use Int/Nat elements.
 
   Scope (revised mid-execution, spec §2 revision):
     * Nested list PATTERNS (`[a,b] ->`) are IN scope — the matrix compiler
@@ -39,6 +39,16 @@ defmodule Cure.Elab.ListTest do
   test "a multi-element list literal elaborates" do
     src = "mod M\n  fn xs() -> List(Int) = [1, 2, 3]\nend\n"
     assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "list sugar and explicit constructors produce identical Core" do
+    literal = "mod M\n  fn xs() -> List(Int) = [1, 2, 3]\nend\n"
+    explicit = "mod M\n  fn xs() -> List(Int) = Cons(1, Cons(2, Cons(3, Nil())))\nend\n"
+
+    assert {:ok, literal_env} = Program.elaborate(literal)
+    assert {:ok, explicit_env} = Program.elaborate(explicit)
+
+    assert Cure.Core.Env.get_def(literal_env, :xs).body == Cure.Core.Env.get_def(explicit_env, :xs).body
   end
 
   test "list elements inherit a dependent Bounded element goal" do

@@ -32,6 +32,7 @@ defmodule Cure.Compiler.InterfaceBenchmarkTest do
     assert report.pipeline == :canonical
     assert report.source_count == 1
     assert report.cold.total_us >= 0
+    assert report.cold.call_attempts == []
     assert report.cold.rebuilt_modules == [expected_module]
     assert report.cold.phases.module_check >= 0
     assert [%{modules: [^expected_module], elapsed_us: elapsed}] = report.cold.components
@@ -56,7 +57,8 @@ defmodule Cure.Compiler.InterfaceBenchmarkTest do
     assert length(report.warm) == 2
 
     assert Enum.all?(report.warm, fn sample ->
-             sample.total_us >= 0 and sample.rebuilt_modules == [] and sample.phases.module_check >= 0
+             sample.total_us >= 0 and sample.call_attempts == [] and sample.rebuilt_modules == [] and
+               sample.phases.module_check >= 0
            end)
   end
 end
