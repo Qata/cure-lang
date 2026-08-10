@@ -545,17 +545,31 @@ mod Std.Regex
       group_machine_next(next)
     )
 
+  @reducible
+  fn concat_pattern_machine(left_count: Nat, left_machine: PatternMachine(left_count), right_count: Nat, right_machine: PatternMachine(right_count)) -> PatternMachine(plus(left_count, right_count)) = match left_machine
+    MkPatternMachine(left_starts, left_next) -> match right_machine
+      MkPatternMachine(right_starts, right_next) ->
+        MkPatternMachine(
+          continue_with_right(left_count, left_starts, right_starts),
+          concat_machine_next(left_count, left_next, right_starts, right_next)
+        )
+
+  @reducible
+  fn repeat_pattern_machine(n: Nat, machine: PatternMachine(n), lazy: Bool) -> PatternMachine(n) = match machine
+    MkPatternMachine(starts, next) ->
+      MkPatternMachine(
+        repeat_machine_starts(starts, lazy),
+        repeat_machine_next(starts, lazy, next)
+      )
+
   fn compile_pattern({shape: ShapeCode}, pattern: Pattern(shape)) -> Sigma(n: Nat, PatternMachine(n)) = match pattern
     PatternEmpty() -> %[Z(), empty_pattern_machine()]
     PatternPredicate(test) -> %[S(Z()), predicate_pattern_machine(test)]
     PatternBoundary(constraint) -> %[Z(), boundary_pattern_machine(constraint)]
     PatternConcat(left, right) -> match compile_pattern(left)
-      mk_pair(left_count, MkPatternMachine(left_starts, left_next)) -> match compile_pattern(right)
-        mk_pair(right_count, MkPatternMachine(right_starts, right_next)) ->
-          %[plus(left_count, right_count), MkPatternMachine(
-            continue_with_right(left_count, left_starts, right_starts),
-            concat_machine_next(left_count, left_next, right_starts, right_next)
-          )]
+      mk_pair(left_count, left_machine) -> match compile_pattern(right)
+        mk_pair(right_count, right_machine) ->
+          %[plus(left_count, right_count), concat_pattern_machine(left_count, left_machine, right_count, right_machine)]
     PatternGroup(inner) -> match compile_pattern(inner)
       mk_pair(count, MkPatternMachine(starts, next)) ->
         %[count, group_pattern_machine(count, starts, next)]
@@ -568,17 +582,11 @@ mod Std.Regex
         mk_pair(right_count, right_machine) ->
           %[plus(left_count, right_count), alternate_pattern_machine(left_count, left_machine, right_count, right_machine, prefer_right)]
     PatternRepeat(inner) -> match compile_pattern(inner)
-      mk_pair(count, MkPatternMachine(starts, next)) ->
-        %[count, MkPatternMachine(
-          repeat_machine_starts(starts, false),
-          repeat_machine_next(starts, false, next)
-        )]
+      mk_pair(count, machine) ->
+        %[count, repeat_pattern_machine(count, machine, false)]
     PatternRepeatMode(inner, lazy) -> match compile_pattern(inner)
-      mk_pair(count, MkPatternMachine(starts, next)) ->
-        %[count, MkPatternMachine(
-          repeat_machine_starts(starts, lazy),
-          repeat_machine_next(starts, lazy, next)
-        )]
+      mk_pair(count, machine) ->
+        %[count, repeat_pattern_machine(count, machine, lazy)]
 
   fn machine_has_accept({n: Nat}, states: List(MachineState(n))) -> Bool = match states
     [] -> false

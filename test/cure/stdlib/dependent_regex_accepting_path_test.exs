@@ -174,6 +174,17 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     fn certified_boundary_machine_case(constraint: BoundaryConstraint) -> CertifiedPatternMachine =
       certify_boundary_pattern_machine(constraint)
 
+    fn nested_thompson_compilation_case() -> ThompsonCompilation(PairC(UnitC(), ChoiceC(CharC(), ListC(CharC())))) =
+      certify_thompson(
+        PatternConcat(
+          PatternEmpty(),
+          PatternAlternate(
+            PatternPredicate(accepts_a),
+            PatternRepeat(PatternPredicate(accepts_b))
+          )
+        )
+      )
+
     fn nested_alternate_machine_case() -> PatternMachine(plus(Z(), S(Z()))) =
       alternate_pattern_machine(Z(), empty_pattern_machine(), S(Z()), predicate_pattern_machine(accepts_a), false)
 
@@ -484,6 +495,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_empty_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_boundary_acceptance_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :nested_thompson_compilation_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :nested_alternate_machine_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :left_alternate_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :right_alternate_state_origin_case))
