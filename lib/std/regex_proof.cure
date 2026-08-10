@@ -2,6 +2,26 @@
 mod Std.Regex.Proof
   use Std.Regex
 
+  ## Structural execution law for the evidence VM. Thompson constructors append
+  ## their own evidence instructions to child routines; this view recovers the
+  ## exact intermediate evidence/capture state and both checked executions.
+  type AppendedRoutineExecution indices (left: List(EvidenceInstruction), right: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame))
+    AppendedRoutineExecuted : (middle_evidence: List(Evidence)) -> (middle_captures: List(CaptureFrame)) -> (left_execution: RoutineExecution(left, input_evidence, input_captures, middle_evidence, middle_captures)) -> (right_execution: RoutineExecution(right, middle_evidence, middle_captures, output_evidence, output_captures)) -> AppendedRoutineExecution(left, right, input_evidence, input_captures, output_evidence, output_captures)
+
+  fn split_appended_routine_execution(left: List(EvidenceInstruction), right: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), {output_evidence: List(Evidence)}, {output_captures: List(CaptureFrame)}, execution: RoutineExecution(append_routine(left, right), input_evidence, input_captures, output_evidence, output_captures)) -> AppendedRoutineExecution(left, right, input_evidence, input_captures, output_evidence, output_captures) = match left
+    Nil() -> AppendedRoutineExecuted(input_evidence, input_captures, RoutineDone(), execution)
+    Cons(instruction, rest) -> match execution
+      RoutineStep(_, suffix) -> match split_appended_routine_execution(rest, right, executed_evidence(execute_instruction(instruction, input_evidence, input_captures)), executed_captures(execute_instruction(instruction, input_evidence, input_captures)), suffix)
+        AppendedRoutineExecuted(middle_evidence, middle_captures, left_execution, right_execution) -> AppendedRoutineExecuted(middle_evidence, middle_captures, RoutineStep(instruction, left_execution), right_execution)
+
+  fn left_marker_execution_encodes({left: ShapeCode}, {right: ShapeCode}, {branch_evidence: List(Evidence)}, {rest: List(Evidence)}, {captures: List(CaptureFrame)}, @erased branch: Encodes(left, branch_evidence, rest), execution: RoutineExecution(Cons(EmitLeft(), Nil()), branch_evidence, captures, Cons(LeftEvidence(), branch_evidence), captures)) -> Encodes(ChoiceC(left, right), Cons(LeftEvidence(), branch_evidence), rest) = match execution
+    RoutineStep(_, suffix) -> match suffix
+      RoutineDone() -> EncodesLeft(branch)
+
+  fn right_marker_execution_encodes({left: ShapeCode}, {right: ShapeCode}, {branch_evidence: List(Evidence)}, {rest: List(Evidence)}, {captures: List(CaptureFrame)}, @erased branch: Encodes(right, branch_evidence, rest), execution: RoutineExecution(Cons(EmitRight(), Nil()), branch_evidence, captures, Cons(RightEvidence(), branch_evidence), captures)) -> Encodes(ChoiceC(left, right), Cons(RightEvidence(), branch_evidence), rest) = match execution
+    RoutineStep(_, suffix) -> match suffix
+      RoutineDone() -> EncodesRight(branch)
+
   ## The atomic case of the thesis's generalized Thompson theorem. It is
   ## independent of the NFA and of any evidence/captures already in the VM.
   fn predicate_transition_routine_encodes(char: Char, {input_evidence: List(Evidence)}, {input_captures: List(CaptureFrame)}, {output_evidence: List(Evidence)}, {output_captures: List(CaptureFrame)}, execution: ExtendedEvidenceRoutineExecution(transition_routine(char, Cons(EmitChar(char), Nil())), input_evidence, input_captures, output_evidence, output_captures)) -> Encodes(CharC, output_evidence, input_evidence) = match execution

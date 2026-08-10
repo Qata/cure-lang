@@ -292,6 +292,28 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> FilteredRightMarkedStateOrigin(left_count, right_count, EmitRight(), filter_machine_states(right_count, right_next(source, char), boundary), combined) =
       alternate_right_transition_origin(left_count, left_starts, left_next, right_count, right_starts, right_next, prefer_right, source, char, boundary, combined, edge)
 
+    fn split_appended_routine_execution_case(
+      left: List(EvidenceInstruction),
+      right: List(EvidenceInstruction),
+      input_evidence: List(Evidence),
+      input_captures: List(CaptureFrame),
+      {output_evidence: List(Evidence)},
+      {output_captures: List(CaptureFrame)},
+      execution: RoutineExecution(append_routine(left, right), input_evidence, input_captures, output_evidence, output_captures)
+    ) -> AppendedRoutineExecution(left, right, input_evidence, input_captures, output_evidence, output_captures) =
+      split_appended_routine_execution(left, right, input_evidence, input_captures, execution)
+
+    fn left_marker_encodes_case(
+      {left: ShapeCode},
+      {right: ShapeCode},
+      {branch_evidence: List(Evidence)},
+      {rest: List(Evidence)},
+      captures: List(CaptureFrame),
+      branch: Encodes(left, branch_evidence, rest),
+      execution: RoutineExecution(Cons(EmitLeft(), Nil()), branch_evidence, captures, Cons(LeftEvidence(), branch_evidence), captures)
+    ) -> Encodes(ChoiceC(left, right), Cons(LeftEvidence(), branch_evidence), rest) =
+      left_marker_execution_encodes(branch, execution)
+
     fn certified_predicate_acceptance_case(
       input: List(Char),
       after_input: List(Char),
@@ -542,6 +564,8 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :alternate_initial_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :alternate_left_transition_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :alternate_right_transition_origin_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :split_appended_routine_execution_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :left_marker_encodes_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_acceptance_case))
