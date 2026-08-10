@@ -562,31 +562,56 @@ mod Std.Regex
         repeat_machine_next(starts, lazy, next)
       )
 
-  fn compile_pattern({shape: ShapeCode}, pattern: Pattern(shape)) -> Sigma(n: Nat, PatternMachine(n)) = match pattern
-    PatternEmpty() -> %[Z(), empty_pattern_machine()]
-    PatternPredicate(test) -> %[S(Z()), predicate_pattern_machine(test)]
-    PatternBoundary(constraint) -> %[Z(), boundary_pattern_machine(constraint)]
-    PatternConcat(left, right) -> match compile_pattern(left)
-      mk_pair(left_count, left_machine) -> match compile_pattern(right)
-        mk_pair(right_count, right_machine) ->
-          %[plus(left_count, right_count), concat_pattern_machine(left_count, left_machine, right_count, right_machine)]
-    PatternGroup(inner) -> match compile_pattern(inner)
-      mk_pair(count, MkPatternMachine(starts, next)) ->
-        %[count, group_pattern_machine(count, starts, next)]
-    PatternAlternate(left, right) -> match compile_pattern(left)
-      mk_pair(left_count, left_machine) -> match compile_pattern(right)
-        mk_pair(right_count, right_machine) ->
-          %[plus(left_count, right_count), alternate_pattern_machine(left_count, left_machine, right_count, right_machine, false)]
-    PatternAlternateMode(left, right, prefer_right) -> match compile_pattern(left)
-      mk_pair(left_count, left_machine) -> match compile_pattern(right)
-        mk_pair(right_count, right_machine) ->
-          %[plus(left_count, right_count), alternate_pattern_machine(left_count, left_machine, right_count, right_machine, prefer_right)]
-    PatternRepeat(inner) -> match compile_pattern(inner)
-      mk_pair(count, machine) ->
-        %[count, repeat_pattern_machine(count, machine, false)]
-    PatternRepeatMode(inner, lazy) -> match compile_pattern(inner)
-      mk_pair(count, machine) ->
-        %[count, repeat_pattern_machine(count, machine, lazy)]
+  ## Constructor-preserving Thompson IR. Both runtime compilation and the
+  ## evidence theorem consume this same tree, so proof code never reconstructs
+  ## machine provenance from a function-valued transition table.
+  type ThompsonCompilation indices (shape: ShapeCode)
+    ThompsonPredicate : (test: (Char -> Bool)) -> ThompsonCompilation(CharC)
+    ThompsonEmpty : ThompsonCompilation(UnitC)
+    ThompsonBoundary : (constraint: BoundaryConstraint) -> ThompsonCompilation(UnitC)
+    ThompsonConcat : (left: ThompsonCompilation(left_shape)) -> (right: ThompsonCompilation(right_shape)) -> ThompsonCompilation(PairC(left_shape, right_shape))
+    ThompsonGroup : (inner: ThompsonCompilation(inner_shape)) -> ThompsonCompilation(StringC)
+    ThompsonAlternate : (left: ThompsonCompilation(left_shape)) -> (right: ThompsonCompilation(right_shape)) -> (prefer_right: Bool) -> ThompsonCompilation(ChoiceC(left_shape, right_shape))
+    ThompsonRepeat : (inner: ThompsonCompilation(inner_shape)) -> (lazy: Bool) -> ThompsonCompilation(ListC(inner_shape))
+
+  @reducible
+  fn thompson_state_count({shape: ShapeCode}, compilation: ThompsonCompilation(shape)) -> Nat = match compilation
+    ThompsonPredicate(_) -> S(Z())
+    ThompsonEmpty() -> Z()
+    ThompsonBoundary(_) -> Z()
+    ThompsonConcat(left, right) -> plus(thompson_state_count(left), thompson_state_count(right))
+    ThompsonGroup(inner) -> thompson_state_count(inner)
+    ThompsonAlternate(left, right, _) -> plus(thompson_state_count(left), thompson_state_count(right))
+    ThompsonRepeat(inner, _) -> thompson_state_count(inner)
+
+  @reducible
+  fn thompson_machine({shape: ShapeCode}, compilation: ThompsonCompilation(shape)) -> PatternMachine(thompson_state_count(compilation)) = match compilation
+    ThompsonPredicate(test) -> predicate_pattern_machine(test)
+    ThompsonEmpty() -> empty_pattern_machine()
+    ThompsonBoundary(constraint) -> boundary_pattern_machine(constraint)
+    ThompsonConcat(left, right) -> concat_pattern_machine(thompson_state_count(left), thompson_machine(left), thompson_state_count(right), thompson_machine(right))
+    ThompsonGroup(inner) -> match thompson_machine(inner)
+      MkPatternMachine(starts, next) -> group_pattern_machine(thompson_state_count(inner), starts, next)
+    ThompsonAlternate(left, right, prefer_right) -> alternate_pattern_machine(thompson_state_count(left), thompson_machine(left), thompson_state_count(right), thompson_machine(right), prefer_right)
+    ThompsonRepeat(inner, lazy) -> repeat_pattern_machine(thompson_state_count(inner), thompson_machine(inner), lazy)
+
+  fn certify_thompson({shape: ShapeCode}, pattern: Pattern(shape)) -> ThompsonCompilation(shape) = match pattern
+    PatternPredicate(test) -> ThompsonPredicate(test)
+    PatternEmpty() -> ThompsonEmpty()
+    PatternBoundary(constraint) -> ThompsonBoundary(constraint)
+    PatternConcat(left, right) -> ThompsonConcat(certify_thompson(left), certify_thompson(right))
+    PatternGroup(inner) -> ThompsonGroup(certify_thompson(inner))
+    PatternAlternate(left, right) -> ThompsonAlternate(certify_thompson(left), certify_thompson(right), false)
+    PatternAlternateMode(left, right, prefer_right) -> ThompsonAlternate(certify_thompson(left), certify_thompson(right), prefer_right)
+    PatternRepeat(inner) -> ThompsonRepeat(certify_thompson(inner), false)
+    PatternRepeatMode(inner, lazy) -> ThompsonRepeat(certify_thompson(inner), lazy)
+
+  @reducible
+  fn thompson_compiled({shape: ShapeCode}, compilation: ThompsonCompilation(shape)) -> Sigma(n: Nat, PatternMachine(n)) =
+    %[thompson_state_count(compilation), thompson_machine(compilation)]
+
+  fn compile_pattern({shape: ShapeCode}, pattern: Pattern(shape)) -> Sigma(n: Nat, PatternMachine(n)) =
+    thompson_compiled(certify_thompson(pattern))
 
   fn machine_has_accept({n: Nat}, states: List(MachineState(n))) -> Bool = match states
     [] -> false

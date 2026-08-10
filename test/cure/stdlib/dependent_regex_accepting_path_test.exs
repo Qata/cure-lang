@@ -185,6 +185,9 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
         )
       )
 
+    fn nested_thompson_compiled_case() -> Sigma(n: Nat, PatternMachine(n)) =
+      thompson_compiled(nested_thompson_compilation_case())
+
     fn nested_alternate_machine_case() -> PatternMachine(plus(Z(), S(Z()))) =
       alternate_pattern_machine(Z(), empty_pattern_machine(), S(Z()), predicate_pattern_machine(accepts_a), false)
 
@@ -496,6 +499,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_empty_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_boundary_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :nested_thompson_compilation_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :nested_thompson_compiled_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :nested_alternate_machine_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :left_alternate_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :right_alternate_state_origin_case))
