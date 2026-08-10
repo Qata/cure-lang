@@ -733,6 +733,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :project_alternate_left_path_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :project_alternate_right_path_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :acceptance_path_case))
+    assert Env.get_def(env, :"Std.Regex.Proof#AcceptancePathFrom")
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_left_acceptance")
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_left_acceptance")
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_right_acceptance")
