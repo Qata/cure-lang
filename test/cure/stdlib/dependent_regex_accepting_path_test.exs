@@ -360,6 +360,47 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> AcceptancePath(n, machine, position, input, after_input, final_evidence) =
       machine_acceptance_path(n, machine, position, input, after_input, acceptance)
 
+    fn predicate_alternate_evidence_proof(
+      left: Char -> Bool,
+      right: Char -> Bool,
+      prefer_right: Bool
+    ) -> ThompsonEvidenceProof(
+      ChoiceC(CharC(), CharC()),
+      ThompsonAlternate(ThompsonPredicate(left), ThompsonPredicate(right), prefer_right)
+    ) =
+      ThompsonEvidenceAlternate(
+        ThompsonPredicate(left),
+        ThompsonPredicate(right),
+        prefer_right,
+        ThompsonEvidencePredicate(left),
+        ThompsonEvidencePredicate(right)
+      )
+
+    fn generic_predicate_alternate_acceptance_case(
+      left: Char -> Bool,
+      right: Char -> Bool,
+      prefer_right: Bool,
+      input: List(Char),
+      after_input: List(Char),
+      position: InitialPosition,
+      {final_evidence: List(Evidence)},
+      acceptance: AcceptancePath(
+        plus(S(Z()), S(Z())),
+        predicate_alternate_mode_machine(left, right, prefer_right),
+        position,
+        input,
+        after_input,
+        final_evidence
+      )
+    ) -> Encodes(ChoiceC(CharC(), CharC()), final_evidence, empty_evidence()) =
+      thompson_evidence_acceptance_encodes(
+        predicate_alternate_evidence_proof(left, right, prefer_right),
+        input,
+        after_input,
+        position,
+        acceptance
+      )
+
     fn certified_predicate_acceptance_case(
       input: List(Char),
       after_input: List(Char),
@@ -621,6 +662,12 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_right_acceptance")
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_acceptance")
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_acceptance")
+    assert Env.get_def(env, :"Std.Regex.Proof#thompson_evidence_acceptance_encodes")
+    assert Env.total?(env, :"Std.Regex.Proof#thompson_evidence_acceptance_encodes")
+    assert Env.certified?(
+             env,
+             Env.resolve_key(env, env.defs, :generic_predicate_alternate_acceptance_case)
+           )
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_acceptance_case))
