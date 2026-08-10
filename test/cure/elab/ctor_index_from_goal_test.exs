@@ -86,6 +86,19 @@ defmodule Cure.Elab.CtorIndexFromGoalTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "numeric indices in parameter signatures lower before a local kernel context exists" do
+    src = """
+    mod NumericParameterIndex
+      type Slot indices (index: Nat)
+        At : Slot(1)
+
+      fn preserve(value: Slot(1)) -> Slot(1) = value
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "the trichotomy pattern (owoto returning proof-carrying GADT ctors) elaborates" do
     src = """
     mod OwotoTrichotomy

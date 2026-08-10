@@ -3710,6 +3710,14 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # Signature registration lowers parameter types before a kernel context has
+  # been built. In that phase the ordinary surface lowering is authoritative;
+  # expected-type-directed compact literals are revisited once a real context
+  # exists (constructor results and checked bodies). Never attempt NbE against
+  # a synthetic context that would lose the surrounding parameter telescope.
+  defp idx_to_core_expected(ast, _expected, scope, fam, env, nil),
+    do: idx_to_core(ast, scope, fam, env, nil)
+
   defp idx_to_core_expected({:variable, _meta, spelling} = ast, expected, scope, fam, env, ctx) do
     case numeric_index_value(spelling) do
       {:ok, value} ->
