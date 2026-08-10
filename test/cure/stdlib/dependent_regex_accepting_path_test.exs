@@ -314,6 +314,40 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> Encodes(ChoiceC(left, right), Cons(LeftEvidence(), branch_evidence), rest) =
       left_marker_execution_encodes(branch, execution)
 
+    fn project_alternate_left_path_case(
+      left_count: Nat,
+      left_machine: PatternMachine(left_count),
+      right_count: Nat,
+      right_machine: PatternMachine(right_count),
+      prefer_right: Bool,
+      input: List(Char),
+      after_input: List(Char),
+      source: Bounded(left_count),
+      current_evidence: List(Evidence),
+      captures: List(CaptureFrame),
+      {final_evidence: List(Evidence)},
+      {routine: List(ExtendedInstruction)},
+      path: AcceptingFrom(plus(left_count, right_count), alternate_pattern_machine(left_count, left_machine, right_count, right_machine, prefer_right), input, after_input, ThreadActive(inject_alternate_left(left_count, right_count, source)), current_evidence, captures, final_evidence, routine)
+    ) -> AlternateLeftPathProjection(left_count, left_machine, input, after_input, source, current_evidence, captures, final_evidence) =
+      project_alternate_left_path(left_count, left_machine, right_count, right_machine, prefer_right, input, after_input, source, current_evidence, captures, path)
+
+    fn project_alternate_right_path_case(
+      left_count: Nat,
+      left_machine: PatternMachine(left_count),
+      right_count: Nat,
+      right_machine: PatternMachine(right_count),
+      prefer_right: Bool,
+      input: List(Char),
+      after_input: List(Char),
+      source: Bounded(right_count),
+      current_evidence: List(Evidence),
+      captures: List(CaptureFrame),
+      {final_evidence: List(Evidence)},
+      {routine: List(ExtendedInstruction)},
+      path: AcceptingFrom(plus(left_count, right_count), alternate_pattern_machine(left_count, left_machine, right_count, right_machine, prefer_right), input, after_input, ThreadActive(inject_alternate_right(left_count, right_count, source)), current_evidence, captures, final_evidence, routine)
+    ) -> AlternateRightPathProjection(right_count, right_machine, input, after_input, source, current_evidence, captures, final_evidence) =
+      project_alternate_right_path(left_count, left_machine, right_count, right_machine, prefer_right, input, after_input, source, current_evidence, captures, path)
+
     fn certified_predicate_acceptance_case(
       input: List(Char),
       after_input: List(Char),
@@ -566,6 +600,8 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :alternate_right_transition_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :split_appended_routine_execution_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :left_marker_encodes_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :project_alternate_left_path_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :project_alternate_right_path_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_acceptance_case))
