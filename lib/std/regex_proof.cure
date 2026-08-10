@@ -14,6 +14,21 @@ mod Std.Regex.Proof
       RoutineStep(_, suffix) -> match split_appended_routine_execution(rest, right, executed_evidence(execute_instruction(instruction, input_evidence, input_captures)), executed_captures(execute_instruction(instruction, input_evidence, input_captures)), suffix)
         AppendedRoutineExecuted(middle_evidence, middle_captures, left_execution, right_execution) -> AppendedRoutineExecuted(middle_evidence, middle_captures, RoutineStep(instruction, left_execution), right_execution)
 
+  fn extend_routine_execution(routine: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame), execution: RoutineExecution(routine, input_evidence, input_captures, output_evidence, output_captures)) -> ExtendedEvidenceRoutineExecution(regular_routine(routine), input_evidence, input_captures, output_evidence, output_captures) = match routine
+    Nil() -> match execution
+      RoutineDone() -> ExtendedEvidenceDone()
+    Cons(instruction, rest) -> match execution
+      RoutineStep(_, suffix) -> ExtendedEvidenceRegular(instruction, extend_routine_execution(rest, executed_evidence(execute_instruction(instruction, input_evidence, input_captures)), executed_captures(execute_instruction(instruction, input_evidence, input_captures)), output_evidence, output_captures, suffix))
+
+  fn append_extended_routine_execution(left: List(ExtendedInstruction), right: List(ExtendedInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), middle_evidence: List(Evidence), middle_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame), left_execution: ExtendedEvidenceRoutineExecution(left, input_evidence, input_captures, middle_evidence, middle_captures), right_execution: ExtendedEvidenceRoutineExecution(right, middle_evidence, middle_captures, output_evidence, output_captures)) -> ExtendedEvidenceRoutineExecution(append_extended_routines(left, right), input_evidence, input_captures, output_evidence, output_captures) = match left
+    Nil() -> match left_execution
+      ExtendedEvidenceDone() -> right_execution
+    Cons(instruction, rest) -> match instruction
+      Observe(char) -> match left_execution
+        ExtendedEvidenceObserve(_, suffix) -> ExtendedEvidenceObserve(char, append_extended_routine_execution(rest, right, input_evidence, record_capture_char(input_captures, char), middle_evidence, middle_captures, output_evidence, output_captures, suffix, right_execution))
+      Regular(regular) -> match left_execution
+        ExtendedEvidenceRegular(_, suffix) -> ExtendedEvidenceRegular(regular, append_extended_routine_execution(rest, right, executed_evidence(execute_instruction(regular, input_evidence, input_captures)), executed_captures(execute_instruction(regular, input_evidence, input_captures)), middle_evidence, middle_captures, output_evidence, output_captures, suffix, right_execution))
+
   fn left_marker_execution_encodes({left: ShapeCode}, {right: ShapeCode}, {branch_evidence: List(Evidence)}, {rest: List(Evidence)}, {captures: List(CaptureFrame)}, @erased branch: Encodes(left, branch_evidence, rest), execution: RoutineExecution(Cons(EmitLeft(), Nil()), branch_evidence, captures, Cons(LeftEvidence(), branch_evidence), captures)) -> Encodes(ChoiceC(left, right), Cons(LeftEvidence(), branch_evidence), rest) = match execution
     RoutineStep(_, suffix) -> match suffix
       RoutineDone() -> EncodesLeft(branch)
@@ -28,6 +43,18 @@ mod Std.Regex.Proof
   typealias AcceptancePathFrom(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char), input_evidence: List(Evidence), input_captures: List(CaptureFrame), final_evidence: List(Evidence)) = Sigma(destination: MachineState(n), Sigma(initial_evidence: List(Evidence), Sigma(initial_captures: List(CaptureFrame), Sigma(path_routine: List(ExtendedInstruction), Sigma(edge: ListMember(MachineState(n), destination, initial_machine_destinations(n, machine, position, input, after_input)), Sigma(execution: RoutineExecution(machine_state_routine(n, destination), input_evidence, input_captures, initial_evidence, initial_captures), AcceptingFrom(n, machine, input, after_input, machine_state_thread(n, destination), initial_evidence, initial_captures, final_evidence, path_routine)))))))
 
   typealias AcceptancePath(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char), final_evidence: List(Evidence)) = AcceptancePathFrom(n, machine, position, input, after_input, Nil(), Nil(), final_evidence)
+
+  type PathExecution indices (routine: List(ExtendedInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), final_evidence: List(Evidence))
+    PathExecuted : (final_captures: List(CaptureFrame)) -> (execution: ExtendedEvidenceRoutineExecution(routine, input_evidence, input_captures, final_evidence, final_captures)) -> PathExecution(routine, input_evidence, input_captures, final_evidence)
+
+  fn accepting_path_execution(n: Nat, machine: PatternMachine(n), input: List(Char), after_input: List(Char), state: ThreadState(n), current_evidence: List(Evidence), captures: List(CaptureFrame), final_evidence: List(Evidence), routine: List(ExtendedInstruction), path: AcceptingFrom(n, machine, input, after_input, state, current_evidence, captures, final_evidence, routine)) -> PathExecution(routine, current_evidence, captures, final_evidence) = match input
+    Nil() -> match path
+      AcceptingNow() -> PathExecuted(captures, ExtendedEvidenceDone())
+    Cons(char, rest) -> match path
+      AcceptingNextActive(destination, regular, constraints, destination_evidence, destination_captures, suffix_routine, edge, execution, suffix) -> match accepting_path_execution(n, machine, rest, after_input, ThreadActive(destination), destination_evidence, destination_captures, final_evidence, suffix_routine, suffix)
+        PathExecuted(final_captures, suffix_execution) -> PathExecuted(final_captures, ExtendedEvidenceObserve(char, append_extended_routine_execution(regular_routine(regular), suffix_routine, current_evidence, record_capture_char(captures, char), destination_evidence, destination_captures, final_evidence, final_captures, extend_routine_execution(regular, current_evidence, record_capture_char(captures, char), destination_evidence, destination_captures, execution), suffix_execution)))
+      AcceptingNextAccepted(regular, constraints, destination_evidence, destination_captures, suffix_routine, edge, execution, suffix) -> match accepting_path_execution(n, machine, rest, after_input, ThreadAccepted(), destination_evidence, destination_captures, final_evidence, suffix_routine, suffix)
+        PathExecuted(final_captures, suffix_execution) -> PathExecuted(final_captures, ExtendedEvidenceObserve(char, append_extended_routine_execution(regular_routine(regular), suffix_routine, current_evidence, record_capture_char(captures, char), destination_evidence, destination_captures, final_evidence, final_captures, extend_routine_execution(regular, current_evidence, record_capture_char(captures, char), destination_evidence, destination_captures, execution), suffix_execution)))
 
   fn machine_acceptance_path(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char), {final_evidence: List(Evidence)}, {routine: List(ExtendedInstruction)}, acceptance: MachineAcceptance(n, machine, position, input, after_input, final_evidence, routine)) -> AcceptancePath(n, machine, position, input, after_input, final_evidence) = match acceptance
     MachineAccepted(destination, initial_evidence, initial_captures, path_routine, edge, execution, _, path) -> %[destination, initial_evidence, initial_captures, path_routine, edge, execution, path]
