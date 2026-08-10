@@ -754,6 +754,29 @@ mod Std.Regex.Proof
               let right_acceptance = empty_accepted_acceptance_from(right_count, right_machine, advance_initial_position(position, Cons(char, Nil())), after_input, left_final_evidence, left_final_captures, right_routine, right_final_evidence, right_final_captures, right_initial_edge, right_execution)
               ProjectedConcatLeftPath(Cons(char, Nil()), empty_characters(), single_left_input_partition(char, empty_characters()), left_final_evidence, left_final_captures, append_extended_routines(transition_routine(char, left_routine), empty_extended_routine()), left_path, right_final_evidence, right_acceptance, reflexive(Cons(PairEvidence(), right_final_evidence)))
 
+  fn project_concat_left_path(left_count: Nat, left_machine: PatternMachine(left_count), right_count: Nat, right_machine: PatternMachine(right_count), position: InitialPosition, input: List(Char), after_input: List(Char), source: Bounded(left_count), current_evidence: List(Evidence), current_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, {path_routine: List(ExtendedInstruction)}, path: AcceptingFrom(plus(left_count, right_count), concat_pattern_machine(left_count, left_machine, right_count, right_machine), input, after_input, ThreadActive(inject_alternate_left(left_count, right_count, source)), current_evidence, current_captures, final_evidence, path_routine)) -> ConcatLeftPathProjection(left_count, left_machine, right_count, right_machine, position, input, after_input, source, current_evidence, current_captures, final_evidence) = match input
+    Nil() -> match path
+      AcceptingNow() -> impossible
+      AcceptingNextActive(_, _, _, _, _, _, _, _, _) -> impossible
+      AcceptingNextAccepted(_, _, _, _, _, _, _, _) -> impossible
+    Cons(char, rest) -> match left_machine
+      MkPatternMachine(left_starts, left_next) -> match right_machine
+        MkPatternMachine(right_starts, right_next) -> match path
+          AcceptingNextActive(destination, regular, constraints, destination_evidence, destination_captures, suffix_routine, edge, execution, suffix) -> match concat_left_transition_origin(left_count, left_starts, left_next, right_count, right_starts, right_next, source, char, transition_boundary_before(char, rest, after_input), Active(destination, regular, constraints), edge)
+            FilteredContinueLeftActiveOrigin(child_destination, child_routine, child_constraints, child_edge, holds) ->
+              let child_filtered_edge = filter_active_member(left_count, left_next(source, char), transition_boundary_before(char, rest, after_input), child_destination, child_routine, child_constraints, child_edge, holds)
+              let projection = project_concat_left_path(left_count, MkPatternMachine(left_starts, left_next), right_count, MkPatternMachine(right_starts, right_next), advance_initial_position(position, Cons(char, Nil())), rest, after_input, child_destination, destination_evidence, destination_captures, suffix)
+              prepend_concat_left_projection(left_count, MkPatternMachine(left_starts, left_next), right_count, MkPatternMachine(right_starts, right_next), position, char, rest, after_input, source, current_evidence, current_captures, child_destination, child_routine, destination_evidence, destination_captures, child_filtered_edge, execution, projection)
+            FilteredContinueEnteredRightActiveOrigin(left_routine, left_constraints, left_edge, state, right_routine, right_constraints, right_edge, holds) ->
+              let boundary = transition_boundary_before(char, rest, after_input)
+              let left_filtered_edge = filter_accepted_member(left_count, left_next(source, char), boundary, left_routine, left_constraints, left_edge, appended_constraints_left_hold(left_constraints, right_constraints, boundary, holds))
+              project_concat_left_handoff_active(left_count, MkPatternMachine(left_starts, left_next), right_count, MkPatternMachine(right_starts, right_next), position, char, rest, after_input, source, current_evidence, current_captures, left_routine, left_filtered_edge, state, right_routine, right_constraints, right_edge, appended_constraints_right_hold(left_constraints, right_constraints, boundary, holds), destination_evidence, destination_captures, execution, suffix)
+          AcceptingNextAccepted(regular, constraints, destination_evidence, destination_captures, suffix_routine, edge, execution, suffix) -> match concat_left_transition_origin(left_count, left_starts, left_next, right_count, right_starts, right_next, source, char, transition_boundary_before(char, rest, after_input), Accepted(regular, constraints), edge)
+            FilteredContinueEnteredRightAcceptedOrigin(left_routine, left_constraints, left_edge, right_routine, right_constraints, right_edge, holds) ->
+              let boundary = transition_boundary_before(char, rest, after_input)
+              let left_filtered_edge = filter_accepted_member(left_count, left_next(source, char), boundary, left_routine, left_constraints, left_edge, appended_constraints_left_hold(left_constraints, right_constraints, boundary, holds))
+              project_concat_left_handoff_accepted(left_count, MkPatternMachine(left_starts, left_next), right_count, MkPatternMachine(right_starts, right_next), position, char, rest, after_input, source, current_evidence, current_captures, left_routine, left_filtered_edge, right_routine, right_constraints, right_edge, appended_constraints_right_hold(left_constraints, right_constraints, boundary, holds), destination_evidence, destination_captures, execution, suffix)
+
   ## Projection of a complete path that is already inside the left injection.
   ## The child path ends immediately before the alternate's final EmitLeft; the
   ## marker execution then pins the combined path's exact final evidence.
