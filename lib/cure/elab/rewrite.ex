@@ -174,6 +174,40 @@ defmodule Cure.Elab.Rewrite do
   def contains_term?(term, target),
     do: term == target or Enum.any?(children(term), &contains_term?(&1, target))
 
+  @doc """
+  Report whether an outer-context term occurs beneath binders, shifting the
+  searched term as each binder is crossed. This is the occurrence-check twin of
+  `replace_term_scoped/3`; using the binder-blind predicate before a scoped
+  replacement can incorrectly discard a dependency exposed inside a case arm.
+  """
+  def contains_term_scoped?(term, target), do: do_contains_term_scoped?(term, target)
+
+  defp do_contains_term_scoped?(term, target) when term == target, do: true
+
+  defp do_contains_term_scoped?({:pi, _grade, domain, codomain}, target) do
+    do_contains_term_scoped?(domain, target) or
+      do_contains_term_scoped?(codomain, Subst.shift(target, 1, 0))
+  end
+
+  defp do_contains_term_scoped?({:lam, _grade, domain, body}, target) do
+    do_contains_term_scoped?(domain, target) or
+      do_contains_term_scoped?(body, Subst.shift(target, 1, 0))
+  end
+
+  defp do_contains_term_scoped?({:case, scrutinee, motive, branches}, target) do
+    do_contains_term_scoped?(scrutinee, target) or
+      do_contains_term_scoped?(motive, target) or
+      Enum.any?(branches, fn {_constructor, arity, body} ->
+        do_contains_term_scoped?(body, Subst.shift(target, arity, 0))
+      end)
+  end
+
+  defp do_contains_term_scoped?(term, target) when is_list(term),
+    do: Enum.any?(term, &do_contains_term_scoped?(&1, target))
+
+  defp do_contains_term_scoped?(term, target),
+    do: Enum.any?(children(term), &do_contains_term_scoped?(&1, target))
+
   def replace_term(term, target, replacement) when term == target, do: replacement
 
   def replace_term(term, target, replacement) when is_list(term),

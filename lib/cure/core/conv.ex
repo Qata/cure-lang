@@ -181,10 +181,14 @@ defmodule Cure.Core.Conv do
   defp conv_struct?({:vdata, n1, vs1}, {:vdata, n2, vs2}, depth, sig),
     do: n1 == n2 and conv_spine?(vs1, vs2, depth, sig)
 
-  defp conv_struct?({:vctor, n1, vs1}, {:vctor, n2, vs2}, depth, sig),
-    do:
-      Eval.constructor_name_matches?(n1, n2) and
-        conv_spine?(coerce_fields(n1, vs1, sig), coerce_fields(n2, vs2, sig), depth, sig)
+  defp conv_struct?({:vctor, n1, vs1}, {:vctor, n2, vs2}, depth, sig) do
+    if Eval.constructor_name_matches?(n1, n2) do
+      {vs1, vs2} = Cure.Core.Inductive.align_ctor_spines(sig, n1, vs1, vs2)
+      conv_spine?(vs1, vs2, depth, sig)
+    else
+      false
+    end
+  end
 
   # Inert effect values: congruence ONLY — same node, pointwise-convertible
   # children. No reduction, no monad laws (design §3.2). Because these are
@@ -307,27 +311,19 @@ defmodule Cure.Core.Conv do
   defp same_value_no_delta?({:vdata, n1, args1}, {:vdata, n2, args2}, depth, sig),
     do: n1 == n2 and same_spine_no_delta?(args1, args2, depth, sig)
 
-  defp same_value_no_delta?({:vctor, n1, args1}, {:vctor, n2, args2}, depth, sig),
-    do:
-      Eval.constructor_name_matches?(n1, n2) and
-        same_spine_no_delta?(coerce_fields(n1, args1, sig), coerce_fields(n2, args2, sig), depth, sig)
+  defp same_value_no_delta?({:vctor, n1, args1}, {:vctor, n2, args2}, depth, sig) do
+    if Eval.constructor_name_matches?(n1, n2) do
+      {args1, args2} = Cure.Core.Inductive.align_ctor_spines(sig, n1, args1, args2)
+      same_spine_no_delta?(args1, args2, depth, sig)
+    else
+      false
+    end
+  end
 
   defp same_value_no_delta?(_a, _b, _depth, _sig), do: false
 
   defp same_spine_no_delta?(args1, args2, depth, sig) do
     length(args1) == length(args2) and
       Enum.zip(args1, args2) |> Enum.all?(fn {a, b} -> same_value_no_delta?(a, b, depth, sig) end)
-  end
-
-  # Coerce a possibly-params-on-spine ctor value spine to fields-only (last F),
-  # F = the ctor's field count. Nil sig or unknown ctor ⇒ unchanged (falls back
-  # to today's length-strict compare — sound, at worst a false-reject).
-  defp coerce_fields(_cname, vs, nil), do: vs
-
-  defp coerce_fields(cname, vs, sig) do
-    case Cure.Core.Inductive.field_count(sig, cname) do
-      n when is_integer(n) -> Eval.drop_leading_params(vs, n)
-      nil -> vs
-    end
   end
 end

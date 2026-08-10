@@ -971,6 +971,52 @@ defmodule Cure.Core.Inductive do
   @spec explicit_arity(ctor()) :: non_neg_integer()
   def explicit_arity(ctor), do: Enum.count(plicities_of(ctor), &(&1 == :explicit))
 
+  @doc """
+  Align two checked spines of the same constructor.
+
+  Core admits a fully explicit inference spelling and a shorter spelling whose
+  leading inferred slots are recovered from the expected indexed family. The
+  alignment is deliberately pairwise: when both sides retain an implicit field
+  it remains available to dependent conversion and GADT index refinement.
+  """
+  @spec align_ctor_spines(Env.t() | nil, atom(), [term()], [term()]) ::
+          {[term()], [term()]}
+  def align_ctor_spines(nil, _cname, left, right), do: {left, right}
+
+  def align_ctor_spines(env, cname, left, right) do
+    cond do
+      length(left) > length(right) and trimmable_ctor_prefix?(env, cname, left, right) ->
+        {Enum.drop(left, length(left) - length(right)), right}
+
+      length(right) > length(left) and trimmable_ctor_prefix?(env, cname, right, left) ->
+        {left, Enum.drop(right, length(right) - length(left))}
+
+      true ->
+        {left, right}
+    end
+  end
+
+  defp trimmable_ctor_prefix?(env, cname, longer, shorter) do
+    case get_ctor(env, cname) do
+      nil ->
+        false
+
+      ctor ->
+        plicities = plicities_of(ctor)
+        omitted = length(longer) - length(shorter)
+
+        k6_prefix? =
+          length(longer) > length(plicities) and length(shorter) == length(plicities)
+
+        inferred_prefix? =
+          length(longer) == length(plicities) and
+            length(shorter) == explicit_arity(ctor) and
+            Enum.all?(Enum.take(plicities, omitted), &(&1 == :implicit))
+
+        omitted > 0 and (k6_prefix? or inferred_prefix?)
+    end
+  end
+
   @doc "A family's index telescope."
   @spec index_telescope(Env.t(), atom()) :: telescope() | nil
   def index_telescope(env, fname) do

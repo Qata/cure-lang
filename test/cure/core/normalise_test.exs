@@ -41,6 +41,21 @@ defmodule Cure.Core.NormaliseTest do
     assert {:type, 0} == Normalise.nf(Context.empty(env), term)
   end
 
+  test "speculative over-application of a certified global stays folded" do
+    env =
+      base()
+      |> Env.add_def(:id, id_type(), id_body())
+      |> Env.certify(:id)
+
+    # Elaboration and conversion normalize open candidates before the kernel has
+    # accepted them. This deliberately ill-typed candidate must be treated as a
+    # stuck neutral, not executed far enough to apply the constructor result.
+    term = {:app, {:app, {:global, :id}, @causal}, @dcoupled}
+
+    assert term == Normalise.whnf(Context.empty(env), term)
+    assert term == Normalise.nf(Context.empty(env), term)
+  end
+
   test "uncertified globals stay opaque" do
     env = Env.add_def(base(), :id, id_type(), id_body())
     term = {:app, {:global, :id}, {:type, 0}}

@@ -33,6 +33,8 @@ defmodule Cure.Elab.CarriedIndexSiblingTest do
       mk : F(as) -> F(bs) -> F(app(as, bs))
     type G indices (xs: SList)
       gwrap : G(cs)
+    type Depends(a: Type) indices (value: a)
+      depends : (value: a) -> Depends(a, value)
   """
 
   defp mod(body), do: "mod P\n  type Nat = Z | S(Nat)\n" <> @preamble <> body <> "end\n"
@@ -48,6 +50,38 @@ defmodule Cure.Elab.CarriedIndexSiblingTest do
           match v
             leaf() -> w
             mk(l, r) -> w
+      """)
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "multiple carried siblings retain the outer de Bruijn frame" do
+    # Each transported domain is authored in the same branch_ctx1 frame. After
+    # `first` is rebound, the domain for `second` must be shifted past that new
+    # binder before evaluation; otherwise its outer references resolve to the
+    # value of `first` (the failure exposed by the dependent regex proof).
+    src =
+      mod("""
+        fn keep_second({p: SList}, {q: SList}, v: F(app(p, q)), first: F(app(p, q)), second: F(app(p, q))) -> F(app(p, q)) =
+          match v
+            leaf() -> second
+            mk(l, r) -> second
+      """)
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
+  test "a later carried sibling is reindexed by the transported earlier sibling" do
+    # `second` depends on both the refined family index and the VALUE of `first`.
+    # Rebinding only its de Bruijn frame leaves it indexed by the original
+    # `first`; it must instead refer to the transported `first` introduced in
+    # the branch context.
+    src =
+      mod("""
+        fn keep_dependent({p: SList}, {q: SList}, v: F(app(p, q)), first: F(app(p, q)), second: Depends(F(app(p, q)), first)) -> Depends(F(app(p, q)), first) =
+          match v
+            leaf() -> second
+            mk(l, r) -> second
       """)
 
     assert {:ok, _env} = Program.elaborate(src)

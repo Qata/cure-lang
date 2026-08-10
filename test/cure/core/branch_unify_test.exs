@@ -45,6 +45,52 @@ defmodule Cure.Core.BranchUnifyTest do
     assert subst == %{1 => {:ctor, :Causal, []}}
   end
 
+  test "does not refine an unrelated proof binder when replacement inference fails before its rigid result" do
+    char = {:data, :Char, [], []}
+    chars = {:data, :Chars, [], []}
+    proof = {:data, :Proof, [], []}
+
+    sig =
+      Env.empty()
+      |> Inductive.declare(Inductive.family(:Char, [], [], 0), [])
+      |> Inductive.declare(Inductive.family(:Chars, [], [], 0), [])
+      |> Inductive.declare(Inductive.family(:Proof, [], [], 0), [])
+      |> Inductive.declare(
+        Inductive.family(:ResultIx, [], [{:n, @dec}], 0),
+        [
+          # This adversarial signature models a de Bruijn-frame corruption: the
+          # declared codomain is rigidly Dec, but `bad` receives a Chars field
+          # where its Π-domain requires Char. Ordinary inference therefore fails
+          # before reporting the codomain.
+          Inductive.ctor(:bad_wrap, [{:xs, chars}], [{:app, {:global, :bad}, {:var, 0}}])
+        ]
+      )
+      |> Env.add_def(:bad, {:pi, :unrestricted, char, @dec}, nil)
+
+    ctx = Context.extend(Context.empty(sig), Eval.eval(proof, []))
+    proof_value = {:vneutral, {:nvar, 0}}
+
+    # A first-order term-only unifier sees a variable and would bind it. The
+    # branch-frame validator must keep the Proof binder rigid because the
+    # replacement's declared result is Dec, even though full inference fails.
+    assert :trivial = Kernel.branch_unify(ctx, :ResultIx, :bad_wrap, [proof_value])
+  end
+
+  test "does not refine a function binder with a data-valued index term" do
+    sig =
+      sig()
+      |> Inductive.declare(
+        Inductive.family(:GroundIx, [], [{:n, @dec}], 0),
+        [Inductive.ctor(:ground_wrap, [], [{:ctor, :Causal, []}])]
+      )
+
+    predicate_type = Eval.eval({:pi, :unrestricted, @dec, @dec}, [])
+    ctx = Context.extend(Context.empty(sig), predicate_type)
+    predicate_value = {:vneutral, {:nvar, 0}}
+
+    assert :trivial = Kernel.branch_unify(ctx, :GroundIx, :ground_wrap, [predicate_value])
+  end
+
   test ":impossible on an index-vector arity mismatch — Enum.zip must not truncate (#573)" do
     # `wrap` has exactly ONE result index (Causal). Passing a scrutinee index
     # vector of a different length is an arity mismatch. `Enum.zip` would

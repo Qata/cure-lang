@@ -268,7 +268,10 @@ defmodule Cure.Core.Normalise do
             with true <- Env.certified?(sig, name),
                  %{body: body} <- Env.get_def(sig, name),
                  true <- Cure.Core.Term.closed?(body) do
-              reduce_unfolded(reapply(args, spend_fuel(Eval.eval(body, []))), sig, opts)
+              case eval_certified_application(body, args) do
+                {:ok, value} -> reduce_unfolded(value, sig, opts)
+                :stuck -> :stuck
+              end
             else
               _ -> :stuck
             end
@@ -300,6 +303,15 @@ defmodule Cure.Core.Normalise do
       _ ->
         :stuck
     end
+  end
+
+  # Conversion normalizes speculative/open Core before the kernel has accepted
+  # it. Runtime evaluation of checked Core remains strict, but δ-normalization
+  # must stay total: an invalid application is simply unable to unfold.
+  defp eval_certified_application(body, args) do
+    {:ok, reapply(args, spend_fuel(Eval.eval(body, [])))}
+  rescue
+    RuntimeError -> :stuck
   end
 
   # Decide, in ONE whnf of the eliminated target, whether a certified global's

@@ -20,6 +20,7 @@ defmodule Cure.Elab.Elaborator do
     only: [
       abstract_term: 3,
       contains_term?: 2,
+      contains_term_scoped?: 2,
       mk_eq: 3,
       mk_refl: 1,
       replace_term: 3,
@@ -5208,7 +5209,9 @@ defmodule Cure.Elab.Elaborator do
 
               computed ->
                 if variable_headed_application?(computed) do
-                  expose_reducible_dependency(result_type_term, computed, ctx, env)
+                  result_type_term
+                  |> expose_reducible_dependency(computed, ctx, env)
+                  |> expose_sibling_result_indices(computed, ctx, env)
                 else
                   expose_sibling_result_indices(result_type_term, computed, ctx, env)
                 end
@@ -6010,10 +6013,8 @@ defmodule Cure.Elab.Elaborator do
 
     types =
       Enum.map(ctx.types, fn type_value ->
-        type_value
-        |> Quote.reify(depth)
-        |> replace_branch_vars(subst)
-        |> Eval.eval(env)
+        original = Quote.reify(type_value, depth)
+        original |> replace_branch_vars(subst) |> Eval.eval(env)
       end)
 
     refined_env =
@@ -6131,8 +6132,10 @@ defmodule Cure.Elab.Elaborator do
   #
   # Dependency discovery is untrusted elaboration, so it may inspect those bodies
   # more aggressively without changing conversion. Expand only certified, closed,
-  # author-published bodies, at most once per global, then beta/iota-normalise with
-  # delta reduction disabled. If this exposes the scrutinee, the ordinary convoy
+  # author-published bodies, at most once per expansion path, then beta/iota-normalise
+  # with delta reduction disabled. Repeated sibling occurrences are independent:
+  # unfolding a definition in one case arm must not suppress it in another. If
+  # this exposes the scrutinee, the ordinary convoy
   # machinery uses the exposed (definitionally equal) type and the kernel checks
   # the resulting term. Opaque, uncertified, open, and recursive occurrences stay
   # folded. The global budget bounds hostile or unusually deep interface graphs.
@@ -6141,14 +6144,14 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp expose_sibling_result_indices({:data, name, params, indices} = result, target, ctx, env) do
-    if Enum.any?(indices, &contains_term?(&1, target)) do
+    if Enum.any?(indices, &contains_term_scoped?(&1, target)) do
       indices =
         Enum.map(indices, fn index ->
-          if contains_term?(index, target) do
+          if contains_term_scoped?(index, target) do
             index
           else
             exposed = expose_reducible_dependency(index, target, ctx, env)
-            if contains_term?(exposed, target), do: exposed, else: index
+            if contains_term_scoped?(exposed, target), do: exposed, else: index
           end
         end)
 
@@ -6229,18 +6232,22 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp expand_published_reducibles(term, env, seen) when is_tuple(term) do
-    {children, seen} =
-      Enum.map_reduce(children(term), seen, fn child, acc ->
-        expand_published_reducibles(child, env, acc)
-      end)
+    {children, seen_sets} =
+      term
+      |> children()
+      |> Enum.map(fn child -> expand_published_reducibles(child, env, seen) end)
+      |> Enum.unzip()
 
-    {rebuild(term, children), seen}
+    {rebuild(term, children), Enum.reduce(seen_sets, seen, &MapSet.union/2)}
   end
 
   defp expand_published_reducibles(term, env, seen) when is_list(term) do
-    Enum.map_reduce(term, seen, fn child, acc ->
-      expand_published_reducibles(child, env, acc)
-    end)
+    {children, seen_sets} =
+      term
+      |> Enum.map(fn child -> expand_published_reducibles(child, env, seen) end)
+      |> Enum.unzip()
+
+    {children, Enum.reduce(seen_sets, seen, &MapSet.union/2)}
   end
 
   defp expand_published_reducibles(term, _env, seen), do: {term, seen}
@@ -6365,7 +6372,7 @@ defmodule Cure.Elab.Elaborator do
         transport =
           {:app, transport_case({:var, 0}, t_b1, motive_j, e_b1), {:var, idx + sc}}
 
-        %{name: sname, dom: replace_term(h_b1, e_b1, pat_b1), transport: transport}
+        %{name: sname, dom: replace_term_scoped(h_b1, e_b1, pat_b1), transport: transport}
       end)
 
     m = length(sib_data)
@@ -6636,6 +6643,7 @@ defmodule Cure.Elab.Elaborator do
         # changing neutral levels into negative indices. Peel it syntactically.
         {:pi, g, raw_dom_term, cod_ty} = ty
         dom_term = Kernel.normalize(c, raw_dom_term)
+
         dom_value = Eval.eval(dom_term, Context.env(c))
 
         {Context.extend(c, dom_value), [sname | ns], cod_ty, [{g, dom_term} | acc]}
@@ -6763,7 +6771,7 @@ defmodule Cure.Elab.Elaborator do
       |> Enum.reject(fn {t, _pos} -> invertible_index?(t) end)
       |> Enum.flat_map(fn {idx_term, pos} ->
         {_name, idx_type_term} = Enum.at(index_tele, pos)
-        siblings = collect_index_siblings(scrut_term, idx_term, names, ctx, env)
+        siblings = collect_index_siblings(scrut_term, idx_term, idx_type_term, names, ctx, env)
 
         if MapSet.size(free_indices(idx_type_term, 0)) == 0 and siblings != [] do
           [%{pos: pos, idx_term: idx_term, idx_type_term: idx_type_term, siblings: siblings}]
@@ -6775,7 +6783,8 @@ defmodule Cure.Elab.Elaborator do
     maximal =
       Enum.reject(candidates, fn candidate ->
         Enum.any?(candidates, fn other ->
-          other.pos != candidate.pos and contains_term?(other.idx_term, candidate.idx_term)
+          other.pos != candidate.pos and
+            contains_term_scoped?(other.idx_term, candidate.idx_term)
         end)
       end)
 
@@ -6811,8 +6820,9 @@ defmodule Cure.Elab.Elaborator do
   # thing being eliminated, not transported). Innermost-first, like
   # `collect_with_siblings`. Interdependent siblings are not pre-screened here; a
   # transport that would be ill-typed is caught by the kernel's re-check.
-  defp collect_index_siblings(scrut_term, idx_term, names, ctx, env) do
+  defp collect_index_siblings(scrut_term, idx_term, idx_type_term, names, ctx, env) do
     depth = Context.length(ctx)
+    idx_type_value = Eval.eval(idx_type_term, Context.env(ctx))
 
     scrut_idx =
       case scrut_term do
@@ -6824,8 +6834,10 @@ defmodule Cure.Elab.Elaborator do
     |> Enum.with_index()
     |> Enum.flat_map(fn {name, i} ->
       if is_binary(name) and i != scrut_idx do
-        type_term = resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env)
-        {type_term, found?} = canonicalize_convoy_occurrence(type_term, idx_term, ctx)
+        original_type_term = resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env)
+
+        {type_term, found?} =
+          canonicalize_convoy_occurrence(original_type_term, idx_term, idx_type_value, ctx)
 
         if found?,
           do: [%{name: name, index: i, type_term: type_term}],
@@ -6844,23 +6856,23 @@ defmodule Cure.Elab.Elaborator do
   # This changes no kernel equality: the final motive and transports are checked.
   # Binder bodies are left alone because their de Bruijn frame differs from `ctx`;
   # the dependent sibling types handled here are ordinary data/application spines.
-  defp canonicalize_convoy_occurrence(term, target, _ctx) when term == target,
+  defp canonicalize_convoy_occurrence(term, target, _target_type, _ctx) when term == target,
     do: {target, true}
 
-  defp canonicalize_convoy_occurrence({tag, _g, _d, _body} = term, _target, _ctx)
+  defp canonicalize_convoy_occurrence({tag, _g, _d, _body} = term, _target, _target_type, _ctx)
        when tag in [:pi, :lam],
        do: {term, false}
 
-  defp canonicalize_convoy_occurrence({:case, _s, _m, _branches} = term, _target, _ctx),
+  defp canonicalize_convoy_occurrence({:case, _s, _m, _branches} = term, _target, _target_type, _ctx),
     do: {term, false}
 
-  defp canonicalize_convoy_occurrence(term, target, ctx) when is_tuple(term) do
-    if convertible_convoy_occurrence?(term, target, ctx) do
+  defp canonicalize_convoy_occurrence(term, target, target_type, ctx) when is_tuple(term) do
+    if convertible_convoy_occurrence?(term, target, target_type, ctx) do
       {target, true}
     else
       {children, found?} =
         Enum.map_reduce(children(term), false, fn child, found ->
-          {child, child_found?} = canonicalize_convoy_occurrence(child, target, ctx)
+          {child, child_found?} = canonicalize_convoy_occurrence(child, target, target_type, ctx)
           {child, found or child_found?}
         end)
 
@@ -6868,24 +6880,61 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp canonicalize_convoy_occurrence(term, target, ctx) when is_list(term) do
+  defp canonicalize_convoy_occurrence(term, target, target_type, ctx) when is_list(term) do
     Enum.map_reduce(term, false, fn child, found ->
-      {child, child_found?} = canonicalize_convoy_occurrence(child, target, ctx)
+      {child, child_found?} = canonicalize_convoy_occurrence(child, target, target_type, ctx)
       {child, found or child_found?}
     end)
   end
 
-  defp canonicalize_convoy_occurrence(term, _target, _ctx), do: {term, false}
+  defp canonicalize_convoy_occurrence(term, _target, _target_type, _ctx), do: {term, false}
 
-  defp convertible_convoy_occurrence?(term, target, ctx) do
-    Term.term?(term) and
-      Conv.conv?(
-        term,
-        target,
-        Context.env(ctx),
-        Context.length(ctx),
-        Context.signature(ctx)
-      )
+  defp convertible_convoy_occurrence?(term, target, target_type, ctx) do
+    inferred = Kernel.infer(ctx, term)
+
+    type_compatible? =
+      case inferred do
+        {:ok, term_type} ->
+          Conv.conv_values?(
+            term_type,
+            target_type,
+            Context.length(ctx),
+            Context.signature(ctx)
+          )
+
+        {:error, _} ->
+          case Kernel.infer_application_result_shape(ctx, term) do
+            {:ok, term_type} ->
+              Conv.conv_values?(
+                term_type,
+                target_type,
+                Context.length(ctx),
+                Context.signature(ctx)
+              )
+
+            :unknown ->
+              # Bidirectional constructors such as `Nil()` deliberately do not
+              # infer their element parameter. The computed index's declared
+              # type supplies exactly that missing expectation.
+              Kernel.check(ctx, term, target_type) == :ok
+          end
+      end
+
+    convertible? =
+      Term.term?(term) and
+        Conv.conv?(
+          term,
+          target,
+          Context.env(ctx),
+          Context.length(ctx),
+          Context.signature(ctx)
+        )
+
+    with true <- type_compatible? do
+      convertible?
+    else
+      _ -> false
+    end
   rescue
     _ -> false
   catch
@@ -10091,11 +10140,13 @@ defmodule Cure.Elab.Elaborator do
 
       sib_data =
         Enum.map(siblings, fn %{index: idx, name: sname, type_term: h_ctx} ->
-          h_b1 =
+          h_shifted =
             h_ctx
             |> Subst.shift(arity, 0)
-            |> replace_branch_vars(subst)
-            |> Subst.shift(1, 0)
+
+          h_refined = replace_branch_vars(h_shifted, subst)
+
+          h_b1 = Subst.shift(h_refined, 1, 0)
 
           motive_j = {:lam, Cure.Core.Grade.unrestricted(), t_b1, abstract_term(h_b1, idx_b1, 0)}
           # J/subst transport (Phase B): prf {:var,0} : Eq(T, idx, ctor_idx); the
@@ -10106,14 +10157,30 @@ defmodule Cure.Elab.Elaborator do
           transport =
             {:app, transport_case({:var, 0}, t_b1, motive_j, idx_b1), {:var, idx + sc}}
 
-          %{name: sname, dom: replace_term(h_b1, idx_b1, pat_b1), transport: transport}
+          %{index: idx, name: sname, dom: replace_term_scoped(h_b1, idx_b1, pat_b1), transport: transport}
         end)
 
       m = length(sib_data)
 
+      rebound_sib_data =
+        sib_data
+        |> Enum.with_index()
+        |> Enum.map(fn {sibling, prior_siblings} ->
+          Map.merge(sibling, %{
+            bound_dom: rebind_carried_sibling_term(sibling.dom, sib_data, prior_siblings, sc),
+            bound_transport: rebind_carried_sibling_term(sibling.transport, sib_data, prior_siblings, sc)
+          })
+        end)
+
       branch_ctx_full =
-        Enum.reduce(sib_data, branch_ctx1, fn %{dom: d}, c ->
-          Context.extend(c, Eval.eval(d, Context.env(c)))
+        Enum.reduce(rebound_sib_data, branch_ctx1, fn %{bound_dom: rebound_domain}, c ->
+          # Every domain is authored in branch_ctx1. Each preceding transported
+          # sibling adds a newer binder. Weaken the domain past that prefix, then
+          # redirect references to those siblings from their original outer
+          # binders to the transported binders. Merely weakening is insufficient
+          # for a dependent sibling such as `suffix : Path(destination, ...)`:
+          # it leaves `suffix` indexed by the old destination.
+          Context.extend(c, Eval.eval(rebound_domain, Context.env(c)))
         end)
 
       body_names = Enum.reduce(sib_data, [carried_prf_name() | branch_names], fn %{name: s}, acc -> [s | acc] end)
@@ -10122,11 +10189,15 @@ defmodule Cure.Elab.Elaborator do
       # substitution. Previously this path replaced only `idx`; activating a
       # convoy could therefore leave unrelated result indices abstract even
       # though the same branch unifier had solved them.
-      branch_goal0 =
+      carried_replaced_goal =
         result_type_term
         |> Subst.shift(arity, 0)
         |> replace_branch_vars(subst)
-        |> then(&Kernel.normalize(check_ctx, &1))
+
+      carried_normalized_goal = Kernel.normalize(check_ctx, carried_replaced_goal)
+
+      branch_goal0 =
+        carried_normalized_goal
         |> replace_term(idx_branch, ctor_idx)
 
       cod_expected =
@@ -10136,11 +10207,10 @@ defmodule Cure.Elab.Elaborator do
 
       with {:ok, inner} <- elaborate_branch_body(body_expr, cod_expected, body_names, branch_ctx_full, env) do
         wrapped =
-          sib_data
-          |> Enum.with_index()
+          rebound_sib_data
           |> Enum.reverse()
-          |> Enum.reduce(inner, fn {%{dom: d, transport: t}, i}, acc ->
-            {:app, {:lam, Cure.Core.Grade.unrestricted(), Subst.shift(d, i, 0), acc}, Subst.shift(t, i, 0)}
+          |> Enum.reduce(inner, fn %{bound_dom: d, bound_transport: t}, acc ->
+            {:app, {:lam, Cure.Core.Grade.unrestricted(), d, acc}, t}
           end)
 
         {:ok, {cname, arity, {:lam, Cure.Core.Grade.unrestricted(), eq_dom_term, wrapped}}}
@@ -10149,6 +10219,22 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp carried_prf_name, do: "$carried_idx_prf"
+
+  defp rebind_carried_sibling_term(term, siblings, prior_count, scope_shift) do
+    shifted = Subst.shift(term, prior_count, 0)
+
+    subst =
+      siblings
+      |> Enum.take(prior_count)
+      |> Enum.with_index()
+      |> Map.new(fn {%{index: original_index}, introduced_at} ->
+        original_var = original_index + scope_shift + prior_count
+        rebound_var = prior_count - introduced_at - 1
+        {original_var, {:var, rebound_var}}
+      end)
+
+    replace_branch_vars(shifted, subst)
+  end
 
   defp elaborate_branch_body({:rewrite_expr, _meta, _children} = expr, expected, names, ctx, env),
     do: elaborate_expr_checked(expr, expected, names, ctx, env)
@@ -12464,8 +12550,15 @@ defmodule Cure.Elab.Elaborator do
 
     shifted_goal =
       case scrut_term do
-        {:var, _} -> shifted_goal
-        computed -> replace_term(shifted_goal, Subst.shift(computed, arity, 0), ctor_term)
+        {:var, _} ->
+          shifted_goal
+
+        computed ->
+          replace_term_scoped(
+            shifted_goal,
+            Subst.shift(computed, arity, 0),
+            ctor_term
+          )
       end
 
     shifted_goal
@@ -12493,6 +12586,7 @@ defmodule Cure.Elab.Elaborator do
     {ctx_final, _local_vals} =
       Enum.reduce(telescope, {ctx, Enum.reverse(param_vals)}, fn {_name, type_term}, {c, local_vals} ->
         type_value = Eval.eval(type_term, local_vals)
+
         fresh_val = {:vneutral, {:nvar, Context.length(c)}}
         {Context.extend(c, type_value), [fresh_val | local_vals]}
       end)

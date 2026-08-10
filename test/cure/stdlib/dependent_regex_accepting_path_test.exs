@@ -70,6 +70,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     fn zero_next(_state: Bounded(0), _char: Char) -> List(MachineState(0)) = []
 
     fn accepts_a(char: Char) -> Bool = char == 'a'
+    fn accepts_b(char: Char) -> Bool = char == 'b'
 
     fn predicate_extended_routine_case(
       prior: List(Evidence),
@@ -147,6 +148,31 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> Encodes(CharC, final_evidence, empty_evidence()) =
       predicate_machine_acceptance_encodes(accepts_a, 'a', empty_characters(), subject_initial_position(), final_evidence, routine, acceptance)
 
+    fn predicate_concat_acceptance_case(
+      @erased final_evidence: List(Evidence),
+      @erased routine: List(ExtendedInstruction),
+      acceptance: MachineAcceptance(
+        plus(1, 1),
+        predicate_concat_machine(accepts_a, accepts_b),
+        subject_initial_position(),
+        Cons('a', Cons('b', empty_characters())),
+        empty_characters(),
+        final_evidence,
+        routine
+      )
+    ) -> Encodes(PairC(CharC, CharC), final_evidence, empty_evidence()) =
+      predicate_concat_machine_acceptance_encodes(
+        accepts_a,
+        accepts_b,
+        'a',
+        'b',
+        empty_characters(),
+        subject_initial_position(),
+        final_evidence,
+        routine,
+        acceptance
+      )
+
     fn end_machine() -> PatternMachine(0) =
       MkPatternMachine([Accepted([EmitUnit()], [subject_end_constraint()])], zero_next)
 
@@ -181,6 +207,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :empty_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :boundary_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_acceptance_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
   end
 
   test "the path proof is erased from the emitted runtime" do

@@ -1200,8 +1200,14 @@ defmodule Cure.Core.Kernel do
 
               true ->
                 %{args: tele, result_indices: result_indices} = ctor
+                {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele, scrut_params)
 
-                case unify_indices(ctx, result_indices, scrut_indices, arity, scrut_params) do
+                verdict =
+                  ctx
+                  |> unify_indices(result_indices, scrut_indices, arity, scrut_params)
+                  |> validate_branch_substitution(ctx_branch)
+
+                case verdict do
                   :impossible ->
                     # unreachable branch: body NOT checked
                     {:cont, status}
@@ -1215,7 +1221,6 @@ defmodule Cure.Core.Kernel do
 
                     subst = merge_known_branch_args(subst, scrut_value, cname, arity, Context.length(ctx))
 
-                    {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele, scrut_params)
                     ctx_branch = specialize_branch_context(ctx_branch, subst)
                     # Result indices are written over the ctor frame `params(outer) ++
                     # args(inner)` (see check_uniform_params), so the eval env is
@@ -1341,11 +1346,102 @@ defmodule Cure.Core.Kernel do
 
     with %{args: tele, result_indices: result_indices} <- Inductive.get_ctor(sig, cname),
          ^dname <- Inductive.ctor_family(sig, cname) do
-      unify_indices(ctx, result_indices, scrut_indices, length(tele), scrut_params)
+      verdict = unify_indices(ctx, result_indices, scrut_indices, length(tele), scrut_params)
+      {branch_ctx, _fresh} = extend_with_telescope(ctx, tele, scrut_params)
+      validate_branch_substitution(verdict, branch_ctx)
     else
       _ -> :impossible
     end
   end
+
+  # First-order index unification is deliberately conservative and operates on
+  # reified terms. Nested dependent matches can present a neutral level through
+  # more than one contextual spelling; a numeric de Bruijn key is not sufficient
+  # evidence that the corresponding context slot has the index's type. Before a
+  # substitution is allowed to rewrite the branch context, re-check every entry
+  # in the actual branch frame. Dropping an ill-typed entry is conservative (the
+  # branch stays less refined); applying one would corrupt an unrelated binder.
+  defp validate_branch_substitution({:solved, subst}, branch_ctx) do
+    valid =
+      Enum.reduce(subst, %{}, fn {key, replacement}, acc ->
+        expected = Context.lookup(branch_ctx, key)
+        inferred = infer(branch_ctx, replacement)
+
+        case {expected, inferred} do
+          {nil, _} ->
+            acc
+
+          {expected, {:ok, actual}} ->
+            if definitely_distinct_type_heads?(actual, expected),
+              do: acc,
+              else: Map.put(acc, key, replacement)
+
+          # An application can fail ordinary inference at an argument before the
+          # checker reaches its result type.  That is exactly the dangerous case
+          # here: an untyped first-order index equation may have confused a proof
+          # binder with an index binder, so the replacement is already malformed.
+          # Peel only declared Π codomains, without treating this as successful
+          # inference.  A distinct rigid result head is enough to REJECT the
+          # substitution; every uncertain/same-head case remains conservatively
+          # retained and is checked normally by the eventual branch body.
+          {expected, {:error, _}} ->
+            case infer_application_result_shape(branch_ctx, replacement) do
+              {:ok, actual} ->
+                if definitely_distinct_type_heads?(actual, expected),
+                  do: acc,
+                  else: Map.put(acc, key, replacement)
+
+              _ ->
+                Map.put(acc, key, replacement)
+            end
+        end
+      end)
+
+    if map_size(valid) == 0, do: :trivial, else: {:solved, valid}
+  end
+
+  defp validate_branch_substitution(verdict, _branch_ctx), do: verdict
+
+  defp definitely_distinct_type_heads?({:vdata, left, _}, {:vdata, right, _}),
+    do: left != right
+
+  defp definitely_distinct_type_heads?({:vtype, _}, {:vdata, _, _}), do: true
+  defp definitely_distinct_type_heads?({:vdata, _, _}, {:vtype, _}), do: true
+  defp definitely_distinct_type_heads?({:vpi, _, _, _}, {:vdata, _, _}), do: true
+  defp definitely_distinct_type_heads?({:vdata, _, _}, {:vpi, _, _, _}), do: true
+  defp definitely_distinct_type_heads?({:vpi, _, _, _}, {:vtype, _}), do: true
+  defp definitely_distinct_type_heads?({:vtype, _}, {:vpi, _, _, _}), do: true
+  defp definitely_distinct_type_heads?(_actual, _expected), do: false
+
+  @doc false
+  @spec infer_application_result_shape(Context.t(), Cure.Core.Term.t()) ::
+          {:ok, Cure.Core.Value.t()} | :unknown
+  def infer_application_result_shape(ctx, term) do
+    {head, args} = application_spine(term, [])
+
+    with {:ok, head_type} <- infer(ctx, head) do
+      Enum.reduce_while(args, {:ok, head_type}, fn arg, {:ok, current} ->
+        case ensure_pi(Normalise.whnf_value(current, Context.signature(ctx))) do
+          {:ok, _domain, codomain} ->
+            # Deliberately do not check the argument here. This helper is only a
+            # negative filter after ordinary inference has failed; evaluating an
+            # argument lets a dependent codomain compute, but never certifies it.
+            value = Eval.eval(arg, Context.env(ctx))
+            {:cont, {:ok, Eval.apply_closure(codomain, value)}}
+
+          _ ->
+            {:halt, :unknown}
+        end
+      end)
+    else
+      _ -> :unknown
+    end
+  rescue
+    RuntimeError -> :unknown
+  end
+
+  defp application_spine({:app, fun, arg}, args), do: application_spine(fun, [arg | args])
+  defp application_spine(head, args), do: {head, args}
 
   # Bidirectional first-order unification of a constructor's result-index vector
   # (`result_indices`, terms over the ctor telescope — vars < arity) against the
@@ -1362,6 +1458,7 @@ defmodule Cure.Core.Kernel do
       :impossible
     else
       outer_depth = Context.length(ctx)
+      sig = Context.signature(ctx)
 
       # Instantiate the ctor's PARAMETER slots with the scrutinee's actual params
       # before unifying. Result indices are written in the ctor frame
@@ -1406,10 +1503,47 @@ defmodule Cure.Core.Kernel do
             nf -> nf
           end
 
-        {r, Term.shift(s_norm, arity, 0)}
+        align_index_ctor_spines(r, Term.shift(s_norm, arity, 0), sig)
       end)
-      |> reduce_index_pairs(%{}, arity)
+      |> reduce_index_pairs(%{}, arity, sig)
     end
+  end
+
+  # A checked constructor can occur with every inferred leading slot present or
+  # with those slots omitted because its expected indexed family determines
+  # them. Align the two spellings PAIRWISE: implicit fields remain available for
+  # GADT refinement when both sides carry them, while a licensed unequal prefix
+  # cannot block propagation through a repeated index equation.
+  defp align_index_ctor_spines({:ctor, cname, left}, {:ctor, cname, right}, sig) do
+    {left, right} = Inductive.align_ctor_spines(sig, cname, left, right)
+
+    if length(left) == length(right) do
+      {left, right} = align_index_spine_lists(left, right, sig)
+      {{:ctor, cname, left}, {:ctor, cname, right}}
+    else
+      {{:ctor, cname, left}, {:ctor, cname, right}}
+    end
+  end
+
+  defp align_index_ctor_spines({:data, name, lp, li}, {:data, name, rp, ri}, sig)
+       when length(lp) == length(rp) and length(li) == length(ri) do
+    {lp, rp} = align_index_spine_lists(lp, rp, sig)
+    {li, ri} = align_index_spine_lists(li, ri, sig)
+    {{:data, name, lp, li}, {:data, name, rp, ri}}
+  end
+
+  defp align_index_ctor_spines({:app, lf, la}, {:app, rf, ra}, sig) do
+    {lf, rf} = align_index_ctor_spines(lf, rf, sig)
+    {la, ra} = align_index_ctor_spines(la, ra, sig)
+    {{:app, lf, la}, {:app, rf, ra}}
+  end
+
+  defp align_index_ctor_spines(left, right, _sig), do: {left, right}
+
+  defp align_index_spine_lists(left, right, sig) do
+    Enum.zip(left, right)
+    |> Enum.map(fn {a, b} -> align_index_ctor_spines(a, b, sig) end)
+    |> Enum.unzip()
   end
 
   # Simultaneous, capture-avoiding substitution of the constructor's parameter
@@ -1448,13 +1582,24 @@ defmodule Cure.Core.Kernel do
 
   defp subst_params(other, _pmap, _depth), do: other
 
-  defp reduce_index_pairs([], subst, _arity),
+  defp reduce_index_pairs([], subst, _arity, _sig),
     do: if(map_size(subst) == 0, do: :trivial, else: {:solved, subst})
 
-  defp reduce_index_pairs([{r, s} | rest], subst, arity) do
+  defp reduce_index_pairs([{r, s} | rest], subst, arity, sig) do
+    # Earlier index equations can reveal a constructor hidden behind a shared
+    # variable in a later equation (`x`, then `Cons(x, rest)`). Chase the current
+    # substitution before pairwise spine alignment so the second equation can
+    # decompose that constructor and propagate its forced outer fields.
+    {r, s} =
+      align_index_ctor_spines(
+        replace_branch_vars(r, subst),
+        replace_branch_vars(s, subst),
+        sig
+      )
+
     case unify_one(r, s, arity, subst) do
       :impossible -> :impossible
-      {:ok, subst2} -> reduce_index_pairs(rest, subst2, arity)
+      {:ok, subst2} -> reduce_index_pairs(rest, subst2, arity, sig)
       # Dropping an :undecided pair (skip it, keep `subst`) is SOUND, not a bug
       # (K5a #575, proven, do NOT "fix" into propagation): the trusted case-checker
       # skips a branch body ONLY on :impossible. Dropping :undecided never yields a
@@ -1464,7 +1609,7 @@ defmodule Cure.Core.Kernel do
       # specialized LESS (more general), making body-checking STRICTER. The only
       # possible effect is a false REJECTION, never a false acceptance. Propagating
       # :undecided instead would drop these valid refinements and reject MORE.
-      :undecided -> reduce_index_pairs(rest, subst, arity)
+      :undecided -> reduce_index_pairs(rest, subst, arity, sig)
     end
   end
 

@@ -46,6 +46,56 @@ mod Std.Regex.Proof
     BoundaryStartsUnavailable : BoundaryStartsView(false, Nil())
     BoundaryStartsExact : BoundaryStartsView(true, Cons(boundary_accepting_destination(), Nil()))
 
+  @reducible
+  fn predicate_concat_machine(left: Char -> Bool, right: Char -> Bool) -> PatternMachine(plus(S(Z()), S(Z()))) =
+    let right_starts: List(MachineState(S(Z()))) = Cons(predicate_machine_start(), Nil())
+    let starts: List(MachineState(plus(S(Z()), S(Z())))) = continue_with_right(S(Z()), Cons(predicate_machine_start(), Nil()), right_starts)
+    MkPatternMachine(starts, concat_machine_next(S(Z()), predicate_machine_next(left), right_starts, predicate_machine_next(right)))
+
+  @reducible
+  fn predicate_concat_start() -> MachineState(plus(S(Z()), S(Z()))) =
+    Active(First(), Nil(), Nil())
+
+  @reducible
+  fn predicate_concat_middle_state() -> Bounded(plus(S(Z()), S(Z()))) =
+    Next(First())
+
+  @reducible
+  fn predicate_concat_middle(char: Char) -> MachineState(plus(S(Z()), S(Z()))) =
+    Active(predicate_concat_middle_state(), Cons(EmitChar(char), Nil()), Nil())
+
+  @reducible
+  fn predicate_concat_start_thread() -> ThreadState(plus(S(Z()), S(Z()))) =
+    machine_state_thread(plus(S(Z()), S(Z())), predicate_concat_start())
+
+  @reducible
+  fn predicate_concat_middle_thread() -> ThreadState(plus(S(Z()), S(Z()))) =
+    ThreadActive(Next(First()))
+
+  @reducible
+  fn predicate_concat_accepting(char: Char) -> MachineState(plus(S(Z()), S(Z()))) =
+    Accepted(Cons(EmitChar(char), Cons(EmitPair(), Nil())), Nil())
+
+  type PredicateConcatStartsView indices (starts: List(MachineState(plus(S(Z()), S(Z())))))
+    PredicateConcatStartsExact : PredicateConcatStartsView(Cons(predicate_concat_start(), Nil()))
+
+  type PredicateConcatInitialDestinationView indices (destination: MachineState(plus(S(Z()), S(Z()))))
+    PredicateConcatInitialDestinationExact : PredicateConcatInitialDestinationView(predicate_concat_start())
+
+  type PredicateConcatFirstView indices (holds: Bool, char: Char, destinations: List(MachineState(plus(S(Z()), S(Z())))))
+    PredicateConcatFirstRejects : PredicateConcatFirstView(false, char, Nil())
+    PredicateConcatFirstAccepts : PredicateConcatFirstView(true, char, Cons(predicate_concat_middle(char), Nil()))
+
+  type PredicateConcatSecondView indices (holds: Bool, char: Char, destinations: List(MachineState(plus(S(Z()), S(Z())))))
+    PredicateConcatSecondRejects : PredicateConcatSecondView(false, char, Nil())
+    PredicateConcatSecondAccepts : PredicateConcatSecondView(true, char, Cons(predicate_concat_accepting(char), Nil()))
+
+  type PredicateConcatAcceptedEdgeView indices (char: Char, regular: List(EvidenceInstruction), constraints: List(BoundaryConstraint))
+    PredicateConcatAcceptedEdgeExact : PredicateConcatAcceptedEdgeView(char, Cons(EmitChar(char), Cons(EmitPair(), Nil())), Nil())
+
+  type PredicateConcatActiveEdgeView indices (char: Char, destination: Bounded(plus(S(Z()), S(Z()))), regular: List(EvidenceInstruction), constraints: List(BoundaryConstraint))
+    PredicateConcatActiveEdgeExact : PredicateConcatActiveEdgeView(char, predicate_concat_middle_state(), Cons(EmitChar(char), Nil()), Nil())
+
   fn impossible_list_member({item_type: Type}, {item: item_type}, {result: Type}, membership: ListMember(item_type, item, Nil())) -> result = match membership
 
   @reducible
@@ -56,11 +106,31 @@ mod Std.Regex.Proof
 
   fn encodes_character_empty(char: Char) -> Encodes(CharC, Cons(CharacterEvidence(char), empty_evidence()), empty_evidence()) = EncodesCharacter(char)
 
+  fn encodes_character_on(char: Char, rest: List(Evidence)) -> Encodes(CharC, Cons(CharacterEvidence(char), rest), rest) = EncodesCharacter(char)
+
+  fn encodes_character_pair(left_char: Char, right_char: Char) -> Encodes(PairC(CharC, CharC), Cons(PairEvidence(), Cons(CharacterEvidence(right_char), Cons(CharacterEvidence(left_char), empty_evidence()))), empty_evidence()) =
+    EncodesPair(encodes_character_on(right_char, Cons(CharacterEvidence(left_char), empty_evidence())), encodes_character_empty(left_char))
+
   fn predicate_execution_view(char: Char, {evidence: List(Evidence)}, {captures: List(CaptureFrame)}, execution: RoutineExecution(Cons(EmitChar(char), Nil()), Nil(), Nil(), evidence, captures)) -> PredicateEvidenceView(char, evidence, captures) = match execution
     RoutineStep(_, suffix) -> match suffix
       RoutineDone() -> PredicateEvidenceExact()
 
   fn predicate_starts_view(test: Char -> Bool, position: InitialPosition, input: List(Char), after_input: List(Char)) -> PredicateStartsView(initial_machine_destinations(S(Z()), predicate_pattern_machine(test), position, input, after_input)) = PredicateStartsExact()
+
+  fn predicate_concat_starts_view(left: Char -> Bool, right: Char -> Bool, position: InitialPosition, input: List(Char), after_input: List(Char)) -> PredicateConcatStartsView(initial_machine_destinations(plus(S(Z()), S(Z())), predicate_concat_machine(left, right), position, input, after_input)) = PredicateConcatStartsExact()
+
+  fn predicate_concat_initial_destination_view(left: Char -> Bool, right: Char -> Bool, position: InitialPosition, input: List(Char), after_input: List(Char), destination: MachineState(plus(S(Z()), S(Z()))), edge: ListMember(MachineState(plus(S(Z()), S(Z()))), destination, initial_machine_destinations(plus(S(Z()), S(Z())), predicate_concat_machine(left, right), position, input, after_input))) -> PredicateConcatInitialDestinationView(destination) = match predicate_concat_starts_view(left, right, position, input, after_input)
+    PredicateConcatStartsExact() -> match edge
+      ListMemberHere() -> PredicateConcatInitialDestinationExact()
+      ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn predicate_concat_first_view(left: Char -> Bool, right: Char -> Bool, char: Char, boundary: Boundary) -> PredicateConcatFirstView(left(char), char, machine_destinations(plus(S(Z()), S(Z())), predicate_concat_machine(left, right), predicate_concat_start_thread(), char, boundary)) = match left(char)
+    False() -> PredicateConcatFirstRejects()
+    True() -> PredicateConcatFirstAccepts()
+
+  fn predicate_concat_second_view(left: Char -> Bool, right: Char -> Bool, char: Char, boundary: Boundary) -> PredicateConcatSecondView(right(char), char, machine_destinations(plus(S(Z()), S(Z())), predicate_concat_machine(left, right), predicate_concat_middle_thread(), char, boundary)) = match right(char)
+    False() -> PredicateConcatSecondRejects()
+    True() -> PredicateConcatSecondAccepts()
 
   fn boundary_starts_view(constraint: BoundaryConstraint, position: InitialPosition, after_input: List(Char)) -> BoundaryStartsView(constraints_hold(Cons(constraint, Nil()), initial_position_boundary(position, after_input)), initial_machine_destinations(Z(), boundary_pattern_machine(constraint), position, empty_characters(), after_input)) = match constraints_hold(Cons(constraint, Nil()), initial_position_boundary(position, after_input))
     False() -> BoundaryStartsUnavailable()
@@ -132,6 +202,60 @@ mod Std.Regex.Proof
     MachineAccepted(destination, initial_evidence, initial_captures, path_routine, edge, initial_execution, routine_certificate, path) ->
       match predicate_initial_path_view(test, char, after_input, position, destination, final_evidence, path_routine, edge, initial_execution, path)
         PredicatePathExact() -> encodes_character_empty(char)
+
+  fn predicate_concat_right_execution_encodes(left: Char -> Bool, right: Char -> Bool, left_char: Char, right_char: Char, after_input: List(Char), destination_evidence: List(Evidence), destination_captures: List(CaptureFrame), suffix_routine: List(ExtendedInstruction), @erased final_evidence: List(Evidence), execution: RoutineExecution(Cons(EmitChar(right_char), Cons(EmitPair(), Nil())), Cons(CharacterEvidence(left_char), empty_evidence()), record_capture_char(Nil(), right_char), destination_evidence, destination_captures), suffix: AcceptingFrom(plus(S(Z()), S(Z())), predicate_concat_machine(left, right), empty_characters(), after_input, ThreadAccepted(), destination_evidence, destination_captures, final_evidence, suffix_routine)) -> Encodes(PairC(CharC, CharC), final_evidence, empty_evidence()) = match execution
+    RoutineStep(_, after_right) -> match after_right
+      RoutineStep(_, after_pair) -> match after_pair
+        RoutineDone() -> match suffix
+          AcceptingNow() -> encodes_character_pair(left_char, right_char)
+
+  fn impossible_concat_accepted_tail(regular: List(EvidenceInstruction), constraints: List(BoundaryConstraint), {result: Type}, prior: ListMember(MachineState(plus(S(Z()), S(Z()))), Accepted(regular, constraints), Nil())) -> result = match prior
+
+  fn impossible_concat_active_tail(destination: Bounded(plus(S(Z()), S(Z()))), regular: List(EvidenceInstruction), constraints: List(BoundaryConstraint), {result: Type}, prior: ListMember(MachineState(plus(S(Z()), S(Z()))), Active(destination, regular, constraints), Nil())) -> result = match prior
+
+  fn impossible_predicate_concat_first_accepted(left: Char -> Bool, right: Char -> Bool, char: Char, boundary: Boundary, regular: List(EvidenceInstruction), constraints: List(BoundaryConstraint), {result: Type}, edge: ListMember(MachineState(plus(S(Z()), S(Z()))), Accepted(regular, constraints), machine_destinations(plus(S(Z()), S(Z())), predicate_concat_machine(left, right), predicate_concat_start_thread(), char, boundary))) -> result = match predicate_concat_first_view(left, right, char, boundary)
+    PredicateConcatFirstRejects() -> impossible_concat_accepted_tail(regular, constraints, edge)
+    PredicateConcatFirstAccepts() -> match edge
+      ListMemberThere(prior) -> impossible_concat_accepted_tail(regular, constraints, prior)
+
+  fn predicate_concat_accepted_edge_view(char: Char, regular: List(EvidenceInstruction), constraints: List(BoundaryConstraint), edge: ListMember(MachineState(plus(S(Z()), S(Z()))), Accepted(regular, constraints), Cons(predicate_concat_accepting(char), Nil()))) -> PredicateConcatAcceptedEdgeView(char, regular, constraints) = match edge
+    ListMemberHere() -> PredicateConcatAcceptedEdgeExact()
+    ListMemberThere(prior) -> impossible_concat_accepted_tail(regular, constraints, prior)
+
+  fn predicate_concat_active_edge_view(char: Char, destination: Bounded(plus(S(Z()), S(Z()))), regular: List(EvidenceInstruction), constraints: List(BoundaryConstraint), edge: ListMember(MachineState(plus(S(Z()), S(Z()))), Active(destination, regular, constraints), Cons(predicate_concat_middle(char), Nil()))) -> PredicateConcatActiveEdgeView(char, destination, regular, constraints) = match edge
+    ListMemberHere() -> PredicateConcatActiveEdgeExact()
+    ListMemberThere(prior) -> impossible_concat_active_tail(destination, regular, constraints, prior)
+
+  fn predicate_concat_right_path_encodes(left: Char -> Bool, right: Char -> Bool, left_char: Char, right_char: Char, after_input: List(Char), @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), path: AcceptingFrom(plus(S(Z()), S(Z())), predicate_concat_machine(left, right), Cons(right_char, empty_characters()), after_input, predicate_concat_middle_thread(), Cons(CharacterEvidence(left_char), empty_evidence()), Nil(), final_evidence, routine)) -> Encodes(PairC(CharC, CharC), final_evidence, empty_evidence()) = match path
+    AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> match predicate_concat_second_view(left, right, right_char, transition_boundary_before(right_char, empty_characters(), after_input))
+      PredicateConcatSecondRejects() -> impossible_list_member(edge)
+      PredicateConcatSecondAccepts() -> match edge
+        ListMemberThere(prior) -> impossible_list_member(prior)
+    AcceptingNextAccepted(regular, constraints, _, _, _, edge, execution, suffix) -> match predicate_concat_second_view(left, right, right_char, transition_boundary_before(right_char, empty_characters(), after_input))
+      PredicateConcatSecondRejects() -> impossible_list_member(edge)
+      PredicateConcatSecondAccepts() -> match predicate_concat_accepted_edge_view(right_char, regular, constraints, edge)
+        PredicateConcatAcceptedEdgeExact() -> match execution
+          RoutineStep(_, after_right) -> match after_right
+            RoutineStep(_, after_pair) -> match after_pair
+              RoutineDone() -> match suffix
+                AcceptingNow() -> encodes_character_pair(left_char, right_char)
+
+  fn predicate_concat_start_path_encodes(left: Char -> Bool, right: Char -> Bool, left_char: Char, right_char: Char, after_input: List(Char), @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), path: AcceptingFrom(plus(S(Z()), S(Z())), predicate_concat_machine(left, right), Cons(left_char, Cons(right_char, empty_characters())), after_input, predicate_concat_start_thread(), Nil(), Nil(), final_evidence, routine)) -> Encodes(PairC(CharC, CharC), final_evidence, empty_evidence()) = match path
+    AcceptingNextActive(first_destination, first_regular, first_constraints, _, _, first_suffix_routine, first_edge, first_execution, first_suffix) -> match predicate_concat_first_view(left, right, left_char, transition_boundary_before(left_char, Cons(right_char, empty_characters()), after_input))
+      PredicateConcatFirstRejects() -> impossible_list_member(first_edge)
+      PredicateConcatFirstAccepts() -> match predicate_concat_active_edge_view(left_char, first_destination, first_regular, first_constraints, first_edge)
+        PredicateConcatActiveEdgeExact() -> match first_execution
+          RoutineStep(_, after_left) -> match after_left
+            RoutineDone() -> predicate_concat_right_path_encodes(left, right, left_char, right_char, after_input, final_evidence, first_suffix_routine, first_suffix)
+    AcceptingNextAccepted(regular, constraints, _, _, _, first_edge, _, _) -> impossible_predicate_concat_first_accepted(left, right, left_char, transition_boundary_before(left_char, Cons(right_char, empty_characters()), after_input), regular, constraints, first_edge)
+
+  ## The first compositional Thompson case. Reverse the two-state concatenation
+  ## path transition-by-transition, recovering the left and right predicate
+  ## paths and the final EmitPair marker from the only possible memberships.
+  fn predicate_concat_machine_acceptance_encodes(left: Char -> Bool, right: Char -> Bool, left_char: Char, right_char: Char, after_input: List(Char), position: InitialPosition, @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), acceptance: MachineAcceptance(plus(S(Z()), S(Z())), predicate_concat_machine(left, right), position, Cons(left_char, Cons(right_char, empty_characters())), after_input, final_evidence, routine)) -> Encodes(PairC(CharC, CharC), final_evidence, empty_evidence()) = match acceptance
+    MachineAccepted(destination, _, _, _, initial_edge, initial_execution, _, path) -> match predicate_concat_initial_destination_view(left, right, position, Cons(left_char, Cons(right_char, empty_characters())), after_input, destination, initial_edge)
+      PredicateConcatInitialDestinationExact() -> match initial_execution
+        RoutineDone() -> predicate_concat_start_path_encodes(left, right, left_char, right_char, after_input, final_evidence, routine, path)
 
   fn predicate_path_routine_view(test: Char -> Bool, char: Char, after_input: List(Char), {path_evidence: List(Evidence)}, {path_captures: List(CaptureFrame)}, {path_final_evidence: List(Evidence)}, {routine: List(ExtendedInstruction)}, path: AcceptingFrom(S(Z()), predicate_pattern_machine(test), Cons(char, Nil()), after_input, predicate_machine_thread(), path_evidence, path_captures, path_final_evidence, routine)) -> PredicateRoutineView(char, routine) = match path
     AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> match predicate_destinations_view(test, char, transition_boundary_before(char, [], after_input))

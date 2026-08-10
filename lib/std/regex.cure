@@ -342,16 +342,19 @@ mod Std.Regex
     [] -> right
     [head | rest] -> [head | append_constraints(rest, right)]
 
+  @reducible
   fn inject_left_states({left_count: Nat}, {right_count: Nat}, states: List(MachineState(left_count))) -> List(MachineState(plus(left_count, right_count))) = match states
     [] -> []
     [Accepted(routine, constraints) | rest] -> [Accepted(routine, constraints) | inject_left_states(rest)]
     [Active(state, routine, constraints) | rest] -> [Active(inject_left(state), routine, constraints) | inject_left_states(rest)]
 
+  @reducible
   fn inject_right_states(left_count: Nat, {right_count: Nat}, states: List(MachineState(right_count))) -> List(MachineState(plus(left_count, right_count))) = match states
     [] -> []
     [Accepted(routine, constraints) | rest] -> [Accepted(routine, constraints) | inject_right_states(left_count, rest)]
     [Active(state, routine, constraints) | rest] -> [Active(inject_right(left_count, state), routine, constraints) | inject_right_states(left_count, rest)]
 
+  @reducible
   fn enter_right_with_constraints(left_count: Nat, {right_count: Nat}, left_routine: List(EvidenceInstruction), left_constraints: List(BoundaryConstraint), right_starts: List(MachineState(right_count))) -> List(MachineState(plus(left_count, right_count))) = match right_starts
     [] -> []
     [Accepted(right_routine, right_constraints) | rest] ->
@@ -362,11 +365,13 @@ mod Std.Regex
   fn enter_right(left_count: Nat, {right_count: Nat}, left_routine: List(EvidenceInstruction), right_starts: List(MachineState(right_count))) -> List(MachineState(plus(left_count, right_count))) =
     enter_right_with_constraints(left_count, left_routine, [], right_starts)
 
+  @reducible
   fn continue_with_right(left_count: Nat, {right_count: Nat}, left_states: List(MachineState(left_count)), right_starts: List(MachineState(right_count))) -> List(MachineState(plus(left_count, right_count))) = match left_states
     [] -> []
     [Accepted(left_routine, constraints) | rest] -> append_states(enter_right_with_constraints(left_count, left_routine, constraints, right_starts), continue_with_right(left_count, rest, right_starts))
     [Active(state, routine, constraints) | rest] -> [Active(inject_left(state), routine, constraints) | continue_with_right(left_count, rest, right_starts)]
 
+  @reducible
   fn finish_pair({n: Nat}, states: List(MachineState(n))) -> List(MachineState(n)) = match states
     [] -> []
     [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [EmitPair()]), constraints) | finish_pair(rest)]
@@ -419,6 +424,7 @@ mod Std.Regex
   fn group_machine_next({n: Nat}, next: (Bounded(n)) -> Char -> List(MachineState(n)), state: Bounded(n), char: Char) -> List(MachineState(n)) =
     finish_capture(next(state, char))
 
+  @reducible
   fn concat_machine_next(left_count: Nat, {right_count: Nat}, left_next: (Bounded(left_count)) -> Char -> List(MachineState(left_count)), right_starts: List(MachineState(right_count)), right_next: (Bounded(right_count)) -> Char -> List(MachineState(right_count)), state: Bounded(plus(left_count, right_count)), char: Char) -> List(MachineState(plus(left_count, right_count))) =
     fold_sum(
       split_sum(left_count, state),
