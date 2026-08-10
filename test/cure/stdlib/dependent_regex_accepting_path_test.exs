@@ -195,6 +195,15 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> RightMarkedStateOrigin(left_count, right_count, EmitRight(), states, combined) =
       right_marked_state_origin(left_count, right_count, states, EmitRight(), combined, edge)
 
+    fn appended_state_origin_case(
+      n: Nat,
+      left: List(MachineState(n)),
+      right: List(MachineState(n)),
+      value: MachineState(n),
+      edge: ListMember(MachineState(n), value, append_machine_states(n, left, right))
+    ) -> AppendMemberOrigin(n, left, right, value) =
+      append_member_origin(n, left, right, value, edge)
+
     fn certified_predicate_acceptance_case(
       input: List(Char),
       after_input: List(Char),
@@ -436,6 +445,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :nested_alternate_machine_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :left_alternate_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :right_alternate_state_origin_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :appended_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_acceptance_case))

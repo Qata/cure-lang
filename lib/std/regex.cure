@@ -338,6 +338,10 @@ mod Std.Regex
     [] -> right
     [head | rest] -> [head | append_states(rest, right)]
 
+  @reducible
+  fn append_machine_states(n: Nat, left: List(MachineState(n)), right: List(MachineState(n))) -> List(MachineState(n)) =
+    append_states(left, right)
+
   fn append_constraints(left: List(BoundaryConstraint), right: List(BoundaryConstraint)) -> List(BoundaryConstraint) = match left
     [] -> right
     [head | rest] -> [head | append_constraints(rest, right)]

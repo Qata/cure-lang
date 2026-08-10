@@ -260,6 +260,22 @@ mod Std.Regex.Proof
   ## is an injected active state or an accepting state whose routine has the
   ## branch marker appended.  Recursive path projection uses these relations
   ## instead of guessing from a combined state's runtime representation.
+  type AppendMemberOrigin(n: Nat, left: List(MachineState(n)), right: List(MachineState(n))) indices (value: MachineState(n))
+    AppendMemberLeft : (edge: ListMember(MachineState(n), value, left)) -> AppendMemberOrigin(n, left, right, value)
+    AppendMemberRight : (edge: ListMember(MachineState(n), value, right)) -> AppendMemberOrigin(n, left, right, value)
+
+  fn append_member_left({n: Nat}, left: List(MachineState(n)), right: List(MachineState(n)), value: MachineState(n), edge: ListMember(MachineState(n), value, left)) -> AppendMemberOrigin(n, left, right, value) = AppendMemberLeft(edge)
+
+  fn append_member_right({n: Nat}, left: List(MachineState(n)), right: List(MachineState(n)), value: MachineState(n), edge: ListMember(MachineState(n), value, right)) -> AppendMemberOrigin(n, left, right, value) = AppendMemberRight(edge)
+
+  fn append_member_origin(n: Nat, left: List(MachineState(n)), right: List(MachineState(n)), value: MachineState(n), edge: ListMember(MachineState(n), value, append_machine_states(n, left, right))) -> AppendMemberOrigin(n, left, right, value) = match left
+    Nil() -> append_member_right(left, right, value, edge)
+    Cons(head, rest) -> match edge
+      ListMemberHere() -> append_member_left(left, right, value, member_here(head, rest))
+      ListMemberThere(prior) -> match append_member_origin(n, rest, right, value, prior)
+        AppendMemberLeft(origin) -> append_member_left(left, right, value, member_there(head, origin))
+        AppendMemberRight(origin) -> append_member_right(left, right, value, origin)
+
   type LeftMarkedStateOrigin(left_count: Nat, right_count: Nat, marker: EvidenceInstruction, states: List(MachineState(left_count))) indices (combined: MachineState(plus(left_count, right_count)))
     LeftMarkedActiveOrigin : (state: Bounded(left_count)) -> (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(left_count), Active(state, routine, constraints), states)) -> LeftMarkedStateOrigin(left_count, right_count, marker, states, Active(inject_alternate_left(left_count, right_count, state), routine, constraints))
     LeftMarkedAcceptedOrigin : (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(left_count), Accepted(routine, constraints), states)) -> LeftMarkedStateOrigin(left_count, right_count, marker, states, Accepted(append_branch_marker(routine, marker), constraints))
