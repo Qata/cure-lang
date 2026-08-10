@@ -244,6 +244,38 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
         acceptance
       )
 
+    fn predicate_alternate_mode_acceptance_case(
+      prefer_right: Bool,
+      @erased final_evidence: List(Evidence),
+      @erased routine: List(ExtendedInstruction),
+      acceptance: MachineAcceptance(
+        plus(1, 1),
+        predicate_alternate_mode_machine(accepts_a, accepts_a, prefer_right),
+        subject_initial_position(),
+        Cons('a', empty_characters()),
+        empty_characters(),
+        final_evidence,
+        routine
+      )
+    ) -> Encodes(ChoiceC(CharC, CharC), final_evidence, empty_evidence()) =
+      predicate_alternate_mode_machine_acceptance_encodes(
+        accepts_a,
+        accepts_a,
+        prefer_right,
+        'a',
+        empty_characters(),
+        subject_initial_position(),
+        final_evidence,
+        routine,
+        acceptance
+      )
+
+    fn ambiguous_left_search() -> MachineAcceptingSearch(plus(1, 1), predicate_alternate_mode_machine(accepts_a, accepts_a, False()), subject_initial_position(), Cons('a', Nil()), Nil()) =
+      search_machine_acceptance(plus(1, 1), predicate_alternate_mode_machine(accepts_a, accepts_a, False()), subject_initial_position(), ['a'], [])
+
+    fn ambiguous_right_search() -> MachineAcceptingSearch(plus(1, 1), predicate_alternate_mode_machine(accepts_a, accepts_a, True()), subject_initial_position(), Cons('a', Nil()), Nil()) =
+      search_machine_acceptance(plus(1, 1), predicate_alternate_mode_machine(accepts_a, accepts_a, True()), subject_initial_position(), ['a'], [])
+
     fn predicate_repeat_acceptance_case(
       input: List(Char),
       lazy: Bool,
@@ -318,6 +350,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_right_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_repeat_acceptance_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_mode_acceptance_case))
   end
 
   test "the path proof is erased from the emitted runtime" do
@@ -332,6 +365,12 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
              {:MachineAcceptingPath, [{:CharacterEvidence, ?a}], [{:Observe, ?a}, {:Regular, {:EmitChar, ?a}}]}
 
     assert apply(module, :searched_empty, []) == :NoAcceptingPath
+
+    assert {:MachineAcceptingPath, [:LeftEvidence, {:CharacterEvidence, ?a}], _} =
+             apply(module, :ambiguous_left_search, [])
+
+    assert {:MachineAcceptingPath, [:RightEvidence, {:CharacterEvidence, ?a}], _} =
+             apply(module, :ambiguous_right_search, [])
 
     repeated_evidence = [:EndListEvidence, {:CharacterEvidence, ?a}, {:CharacterEvidence, ?a}, :BeginListEvidence]
 
