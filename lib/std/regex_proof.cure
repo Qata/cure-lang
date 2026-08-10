@@ -520,6 +520,35 @@ mod Std.Regex.Proof
       AppendMemberLeft(right_edge) -> ContinueEnteredRightOrigin(left_routine, left_constraints, ListMemberHere(), enter_right_state_origin(left_count, right_count, left_routine, left_constraints, right_starts, combined, right_edge))
       AppendMemberRight(rest_edge) -> prepend_continue_with_right_origin(left_count, right_count, Accepted(left_routine, left_constraints), rest, right_starts, combined, continue_with_right_state_origin(left_count, right_count, rest, right_starts, combined, rest_edge))
 
+  type FilteredStateOrigin(n: Nat, states: List(MachineState(n)), boundary: Boundary) indices (filtered: MachineState(n))
+    FilteredActiveStateOrigin : (state: Bounded(n)) -> (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(n), Active(state, routine, constraints), states)) -> (holds: Equivalent(Bool, constraints_hold(constraints, boundary), True())) -> FilteredStateOrigin(n, states, boundary, Active(state, routine, Nil()))
+    FilteredAcceptedStateOrigin : (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(n), Accepted(routine, constraints), states)) -> (holds: Equivalent(Bool, constraints_hold(constraints, boundary), True())) -> FilteredStateOrigin(n, states, boundary, Accepted(routine, Nil()))
+
+  fn filtered_active_state_origin({n: Nat}, states: List(MachineState(n)), boundary: Boundary, state: Bounded(n), routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), edge: ListMember(MachineState(n), Active(state, routine, constraints), states), holds: Equivalent(Bool, constraints_hold(constraints, boundary), True())) -> FilteredStateOrigin(n, states, boundary, Active(state, routine, Nil())) = FilteredActiveStateOrigin(state, routine, constraints, edge, holds)
+
+  fn filtered_accepted_state_origin({n: Nat}, states: List(MachineState(n)), boundary: Boundary, routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), edge: ListMember(MachineState(n), Accepted(routine, constraints), states), holds: Equivalent(Bool, constraints_hold(constraints, boundary), True())) -> FilteredStateOrigin(n, states, boundary, Accepted(routine, Nil())) = FilteredAcceptedStateOrigin(routine, constraints, edge, holds)
+
+  fn prepend_filtered_state_origin({n: Nat}, head: MachineState(n), tail: List(MachineState(n)), boundary: Boundary, filtered: MachineState(n), origin: FilteredStateOrigin(n, tail, boundary, filtered)) -> FilteredStateOrigin(n, Cons(head, tail), boundary, filtered) = match origin
+    FilteredActiveStateOrigin(state, routine, constraints, edge, holds) -> FilteredActiveStateOrigin(state, routine, constraints, ListMemberThere(edge), holds)
+    FilteredAcceptedStateOrigin(routine, constraints, edge, holds) -> FilteredAcceptedStateOrigin(routine, constraints, ListMemberThere(edge), holds)
+
+  fn filtered_active_cons_origin(n: Nat, state: Bounded(n), routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), rest: List(MachineState(n)), boundary: Boundary, filtered: MachineState(n), edge: ListMember(MachineState(n), filtered, filter_machine_states(n, Cons(Active(state, routine, constraints), rest), boundary))) -> FilteredStateOrigin(n, Cons(Active(state, routine, constraints), rest), boundary, filtered) = with constraints_hold(constraints, boundary) proof holds
+    True() -> match edge
+      ListMemberHere() -> filtered_active_state_origin(Cons(Active(state, routine, constraints), rest), boundary, state, routine, constraints, member_here(Active(state, routine, constraints), rest), holds)
+      ListMemberThere(prior) -> prepend_filtered_state_origin(Active(state, routine, constraints), rest, boundary, filtered, filtered_state_origin(n, rest, boundary, filtered, prior))
+    False() -> prepend_filtered_state_origin(Active(state, routine, constraints), rest, boundary, filtered, filtered_state_origin(n, rest, boundary, filtered, edge))
+
+  fn filtered_accepted_cons_origin(n: Nat, routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), rest: List(MachineState(n)), boundary: Boundary, filtered: MachineState(n), edge: ListMember(MachineState(n), filtered, filter_machine_states(n, Cons(Accepted(routine, constraints), rest), boundary))) -> FilteredStateOrigin(n, Cons(Accepted(routine, constraints), rest), boundary, filtered) = with constraints_hold(constraints, boundary) proof holds
+    True() -> match edge
+      ListMemberHere() -> filtered_accepted_state_origin(Cons(Accepted(routine, constraints), rest), boundary, routine, constraints, member_here(Accepted(routine, constraints), rest), holds)
+      ListMemberThere(prior) -> prepend_filtered_state_origin(Accepted(routine, constraints), rest, boundary, filtered, filtered_state_origin(n, rest, boundary, filtered, prior))
+    False() -> prepend_filtered_state_origin(Accepted(routine, constraints), rest, boundary, filtered, filtered_state_origin(n, rest, boundary, filtered, edge))
+
+  fn filtered_state_origin(n: Nat, states: List(MachineState(n)), boundary: Boundary, filtered: MachineState(n), edge: ListMember(MachineState(n), filtered, filter_machine_states(n, states, boundary))) -> FilteredStateOrigin(n, states, boundary, filtered) = match states
+    Nil() -> impossible_list_member(edge)
+    Cons(Active(state, routine, constraints), rest) -> filtered_active_cons_origin(n, state, routine, constraints, rest, boundary, filtered, edge)
+    Cons(Accepted(routine, constraints), rest) -> filtered_accepted_cons_origin(n, routine, constraints, rest, boundary, filtered, edge)
+
   ## Projection of a complete path that is already inside the left injection.
   ## The child path ends immediately before the alternate's final EmitLeft; the
   ## marker execution then pins the combined path's exact final evidence.
