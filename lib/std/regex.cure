@@ -627,14 +627,24 @@ mod Std.Regex
     [head | rest] -> constraint_holds(head, boundary) and constraints_hold(rest, boundary)
 
   @reducible
+  fn filter_active_decision({n: Nat}, keep: Bool, state: Bounded(n), routine: List(EvidenceInstruction), rest: List(MachineState(n)), boundary: Boundary) -> List(MachineState(n)) = match keep
+    True() -> Cons(Active(state, routine, Nil()), filter_boundary_states(rest, boundary))
+    False() -> filter_boundary_states(rest, boundary)
+
+  @reducible
+  fn filter_accepted_decision({n: Nat}, keep: Bool, routine: List(EvidenceInstruction), rest: List(MachineState(n)), boundary: Boundary) -> List(MachineState(n)) = match keep
+    True() -> Cons(Accepted(routine, Nil()), filter_boundary_states(rest, boundary))
+    False() -> filter_boundary_states(rest, boundary)
+
+  @reducible
   fn filter_boundary_states({n: Nat}, states: List(MachineState(n)), boundary: Boundary) -> List(MachineState(n)) = match states
     [] -> []
-    [Accepted(routine, constraints) | rest] -> pickup
-      constraints_hold(constraints, boundary) -> [Accepted(routine, []) | filter_boundary_states(rest, boundary)]
-      else -> filter_boundary_states(rest, boundary)
-    [Active(state, routine, constraints) | rest] -> pickup
-      constraints_hold(constraints, boundary) -> [Active(state, routine, []) | filter_boundary_states(rest, boundary)]
-      else -> filter_boundary_states(rest, boundary)
+    [Accepted(routine, constraints) | rest] -> filter_accepted_decision(constraints_hold(constraints, boundary), routine, rest, boundary)
+    [Active(state, routine, constraints) | rest] -> filter_active_decision(constraints_hold(constraints, boundary), state, routine, rest, boundary)
+
+  @reducible
+  fn filter_machine_states(n: Nat, states: List(MachineState(n)), boundary: Boundary) -> List(MachineState(n)) =
+    filter_boundary_states(states, boundary)
 
   fn position_line_end(input: List(Char)) -> Bool = match input
     [] -> true

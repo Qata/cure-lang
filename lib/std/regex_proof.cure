@@ -310,6 +310,68 @@ mod Std.Regex.Proof
         RightMarkedActiveOrigin(origin_state, origin_routine, origin_constraints, origin_edge) -> RightMarkedActiveOrigin(origin_state, origin_routine, origin_constraints, ListMemberThere(origin_edge))
         RightMarkedAcceptedOrigin(origin_routine, origin_constraints, origin_edge) -> RightMarkedAcceptedOrigin(origin_routine, origin_constraints, ListMemberThere(origin_edge))
 
+  type FilteredLeftMarkedStateOrigin(left_count: Nat, right_count: Nat, marker: EvidenceInstruction) indices (filtered_states: List(MachineState(left_count)), combined: MachineState(plus(left_count, right_count)))
+    FilteredLeftActiveOrigin : (state: Bounded(left_count)) -> (routine: List(EvidenceInstruction)) -> (edge: ListMember(MachineState(left_count), Active(state, routine, Nil()), filtered_states)) -> FilteredLeftMarkedStateOrigin(left_count, right_count, marker, filtered_states, Active(inject_alternate_left(left_count, right_count, state), routine, Nil()))
+    FilteredLeftAcceptedOrigin : (routine: List(EvidenceInstruction)) -> (edge: ListMember(MachineState(left_count), Accepted(routine, Nil()), filtered_states)) -> FilteredLeftMarkedStateOrigin(left_count, right_count, marker, filtered_states, Accepted(append_branch_marker(routine, marker), Nil()))
+
+  type FilteredRightMarkedStateOrigin(left_count: Nat, right_count: Nat, marker: EvidenceInstruction) indices (filtered_states: List(MachineState(right_count)), combined: MachineState(plus(left_count, right_count)))
+    FilteredRightActiveOrigin : (state: Bounded(right_count)) -> (routine: List(EvidenceInstruction)) -> (edge: ListMember(MachineState(right_count), Active(state, routine, Nil()), filtered_states)) -> FilteredRightMarkedStateOrigin(left_count, right_count, marker, filtered_states, Active(inject_alternate_right(left_count, right_count, state), routine, Nil()))
+    FilteredRightAcceptedOrigin : (routine: List(EvidenceInstruction)) -> (edge: ListMember(MachineState(right_count), Accepted(routine, Nil()), filtered_states)) -> FilteredRightMarkedStateOrigin(left_count, right_count, marker, filtered_states, Accepted(append_branch_marker(routine, marker), Nil()))
+
+  fn filtered_left_active_origin(left_count: Nat, right_count: Nat, marker: EvidenceInstruction, states: List(MachineState(left_count)), state: Bounded(left_count), routine: List(EvidenceInstruction), edge: ListMember(MachineState(left_count), Active(state, routine, Nil()), states)) -> FilteredLeftMarkedStateOrigin(left_count, right_count, marker, states, Active(inject_alternate_left(left_count, right_count, state), routine, Nil())) =
+    FilteredLeftActiveOrigin(state, routine, edge)
+
+  fn filtered_left_accepted_origin(left_count: Nat, right_count: Nat, marker: EvidenceInstruction, states: List(MachineState(left_count)), routine: List(EvidenceInstruction), edge: ListMember(MachineState(left_count), Accepted(routine, Nil()), states)) -> FilteredLeftMarkedStateOrigin(left_count, right_count, marker, states, Accepted(append_branch_marker(routine, marker), Nil())) =
+    FilteredLeftAcceptedOrigin(routine, edge)
+
+  fn filtered_right_active_origin(left_count: Nat, right_count: Nat, marker: EvidenceInstruction, states: List(MachineState(right_count)), state: Bounded(right_count), routine: List(EvidenceInstruction), edge: ListMember(MachineState(right_count), Active(state, routine, Nil()), states)) -> FilteredRightMarkedStateOrigin(left_count, right_count, marker, states, Active(inject_alternate_right(left_count, right_count, state), routine, Nil())) =
+    FilteredRightActiveOrigin(state, routine, edge)
+
+  fn filtered_right_accepted_origin(left_count: Nat, right_count: Nat, marker: EvidenceInstruction, states: List(MachineState(right_count)), routine: List(EvidenceInstruction), edge: ListMember(MachineState(right_count), Accepted(routine, Nil()), states)) -> FilteredRightMarkedStateOrigin(left_count, right_count, marker, states, Accepted(append_branch_marker(routine, marker), Nil())) =
+    FilteredRightAcceptedOrigin(routine, edge)
+
+  fn prepend_filtered_left_origin(left_count: Nat, right_count: Nat, marker: EvidenceInstruction, head: MachineState(left_count), tail: List(MachineState(left_count)), combined: MachineState(plus(left_count, right_count)), origin: FilteredLeftMarkedStateOrigin(left_count, right_count, marker, tail, combined)) -> FilteredLeftMarkedStateOrigin(left_count, right_count, marker, Cons(head, tail), combined) = match origin
+    FilteredLeftActiveOrigin(state, routine, edge) -> filtered_left_active_origin(left_count, right_count, marker, Cons(head, tail), state, routine, member_there(head, edge))
+    FilteredLeftAcceptedOrigin(routine, edge) -> filtered_left_accepted_origin(left_count, right_count, marker, Cons(head, tail), routine, member_there(head, edge))
+
+  fn prepend_filtered_right_origin(left_count: Nat, right_count: Nat, marker: EvidenceInstruction, head: MachineState(right_count), tail: List(MachineState(right_count)), combined: MachineState(plus(left_count, right_count)), origin: FilteredRightMarkedStateOrigin(left_count, right_count, marker, tail, combined)) -> FilteredRightMarkedStateOrigin(left_count, right_count, marker, Cons(head, tail), combined) = match origin
+    FilteredRightActiveOrigin(state, routine, edge) -> filtered_right_active_origin(left_count, right_count, marker, Cons(head, tail), state, routine, member_there(head, edge))
+    FilteredRightAcceptedOrigin(routine, edge) -> filtered_right_accepted_origin(left_count, right_count, marker, Cons(head, tail), routine, member_there(head, edge))
+
+  fn filtered_left_active_true_origin(left_count: Nat, right_count: Nat, state: Bounded(left_count), routine: List(EvidenceInstruction), rest: List(MachineState(left_count)), marker: EvidenceInstruction, boundary: Boundary, combined: MachineState(plus(left_count, right_count)), edge: ListMember(MachineState(plus(left_count, right_count)), combined, Cons(Active(inject_alternate_left(left_count, right_count, state), routine, Nil()), filter_machine_states(plus(left_count, right_count), alternate_left_states(left_count, right_count, rest, marker), boundary)))) -> FilteredLeftMarkedStateOrigin(left_count, right_count, marker, Cons(Active(state, routine, Nil()), filter_machine_states(left_count, rest, boundary)), combined) = match edge
+    ListMemberHere() -> filtered_left_active_origin(left_count, right_count, marker, Cons(Active(state, routine, Nil()), filter_machine_states(left_count, rest, boundary)), state, routine, member_here(Active(state, routine, Nil()), filter_machine_states(left_count, rest, boundary)))
+    ListMemberThere(prior) -> prepend_filtered_left_origin(left_count, right_count, marker, Active(state, routine, Nil()), filter_machine_states(left_count, rest, boundary), combined, filtered_left_marked_state_origin(left_count, right_count, rest, marker, boundary, combined, prior))
+
+  fn filtered_left_accepted_true_origin(left_count: Nat, right_count: Nat, routine: List(EvidenceInstruction), rest: List(MachineState(left_count)), marker: EvidenceInstruction, boundary: Boundary, combined: MachineState(plus(left_count, right_count)), edge: ListMember(MachineState(plus(left_count, right_count)), combined, Cons(Accepted(append_branch_marker(routine, marker), Nil()), filter_machine_states(plus(left_count, right_count), alternate_left_states(left_count, right_count, rest, marker), boundary)))) -> FilteredLeftMarkedStateOrigin(left_count, right_count, marker, Cons(Accepted(routine, Nil()), filter_machine_states(left_count, rest, boundary)), combined) = match edge
+    ListMemberHere() -> filtered_left_accepted_origin(left_count, right_count, marker, Cons(Accepted(routine, Nil()), filter_machine_states(left_count, rest, boundary)), routine, member_here(Accepted(routine, Nil()), filter_machine_states(left_count, rest, boundary)))
+    ListMemberThere(prior) -> prepend_filtered_left_origin(left_count, right_count, marker, Accepted(routine, Nil()), filter_machine_states(left_count, rest, boundary), combined, filtered_left_marked_state_origin(left_count, right_count, rest, marker, boundary, combined, prior))
+
+  fn filtered_right_active_true_origin(left_count: Nat, right_count: Nat, state: Bounded(right_count), routine: List(EvidenceInstruction), rest: List(MachineState(right_count)), marker: EvidenceInstruction, boundary: Boundary, combined: MachineState(plus(left_count, right_count)), edge: ListMember(MachineState(plus(left_count, right_count)), combined, Cons(Active(inject_alternate_right(left_count, right_count, state), routine, Nil()), filter_machine_states(plus(left_count, right_count), alternate_right_states(left_count, right_count, rest, marker), boundary)))) -> FilteredRightMarkedStateOrigin(left_count, right_count, marker, Cons(Active(state, routine, Nil()), filter_machine_states(right_count, rest, boundary)), combined) = match edge
+    ListMemberHere() -> filtered_right_active_origin(left_count, right_count, marker, Cons(Active(state, routine, Nil()), filter_machine_states(right_count, rest, boundary)), state, routine, member_here(Active(state, routine, Nil()), filter_machine_states(right_count, rest, boundary)))
+    ListMemberThere(prior) -> prepend_filtered_right_origin(left_count, right_count, marker, Active(state, routine, Nil()), filter_machine_states(right_count, rest, boundary), combined, filtered_right_marked_state_origin(left_count, right_count, rest, marker, boundary, combined, prior))
+
+  fn filtered_right_accepted_true_origin(left_count: Nat, right_count: Nat, routine: List(EvidenceInstruction), rest: List(MachineState(right_count)), marker: EvidenceInstruction, boundary: Boundary, combined: MachineState(plus(left_count, right_count)), edge: ListMember(MachineState(plus(left_count, right_count)), combined, Cons(Accepted(append_branch_marker(routine, marker), Nil()), filter_machine_states(plus(left_count, right_count), alternate_right_states(left_count, right_count, rest, marker), boundary)))) -> FilteredRightMarkedStateOrigin(left_count, right_count, marker, Cons(Accepted(routine, Nil()), filter_machine_states(right_count, rest, boundary)), combined) = match edge
+    ListMemberHere() -> filtered_right_accepted_origin(left_count, right_count, marker, Cons(Accepted(routine, Nil()), filter_machine_states(right_count, rest, boundary)), routine, member_here(Accepted(routine, Nil()), filter_machine_states(right_count, rest, boundary)))
+    ListMemberThere(prior) -> prepend_filtered_right_origin(left_count, right_count, marker, Accepted(routine, Nil()), filter_machine_states(right_count, rest, boundary), combined, filtered_right_marked_state_origin(left_count, right_count, rest, marker, boundary, combined, prior))
+
+  fn filtered_left_marked_state_origin(left_count: Nat, right_count: Nat, states: List(MachineState(left_count)), marker: EvidenceInstruction, boundary: Boundary, combined: MachineState(plus(left_count, right_count)), edge: ListMember(MachineState(plus(left_count, right_count)), combined, filter_machine_states(plus(left_count, right_count), alternate_left_states(left_count, right_count, states, marker), boundary))) -> FilteredLeftMarkedStateOrigin(left_count, right_count, marker, filter_machine_states(left_count, states, boundary), combined) = match states
+    Nil() -> impossible_list_member(edge)
+    Cons(Active(state, routine, constraints), rest) -> with constraints_hold(constraints, boundary)
+      True() -> filtered_left_active_true_origin(left_count, right_count, state, routine, rest, marker, boundary, combined, edge)
+      False() -> filtered_left_marked_state_origin(left_count, right_count, rest, marker, boundary, combined, edge)
+    Cons(Accepted(routine, constraints), rest) -> with constraints_hold(constraints, boundary)
+      True() -> filtered_left_accepted_true_origin(left_count, right_count, routine, rest, marker, boundary, combined, edge)
+      False() -> filtered_left_marked_state_origin(left_count, right_count, rest, marker, boundary, combined, edge)
+
+  fn filtered_right_marked_state_origin(left_count: Nat, right_count: Nat, states: List(MachineState(right_count)), marker: EvidenceInstruction, boundary: Boundary, combined: MachineState(plus(left_count, right_count)), edge: ListMember(MachineState(plus(left_count, right_count)), combined, filter_machine_states(plus(left_count, right_count), alternate_right_states(left_count, right_count, states, marker), boundary))) -> FilteredRightMarkedStateOrigin(left_count, right_count, marker, filter_machine_states(right_count, states, boundary), combined) = match states
+    Nil() -> impossible_list_member(edge)
+    Cons(Active(state, routine, constraints), rest) -> with constraints_hold(constraints, boundary)
+      True() -> filtered_right_active_true_origin(left_count, right_count, state, routine, rest, marker, boundary, combined, edge)
+      False() -> filtered_right_marked_state_origin(left_count, right_count, rest, marker, boundary, combined, edge)
+    Cons(Accepted(routine, constraints), rest) -> with constraints_hold(constraints, boundary)
+      True() -> filtered_right_accepted_true_origin(left_count, right_count, routine, rest, marker, boundary, combined, edge)
+      False() -> filtered_right_marked_state_origin(left_count, right_count, rest, marker, boundary, combined, edge)
+
   type CertifiedPatternMachine = CertifiedEmptyMachine | CertifiedBoundaryMachine(BoundaryConstraint) | CertifiedPredicateMachine(Char -> Bool)
 
   @reducible
