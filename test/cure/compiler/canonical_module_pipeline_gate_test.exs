@@ -58,4 +58,23 @@ defmodule Cure.Compiler.CanonicalModulePipelineGateTest do
     assert {:error, {:unknown_module_pipeline_options, [:mystery]}} =
              request(:new, [[entry_point: :compiler_file, mystery: true]])
   end
+
+  test "the stabilization gate permits exactly the reviewed stdlib use SCC" do
+    paths = Path.wildcard("lib/std/**/*.cure")
+
+    assert {:ok, graph} = Cure.Compiler.DepGraph.scan(paths)
+    assert {:ok, _ordered, [_one_w086]} = Cure.Compiler.DepGraph.order(graph)
+
+    cyclic_components =
+      graph
+      |> Cure.Compiler.DepGraph.order_deps_map()
+      |> then(fn dependencies ->
+        Cure.Compiler.DepGraph.components(dependencies, Map.keys(dependencies))
+      end)
+      |> Enum.reject(&match?([_single], &1))
+
+    # This is one semantic text/literal component, not a blanket cycle
+    # exemption. A new cycle or a membership change requires explicit review.
+    assert cyclic_components == [["Std.Char", "Std.Literal", "Std.String"]]
+  end
 end

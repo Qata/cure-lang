@@ -71,6 +71,49 @@ profiling therefore identifies repeated typed elaboration as the remaining
 cost, rather than parsing, expansion size, interface publication, or totality
 certification. This profile is the baseline for the next elaborator change.
 
+## 2026-08-10 post-CharacterLiteral baseline
+
+Environment: Apple M1 Pro, macOS arm64, Erlang/OTP 29, Elixir 1.20.1. This run
+is after `674f9772`, which prevents decoded string-literal descriptor characters
+from recursively re-entering `ExpressibleByCharacterLiteral`.
+
+| Measurement | Observed |
+|---|---:|
+| all 75 sources, cold total | 12.351 s |
+| cold `Std.Actor` component | 4.821 s |
+| cold `Std.Bool` component | 1.400 s |
+| cold `Std.Fsm` component | 0.605 s |
+| cold `Std.Regex` component | 0.471 s |
+| cold reviewed text/literal SCC | 0.166 s |
+| warm total, three samples | 1.363 / 1.588 / 1.584 s |
+| warm module checking | 0.274 / 0.278 / 0.257 s |
+
+All warm samples rebuilt zero modules. The slowest declarations remain in
+`Std.Actor`: `derive_behavior_family` (1.014 s),
+`emit_actor_dep_call_parts` (1.007 s), `emit_actor_parts_aliased` (0.542 s),
+`emit_actor_call_parts` (0.458 s), and `emit_actor_parts_aliased_raw`
+(0.451 s). Their typed-elaboration stages account for most of those totals.
+
+The earlier 41.193 s declaration-stage sample and this sample are not suitable
+for claiming a precise speedup by subtraction: they were independent wall-time
+measurements on a non-isolated development machine. The new sample does establish
+the current post-fix baseline and preserves the same ranking: Actor elaboration,
+not Regex, is the next measured target.
+
+## Stabilization warning policy
+
+The stabilization gate means **no unexpected compiler warnings**, rather than
+an unconditional zero-warning count. Exactly one reviewed `use` SCC is allowed,
+with membership equal to `{Std.Char, Std.Literal, Std.String}`; it is reported as
+W086. Any additional warning, additional SCC, or change to that membership fails
+the gate and requires review.
+
+The gate compares complete SCC membership rather than the rendered closed walk.
+A traversal may print `Char -> Literal -> Char` or `Char -> String -> Char` for
+the same three-member component. The canonical-pipeline gate pins the component
+and the single W086 report; `mix cure.check.stdlib` independently rejects module
+compiler warnings.
+
 ## Focused test startup
 
 Test VMs publish through the shared `_build/cure/test/ebin` root. Publication

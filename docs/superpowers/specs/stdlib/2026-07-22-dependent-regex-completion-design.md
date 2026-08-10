@@ -4,6 +4,11 @@
 
 **Date:** 2026-07-22
 
+**Amended:** 2026-08-10 — runtime module decomposition is measurement-triggered,
+not a prerequisite for the proof phases. The post-CharacterLiteral baseline and
+decision are recorded in `docs/COMPILER_PERFORMANCE_BASELINES.md` and
+`2026-08-10-regex-actor-module-split-design.md`.
+
 **Supersedes for unfinished work:**
 `2026-07-21-dependently-typed-regex-design.md`
 
@@ -100,6 +105,11 @@ Therefore “paper parity” and “complete Cure regex” are separate mileston
 9. Every accepted syntax form and modifier has direct behavioral tests. Parsing
    and retaining an option without implementing its meaning is forbidden.
 10. Property tests use `Antigen.Backend.StreamData`, not StreamData directly.
+11. A MetaM-like reflective API is not a prerequisite. Regex proofs and runtime
+    construction use ordinary checked Cure definitions; the existing checked
+    macro/syntax pipeline is sufficient for `/pattern/flags` to emit qualified
+    `Std.Regex.*` calls. Reflective declaration lookup or publication must not be
+    introduced into the trusted Regex path.
 
 ## 4. Honest baseline audit
 
@@ -158,7 +168,9 @@ be removed from the successful parse path.
   builder/snoc structure.
 - literal expansion emits typed combinator construction, not a completely
   staged finite machine.
-- the runtime module is monolithic and expensive to elaborate cold.
+- the runtime module remains monolithic, but the post-CharacterLiteral baseline
+  measures it at 0.471 seconds (3.8% of the 12.351-second cold pipeline), so
+  decomposition is not presently a performance blocker.
 
 ### 4.4 Test gaps
 
@@ -392,15 +404,26 @@ update, and descriptive commit. Do not credit partially edited work.
 
 Gate: clean baseline, no uncommitted regex changes, no current regression.
 
-### Phase B — modularize without semantic change
+### Phase B — measured module-boundary decision
 
-Split the runtime along shape/core/NFA/Thompson/evidence/VM/proof/API boundaries
-using canonical stdlib module paths and dependency ordering. Add parity tests
-before moving each section. Do not duplicate definitions to break cycles; adjust
-ownership and dependency direction.
+Retain the existing compile-time split across `Std.Regex.Syntax.Model`,
+`.Class`, `.Flags`, `.Parser`, and `.Emitter`. Do not split the dependent runtime
+before the proof phases merely because the source file is large. The 2026-08-10
+post-CharacterLiteral baseline measures `Std.Regex` at 0.471 seconds, while
+`Std.Actor` alone takes 4.821 seconds; publishing the runtime's indexed
+shape/machine/evidence chain through additional interfaces has no demonstrated
+payoff and may add conversion and interface-loading work.
 
-Gate: byte-for-byte-equivalent public behavior and materially lower isolated
-module elaboration costs.
+Reopen runtime decomposition only if a representative post-proof baseline puts
+`Std.Regex` above 15% of cold module-check time, or an isolated Regex edit forces
+unrelated layers to rebuild at a cost above one second. Then split along
+shape/core/NFA/Thompson/evidence/VM/proof/API dependency direction, with parity
+tests before every move. Do not introduce cycles, duplicate definitions,
+compatibility wrappers, or alias-dependent recovery.
+
+Gate: a current cold/warm baseline and an explicit keep/split decision are
+recorded. This gate is discharged by the 2026-08-10 baseline and split-decision
+document; Phase C may proceed without runtime decomposition.
 
 ### Phase C — intrinsic finite states
 
