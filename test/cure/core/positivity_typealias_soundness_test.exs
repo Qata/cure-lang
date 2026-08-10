@@ -146,4 +146,15 @@ defmodule Cure.Core.PositivityTypealiasSoundnessTest do
     assert {:error, {:non_strictly_positive, :mk}} ==
              Inductive.positive?(env, Inductive.get_family(env, :Bad))
   end
+
+  test "an unrelated recursive global does not invent an occurrence of the family under review" do
+    env =
+      base()
+      |> Env.add_def(:Loop, {:type, 0}, {:global, :Loop})
+      |> Inductive.declare(Inductive.family(:Fresh, [], [], 0), [
+        Inductive.ctor(:mk_fresh, [{:field, {:global, :Loop}}], [])
+      ])
+
+    assert :ok == Inductive.positive?(env, Inductive.get_family(env, :Fresh))
+  end
 end

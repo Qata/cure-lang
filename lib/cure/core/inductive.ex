@@ -1305,8 +1305,9 @@ defmodule Cure.Core.Inductive do
   # and demonstrably contains no occurrence — `false` is the correct answer, not
   # a fail-open one. This is what keeps `{:app, {:global, :Neg}, Empty}` admitted
   # while `{:app, {:global, :Neg}, Bad}` is still rejected: `Bad` is found in the
-  # ARGUMENT by the structural walk, not in the opaque head. A CYCLIC alias has no
-  # δ-normal form, so it answers `true` (soundly incomplete, never unsound).
+  # ARGUMENT by the structural walk, not in the opaque head. On a cyclic global,
+  # the first traversal has already inspected the complete finite body syntax;
+  # revisiting that same body cannot reveal a previously unseen occurrence.
   defp occurs?(env, fname, term), do: occurs?(env, fname, term, MapSet.new())
 
   defp occurs?(_env, fname, {:data, fname, _ps, _is}, _seen), do: true
@@ -1317,7 +1318,13 @@ defmodule Cure.Core.Inductive do
 
   defp occurs?(env, fname, {:global, g}, seen) do
     if MapSet.member?(seen, g) do
-      true
+      # We have already inspected this global's body on the current expansion
+      # path. Re-entering it cannot reveal a new syntactic occurrence of
+      # `fname`; any such occurrence was visited before the recursive edge.
+      # Treating every value-level recursion cycle as an occurrence invents a
+      # dependency on the family under review and rejects unrelated constructor
+      # fields (notably proof indices containing recursive machine functions).
+      false
     else
       case Env.get_def(env, g) do
         %{body: body} when not is_nil(body) -> occurs?(env, fname, body, MapSet.put(seen, g))
