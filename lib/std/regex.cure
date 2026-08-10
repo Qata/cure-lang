@@ -393,25 +393,30 @@ mod Std.Regex
     [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [EndCapture()]), constraints) | finish_capture(rest)]
     [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | finish_capture(rest)]
 
+  @reducible
   fn repeat_accepting({n: Nat}, routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint)) -> List(MachineState(n)) =
     [Accepted(append_routine(routine, [EndList()]), constraints)]
 
+  @reducible
   fn repeat_destination_order({n: Nat}, routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState(n)), lazy: Bool) -> List(MachineState(n)) = pickup
     lazy -> append_states(repeat_accepting(routine, constraints), enter_repeat_with_constraints(routine, constraints, starts))
     else -> append_states(enter_repeat_with_constraints(routine, constraints, starts), repeat_accepting(routine, constraints))
 
+  @reducible
   fn repeat_destinations({n: Nat}, destinations: List(MachineState(n)), starts: List(MachineState(n)), lazy: Bool) -> List(MachineState(n)) = match destinations
     [] -> []
     [Accepted(routine, constraints) | rest] ->
       append_states(repeat_destination_order(routine, constraints, starts, lazy), repeat_destinations(rest, starts, lazy))
     [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | repeat_destinations(rest, starts, lazy)]
 
+  @reducible
   fn enter_repeat_with_constraints({n: Nat}, routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState(n))) -> List(MachineState(n)) = match starts
     [] -> []
     [Accepted(_, _) | rest] -> enter_repeat_with_constraints(routine, constraints, rest)
     [Active(state, next_routine, next_constraints) | rest] ->
       [Active(state, append_routine(routine, next_routine), append_constraints(constraints, next_constraints)) | enter_repeat_with_constraints(routine, constraints, rest)]
 
+  @reducible
   fn enter_repeat({n: Nat}, routine: List(EvidenceInstruction), starts: List(MachineState(n))) -> List(MachineState(n)) =
     enter_repeat_with_constraints(routine, [], starts)
 
@@ -453,6 +458,7 @@ mod Std.Regex
       prefer_right -> append_states(marked_right, marked_left)
       else -> append_states(marked_left, marked_right)
 
+  @reducible
   fn repeat_machine_starts({n: Nat}, starts: List(MachineState(n)), lazy: Bool) -> List(MachineState(n)) =
     let empty: List(MachineState(n)) = [Accepted([BeginList(), EndList()], [])]
     let consuming: List(MachineState(n)) = enter_repeat([BeginList()], starts)
@@ -460,6 +466,7 @@ mod Std.Regex
       lazy -> append_states(empty, consuming)
       else -> append_states(consuming, empty)
 
+  @reducible
   fn repeat_machine_next({n: Nat}, starts: List(MachineState(n)), lazy: Bool, next: (Bounded(n)) -> Char -> List(MachineState(n)), state: Bounded(n), char: Char) -> List(MachineState(n)) =
     repeat_destinations(next(state, char), starts, lazy)
 

@@ -244,6 +244,41 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
         acceptance
       )
 
+    fn predicate_repeat_acceptance_case(
+      input: List(Char),
+      lazy: Bool,
+      @erased final_evidence: List(Evidence),
+      @erased routine: List(ExtendedInstruction),
+      acceptance: MachineAcceptance(
+        1,
+        predicate_repeat_machine(accepts_a, lazy),
+        subject_initial_position(),
+        input,
+        empty_characters(),
+        final_evidence,
+        routine
+      )
+    ) -> Encodes(ListC(CharC), final_evidence, empty_evidence()) =
+      predicate_repeat_machine_acceptance_encodes(
+        accepts_a,
+        lazy,
+        input,
+        empty_characters(),
+        subject_initial_position(),
+        final_evidence,
+        routine,
+        acceptance
+      )
+
+    fn repeated_greedy() -> MachineAcceptingSearch(1, predicate_repeat_machine(accepts_a, False()), subject_initial_position(), Cons('a', Cons('a', Nil())), Nil()) =
+      search_machine_acceptance(1, predicate_repeat_machine(accepts_a, False()), subject_initial_position(), ['a', 'a'], [])
+
+    fn repeated_lazy() -> MachineAcceptingSearch(1, predicate_repeat_machine(accepts_a, True()), subject_initial_position(), Cons('a', Cons('a', Nil())), Nil()) =
+      search_machine_acceptance(1, predicate_repeat_machine(accepts_a, True()), subject_initial_position(), ['a', 'a'], [])
+
+    fn repeated_empty() -> MachineAcceptingSearch(1, predicate_repeat_machine(accepts_a, False()), subject_initial_position(), Nil(), Nil()) =
+      search_machine_acceptance(1, predicate_repeat_machine(accepts_a, False()), subject_initial_position(), [], [])
+
     fn end_machine() -> PatternMachine(0) =
       MkPatternMachine([Accepted([EmitUnit()], [subject_end_constraint()])], zero_next)
 
@@ -282,6 +317,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_right_acceptance_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_repeat_acceptance_case))
   end
 
   test "the path proof is erased from the emitted runtime" do
@@ -296,6 +332,15 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
              {:MachineAcceptingPath, [{:CharacterEvidence, ?a}], [{:Observe, ?a}, {:Regular, {:EmitChar, ?a}}]}
 
     assert apply(module, :searched_empty, []) == :NoAcceptingPath
+
+    repeated_evidence = [:EndListEvidence, {:CharacterEvidence, ?a}, {:CharacterEvidence, ?a}, :BeginListEvidence]
+
+    assert {:MachineAcceptingPath, ^repeated_evidence, _routine} = apply(module, :repeated_greedy, [])
+    assert {:MachineAcceptingPath, ^repeated_evidence, _routine} = apply(module, :repeated_lazy, [])
+
+    assert apply(module, :repeated_empty, []) ==
+             {:MachineAcceptingPath, [:EndListEvidence, :BeginListEvidence],
+              [{:Regular, :BeginList}, {:Regular, :EndList}]}
   end
 
   test "certified prefix search preserves shortest and longest choices" do
