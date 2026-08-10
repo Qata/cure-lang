@@ -106,4 +106,26 @@ defmodule Cure.Elab.CallAttemptProfileTest do
              attempt.declaration == :"CheckedCallProfileProbe#build" and attempt.callee in ["Cons", "Nil"]
            end)
   end
+
+  test "decoded literal descriptor spelling does not re-enter the character literal protocol" do
+    source = """
+    mod DescriptorCharacterProfileProbe
+      use Std.String
+      fn value() -> String = "hello"
+    """
+
+    {result, attempts} = CallAttemptProfile.run(fn -> Cure.Elab.Program.elaborate(source) end)
+
+    assert {:ok, _env} = result
+
+    assert Enum.any?(attempts, fn attempt ->
+             attempt.declaration == :"DescriptorCharacterProfileProbe#value" and
+               attempt.callee == "StringLiteral" and attempt.outcome == :success
+           end)
+
+    refute Enum.any?(attempts, fn attempt ->
+             attempt.declaration == :"DescriptorCharacterProfileProbe#value" and
+               attempt.callee == "CharacterLiteral"
+           end)
+  end
 end

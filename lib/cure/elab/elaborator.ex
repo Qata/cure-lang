@@ -3983,9 +3983,12 @@ defmodule Cure.Elab.Elaborator do
   # without depending on that record. Emit the character list itself rather than a
   # string literal: a bare string literal constructs the nominal `String`, and it
   # did so here whenever the descriptor's field was elaborated in inference mode,
-  # which is a `String` where a `List(Char)` was declared. Tagging the literal to
-  # steer the checking path only worked while every field happened to be checked.
-  defp literal_spelling(text) when is_binary(text), do: desugar_string_characters(text, [])
+  # which is a `String` where a `List(Char)` was declared. These are already-decoded
+  # descriptor characters rather than fresh authored literals, so tag them for the
+  # canonical `Char` introduction path instead of recursively invoking
+  # `ExpressibleByCharacterLiteral` once per code point.
+  defp literal_spelling(text) when is_binary(text),
+    do: desugar_string_characters(text, [], literal_protocol: :character_argument)
 
   defp nat_expected?(expected_core, ctx) do
     sig = Context.signature(ctx)
@@ -11256,9 +11259,14 @@ defmodule Cure.Elab.Elaborator do
     {:function_call, [name: name] ++ generated_meta(meta), [desugar_string_characters(value, meta)]}
   end
 
-  defp desugar_string_characters(value, meta) when is_binary(value) do
+  defp desugar_string_characters(value, meta, literal_meta \\ []) when is_binary(value) do
     loc = generated_meta(meta)
-    chars = Enum.map(String.to_charlist(value), fn cp -> {:literal, [subtype: :char] ++ loc, cp} end)
+
+    chars =
+      Enum.map(String.to_charlist(value), fn cp ->
+        {:literal, [subtype: :char] ++ literal_meta ++ loc, cp}
+      end)
+
     {:list, meta, chars}
   end
 
