@@ -412,10 +412,7 @@ mod Std.Regex.Proof
   ## right-hand state shift and the final EmitLeft/EmitRight marker.
   @reducible
   fn predicate_alternate_mode_machine(left: Char -> Bool, right: Char -> Bool, prefer_right: Bool) -> PatternMachine(plus(S(Z()), S(Z()))) =
-    MkPatternMachine(
-      alternate_machine_starts(S(Z()), Cons(predicate_machine_start(), Nil()), Cons(predicate_machine_start(), Nil()), prefer_right),
-      alternate_machine_next(S(Z()), predicate_machine_next(left), predicate_machine_next(right))
-    )
+    alternate_pattern_machine(S(Z()), predicate_pattern_machine(left), S(Z()), predicate_pattern_machine(right), prefer_right)
 
   @reducible
   fn predicate_alternate_machine(left: Char -> Bool, right: Char -> Bool) -> PatternMachine(plus(S(Z()), S(Z()))) = predicate_alternate_mode_machine(left, right, false)

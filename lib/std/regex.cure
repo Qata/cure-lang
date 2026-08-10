@@ -459,6 +459,15 @@ mod Std.Regex
       else -> append_states(marked_left, marked_right)
 
   @reducible
+  fn alternate_pattern_machine(left_count: Nat, left_machine: PatternMachine(left_count), right_count: Nat, right_machine: PatternMachine(right_count), prefer_right: Bool) -> PatternMachine(plus(left_count, right_count)) = match left_machine
+    MkPatternMachine(left_starts, left_next) -> match right_machine
+      MkPatternMachine(right_starts, right_next) ->
+        MkPatternMachine(
+          alternate_machine_starts(left_count, left_starts, right_starts, prefer_right),
+          alternate_machine_next(left_count, left_next, right_next)
+        )
+
+  @reducible
   fn repeat_machine_starts({n: Nat}, starts: List(MachineState(n)), lazy: Bool) -> List(MachineState(n)) =
     let empty: List(MachineState(n)) = [Accepted([BeginList(), EndList()], [])]
     let consuming: List(MachineState(n)) = enter_repeat([BeginList()], starts)
@@ -523,19 +532,13 @@ mod Std.Regex
       mk_pair(count, MkPatternMachine(starts, next)) ->
         %[count, group_pattern_machine(count, starts, next)]
     PatternAlternate(left, right) -> match compile_pattern(left)
-      mk_pair(left_count, MkPatternMachine(left_starts, left_next)) -> match compile_pattern(right)
-        mk_pair(right_count, MkPatternMachine(right_starts, right_next)) ->
-          %[plus(left_count, right_count), MkPatternMachine(
-            append_states(inject_left_states(mark_branch(left_starts, EmitLeft())), inject_right_states(left_count, mark_branch(right_starts, EmitRight()))),
-            alternate_machine_next(left_count, left_next, right_next)
-          )]
+      mk_pair(left_count, left_machine) -> match compile_pattern(right)
+        mk_pair(right_count, right_machine) ->
+          %[plus(left_count, right_count), alternate_pattern_machine(left_count, left_machine, right_count, right_machine, false)]
     PatternAlternateMode(left, right, prefer_right) -> match compile_pattern(left)
-      mk_pair(left_count, MkPatternMachine(left_starts, left_next)) -> match compile_pattern(right)
-        mk_pair(right_count, MkPatternMachine(right_starts, right_next)) ->
-          %[plus(left_count, right_count), MkPatternMachine(
-            alternate_machine_starts(left_count, left_starts, right_starts, prefer_right),
-            alternate_machine_next(left_count, left_next, right_next)
-          )]
+      mk_pair(left_count, left_machine) -> match compile_pattern(right)
+        mk_pair(right_count, right_machine) ->
+          %[plus(left_count, right_count), alternate_pattern_machine(left_count, left_machine, right_count, right_machine, prefer_right)]
     PatternRepeat(inner) -> match compile_pattern(inner)
       mk_pair(count, MkPatternMachine(starts, next)) ->
         %[count, MkPatternMachine(

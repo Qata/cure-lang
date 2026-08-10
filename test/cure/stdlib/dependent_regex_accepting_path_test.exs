@@ -174,6 +174,9 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     fn certified_boundary_machine_case(constraint: BoundaryConstraint) -> CertifiedPatternMachine =
       certify_boundary_pattern_machine(constraint)
 
+    fn nested_alternate_machine_case() -> PatternMachine(plus(Z(), S(Z()))) =
+      alternate_pattern_machine(Z(), empty_pattern_machine(), S(Z()), predicate_pattern_machine(accepts_a), false)
+
     fn certified_predicate_acceptance_case(
       input: List(Char),
       after_input: List(Char),
@@ -412,6 +415,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_empty_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_boundary_acceptance_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :nested_alternate_machine_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_acceptance_case))
