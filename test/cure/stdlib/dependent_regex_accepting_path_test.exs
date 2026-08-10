@@ -204,6 +204,16 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> AppendMemberOrigin(n, left, right, value) =
       append_member_origin(n, left, right, value, edge)
 
+    fn filtered_appended_state_origin_case(
+      n: Nat,
+      left: List(MachineState(n)),
+      right: List(MachineState(n)),
+      boundary: Boundary,
+      value: MachineState(n),
+      edge: ListMember(MachineState(n), value, filter_machine_states(n, append_machine_states(n, left, right), boundary))
+    ) -> FilteredAppendMemberOrigin(n, filter_machine_states(n, left, boundary), filter_machine_states(n, right, boundary), value) =
+      filtered_append_member_origin(n, left, right, boundary, value, edge)
+
     fn left_filtered_alternate_state_origin_case(
       left_count: Nat,
       right_count: Nat,
@@ -466,6 +476,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :left_alternate_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :right_alternate_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :appended_state_origin_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :filtered_appended_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :left_filtered_alternate_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :right_filtered_alternate_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
