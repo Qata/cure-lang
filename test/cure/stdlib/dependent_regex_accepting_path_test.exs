@@ -86,6 +86,24 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> Encodes(CharC, output, prior) =
       predicate_transition_routine_encodes('a', execution)
 
+    fn group_character_extended_routine_case(
+      prior: List(Evidence),
+      captures: List(CaptureFrame),
+      {output: List(Evidence)},
+      {output_captures: List(CaptureFrame)},
+      execution: ExtendedEvidenceRoutineExecution(
+        Cons(
+          Regular(BeginCapture()),
+          transition_routine('a', Cons(EmitChar('a'), Cons(EndCapture(), Nil())))
+        ),
+        prior,
+        captures,
+        output,
+        output_captures
+      )
+    ) -> Encodes(StringC, output, prior) =
+      group_character_routine_encodes('a', execution)
+
     fn predicate_path_routine_case(
       prior: List(Evidence),
       captures: List(CaptureFrame),
@@ -158,6 +176,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.get_def(env, :one_step)
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :one_step))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_extended_routine_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :group_character_extended_routine_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_path_routine_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :empty_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :boundary_acceptance_case))
