@@ -793,6 +793,8 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.total?(env, :"Std.Regex.Proof#concat_left_transition_origin")
     assert Env.total?(env, :"Std.Regex.Proof#appended_constraints_left_hold")
     assert Env.total?(env, :"Std.Regex.Proof#appended_constraints_right_hold")
+    assert Env.total?(env, :"Std.Regex.Proof#filter_active_member")
+    assert Env.total?(env, :"Std.Regex.Proof#filter_accepted_member")
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_left_acceptance")
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_left_acceptance")
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_right_acceptance")
