@@ -25,6 +25,16 @@ mod Std.Regex.Proof
   type PredicateStartsView indices (starts: List(MachineState(S(Z()))))
     PredicateStartsExact : PredicateStartsView(Cons(predicate_machine_start(), Nil()))
 
+  @reducible
+  fn boundary_accepting_destination() -> MachineState(Z()) =
+    let routine: List(EvidenceInstruction) = Cons(EmitUnit(), Nil())
+    let constraints: List(BoundaryConstraint) = Nil()
+    Accepted(routine, constraints)
+
+  type BoundaryStartsView indices (holds: Bool, starts: List(MachineState(Z())))
+    BoundaryStartsUnavailable : BoundaryStartsView(false, Nil())
+    BoundaryStartsExact : BoundaryStartsView(true, Cons(boundary_accepting_destination(), Nil()))
+
   fn impossible_list_member({item_type: Type}, {item: item_type}, {result: Type}, membership: ListMember(item_type, item, Nil())) -> result = match membership
 
   @reducible
@@ -41,6 +51,10 @@ mod Std.Regex.Proof
 
   fn predicate_starts_view(test: Char -> Bool, position: InitialPosition, input: List(Char), after_input: List(Char)) -> PredicateStartsView(initial_machine_destinations(S(Z()), predicate_pattern_machine(test), position, input, after_input)) = PredicateStartsExact()
 
+  fn boundary_starts_view(constraint: BoundaryConstraint, position: InitialPosition, after_input: List(Char)) -> BoundaryStartsView(constraints_hold(Cons(constraint, Nil()), initial_position_boundary(position, after_input)), initial_machine_destinations(Z(), boundary_pattern_machine(constraint), position, empty_characters(), after_input)) = match constraints_hold(Cons(constraint, Nil()), initial_position_boundary(position, after_input))
+    False() -> BoundaryStartsUnavailable()
+    True() -> BoundaryStartsExact()
+
   ## The nullable base case of the generalized Thompson theorem.  Unlike the
   ## predicate case, its evidence is emitted by the initial accepting edge and
   ## the accepting path consumes no input.
@@ -51,6 +65,16 @@ mod Std.Regex.Proof
           ExtendedEvidenceRegular(_, suffix) -> match suffix
             ExtendedEvidenceDone() -> EncodesUnit()
       ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn boundary_machine_acceptance_encodes(constraint: BoundaryConstraint, position: InitialPosition, after_input: List(Char), @erased final_evidence: List(Evidence), @erased routine: List(ExtendedInstruction), acceptance: MachineAcceptance(Z(), boundary_pattern_machine(constraint), position, empty_characters(), after_input, final_evidence, routine)) -> Encodes(UnitC, final_evidence, empty_evidence()) = match acceptance
+    MachineAccepted(_, _, _, _, edge, initial_execution, _, path) -> match boundary_starts_view(constraint, position, after_input)
+      BoundaryStartsUnavailable() -> impossible_list_member(edge)
+      BoundaryStartsExact() -> match edge
+        ListMemberHere() -> match path
+          AcceptingNow() -> match initial_execution
+            RoutineStep(_, after_emit) -> match after_emit
+              RoutineDone() -> EncodesUnit()
+        ListMemberThere(prior) -> impossible_list_member(prior)
 
   fn predicate_destinations_view(test: Char -> Bool, char: Char, boundary: Boundary) -> PredicateDestinationsView(test, char, boundary, machine_destinations(S(Z()), predicate_pattern_machine(test), predicate_machine_thread(), char, boundary)) = match test(char)
     False() -> PredicateRejects()

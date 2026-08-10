@@ -44,4 +44,28 @@ defmodule Cure.Elab.SiblingContextRefinementTest do
     assert {:ok, _env} = Program.elaborate(source)
   end
 
+  test "a sibling refined by an outer match remains well-scoped in a nested indexed match" do
+    source = """
+    mod NestedSiblingConvoy
+      type Bit = Off | On
+      type Item = A | B
+      type Bag = Empty | One
+      fn bag(bit: Bit) -> Bag = match bit
+        Off() -> Empty()
+        On() -> One()
+      type Member indices (item: Item, bag: Bag)
+        HereA : Member(A(), One())
+      type Payload indices (item: Item)
+        PayloadA : Payload(A())
+        PayloadB : Payload(B())
+      fn impossible_member({item: Item}, member: Member(item, Empty())) -> Payload(item) = match member
+      fn consume(bit: Bit, item: Item, member: Member(item, bag(bit)), payload: Payload(item), _d1: Unit, _d2: Unit, _d3: Unit, _d4: Unit, _d5: Unit) -> Payload(item) = match bit
+        Off() -> impossible_member(member)
+        On() -> match member
+          HereA() -> payload
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
 end

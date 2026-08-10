@@ -17,7 +17,15 @@ defmodule Cure.Elab.Elaborator do
   alias Cure.Elab.{CallAttemptProfile, GuardLint, MetaCtx, Rewrite, Subst, Unify}
 
   import Cure.Elab.Rewrite,
-    only: [abstract_term: 3, contains_term?: 2, mk_eq: 3, mk_refl: 1, replace_term: 3, transport_case: 4]
+    only: [
+      abstract_term: 3,
+      contains_term?: 2,
+      mk_eq: 3,
+      mk_refl: 1,
+      replace_term: 3,
+      replace_term_scoped: 3,
+      transport_case: 4
+    ]
 
   # Placeholder body for a `:case` branch the join point will fill (see
   # `join_point?/5`, `elaborate_join/6`, `wrap_join/2`). Never reaches the kernel:
@@ -5202,7 +5210,7 @@ defmodule Cure.Elab.Elaborator do
                 if variable_headed_application?(computed) do
                   expose_reducible_dependency(result_type_term, computed, ctx, env)
                 else
-                  result_type_term
+                  expose_sibling_result_indices(result_type_term, computed, ctx, env)
                 end
             end
 
@@ -6039,7 +6047,7 @@ defmodule Cure.Elab.Elaborator do
 
     gen =
       names
-      |> Enum.with_index()
+      |> visible_named_context_indices()
       |> Enum.flat_map(fn {name, i} ->
         if is_binary(name) do
           type_term = resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env)
@@ -6077,7 +6085,7 @@ defmodule Cure.Elab.Elaborator do
 
     gen =
       names
-      |> Enum.with_index()
+      |> visible_named_context_indices()
       |> Enum.flat_map(fn {name, i} ->
         if is_binary(name) and i != scrut_idx do
           type_term = resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env)
@@ -6099,6 +6107,22 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  defp visible_named_context_indices(names) do
+    names
+    |> Enum.with_index()
+    |> Enum.reduce({[], MapSet.new()}, fn
+      {name, index}, {visible, seen} when is_binary(name) ->
+        if MapSet.member?(seen, name),
+          do: {visible, seen},
+          else: {[{name, index} | visible], MapSet.put(seen, name)}
+
+      {_name, _index}, acc ->
+        acc
+    end)
+    |> elem(0)
+    |> Enum.reverse()
+  end
+
   # Normalisation deliberately keeps a certified global folded when unfolding it
   # would merely expose a case stuck on a neutral (Core.Normalise's A6 rule). That
   # is the right canonical-form policy, but it can hide a convoy dependency from
@@ -6115,6 +6139,26 @@ defmodule Cure.Elab.Elaborator do
   defp expose_reducible_dependency(type_term, target, ctx, env) do
     do_expose_reducible_dependency(type_term, target, ctx, env, MapSet.new(), 32)
   end
+
+  defp expose_sibling_result_indices({:data, name, params, indices} = result, target, ctx, env) do
+    if Enum.any?(indices, &contains_term?(&1, target)) do
+      indices =
+        Enum.map(indices, fn index ->
+          if contains_term?(index, target) do
+            index
+          else
+            exposed = expose_reducible_dependency(index, target, ctx, env)
+            if contains_term?(exposed, target), do: exposed, else: index
+          end
+        end)
+
+      {:data, name, params, indices}
+    else
+      result
+    end
+  end
+
+  defp expose_sibling_result_indices(result, _target, _ctx, _env), do: result
 
   defp variable_headed_application?({:app, function, _argument}),
     do: variable_headed_application?(function)
@@ -6453,12 +6497,7 @@ defmodule Cure.Elab.Elaborator do
          ctx,
          env
        ) do
-    generalized_result =
-      siblings
-      |> Enum.reverse()
-      |> Enum.reduce(result_type_term, fn %{type_term: domain}, codomain ->
-        {:pi, Grade.unrestricted(), domain, Subst.shift(codomain, 1, 0)}
-      end)
+    generalized_result = generalize_sibling_telescope(siblings, result_type_term)
 
     motive = build_motive(dname, index_tele, param_terms, idx_terms, scrut_term, generalized_result)
 
@@ -6479,6 +6518,47 @@ defmodule Cure.Elab.Elaborator do
       applied = Enum.reduce(siblings, case_term, fn %{index: idx}, acc -> {:app, acc, {:var, idx}} end)
       {:ok, applied}
     end
+  end
+
+  # Move a selected slice of the ambient context into a dependent Π telescope.
+  # `siblings` is outermost-first (descending ambient de Bruijn index). A later
+  # sibling may therefore mention an earlier one; each domain is generalized
+  # only over the binders already introduced, while the result is generalized
+  # over the whole slice. The former implementation merely shifted the codomain
+  # once per sibling and copied every domain unchanged, which was valid only for
+  # an independent set and left computed convoy occurrences in sibling domains
+  # in the outer frame. Once motive abstraction crossed those Πs, evaluation
+  # could reify the stale references as negative indices.
+  defp generalize_sibling_telescope(siblings, result_type_term) do
+    m = length(siblings)
+
+    result_rebind =
+      siblings
+      |> Enum.with_index()
+      |> Map.new(fn {%{index: original}, position} -> {original, m - 1 - position} end)
+
+    body = generalize(result_type_term, result_rebind, m, 0)
+
+    domains =
+      siblings
+      |> Enum.with_index()
+      |> Enum.map(fn {%{type_term: domain}, position} ->
+        preceding_rebind =
+          siblings
+          |> Enum.take(position)
+          |> Enum.with_index()
+          |> Map.new(fn {%{index: original}, prior_position} ->
+            {original, position - 1 - prior_position}
+          end)
+
+        generalize(domain, preceding_rebind, position, 0)
+      end)
+
+    domains
+    |> Enum.reverse()
+    |> Enum.reduce(body, fn domain, codomain ->
+      {:pi, Grade.unrestricted(), domain, codomain}
+    end)
   end
 
   # Motive-generalization branches (single sibling, no proof). Each branch binds the
@@ -6530,16 +6610,19 @@ defmodule Cure.Elab.Elaborator do
     ctor_term = branch_constructor_term(cname, arity)
     motive_shifted = Subst.shift(motive, arity, 0)
     # applied = Π(s₁: H₁[e↦pat]) … Π(sₘ: Hₘ[e↦pat]). G[e↦pat]
-    motive_application =
-      if Map.get(cfg, :indexed_motive?, false) do
-        Enum.reduce(result_indices ++ [ctor_term], motive_shifted, fn argument, function ->
-          {:app, function, argument}
-        end)
-      else
-        {:app, motive_shifted, ctor_term}
-      end
+    motive_arguments =
+      if Map.get(cfg, :indexed_motive?, false),
+        do: result_indices ++ [ctor_term],
+        else: [ctor_term]
 
-    applied = Kernel.normalize(branch_ctx0, motive_application)
+    # Motives constructed above are explicit λ-spines. Instantiate that spine
+    # structurally instead of evaluating and reifying the whole application.
+    # Reification under the still-unintroduced sibling Πs changes levels back to
+    # indices in the wrong frame; with several siblings that used to manufacture
+    # negative indices. Binder-aware substitution performs the same β-step while
+    # preserving the frame in which every sibling domain was authored.
+    {_motive_domains, motive_body} = peel_lams(motive_shifted, length(motive_arguments), [])
+    applied = Subst.instantiate(motive_body, motive_arguments)
 
     # Peel one Π per sibling, extending the branch context and rebinding each
     # refined sibling under its original name (so the arm body reads the refined
@@ -6547,8 +6630,14 @@ defmodule Cure.Elab.Elaborator do
     # pairs to wrap the body in the matching λ-nest.
     {branch_ctx, branch_names, cod, doms_rev} =
       Enum.reduce(snames, {branch_ctx0, branch_names0, applied, []}, fn sname, {c, ns, ty, acc} ->
-        {:pi, g, dom_term, cod_ty} = ty
+        # `applied` is the structurally instantiated body of the motive we built,
+        # so these Πs are already exposed. Evaluating the whole Π just to inspect
+        # its head reifies its codomain before this binder has been added to `c`,
+        # changing neutral levels into negative indices. Peel it syntactically.
+        {:pi, g, raw_dom_term, cod_ty} = ty
+        dom_term = Kernel.normalize(c, raw_dom_term)
         dom_value = Eval.eval(dom_term, Context.env(c))
+
         {Context.extend(c, dom_value), [sname | ns], cod_ty, [{g, dom_term} | acc]}
       end)
 
@@ -6630,7 +6719,7 @@ defmodule Cure.Elab.Elaborator do
 
         {computed, pos}, {rt, acc} ->
           sentinel = sentinel_base + pos
-          {replace_term(rt, computed, {:var, sentinel}), Map.put(acc, sentinel, k - pos)}
+          {replace_term_scoped(rt, computed, {:var, sentinel}), Map.put(acc, sentinel, k - pos)}
       end)
 
     # The scrutinee VALUE rebinds to the motive's last binder `x`. A variable
@@ -6648,7 +6737,7 @@ defmodule Cure.Elab.Elaborator do
 
         computed ->
           sentinel = sentinel_base + k
-          {replace_term(result_type_term, computed, {:var, sentinel}), Map.put(rebind, sentinel, 0)}
+          {replace_term_scoped(result_type_term, computed, {:var, sentinel}), Map.put(rebind, sentinel, 0)}
       end
 
     body = generalize(result_type_term, rebind, k + 1, 0)

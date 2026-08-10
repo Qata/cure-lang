@@ -182,6 +182,45 @@ defmodule Cure.Elab.Rewrite do
   def replace_term(term, target, replacement),
     do: rebuild(term, Enum.map(children(term), &replace_term(&1, target, replacement)))
 
+  @doc """
+  Replace a term beneath binders, shifting the target and replacement with the
+  binder depth. Use this when the searched term originates in an outer context
+  but the containing term may include Π/λ/case binders.
+  """
+  def replace_term_scoped(term, target, replacement),
+    do: do_replace_term_scoped(term, target, replacement)
+
+  defp do_replace_term_scoped(term, target, replacement) when term == target,
+    do: replacement
+
+  defp do_replace_term_scoped({:pi, grade, domain, codomain}, target, replacement) do
+    {:pi, grade, do_replace_term_scoped(domain, target, replacement),
+     do_replace_term_scoped(codomain, Subst.shift(target, 1, 0), Subst.shift(replacement, 1, 0))}
+  end
+
+  defp do_replace_term_scoped({:lam, grade, domain, body}, target, replacement) do
+    {:lam, grade, do_replace_term_scoped(domain, target, replacement),
+     do_replace_term_scoped(body, Subst.shift(target, 1, 0), Subst.shift(replacement, 1, 0))}
+  end
+
+  defp do_replace_term_scoped({:case, scrutinee, motive, branches}, target, replacement) do
+    {:case, do_replace_term_scoped(scrutinee, target, replacement), do_replace_term_scoped(motive, target, replacement),
+     Enum.map(branches, fn {constructor, arity, body} ->
+       {constructor, arity,
+        do_replace_term_scoped(
+          body,
+          Subst.shift(target, arity, 0),
+          Subst.shift(replacement, arity, 0)
+        )}
+     end)}
+  end
+
+  defp do_replace_term_scoped(term, target, replacement) when is_list(term),
+    do: Enum.map(term, &do_replace_term_scoped(&1, target, replacement))
+
+  defp do_replace_term_scoped(term, target, replacement),
+    do: rebuild(term, Enum.map(children(term), &do_replace_term_scoped(&1, target, replacement)))
+
   def abstract_term(term, target, depth) when term == target, do: {:var, depth}
   def abstract_term({:var, index}, _target, depth) when index >= depth, do: {:var, index + 1}
   def abstract_term({:var, _} = variable, _target, _depth), do: variable

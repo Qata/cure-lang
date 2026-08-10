@@ -112,6 +112,16 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> Encodes(UnitC, output, prior) =
       empty_machine_acceptance_encodes(subject_initial_position(), [], prior, captures, acceptance, execution)
 
+    fn boundary_acceptance_case(
+      constraint: BoundaryConstraint,
+      position: InitialPosition,
+      after_input: List(Char),
+      @erased final_evidence: List(Evidence),
+      @erased routine: List(ExtendedInstruction),
+      acceptance: MachineAcceptance(0, boundary_pattern_machine(constraint), position, empty_characters(), after_input, final_evidence, routine)
+    ) -> Encodes(UnitC, final_evidence, empty_evidence()) =
+      boundary_machine_acceptance_encodes(constraint, position, after_input, final_evidence, routine, acceptance)
+
     fn predicate_acceptance_case(
       @erased final_evidence: List(Evidence),
       @erased routine: List(ExtendedInstruction),
@@ -150,6 +160,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_extended_routine_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_path_routine_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :empty_acceptance_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :boundary_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_acceptance_case))
   end
 

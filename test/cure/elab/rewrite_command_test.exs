@@ -23,4 +23,25 @@ defmodule Cure.Elab.RewriteCommandTest do
 
     assert [%Rewrite.Occurrence{number: 1, traversal_path: [1, 1]}] = Rewrite.occurrences(goal, target)
   end
+
+  test "scoped replacement follows a target beneath dependent binders" do
+    target = {:app, {:global, :f}, {:var, 0}}
+
+    term =
+      {:pi, Grade.unrestricted(), {:int_type}, {:app, {:global, :uses}, {:app, {:global, :f}, {:var, 1}}}}
+
+    assert Rewrite.replace_term_scoped(term, target, {:var, 7}) ==
+             {:pi, Grade.unrestricted(), {:int_type}, {:app, {:global, :uses}, {:var, 8}}}
+  end
+
+  test "scoped replacement follows constructor branch arity" do
+    target = {:app, {:global, :f}, {:var, 0}}
+
+    term =
+      {:case, {:var, 0}, {:global, :motive},
+       [{:SomeCtor, 2, {:app, {:global, :uses}, {:app, {:global, :f}, {:var, 2}}}}]}
+
+    assert Rewrite.replace_term_scoped(term, target, {:var, 5}) ==
+             {:case, {:var, 0}, {:global, :motive}, [{:SomeCtor, 2, {:app, {:global, :uses}, {:var, 7}}}]}
+  end
 end
