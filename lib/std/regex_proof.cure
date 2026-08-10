@@ -549,6 +549,34 @@ mod Std.Regex.Proof
     Cons(Active(state, routine, constraints), rest) -> filtered_active_cons_origin(n, state, routine, constraints, rest, boundary, filtered, edge)
     Cons(Accepted(routine, constraints), rest) -> filtered_accepted_cons_origin(n, routine, constraints, rest, boundary, filtered, edge)
 
+  fn impossible_false_is_true({a: Type}, equality: Equivalent(Bool, False(), True())) -> a = match equality
+    reflexive() -> impossible
+
+  fn and_true_left(a: Bool, b: Bool, equality: Equivalent(Bool, a and b, True())) -> Equivalent(Bool, a, True()) = match a
+    True() -> reflexive(True())
+    False() -> impossible_false_is_true(equality)
+
+  fn and_true_right(a: Bool, b: Bool, equality: Equivalent(Bool, a and b, True())) -> Equivalent(Bool, b, True()) = match a
+    True() -> equality
+    False() -> impossible_false_is_true(equality)
+
+  fn and_associative(a: Bool, b: Bool, c: Bool) -> Equivalent(Bool, a and (b and c), (a and b) and c) = match a
+    True() -> reflexive(b and c)
+    False() -> reflexive(False())
+
+  fn transport_equivalent_source({a: Type}, x: a, y: a, z: a, xy: Equivalent(a, x, y), xz: Equivalent(a, x, z)) -> Equivalent(a, y, z) = match xy
+    reflexive() -> xz
+
+  fn constraints_hold_append(left: List(BoundaryConstraint), right: List(BoundaryConstraint), boundary: Boundary) -> Equivalent(Bool, constraints_hold(append_constraints(left, right), boundary), constraints_hold(left, boundary) and constraints_hold(right, boundary)) = match left
+    Nil() -> reflexive(constraints_hold(right, boundary))
+    Cons(head, rest) -> rewrite constraints_hold_append(rest, right, boundary) in and_associative(constraint_holds(head, boundary), constraints_hold(rest, boundary), constraints_hold(right, boundary))
+
+  fn appended_constraints_left_hold(left: List(BoundaryConstraint), right: List(BoundaryConstraint), boundary: Boundary, equality: Equivalent(Bool, constraints_hold(append_constraints(left, right), boundary), True())) -> Equivalent(Bool, constraints_hold(left, boundary), True()) =
+    and_true_left(constraints_hold(left, boundary), constraints_hold(right, boundary), transport_equivalent_source(constraints_hold(append_constraints(left, right), boundary), constraints_hold(left, boundary) and constraints_hold(right, boundary), True(), constraints_hold_append(left, right, boundary), equality))
+
+  fn appended_constraints_right_hold(left: List(BoundaryConstraint), right: List(BoundaryConstraint), boundary: Boundary, equality: Equivalent(Bool, constraints_hold(append_constraints(left, right), boundary), True())) -> Equivalent(Bool, constraints_hold(right, boundary), True()) =
+    and_true_right(constraints_hold(left, boundary), constraints_hold(right, boundary), transport_equivalent_source(constraints_hold(append_constraints(left, right), boundary), constraints_hold(left, boundary) and constraints_hold(right, boundary), True(), constraints_hold_append(left, right, boundary), equality))
+
   type FilteredContinueWithRightStateOrigin(left_count: Nat, right_count: Nat, left_states: List(MachineState(left_count)), right_starts: List(MachineState(right_count)), boundary: Boundary) indices (filtered: MachineState(plus(left_count, right_count)))
     FilteredContinueLeftActiveOrigin : (state: Bounded(left_count)) -> (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(left_count), Active(state, routine, constraints), left_states)) -> (holds: Equivalent(Bool, constraints_hold(constraints, boundary), True())) -> FilteredContinueWithRightStateOrigin(left_count, right_count, left_states, right_starts, boundary, Active(inject_alternate_left(left_count, right_count, state), routine, Nil()))
     FilteredContinueEnteredRightActiveOrigin : (left_routine: List(EvidenceInstruction)) -> (left_constraints: List(BoundaryConstraint)) -> (left_edge: ListMember(MachineState(left_count), Accepted(left_routine, left_constraints), left_states)) -> (state: Bounded(right_count)) -> (right_routine: List(EvidenceInstruction)) -> (right_constraints: List(BoundaryConstraint)) -> (right_edge: ListMember(MachineState(right_count), Active(state, right_routine, right_constraints), right_starts)) -> (holds: Equivalent(Bool, constraints_hold(append_constraints(left_constraints, right_constraints), boundary), True())) -> FilteredContinueWithRightStateOrigin(left_count, right_count, left_states, right_starts, boundary, Active(inject_alternate_right(left_count, right_count, state), append_routine(left_routine, right_routine), Nil()))
