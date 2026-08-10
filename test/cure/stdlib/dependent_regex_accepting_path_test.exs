@@ -177,6 +177,24 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     fn nested_alternate_machine_case() -> PatternMachine(plus(Z(), S(Z()))) =
       alternate_pattern_machine(Z(), empty_pattern_machine(), S(Z()), predicate_pattern_machine(accepts_a), false)
 
+    fn left_alternate_state_origin_case(
+      left_count: Nat,
+      right_count: Nat,
+      states: List(MachineState(left_count)),
+      combined: MachineState(plus(left_count, right_count)),
+      edge: ListMember(MachineState(plus(left_count, right_count)), combined, alternate_left_states(left_count, right_count, states, EmitLeft()))
+    ) -> LeftMarkedStateOrigin(left_count, right_count, EmitLeft(), states, combined) =
+      left_marked_state_origin(left_count, right_count, states, EmitLeft(), combined, edge)
+
+    fn right_alternate_state_origin_case(
+      left_count: Nat,
+      right_count: Nat,
+      states: List(MachineState(right_count)),
+      combined: MachineState(plus(left_count, right_count)),
+      edge: ListMember(MachineState(plus(left_count, right_count)), combined, alternate_right_states(left_count, right_count, states, EmitRight()))
+    ) -> RightMarkedStateOrigin(left_count, right_count, EmitRight(), states, combined) =
+      right_marked_state_origin(left_count, right_count, states, EmitRight(), combined, edge)
+
     fn certified_predicate_acceptance_case(
       input: List(Char),
       after_input: List(Char),
@@ -416,6 +434,8 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_empty_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :certified_boundary_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :nested_alternate_machine_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :left_alternate_state_origin_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :right_alternate_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_acceptance_case))

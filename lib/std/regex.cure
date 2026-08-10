@@ -349,6 +349,14 @@ mod Std.Regex
     [Active(state, routine, constraints) | rest] -> [Active(inject_left(state), routine, constraints) | inject_left_states(rest)]
 
   @reducible
+  fn inject_alternate_left(left_count: Nat, right_count: Nat, state: Bounded(left_count)) -> Bounded(plus(left_count, right_count)) =
+    inject_left(state)
+
+  @reducible
+  fn inject_alternate_right(left_count: Nat, right_count: Nat, state: Bounded(right_count)) -> Bounded(plus(left_count, right_count)) =
+    inject_right(left_count, state)
+
+  @reducible
   fn inject_right_states(left_count: Nat, {right_count: Nat}, states: List(MachineState(right_count))) -> List(MachineState(plus(left_count, right_count))) = match states
     [] -> []
     [Accepted(routine, constraints) | rest] -> [Accepted(routine, constraints) | inject_right_states(left_count, rest)]
@@ -382,6 +390,18 @@ mod Std.Regex
     [] -> []
     [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [marker]), constraints) | mark_branch(rest, marker)]
     [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | mark_branch(rest, marker)]
+
+  @reducible
+  fn append_branch_marker(routine: List(EvidenceInstruction), marker: EvidenceInstruction) -> List(EvidenceInstruction) =
+    append_routine(routine, Cons(marker, Nil()))
+
+  @reducible
+  fn alternate_left_states(left_count: Nat, right_count: Nat, states: List(MachineState(left_count)), marker: EvidenceInstruction) -> List(MachineState(plus(left_count, right_count))) =
+    inject_left_states(mark_branch(states, marker))
+
+  @reducible
+  fn alternate_right_states(left_count: Nat, right_count: Nat, states: List(MachineState(right_count)), marker: EvidenceInstruction) -> List(MachineState(plus(left_count, right_count))) =
+    inject_right_states(left_count, mark_branch(states, marker))
 
   fn prefix_routine({n: Nat}, instruction: EvidenceInstruction, states: List(MachineState(n))) -> List(MachineState(n)) = match states
     [] -> []

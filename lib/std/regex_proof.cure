@@ -255,6 +255,45 @@ mod Std.Regex.Proof
           RoutineDone() -> predicate_arbitrary_path_encodes(test, input, after_input, final_evidence, path_routine, path)
         ListMemberThere(prior) -> impossible_list_member(prior)
 
+  ## Invert the two list transformations used by Thompson alternation.  The
+  ## result retains the exact child edge and records whether the combined state
+  ## is an injected active state or an accepting state whose routine has the
+  ## branch marker appended.  Recursive path projection uses these relations
+  ## instead of guessing from a combined state's runtime representation.
+  type LeftMarkedStateOrigin(left_count: Nat, right_count: Nat, marker: EvidenceInstruction, states: List(MachineState(left_count))) indices (combined: MachineState(plus(left_count, right_count)))
+    LeftMarkedActiveOrigin : (state: Bounded(left_count)) -> (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(left_count), Active(state, routine, constraints), states)) -> LeftMarkedStateOrigin(left_count, right_count, marker, states, Active(inject_alternate_left(left_count, right_count, state), routine, constraints))
+    LeftMarkedAcceptedOrigin : (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(left_count), Accepted(routine, constraints), states)) -> LeftMarkedStateOrigin(left_count, right_count, marker, states, Accepted(append_branch_marker(routine, marker), constraints))
+
+  type RightMarkedStateOrigin(left_count: Nat, right_count: Nat, marker: EvidenceInstruction, states: List(MachineState(right_count))) indices (combined: MachineState(plus(left_count, right_count)))
+    RightMarkedActiveOrigin : (state: Bounded(right_count)) -> (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(right_count), Active(state, routine, constraints), states)) -> RightMarkedStateOrigin(left_count, right_count, marker, states, Active(inject_alternate_right(left_count, right_count, state), routine, constraints))
+    RightMarkedAcceptedOrigin : (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(right_count), Accepted(routine, constraints), states)) -> RightMarkedStateOrigin(left_count, right_count, marker, states, Accepted(append_branch_marker(routine, marker), constraints))
+
+  fn left_marked_state_origin(left_count: Nat, right_count: Nat, states: List(MachineState(left_count)), marker: EvidenceInstruction, combined: MachineState(plus(left_count, right_count)), edge: ListMember(MachineState(plus(left_count, right_count)), combined, alternate_left_states(left_count, right_count, states, marker))) -> LeftMarkedStateOrigin(left_count, right_count, marker, states, combined) = match states
+    Nil() -> impossible_list_member(edge)
+    Cons(Active(state, routine, constraints), rest) -> match edge
+      ListMemberHere() -> LeftMarkedActiveOrigin(state, routine, constraints, ListMemberHere())
+      ListMemberThere(prior) -> match left_marked_state_origin(left_count, right_count, rest, marker, combined, prior)
+        LeftMarkedActiveOrigin(origin_state, origin_routine, origin_constraints, origin_edge) -> LeftMarkedActiveOrigin(origin_state, origin_routine, origin_constraints, ListMemberThere(origin_edge))
+        LeftMarkedAcceptedOrigin(origin_routine, origin_constraints, origin_edge) -> LeftMarkedAcceptedOrigin(origin_routine, origin_constraints, ListMemberThere(origin_edge))
+    Cons(Accepted(routine, constraints), rest) -> match edge
+      ListMemberHere() -> LeftMarkedAcceptedOrigin(routine, constraints, ListMemberHere())
+      ListMemberThere(prior) -> match left_marked_state_origin(left_count, right_count, rest, marker, combined, prior)
+        LeftMarkedActiveOrigin(origin_state, origin_routine, origin_constraints, origin_edge) -> LeftMarkedActiveOrigin(origin_state, origin_routine, origin_constraints, ListMemberThere(origin_edge))
+        LeftMarkedAcceptedOrigin(origin_routine, origin_constraints, origin_edge) -> LeftMarkedAcceptedOrigin(origin_routine, origin_constraints, ListMemberThere(origin_edge))
+
+  fn right_marked_state_origin(left_count: Nat, right_count: Nat, states: List(MachineState(right_count)), marker: EvidenceInstruction, combined: MachineState(plus(left_count, right_count)), edge: ListMember(MachineState(plus(left_count, right_count)), combined, alternate_right_states(left_count, right_count, states, marker))) -> RightMarkedStateOrigin(left_count, right_count, marker, states, combined) = match states
+    Nil() -> impossible_list_member(edge)
+    Cons(Active(state, routine, constraints), rest) -> match edge
+      ListMemberHere() -> RightMarkedActiveOrigin(state, routine, constraints, ListMemberHere())
+      ListMemberThere(prior) -> match right_marked_state_origin(left_count, right_count, rest, marker, combined, prior)
+        RightMarkedActiveOrigin(origin_state, origin_routine, origin_constraints, origin_edge) -> RightMarkedActiveOrigin(origin_state, origin_routine, origin_constraints, ListMemberThere(origin_edge))
+        RightMarkedAcceptedOrigin(origin_routine, origin_constraints, origin_edge) -> RightMarkedAcceptedOrigin(origin_routine, origin_constraints, ListMemberThere(origin_edge))
+    Cons(Accepted(routine, constraints), rest) -> match edge
+      ListMemberHere() -> RightMarkedAcceptedOrigin(routine, constraints, ListMemberHere())
+      ListMemberThere(prior) -> match right_marked_state_origin(left_count, right_count, rest, marker, combined, prior)
+        RightMarkedActiveOrigin(origin_state, origin_routine, origin_constraints, origin_edge) -> RightMarkedActiveOrigin(origin_state, origin_routine, origin_constraints, ListMemberThere(origin_edge))
+        RightMarkedAcceptedOrigin(origin_routine, origin_constraints, origin_edge) -> RightMarkedAcceptedOrigin(origin_routine, origin_constraints, ListMemberThere(origin_edge))
+
   type CertifiedPatternMachine = CertifiedEmptyMachine | CertifiedBoundaryMachine(BoundaryConstraint) | CertifiedPredicateMachine(Char -> Bool)
 
   @reducible
