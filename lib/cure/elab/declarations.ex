@@ -2632,12 +2632,14 @@ defmodule Cure.Elab.Declarations do
           result_ctx = build_context(env, param_tele ++ impl_tele ++ expl_tele)
 
           with {:ok, result_params} <- map_idx_to_core(param_exprs, full_scope, fam, env, result_ctx),
-               {:ok, raw_result_indices} <- map_idx_to_core(index_exprs, full_scope, fam, env, result_ctx),
                {:ok, result_indices} <-
-                 check_compact_result_indices(
-                   raw_result_indices,
+                 lower_constructor_result_indices(
+                   index_exprs,
                    result_params,
                    index_tele,
+                   full_scope,
+                   fam,
+                   env,
                    result_ctx
                  ) do
             # Inferred index variables are erased (quantity 0); every
@@ -2672,38 +2674,32 @@ defmodule Cure.Elab.Declarations do
   end
 
   # Constructor result indices are checking positions, not inference positions.
-  # `idx_to_core/5` necessarily lowers an unadorned numeral to compact Nat before
-  # it knows the family telescope. Revisit those numerals against the instantiated
-  # index domain and let the kernel decide whether the compact Bounded introduction
-  # rule applies. This is registry/type directed: Nat indices remain Nat, Bounded
-  # aliases (including Char) become `bounded_lit`, and range failures retain the
-  # kernel's structured diagnostic.
-  defp check_compact_result_indices(indices, result_params, index_tele, ctx) do
-    indices
+  # Lower every surface index left-to-right against the instantiated family
+  # telescope. This is the single construction site for compact Bounded literals,
+  # omitted constructor implicits, and nested constructor values: lowering an
+  # entire index without its expected domain loses the field expectations needed
+  # by values such as `Cons(Frame(Nil(), Nil()), Nil())`.
+  defp lower_constructor_result_indices(
+         expressions,
+         result_params,
+         index_tele,
+         scope,
+         fam,
+         env,
+         ctx
+       ) do
+    expressions
     |> Enum.zip(index_tele)
-    |> Enum.reduce_while({:ok, []}, fn {index, {_name, index_type}}, {:ok, checked} ->
+    |> Enum.reduce_while({:ok, []}, fn {expression, {_name, index_type}}, {:ok, checked} ->
       actuals = result_params ++ checked
-      expected_term = Subst.instantiate(index_type, actuals)
-      expected = Eval.eval(expected_term, Context.env(ctx))
+      expected = Subst.instantiate(index_type, actuals)
 
-      case check_compact_result_index(index, expected, ctx) do
+      case idx_to_core_expected(expression, expected, scope, fam, env, ctx) do
         {:ok, checked_index} -> {:cont, {:ok, checked ++ [checked_index]}}
         {:error, _} = error -> {:halt, error}
       end
     end)
   end
-
-  defp check_compact_result_index({:nat_lit, value} = natural, expected, ctx) do
-    bounded = {:bounded_lit, value}
-
-    case Kernel.check(ctx, bounded, expected) do
-      :ok -> {:ok, bounded}
-      {:error, {:bounded_lit_out_of_range, _value, _bound}} = error -> error
-      {:error, _not_a_bounded_domain} -> {:ok, natural}
-    end
-  end
-
-  defp check_compact_result_index(index, _expected, _ctx), do: {:ok, index}
 
   defp attach_constructor_result_context(
          {:error, {:result_type_not_family, _family} = reason},
@@ -3699,8 +3695,8 @@ defmodule Cure.Elab.Declarations do
     key = Env.resolve_key(env, env.ctors, atom)
 
     if Inductive.get_ctor(env, key) do
-      with {:ok, explicit} <- map_idx_to_core(args, scope, fam, env, ctx),
-           {:ok, term} <- complete_index_constructor(key, explicit, expected, env) do
+      with {:ok, term} <-
+             complete_index_constructor_ast(key, args, expected, scope, fam, env, ctx) do
         {:ok, term}
       else
         _ -> idx_to_core(ast, scope, fam, env, ctx)
@@ -3738,7 +3734,7 @@ defmodule Cure.Elab.Declarations do
   defp idx_to_core_expected(ast, _expected, scope, fam, env, ctx),
     do: idx_to_core(ast, scope, fam, env, ctx)
 
-  defp complete_index_constructor(cname, explicit, expected, env) do
+  defp complete_index_constructor_ast(cname, explicit, expected, scope, fam, env, ctx) do
     ctor = Inductive.get_ctor(env, cname)
     plicities = Inductive.plicities_of(ctor)
 
@@ -3746,16 +3742,7 @@ defmodule Cure.Elab.Declarations do
       pc = Inductive.param_count(env, Inductive.ctor_family(env, cname))
       {mctx, seed} = fresh_index_seed(MetaCtx.new(), pc + length(ctor.args), [])
       {params, field_seed} = Enum.split(seed, pc)
-
-      {fields, []} =
-        plicities
-        |> Enum.with_index()
-        |> Enum.map_reduce(explicit, fn
-          {:explicit, _i}, [value | rest] -> {value, rest}
-          {:implicit, i}, rest -> {Enum.at(field_seed, i), rest}
-        end)
-
-      frame = params ++ fields
+      frame = params ++ field_seed
 
       result =
         {:data, Inductive.ctor_family(env, cname),
@@ -3764,8 +3751,25 @@ defmodule Cure.Elab.Declarations do
 
       case Unify.unify(result, expected, mctx, env) do
         {:ok, solved} ->
-          values = Enum.map(fields, &Unify.zonk(&1, solved))
-          if Enum.any?(values, &index_term_has_meta?/1), do: :error, else: {:ok, {:ctor, cname, values}}
+          solved_params = Enum.map(params, &Unify.zonk(&1, solved))
+
+          with {:ok, fields, final_mctx} <-
+                 lower_index_constructor_fields(
+                   ctor.args,
+                   plicities,
+                   explicit,
+                   field_seed,
+                   solved_params,
+                   solved,
+                   scope,
+                   fam,
+                   env,
+                   ctx,
+                   []
+                 ) do
+            values = Enum.map(fields, &Unify.zonk(&1, final_mctx))
+            if Enum.any?(values, &index_term_has_meta?/1), do: :error, else: {:ok, {:ctor, cname, values}}
+          end
 
         {:error, _} ->
           :error
@@ -3774,6 +3778,98 @@ defmodule Cure.Elab.Declarations do
       :error
     end
   end
+
+  defp lower_index_constructor_fields(
+         [],
+         [],
+         [],
+         [],
+         _params,
+         mctx,
+         _scope,
+         _fam,
+         _env,
+         _ctx,
+         acc
+       ),
+       do: {:ok, Enum.reverse(acc), mctx}
+
+  defp lower_index_constructor_fields(
+         [{_name, _dom} | fields],
+         [:implicit | plicities],
+         explicit,
+         [seed | seeds],
+         params,
+         mctx,
+         scope,
+         fam,
+         env,
+         ctx,
+         acc
+       ) do
+    lower_index_constructor_fields(
+      fields,
+      plicities,
+      explicit,
+      seeds,
+      params,
+      mctx,
+      scope,
+      fam,
+      env,
+      ctx,
+      [Unify.zonk(seed, mctx) | acc]
+    )
+  end
+
+  defp lower_index_constructor_fields(
+         [{_name, dom} | fields],
+         [:explicit | plicities],
+         [ast | explicit],
+         [seed | seeds],
+         params,
+         mctx,
+         scope,
+         fam,
+         env,
+         ctx,
+         acc
+       ) do
+    prior = Enum.reverse(acc)
+    expected = dom |> Subst.instantiate(params ++ prior) |> Unify.zonk(mctx)
+
+    with {:ok, value} <- idx_to_core_expected(ast, expected, scope, fam, env, ctx),
+         {:ok, solved} <- Unify.unify(seed, value, mctx, env) do
+      lower_index_constructor_fields(
+        fields,
+        plicities,
+        explicit,
+        seeds,
+        params,
+        solved,
+        scope,
+        fam,
+        env,
+        ctx,
+        [value | acc]
+      )
+    end
+  end
+
+  defp lower_index_constructor_fields(
+         _fields,
+         _plicities,
+         _explicit,
+         _seeds,
+         _params,
+         _mctx,
+         _scope,
+         _fam,
+         _env,
+         _ctx,
+         _acc
+       ),
+       do: :error
 
   defp fresh_index_seed(mctx, 0, acc), do: {mctx, Enum.reverse(acc)}
 

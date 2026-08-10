@@ -99,6 +99,19 @@ defmodule Cure.Elab.CtorIndexFromGoalTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "nested constructors in a result index inherit every enclosing field expectation" do
+    src = """
+    mod NestedConstructorResultIndex
+      type Frame = Frame(List(Nat), List(Nat))
+
+      type FrameStack indices (frames: List(Frame))
+        EmptyFrame : FrameStack(Cons(Frame(Nil(), Nil()), Nil()))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "the trichotomy pattern (owoto returning proof-carrying GADT ctors) elaborates" do
     src = """
     mod OwotoTrichotomy
