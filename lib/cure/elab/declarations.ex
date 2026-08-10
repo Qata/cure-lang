@@ -2420,7 +2420,15 @@ defmodule Cure.Elab.Declarations do
           end
 
         type_expr ->
-          case idx_to_core(type_expr, scope, nil, env) do
+          # Parameter annotations are lowered in the context of the preceding
+          # telescope, just like return annotations are lowered in the complete
+          # parameter context. Passing `nil` here disabled the term-level
+          # implicit-application path, so a call with an erased parameter inside
+          # a dependent parameter type was emitted as a bare explicit-argument
+          # spine. A middle implicit then shifted every following argument.
+          ctx = build_context(env, tele)
+
+          case idx_to_core(type_expr, scope, nil, env, ctx) do
             {:ok, core} ->
               # A surface grade (`c :linear T`, plan slice 5) overrides the position's
               # default: an implicit defaults to `:erased`, an explicit to `ω`. `ω`
