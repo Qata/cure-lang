@@ -401,6 +401,37 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
         acceptance
       )
 
+    fn generic_predicate_alternate_acceptance_from_case(
+      left: Char -> Bool,
+      right: Char -> Bool,
+      prefer_right: Bool,
+      input: List(Char),
+      after_input: List(Char),
+      position: InitialPosition,
+      input_evidence: List(Evidence),
+      input_captures: List(CaptureFrame),
+      {final_evidence: List(Evidence)},
+      acceptance: AcceptancePathFrom(
+        plus(S(Z()), S(Z())),
+        predicate_alternate_mode_machine(left, right, prefer_right),
+        position,
+        input,
+        after_input,
+        input_evidence,
+        input_captures,
+        final_evidence
+      )
+    ) -> Encodes(ChoiceC(CharC(), CharC()), final_evidence, input_evidence) =
+      thompson_evidence_acceptance_from_encodes(
+        predicate_alternate_evidence_proof(left, right, prefer_right),
+        input,
+        after_input,
+        position,
+        input_evidence,
+        input_captures,
+        acceptance
+      )
+
     fn generic_empty_acceptance_case(
       input: List(Char),
       after_input: List(Char),
@@ -740,6 +771,12 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.total?(env, :"Std.Regex.Proof#empty_acceptance_path_from_encodes")
     assert Env.total?(env, :"Std.Regex.Proof#boundary_acceptance_path_from_encodes")
     assert Env.total?(env, :"Std.Regex.Proof#predicate_acceptance_path_from_encodes")
+    assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_left_acceptance_from")
+    assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_right_acceptance_from")
+    assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_acceptance_from")
+    assert Env.get_def(env, :"Std.Regex.Proof#thompson_evidence_acceptance_from_encodes")
+    assert Env.total?(env, :"Std.Regex.Proof#project_alternate_acceptance_from")
+    assert Env.total?(env, :"Std.Regex.Proof#thompson_evidence_acceptance_from_encodes")
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_left_acceptance")
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_left_acceptance")
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_right_acceptance")
@@ -754,6 +791,15 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(
              env,
              Env.resolve_key(env, env.defs, :generic_predicate_alternate_acceptance_case)
+           )
+
+    assert Env.certified?(
+             env,
+             Env.resolve_key(
+               env,
+               env.defs,
+               :generic_predicate_alternate_acceptance_from_case
+             )
            )
 
     assert Env.certified?(
