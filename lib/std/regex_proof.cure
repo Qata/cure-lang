@@ -1033,12 +1033,19 @@ mod Std.Regex.Proof
     ThompsonEvidenceEmpty : ThompsonEvidenceProof(UnitC(), ThompsonEmpty())
     ThompsonEvidenceBoundary : (constraint: BoundaryConstraint) -> ThompsonEvidenceProof(UnitC(), ThompsonBoundary(constraint))
     ThompsonEvidencePredicate : (test: (Char -> Bool)) -> ThompsonEvidenceProof(CharC(), ThompsonPredicate(test))
+    ThompsonEvidenceConcat : {left_shape: ShapeCode} -> {right_shape: ShapeCode} -> (left: ThompsonCompilation(left_shape)) -> (right: ThompsonCompilation(right_shape)) -> (left_proof: ThompsonEvidenceProof(left_shape, left)) -> (right_proof: ThompsonEvidenceProof(right_shape, right)) -> ThompsonEvidenceProof(PairC(left_shape, right_shape), ThompsonConcat(left, right))
     ThompsonEvidenceAlternate : {left_shape: ShapeCode} -> {right_shape: ShapeCode} -> (left: ThompsonCompilation(left_shape)) -> (right: ThompsonCompilation(right_shape)) -> (prefer_right: Bool) -> (left_proof: ThompsonEvidenceProof(left_shape, left)) -> (right_proof: ThompsonEvidenceProof(right_shape, right)) -> ThompsonEvidenceProof(ChoiceC(left_shape, right_shape), ThompsonAlternate(left, right, prefer_right))
 
   fn thompson_evidence_acceptance_from_encodes({shape: ShapeCode}, {compilation: ThompsonCompilation(shape)}, proof: ThompsonEvidenceProof(shape, compilation), input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, acceptance: AcceptancePathFrom(thompson_state_count(compilation), thompson_machine(compilation), position, input, after_input, input_evidence, input_captures, final_evidence)) -> Encodes(shape, final_evidence, input_evidence) = match proof
     ThompsonEvidenceEmpty() -> empty_acceptance_path_from_encodes(input, after_input, position, input_evidence, input_captures, acceptance)
     ThompsonEvidenceBoundary(constraint) -> boundary_acceptance_path_from_encodes(constraint, input, after_input, position, input_evidence, input_captures, acceptance)
     ThompsonEvidencePredicate(test) -> predicate_acceptance_path_from_encodes(test, input, after_input, position, input_evidence, input_captures, acceptance)
+    ThompsonEvidenceConcat(left, right, left_proof, right_proof) -> match project_concat_acceptance_from(thompson_state_count(left), thompson_machine(left), thompson_state_count(right), thompson_machine(right), position, input, after_input, input_evidence, input_captures, acceptance)
+      ProjectedConcatAcceptance(left_input, right_input, partition, left_final_evidence, left_final_captures, left_acceptance, right_final_evidence, right_acceptance, final_is_paired) -> match final_is_paired
+        reflexive() -> EncodesPair(
+          thompson_evidence_acceptance_from_encodes(right_proof, right_input, after_input, advance_initial_position(position, left_input), left_final_evidence, left_final_captures, right_acceptance),
+          thompson_evidence_acceptance_from_encodes(left_proof, left_input, append_characters(right_input, after_input), position, input_evidence, input_captures, left_acceptance)
+        )
     ThompsonEvidenceAlternate(left, right, prefer_right, left_proof, right_proof) -> match project_alternate_acceptance_from(thompson_state_count(left), thompson_machine(left), thompson_state_count(right), thompson_machine(right), prefer_right, position, input, after_input, input_evidence, input_captures, acceptance)
       mk_pair(False(), ProjectedAlternateFromLeft(left_projection)) -> match left_projection
         mk_pair(child_final_evidence, mk_pair(child_acceptance, final_is_left)) -> match final_is_left

@@ -376,6 +376,20 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
         ThompsonEvidencePredicate(right)
       )
 
+    fn predicate_concat_evidence_proof(
+      left: Char -> Bool,
+      right: Char -> Bool
+    ) -> ThompsonEvidenceProof(
+      PairC(CharC(), CharC()),
+      ThompsonConcat(ThompsonPredicate(left), ThompsonPredicate(right))
+    ) =
+      ThompsonEvidenceConcat(
+        ThompsonPredicate(left),
+        ThompsonPredicate(right),
+        ThompsonEvidencePredicate(left),
+        ThompsonEvidencePredicate(right)
+      )
+
     fn generic_predicate_alternate_acceptance_case(
       left: Char -> Bool,
       right: Char -> Bool,
@@ -824,6 +838,11 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.get_def(env, :"Std.Regex.Proof#thompson_machine_acceptance_encodes")
     assert Env.total?(env, :"Std.Regex.Proof#thompson_machine_acceptance_encodes")
     assert Map.has_key?(env.ctors, :"Std.Regex.Proof#ThompsonEvidenceBoundary")
+    assert Map.has_key?(env.ctors, :"Std.Regex.Proof#ThompsonEvidenceConcat")
+    assert Env.certified?(
+             env,
+             Env.resolve_key(env, env.defs, :predicate_concat_evidence_proof)
+           )
     assert Env.certified?(
              env,
              Env.resolve_key(env, env.defs, :generic_predicate_alternate_acceptance_case)
