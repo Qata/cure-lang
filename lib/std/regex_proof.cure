@@ -582,6 +582,18 @@ mod Std.Regex.Proof
             AcceptedPathNow() -> EncodesUnit()
       ListMemberThere(prior) -> impossible_list_member(prior)
 
+  fn boundary_acceptance_path_parts(constraint: BoundaryConstraint, input: List(Char), after_input: List(Char), position: InitialPosition, destination: MachineState(Z()), initial_evidence: List(Evidence), initial_captures: List(CaptureFrame), path_routine: List(ExtendedInstruction), {final_evidence: List(Evidence)}, edge: ListMember(MachineState(Z()), destination, initial_machine_destinations(Z(), boundary_pattern_machine(constraint), position, input, after_input)), initial_execution: RoutineExecution(machine_state_routine(Z(), destination), Nil(), Nil(), initial_evidence, initial_captures), path: AcceptingFrom(Z(), boundary_pattern_machine(constraint), input, after_input, machine_state_thread(Z(), destination), initial_evidence, initial_captures, final_evidence, path_routine)) -> Encodes(UnitC(), final_evidence, empty_evidence()) = match boundary_starts_view(constraint, position, append_characters(input, after_input))
+    BoundaryStartsUnavailable() -> impossible_list_member(edge)
+    BoundaryStartsExact() -> match edge
+      ListMemberHere() -> match initial_execution
+        RoutineStep(_, after_emit) -> match after_emit
+          RoutineDone() -> match accepted_path_view(Z(), boundary_pattern_machine(constraint), input, after_input, initial_evidence, initial_captures, final_evidence, path_routine, path)
+            AcceptedPathNow() -> EncodesUnit()
+      ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn boundary_acceptance_path_encodes(constraint: BoundaryConstraint, input: List(Char), after_input: List(Char), position: InitialPosition, {final_evidence: List(Evidence)}, acceptance: AcceptancePath(Z(), boundary_pattern_machine(constraint), position, input, after_input, final_evidence)) -> Encodes(UnitC(), final_evidence, empty_evidence()) = match acceptance
+    mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> boundary_acceptance_path_parts(constraint, input, after_input, position, destination, initial_evidence, initial_captures, path_routine, edge, initial_execution, path)
+
   fn predicate_acceptance_path_encodes(test: Char -> Bool, input: List(Char), after_input: List(Char), position: InitialPosition, {final_evidence: List(Evidence)}, acceptance: AcceptancePath(S(Z()), predicate_pattern_machine(test), position, input, after_input, final_evidence)) -> Encodes(CharC(), final_evidence, empty_evidence()) = match acceptance
     mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> match predicate_starts_view(test, position, input, after_input)
       PredicateStartsExact() -> match edge
@@ -591,11 +603,13 @@ mod Std.Regex.Proof
 
   type ThompsonEvidenceProof indices (shape: ShapeCode, compilation: ThompsonCompilation(shape))
     ThompsonEvidenceEmpty : ThompsonEvidenceProof(UnitC(), ThompsonEmpty())
+    ThompsonEvidenceBoundary : (constraint: BoundaryConstraint) -> ThompsonEvidenceProof(UnitC(), ThompsonBoundary(constraint))
     ThompsonEvidencePredicate : (test: (Char -> Bool)) -> ThompsonEvidenceProof(CharC(), ThompsonPredicate(test))
     ThompsonEvidenceAlternate : {left_shape: ShapeCode} -> {right_shape: ShapeCode} -> (left: ThompsonCompilation(left_shape)) -> (right: ThompsonCompilation(right_shape)) -> (prefer_right: Bool) -> (left_proof: ThompsonEvidenceProof(left_shape, left)) -> (right_proof: ThompsonEvidenceProof(right_shape, right)) -> ThompsonEvidenceProof(ChoiceC(left_shape, right_shape), ThompsonAlternate(left, right, prefer_right))
 
   fn thompson_evidence_acceptance_encodes({shape: ShapeCode}, {compilation: ThompsonCompilation(shape)}, proof: ThompsonEvidenceProof(shape, compilation), input: List(Char), after_input: List(Char), position: InitialPosition, {final_evidence: List(Evidence)}, acceptance: AcceptancePath(thompson_state_count(compilation), thompson_machine(compilation), position, input, after_input, final_evidence)) -> Encodes(shape, final_evidence, empty_evidence()) = match proof
     ThompsonEvidenceEmpty() -> empty_acceptance_path_encodes(input, after_input, position, acceptance)
+    ThompsonEvidenceBoundary(constraint) -> boundary_acceptance_path_encodes(constraint, input, after_input, position, acceptance)
     ThompsonEvidencePredicate(test) -> predicate_acceptance_path_encodes(test, input, after_input, position, acceptance)
     ThompsonEvidenceAlternate(left, right, prefer_right, left_proof, right_proof) -> match project_alternate_acceptance(thompson_state_count(left), thompson_machine(left), thompson_state_count(right), thompson_machine(right), prefer_right, position, input, after_input, acceptance)
       mk_pair(False(), ProjectedAlternateLeft(left_projection)) -> match left_projection

@@ -401,6 +401,51 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
         acceptance
       )
 
+    fn generic_empty_acceptance_case(
+      input: List(Char),
+      after_input: List(Char),
+      position: InitialPosition,
+      {final_evidence: List(Evidence)},
+      acceptance: AcceptancePath(
+        Z(),
+        empty_pattern_machine(),
+        position,
+        input,
+        after_input,
+        final_evidence
+      )
+    ) -> Encodes(UnitC(), final_evidence, empty_evidence()) =
+      thompson_evidence_acceptance_encodes(
+        ThompsonEvidenceEmpty(),
+        input,
+        after_input,
+        position,
+        acceptance
+      )
+
+    fn generic_boundary_acceptance_case(
+      constraint: BoundaryConstraint,
+      input: List(Char),
+      after_input: List(Char),
+      position: InitialPosition,
+      {final_evidence: List(Evidence)},
+      acceptance: AcceptancePath(
+        Z(),
+        boundary_pattern_machine(constraint),
+        position,
+        input,
+        after_input,
+        final_evidence
+      )
+    ) -> Encodes(UnitC(), final_evidence, empty_evidence()) =
+      thompson_evidence_acceptance_encodes(
+        ThompsonEvidenceBoundary(constraint),
+        input,
+        after_input,
+        position,
+        acceptance
+      )
+
     fn certified_predicate_acceptance_case(
       input: List(Char),
       after_input: List(Char),
@@ -664,9 +709,20 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_acceptance")
     assert Env.get_def(env, :"Std.Regex.Proof#thompson_evidence_acceptance_encodes")
     assert Env.total?(env, :"Std.Regex.Proof#thompson_evidence_acceptance_encodes")
+    assert Map.has_key?(env.ctors, :"Std.Regex.Proof#ThompsonEvidenceBoundary")
     assert Env.certified?(
              env,
              Env.resolve_key(env, env.defs, :generic_predicate_alternate_acceptance_case)
+           )
+
+    assert Env.certified?(
+             env,
+             Env.resolve_key(env, env.defs, :generic_empty_acceptance_case)
+           )
+
+    assert Env.certified?(
+             env,
+             Env.resolve_key(env, env.defs, :generic_boundary_acceptance_case)
            )
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
