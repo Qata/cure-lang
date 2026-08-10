@@ -234,6 +234,18 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> FilteredRightMarkedStateOrigin(left_count, right_count, EmitRight(), filter_machine_states(right_count, states, boundary), combined) =
       filtered_right_marked_state_origin(left_count, right_count, states, EmitRight(), boundary, combined, edge)
 
+    fn alternate_initial_origin_case(
+      left_count: Nat,
+      left_starts: List(MachineState(left_count)),
+      right_count: Nat,
+      right_starts: List(MachineState(right_count)),
+      prefer_right: Bool,
+      boundary: Boundary,
+      combined: MachineState(plus(left_count, right_count)),
+      edge: ListMember(MachineState(plus(left_count, right_count)), combined, filter_machine_states(plus(left_count, right_count), alternate_machine_starts(left_count, left_starts, right_starts, prefer_right), boundary))
+    ) -> AlternateInitialOrigin(left_count, right_count, filter_machine_states(left_count, left_starts, boundary), filter_machine_states(right_count, right_starts, boundary), combined) =
+      alternate_initial_origin(left_count, left_starts, right_count, right_starts, prefer_right, boundary, combined, edge)
+
     fn certified_predicate_acceptance_case(
       input: List(Char),
       after_input: List(Char),
@@ -479,6 +491,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :filtered_appended_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :left_filtered_alternate_state_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :right_filtered_alternate_state_origin_case))
+    assert Env.certified?(env, Env.resolve_key(env, env.defs, :alternate_initial_origin_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_acceptance_case))

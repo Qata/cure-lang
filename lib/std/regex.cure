@@ -334,6 +334,7 @@ mod Std.Regex
     [] -> right
     [head | rest] -> [head | append_routine(rest, right)]
 
+  @reducible
   fn append_states({n: Nat}, left: List(MachineState(n)), right: List(MachineState(n))) -> List(MachineState(n)) = match left
     [] -> right
     [head | rest] -> [head | append_states(rest, right)]
@@ -475,12 +476,15 @@ mod Std.Regex
     )
 
   @reducible
+  fn alternate_starts_order({n: Nat}, left: List(MachineState(n)), right: List(MachineState(n)), prefer_right: Bool) -> List(MachineState(n)) = match prefer_right
+    True() -> append_states(right, left)
+    False() -> append_states(left, right)
+
+  @reducible
   fn alternate_machine_starts(left_count: Nat, {right_count: Nat}, left_starts: List(MachineState(left_count)), right_starts: List(MachineState(right_count)), prefer_right: Bool) -> List(MachineState(plus(left_count, right_count))) =
     let marked_left: List(MachineState(plus(left_count, right_count))) = inject_left_states(mark_branch(left_starts, EmitLeft()))
     let marked_right: List(MachineState(plus(left_count, right_count))) = inject_right_states(left_count, mark_branch(right_starts, EmitRight()))
-    pickup
-      prefer_right -> append_states(marked_right, marked_left)
-      else -> append_states(marked_left, marked_right)
+    alternate_starts_order(marked_left, marked_right, prefer_right)
 
   @reducible
   fn alternate_pattern_machine(left_count: Nat, left_machine: PatternMachine(left_count), right_count: Nat, right_machine: PatternMachine(right_count), prefer_right: Bool) -> PatternMachine(plus(left_count, right_count)) = match left_machine
