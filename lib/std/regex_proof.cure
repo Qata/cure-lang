@@ -257,6 +257,19 @@ mod Std.Regex.Proof
     AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> impossible_list_member(edge)
     AcceptingNextAccepted(_, _, _, _, _, edge, _, _) -> impossible_list_member(edge)
 
+  fn accepted_path_final_captures(n: Nat, machine: PatternMachine(n), input: List(Char), after_input: List(Char), current_evidence: List(Evidence), captures: List(CaptureFrame), final_evidence: List(Evidence), routine: List(ExtendedInstruction), path: AcceptingFrom(n, machine, input, after_input, ThreadAccepted(), current_evidence, captures, final_evidence, routine)) -> Equivalent(List(CaptureFrame), accepting_final_captures(n, machine, input, after_input, ThreadAccepted(), current_evidence, captures, final_evidence, routine, path), captures) = match path
+    AcceptingNow() -> reflexive(captures)
+    AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> impossible_list_member(edge)
+    AcceptingNextAccepted(_, _, _, _, _, edge, _, _) -> impossible_list_member(edge)
+
+  @reducible
+  fn proof_empty_characters() -> List(Char) = Nil()
+
+  fn accepted_path_input_empty(n: Nat, machine: PatternMachine(n), input: List(Char), after_input: List(Char), current_evidence: List(Evidence), captures: List(CaptureFrame), final_evidence: List(Evidence), routine: List(ExtendedInstruction), path: AcceptingFrom(n, machine, input, after_input, ThreadAccepted(), current_evidence, captures, final_evidence, routine)) -> Equivalent(List(Char), input, proof_empty_characters()) = match path
+    AcceptingNow() -> reflexive(proof_empty_characters())
+    AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> impossible_list_member(edge)
+    AcceptingNextAccepted(_, _, _, _, _, edge, _, _) -> impossible_list_member(edge)
+
   @reducible
   fn empty_evidence() -> List(Evidence) = Nil()
 
@@ -1187,6 +1200,30 @@ mod Std.Regex.Proof
     rewrite equality in
       rewrite record_capture_frame_input(chars, saved, captures, input) in
         RecordedOpenCaptureExact()
+
+  fn empty_acceptance_captures(input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, acceptance: AcceptancePathFrom(Z(), empty_pattern_machine(), position, input, after_input, input_evidence, input_captures, final_evidence)) -> Equivalent(List(CaptureFrame), acceptance_path_final_captures(Z(), empty_pattern_machine(), position, input, after_input, input_evidence, input_captures, final_evidence, acceptance), record_capture_input(input_captures, input)) = match acceptance
+    mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> match edge
+      ListMemberHere() -> match initial_execution
+        RoutineStep(_, after_emit) -> match after_emit
+          RoutineDone() -> match path
+            AcceptingNow() -> reflexive(input_captures)
+            AcceptingNextActive(_, _, _, _, _, _, impossible_edge, _, _) -> impossible_list_member(impossible_edge)
+            AcceptingNextAccepted(_, _, _, _, _, impossible_edge, _, _) -> impossible_list_member(impossible_edge)
+      ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn boundary_acceptance_captures_parts(constraint: BoundaryConstraint, input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), destination: MachineState(Z()), initial_evidence: List(Evidence), initial_captures: List(CaptureFrame), path_routine: List(ExtendedInstruction), {final_evidence: List(Evidence)}, edge: ListMember(MachineState(Z()), destination, initial_machine_destinations(Z(), boundary_pattern_machine(constraint), position, input, after_input)), initial_execution: RoutineExecution(machine_state_routine(Z(), destination), input_evidence, input_captures, initial_evidence, initial_captures), path: AcceptingFrom(Z(), boundary_pattern_machine(constraint), input, after_input, machine_state_thread(Z(), destination), initial_evidence, initial_captures, final_evidence, path_routine)) -> Equivalent(List(CaptureFrame), accepting_final_captures(Z(), boundary_pattern_machine(constraint), input, after_input, machine_state_thread(Z(), destination), initial_evidence, initial_captures, final_evidence, path_routine, path), record_capture_input(input_captures, input)) = match boundary_starts_view(constraint, position, append_characters(input, after_input))
+    BoundaryStartsUnavailable() -> impossible_list_member(edge)
+    BoundaryStartsExact() -> match edge
+      ListMemberHere() -> match initial_execution
+        RoutineStep(_, after_emit) -> match after_emit
+          RoutineDone() -> match path
+            AcceptingNow() -> reflexive(input_captures)
+            AcceptingNextActive(_, _, _, _, _, _, impossible_edge, _, _) -> impossible_list_member(impossible_edge)
+            AcceptingNextAccepted(_, _, _, _, _, impossible_edge, _, _) -> impossible_list_member(impossible_edge)
+      ListMemberThere(prior) -> impossible_list_member(prior)
+
+  fn boundary_acceptance_captures(constraint: BoundaryConstraint, input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, acceptance: AcceptancePathFrom(Z(), boundary_pattern_machine(constraint), position, input, after_input, input_evidence, input_captures, final_evidence)) -> Equivalent(List(CaptureFrame), acceptance_path_final_captures(Z(), boundary_pattern_machine(constraint), position, input, after_input, input_evidence, input_captures, final_evidence, acceptance), record_capture_input(input_captures, input)) = match acceptance
+    mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> boundary_acceptance_captures_parts(constraint, input, after_input, position, input_evidence, input_captures, destination, initial_evidence, initial_captures, path_routine, edge, initial_execution, path)
 
   ## Structural inverses for Group's two routine transformations. These retain
   ## the original membership witness, so later projection can rebuild an inner
