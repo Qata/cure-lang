@@ -1084,6 +1084,13 @@ mod Std.Regex.Proof
     InputPartitionHere(parts_right) -> reflexive(record_capture_input(captures, parts_right))
     InputPartitionThere(char, prior) -> record_capture_partition(record_capture_char(captures, char), prior)
 
+  ## Recording input is pointwise over the capture stack. In particular, a
+  ## freshly opened head frame contains exactly the reversed consumed input,
+  ## while every enclosing frame records the same input independently.
+  fn record_capture_frame_input(chars: List(Char), saved: List(Evidence), captures: List(CaptureFrame), input: List(Char)) -> Equivalent(List(CaptureFrame), record_capture_input(Cons(CaptureFrame(chars, saved), captures), input), Cons(CaptureFrame(evidence_reverse_chars_into(input, chars), saved), record_capture_input(captures, input))) = match input
+    Nil() -> reflexive(Cons(CaptureFrame(chars, saved), captures))
+    Cons(char, rest) -> record_capture_frame_input(Cons(char, chars), saved, record_capture_char(captures, char), rest)
+
   fn thompson_evidence_acceptance_from_encodes({shape: ShapeCode}, {compilation: ThompsonCompilation(shape)}, proof: ThompsonEvidenceProof(shape, compilation), input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, acceptance: AcceptancePathFrom(thompson_state_count(compilation), thompson_machine(compilation), position, input, after_input, input_evidence, input_captures, final_evidence)) -> Encodes(shape, final_evidence, input_evidence) = match proof
     ThompsonEvidenceEmpty() -> empty_acceptance_path_from_encodes(input, after_input, position, input_evidence, input_captures, acceptance)
     ThompsonEvidenceBoundary(constraint) -> boundary_acceptance_path_from_encodes(constraint, input, after_input, position, input_evidence, input_captures, acceptance)
