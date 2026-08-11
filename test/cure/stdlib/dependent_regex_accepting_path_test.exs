@@ -794,6 +794,8 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.total?(env, :"Std.Regex.Proof#filtered_group_start_origin")
     assert Env.total?(env, :"Std.Regex.Proof#strip_begin_capture_execution")
     assert Env.total?(env, :"Std.Regex.Proof#split_end_capture_execution")
+    assert Env.total?(env, :"Std.Regex.Proof#group_initial_origin")
+    assert Env.total?(env, :"Std.Regex.Proof#group_transition_origin")
     assert Env.get_def(env, :"Std.Regex.Proof#empty_acceptance_path_from_encodes")
     assert Env.get_def(env, :"Std.Regex.Proof#boundary_acceptance_path_from_encodes")
     assert Env.get_def(env, :"Std.Regex.Proof#predicate_acceptance_path_from_encodes")

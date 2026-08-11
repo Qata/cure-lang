@@ -1166,6 +1166,12 @@ mod Std.Regex.Proof
       PrefixedActiveOrigin(_, child_routine, _, child_edge) -> GroupStartActiveOrigin(state, child_routine, constraints, child_edge, holds)
     FilteredCaptureAcceptedOrigin(prefixed_routine, constraints, prefixed_edge, holds) -> match prefix_routine_origin(BeginCapture(), starts, Accepted(prefixed_routine, constraints), prefixed_edge)
       PrefixedAcceptedOrigin(child_routine, _, child_edge) -> GroupStartAcceptedOrigin(child_routine, constraints, child_edge, holds)
+
+  fn group_initial_origin(n: Nat, starts: List(MachineState(n)), next: (Bounded(n)) -> Char -> List(MachineState(n)), position: InitialPosition, input: List(Char), after_input: List(Char), destination: MachineState(n), edge: ListMember(MachineState(n), destination, initial_machine_destinations(n, group_pattern_machine(n, starts, next), position, input, after_input))) -> FilteredGroupStartOrigin(n, starts, initial_position_boundary(position, append_characters(input, after_input)), destination) =
+    filtered_group_start_origin(n, starts, initial_position_boundary(position, append_characters(input, after_input)), destination, edge)
+
+  fn group_transition_origin(n: Nat, starts: List(MachineState(n)), next: (Bounded(n)) -> Char -> List(MachineState(n)), source: Bounded(n), char: Char, boundary: Boundary, destination: MachineState(n), edge: ListMember(MachineState(n), destination, machine_destinations(n, group_pattern_machine(n, starts, next), ThreadActive(source), char, boundary))) -> FilteredFinishCaptureOrigin(n, next(source, char), boundary, destination) =
+    filtered_finish_capture_origin(n, next(source, char), boundary, destination, edge)
   fn thompson_evidence_acceptance_from_encodes({shape: ShapeCode}, {compilation: ThompsonCompilation(shape)}, proof: ThompsonEvidenceProof(shape, compilation), input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, acceptance: AcceptancePathFrom(thompson_state_count(compilation), thompson_machine(compilation), position, input, after_input, input_evidence, input_captures, final_evidence)) -> Encodes(shape, final_evidence, input_evidence) = match proof
     ThompsonEvidenceEmpty() -> empty_acceptance_path_from_encodes(input, after_input, position, input_evidence, input_captures, acceptance)
     ThompsonEvidenceBoundary(constraint) -> boundary_acceptance_path_from_encodes(constraint, input, after_input, position, input_evidence, input_captures, acceptance)
