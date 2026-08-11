@@ -781,6 +781,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.get_def(env, :"Std.Regex.Proof#AcceptancePathFrom")
     assert Env.total?(env, :"Std.Regex.Proof#extend_routine_execution")
     assert Env.total?(env, :"Std.Regex.Proof#append_extended_routine_execution")
+    assert Env.total?(env, :"Std.Regex.Proof#split_appended_extended_routine_execution")
     assert Env.get_def(env, :"Std.Regex.Proof#accepting_path_execution")
     assert Env.total?(env, :"Std.Regex.Proof#accepting_path_execution")
     assert Env.total?(env, :"Std.Regex.Proof#accepting_final_captures")

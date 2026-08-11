@@ -70,6 +70,22 @@ mod Std.Regex.Proof
       Regular(regular) -> match left_execution
         ExtendedEvidenceRegular(_, suffix) -> ExtendedEvidenceRegular(regular, append_extended_routine_execution(rest, right, executed_evidence(execute_instruction(regular, input_evidence, input_captures)), executed_captures(execute_instruction(regular, input_evidence, input_captures)), middle_evidence, middle_captures, output_evidence, output_captures, suffix, right_execution))
 
+  ## Inverse of append_extended_routine_execution. Composite Thompson proofs use
+  ## this view to recover the exact evidence/capture boundary between child
+  ## routines without recomputing or guessing either indexed state.
+  type AppendedExtendedRoutineExecution indices (left: List(ExtendedInstruction), right: List(ExtendedInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame))
+    AppendedExtendedRoutineExecuted : (middle_evidence: List(Evidence)) -> (middle_captures: List(CaptureFrame)) -> (left_execution: ExtendedEvidenceRoutineExecution(left, input_evidence, input_captures, middle_evidence, middle_captures)) -> (right_execution: ExtendedEvidenceRoutineExecution(right, middle_evidence, middle_captures, output_evidence, output_captures)) -> AppendedExtendedRoutineExecution(left, right, input_evidence, input_captures, output_evidence, output_captures)
+
+  fn split_appended_extended_routine_execution(left: List(ExtendedInstruction), right: List(ExtendedInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), {output_evidence: List(Evidence)}, {output_captures: List(CaptureFrame)}, execution: ExtendedEvidenceRoutineExecution(append_extended_routines(left, right), input_evidence, input_captures, output_evidence, output_captures)) -> AppendedExtendedRoutineExecution(left, right, input_evidence, input_captures, output_evidence, output_captures) = match left
+    Nil() -> AppendedExtendedRoutineExecuted(input_evidence, input_captures, ExtendedEvidenceDone(), execution)
+    Cons(instruction, rest) -> match instruction
+      Observe(char) -> match execution
+        ExtendedEvidenceObserve(_, suffix) -> match split_appended_extended_routine_execution(rest, right, input_evidence, record_capture_char(input_captures, char), suffix)
+          AppendedExtendedRoutineExecuted(middle_evidence, middle_captures, left_execution, right_execution) -> AppendedExtendedRoutineExecuted(middle_evidence, middle_captures, ExtendedEvidenceObserve(char, left_execution), right_execution)
+      Regular(regular) -> match execution
+        ExtendedEvidenceRegular(_, suffix) -> match split_appended_extended_routine_execution(rest, right, executed_evidence(execute_instruction(regular, input_evidence, input_captures)), executed_captures(execute_instruction(regular, input_evidence, input_captures)), suffix)
+          AppendedExtendedRoutineExecuted(middle_evidence, middle_captures, left_execution, right_execution) -> AppendedExtendedRoutineExecuted(middle_evidence, middle_captures, ExtendedEvidenceRegular(regular, left_execution), right_execution)
+
   fn left_marker_execution_encodes({left: ShapeCode}, {right: ShapeCode}, {branch_evidence: List(Evidence)}, {rest: List(Evidence)}, {captures: List(CaptureFrame)}, @erased branch: Encodes(left, branch_evidence, rest), execution: RoutineExecution(Cons(EmitLeft(), Nil()), branch_evidence, captures, Cons(LeftEvidence(), branch_evidence), captures)) -> Encodes(ChoiceC(left, right), Cons(LeftEvidence(), branch_evidence), rest) = match execution
     RoutineStep(_, suffix) -> match suffix
       RoutineDone() -> EncodesLeft(branch)
