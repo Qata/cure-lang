@@ -6669,7 +6669,14 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_with_motivegen_branch(cname, pattern, body_expr, cfg) do
-    %{names: names, ctx: ctx, env: env, param_vals: param_vals, motive: motive, sibling_names: snames} = cfg
+    %{
+      names: names,
+      ctx: ctx,
+      env: env,
+      param_vals: param_vals,
+      motive: motive,
+      sibling_names: snames
+    } = cfg
 
     {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
 
@@ -6696,9 +6703,22 @@ defmodule Cure.Elab.Elaborator do
     motive_shifted = Subst.shift(motive, arity, 0)
     # applied = Π(s₁: H₁[e↦pat]) … Π(sₘ: Hₘ[e↦pat]). G[e↦pat]
     motive_arguments =
-      if Map.get(cfg, :indexed_motive?, false),
-        do: result_indices ++ [ctor_term],
-        else: [ctor_term]
+      if Map.get(cfg, :indexed_motive?, false) do
+        # Constructor result indices live in `params(outer) ++ args(inner)`.
+        # Applying them raw as motive arguments lets a uniform parameter slot
+        # numerically alias an unrelated outer binder in this branch frame (the
+        # Regex marker `EmitLeft` became the later `path` sibling). Instantiate
+        # those slots with the scrutinee's actual parameters through the same
+        # kernel authority used by branch unification before applying the motive.
+        Kernel.instantiate_branch_result_indices(
+          result_indices,
+          arity,
+          param_vals,
+          Context.length(ctx)
+        ) ++ [ctor_term]
+      else
+        [ctor_term]
+      end
 
     # Motives constructed above are explicit λ-spines. Instantiate that spine
     # structurally instead of evaluating and reifying the whole application.
@@ -6745,7 +6765,7 @@ defmodule Cure.Elab.Elaborator do
       inner =
         if map_size(emitted_subst) == 0,
           do: inner,
-          else: replace_branch_vars(inner, shift_subst(emitted_subst, length(snames)))
+          else: replace_emitted_branch_vars(inner, shift_subst(emitted_subst, length(snames)))
 
       # doms_rev is innermost-first; folding wraps λs₁'. … λsₘ'. inner (s₁ outermost).
       wrapped =
@@ -12793,6 +12813,43 @@ defmodule Cure.Elab.Elaborator do
        Enum.map(brs, fn {c, ar, b} -> {c, ar, replace_branch_vars(b, shift_subst(subst, ar))} end)}
 
   defp replace_branch_vars(other, _subst), do: other
+
+  # Branch unification also tells code generation which present constructor
+  # fields represent refined outer values. The branch body has already been
+  # checked against the refined motive, so this pass is computational only:
+  # rewriting type annotations a second time can corrupt an already-specialized
+  # convoy domain when an outer index is definitionally replaced by a constructor
+  # term. Keep domains, motives, and data indices exactly as checked; rewrite only
+  # positions that survive as executable Core.
+  defp replace_emitted_branch_vars({:var, i}, subst), do: replace_branch_var(i, subst, 0)
+
+  defp replace_emitted_branch_vars({:lam, g, domain, body}, subst),
+    do: {:lam, g, domain, replace_emitted_branch_vars(body, shift_subst(subst, 1))}
+
+  defp replace_emitted_branch_vars({:app, fun, arg}, subst),
+    do: {:app, replace_emitted_branch_vars(fun, subst), replace_emitted_branch_vars(arg, subst)}
+
+  defp replace_emitted_branch_vars({:ctor, name, args}, subst),
+    do: {:ctor, name, Enum.map(args, &replace_emitted_branch_vars(&1, subst))}
+
+  defp replace_emitted_branch_vars({:case, scrutinee, motive, branches}, subst) do
+    {:case, replace_emitted_branch_vars(scrutinee, subst), motive,
+     Enum.map(branches, fn {name, arity, body} ->
+       {name, arity, replace_emitted_branch_vars(body, shift_subst(subst, arity))}
+     end)}
+  end
+
+  defp replace_emitted_branch_vars({:let, g, type, value, body}, subst) do
+    {:let, g, type, replace_emitted_branch_vars(value, subst), replace_emitted_branch_vars(body, shift_subst(subst, 1))}
+  end
+
+  defp replace_emitted_branch_vars({:effect_pure, value}, subst),
+    do: {:effect_pure, replace_emitted_branch_vars(value, subst)}
+
+  defp replace_emitted_branch_vars({:effect_bind, effect, continuation}, subst),
+    do: {:effect_bind, replace_emitted_branch_vars(effect, subst), replace_emitted_branch_vars(continuation, subst)}
+
+  defp replace_emitted_branch_vars(other, _subst), do: other
 
   defp shift_subst(subst, amount) do
     Map.new(subst, fn {k, v} -> {k + amount, Subst.shift(v, amount, 0)} end)

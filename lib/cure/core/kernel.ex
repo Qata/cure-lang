@@ -1497,17 +1497,8 @@ defmodule Cure.Core.Kernel do
       # inhabited indexed family pass coverage (ex-falso). Substituting the real
       # params removes every bare param var, restoring the "r-side unknowns <
       # arity, everything else outer" disjointness the unifier relies on.
-      pc = length(scrut_params)
-
-      pmap =
-        scrut_params
-        |> Enum.with_index()
-        |> Map.new(fn {pval, p} ->
-          {arity + pc - 1 - p, pval |> Quote.reify(outer_depth) |> Term.shift(arity, 0)}
-        end)
-
       result_indices
-      |> Enum.map(&subst_params(&1, pmap, 0))
+      |> instantiate_branch_result_indices(arity, scrut_params, outer_depth)
       |> Enum.zip(scrut_indices)
       |> Enum.map(fn {r, s_val} ->
         # Coverage/branch-typing is up to DEFINITIONAL EQUALITY: unify the ctor's
@@ -1533,6 +1524,26 @@ defmodule Cure.Core.Kernel do
       end)
       |> reduce_index_pairs(%{}, arity, sig)
     end
+  end
+
+  @doc false
+  @spec instantiate_branch_result_indices(
+          [Cure.Core.Term.t()],
+          non_neg_integer(),
+          [Cure.Core.Value.t()],
+          non_neg_integer()
+        ) :: [Cure.Core.Term.t()]
+  def instantiate_branch_result_indices(result_indices, arity, scrut_params, outer_depth) do
+    pc = length(scrut_params)
+
+    pmap =
+      scrut_params
+      |> Enum.with_index()
+      |> Map.new(fn {pval, p} ->
+        {arity + pc - 1 - p, pval |> Quote.reify(outer_depth) |> Term.shift(arity, 0)}
+      end)
+
+    Enum.map(result_indices, &subst_params(&1, pmap, 0))
   end
 
   # A checked constructor can occur with every inferred leading slot present or

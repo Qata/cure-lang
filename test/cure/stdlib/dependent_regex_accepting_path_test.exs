@@ -905,6 +905,8 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.total?(env, :"Std.Regex.Proof#execute_concat_acceptance_projection")
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_left_acceptance")
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_left_acceptance")
+    assert Env.get_def(env, :"Std.Regex.Proof#alternate_left_origin_acceptance_captures")
+    assert Env.total?(env, :"Std.Regex.Proof#alternate_left_origin_acceptance_captures")
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_right_acceptance")
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_right_acceptance")
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_acceptance")
