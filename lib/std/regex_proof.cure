@@ -90,9 +90,17 @@ mod Std.Regex.Proof
     RoutineStep(_, suffix) -> match suffix
       RoutineDone() -> EncodesLeft(branch)
 
+  fn left_marker_execution_captures(input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame), execution: RoutineExecution(Cons(EmitLeft(), Nil()), input_evidence, input_captures, output_evidence, output_captures)) -> Equivalent(List(CaptureFrame), output_captures, input_captures) = match execution
+    RoutineStep(_, suffix) -> match suffix
+      RoutineDone() -> reflexive(input_captures)
+
   fn right_marker_execution_encodes({left: ShapeCode}, {right: ShapeCode}, {branch_evidence: List(Evidence)}, {rest: List(Evidence)}, {captures: List(CaptureFrame)}, @erased branch: Encodes(right, branch_evidence, rest), execution: RoutineExecution(Cons(EmitRight(), Nil()), branch_evidence, captures, Cons(RightEvidence(), branch_evidence), captures)) -> Encodes(ChoiceC(left, right), Cons(RightEvidence(), branch_evidence), rest) = match execution
     RoutineStep(_, suffix) -> match suffix
       RoutineDone() -> EncodesRight(branch)
+
+  fn right_marker_execution_captures(input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame), execution: RoutineExecution(Cons(EmitRight(), Nil()), input_evidence, input_captures, output_evidence, output_captures)) -> Equivalent(List(CaptureFrame), output_captures, input_captures) = match execution
+    RoutineStep(_, suffix) -> match suffix
+      RoutineDone() -> reflexive(input_captures)
 
   ## The proof-relevant core of MachineAcceptance. The replay certificate is an
   ## execution artifact; Thompson induction needs only the checked initial edge,
