@@ -86,6 +86,10 @@ mod Std.Regex.Proof
   typealias AcceptancePath(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char), final_evidence: List(Evidence)) = AcceptancePathFrom(n, machine, position, input, after_input, Nil(), Nil(), final_evidence)
 
   @reducible
+  fn acceptance_extended_routine(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char), input_evidence: List(Evidence), input_captures: List(CaptureFrame), final_evidence: List(Evidence), acceptance: AcceptancePathFrom(n, machine, position, input, after_input, input_evidence, input_captures, final_evidence)) -> List(ExtendedInstruction) = match acceptance
+    mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> append_extended_routines(regular_routine(machine_state_routine(n, destination)), path_routine)
+
+  @reducible
   fn accepting_final_captures(n: Nat, machine: PatternMachine(n), input: List(Char), after_input: List(Char), state: ThreadState(n), current_evidence: List(Evidence), captures: List(CaptureFrame), final_evidence: List(Evidence), routine: List(ExtendedInstruction), path: AcceptingFrom(n, machine, input, after_input, state, current_evidence, captures, final_evidence, routine)) -> List(CaptureFrame) = match input
     Nil() -> match path
       AcceptingNow() -> captures
@@ -96,6 +100,9 @@ mod Std.Regex.Proof
   type PathExecution indices (routine: List(ExtendedInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), final_evidence: List(Evidence))
     PathExecuted : (final_captures: List(CaptureFrame)) -> (execution: ExtendedEvidenceRoutineExecution(routine, input_evidence, input_captures, final_evidence, final_captures)) -> PathExecution(routine, input_evidence, input_captures, final_evidence)
 
+  type AcceptanceExecution indices (routine: List(ExtendedInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), final_evidence: List(Evidence))
+    AcceptanceExecuted : (final_captures: List(CaptureFrame)) -> (execution: ExtendedEvidenceRoutineExecution(routine, input_evidence, input_captures, final_evidence, final_captures)) -> AcceptanceExecution(routine, input_evidence, input_captures, final_evidence)
+
   fn accepting_path_execution(n: Nat, machine: PatternMachine(n), input: List(Char), after_input: List(Char), state: ThreadState(n), current_evidence: List(Evidence), captures: List(CaptureFrame), final_evidence: List(Evidence), routine: List(ExtendedInstruction), path: AcceptingFrom(n, machine, input, after_input, state, current_evidence, captures, final_evidence, routine)) -> PathExecution(routine, current_evidence, captures, final_evidence) = match input
     Nil() -> match path
       AcceptingNow() -> PathExecuted(captures, ExtendedEvidenceDone())
@@ -104,6 +111,13 @@ mod Std.Regex.Proof
         PathExecuted(final_captures, suffix_execution) -> PathExecuted(final_captures, ExtendedEvidenceObserve(char, append_extended_routine_execution(regular_routine(regular), suffix_routine, current_evidence, record_capture_char(captures, char), destination_evidence, destination_captures, final_evidence, final_captures, extend_routine_execution(regular, current_evidence, record_capture_char(captures, char), destination_evidence, destination_captures, execution), suffix_execution)))
       AcceptingNextAccepted(regular, constraints, destination_evidence, destination_captures, suffix_routine, edge, execution, suffix) -> match accepting_path_execution(n, machine, rest, after_input, ThreadAccepted(), destination_evidence, destination_captures, final_evidence, suffix_routine, suffix)
         PathExecuted(final_captures, suffix_execution) -> PathExecuted(final_captures, ExtendedEvidenceObserve(char, append_extended_routine_execution(regular_routine(regular), suffix_routine, current_evidence, record_capture_char(captures, char), destination_evidence, destination_captures, final_evidence, final_captures, extend_routine_execution(regular, current_evidence, record_capture_char(captures, char), destination_evidence, destination_captures, execution), suffix_execution)))
+
+  fn acceptance_path_execution(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char), input_evidence: List(Evidence), input_captures: List(CaptureFrame), final_evidence: List(Evidence), acceptance: AcceptancePathFrom(n, machine, position, input, after_input, input_evidence, input_captures, final_evidence)) -> AcceptanceExecution(acceptance_extended_routine(n, machine, position, input, after_input, input_evidence, input_captures, final_evidence, acceptance), input_evidence, input_captures, final_evidence) = match acceptance
+    mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> match accepting_path_execution(n, machine, input, after_input, machine_state_thread(n, destination), initial_evidence, initial_captures, final_evidence, path_routine, path)
+      PathExecuted(final_captures, path_execution) ->
+        let initial_routine = machine_state_routine(n, destination)
+        let initial_extended = extend_routine_execution(initial_routine, input_evidence, input_captures, initial_evidence, initial_captures, initial_execution)
+        AcceptanceExecuted(final_captures, append_extended_routine_execution(regular_routine(initial_routine), path_routine, input_evidence, input_captures, initial_evidence, initial_captures, final_evidence, final_captures, initial_extended, path_execution))
 
   @reducible
   fn acceptance_path_final_captures(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char), input_evidence: List(Evidence), input_captures: List(CaptureFrame), final_evidence: List(Evidence), acceptance: AcceptancePathFrom(n, machine, position, input, after_input, input_evidence, input_captures, final_evidence)) -> List(CaptureFrame) = match acceptance
