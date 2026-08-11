@@ -1091,6 +1091,43 @@ mod Std.Regex.Proof
     Nil() -> reflexive(Cons(CaptureFrame(chars, saved), captures))
     Cons(char, rest) -> record_capture_frame_input(Cons(char, chars), saved, record_capture_char(captures, char), rest)
 
+  ## Structural inverses for Group's two routine transformations. These retain
+  ## the original membership witness, so later projection can rebuild an inner
+  ## accepting edge without guessing from function-valued transition tables.
+  type PrefixRoutineOrigin(n: Nat, instruction: EvidenceInstruction, states: List(MachineState(n))) indices (prefixed: MachineState(n))
+    PrefixedActiveOrigin : (state: Bounded(n)) -> (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(n), Active(state, routine, constraints), states)) -> PrefixRoutineOrigin(n, instruction, states, Active(state, Cons(instruction, routine), constraints))
+    PrefixedAcceptedOrigin : (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(n), Accepted(routine, constraints), states)) -> PrefixRoutineOrigin(n, instruction, states, Accepted(Cons(instruction, routine), constraints))
+
+  fn prefix_routine_origin({n: Nat}, instruction: EvidenceInstruction, states: List(MachineState(n)), prefixed: MachineState(n), edge: ListMember(MachineState(n), prefixed, prefix_routine(instruction, states))) -> PrefixRoutineOrigin(n, instruction, states, prefixed) = match states
+    Nil() -> impossible_list_member(edge)
+    Cons(Active(state, routine, constraints), rest) -> match edge
+      ListMemberHere() -> PrefixedActiveOrigin(state, routine, constraints, ListMemberHere())
+      ListMemberThere(prior) -> match prefix_routine_origin(instruction, rest, prefixed, prior)
+        PrefixedActiveOrigin(child_state, child_routine, child_constraints, child_edge) -> PrefixedActiveOrigin(child_state, child_routine, child_constraints, ListMemberThere(child_edge))
+        PrefixedAcceptedOrigin(child_routine, child_constraints, child_edge) -> PrefixedAcceptedOrigin(child_routine, child_constraints, ListMemberThere(child_edge))
+    Cons(Accepted(routine, constraints), rest) -> match edge
+      ListMemberHere() -> PrefixedAcceptedOrigin(routine, constraints, ListMemberHere())
+      ListMemberThere(prior) -> match prefix_routine_origin(instruction, rest, prefixed, prior)
+        PrefixedActiveOrigin(child_state, child_routine, child_constraints, child_edge) -> PrefixedActiveOrigin(child_state, child_routine, child_constraints, ListMemberThere(child_edge))
+        PrefixedAcceptedOrigin(child_routine, child_constraints, child_edge) -> PrefixedAcceptedOrigin(child_routine, child_constraints, ListMemberThere(child_edge))
+
+  type FinishCaptureOrigin(n: Nat, states: List(MachineState(n))) indices (finished: MachineState(n))
+    CaptureActiveOrigin : (state: Bounded(n)) -> (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(n), Active(state, routine, constraints), states)) -> FinishCaptureOrigin(n, states, Active(state, routine, constraints))
+    CaptureAcceptedOrigin : (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(n), Accepted(routine, constraints), states)) -> FinishCaptureOrigin(n, states, Accepted(append_routine(routine, Cons(EndCapture(), Nil())), constraints))
+
+  fn finish_capture_origin({n: Nat}, states: List(MachineState(n)), finished: MachineState(n), edge: ListMember(MachineState(n), finished, finish_capture(states))) -> FinishCaptureOrigin(n, states, finished) = match states
+    Nil() -> impossible_list_member(edge)
+    Cons(Active(state, routine, constraints), rest) -> match edge
+      ListMemberHere() -> CaptureActiveOrigin(state, routine, constraints, ListMemberHere())
+      ListMemberThere(prior) -> match finish_capture_origin(rest, finished, prior)
+        CaptureActiveOrigin(child_state, child_routine, child_constraints, child_edge) -> CaptureActiveOrigin(child_state, child_routine, child_constraints, ListMemberThere(child_edge))
+        CaptureAcceptedOrigin(child_routine, child_constraints, child_edge) -> CaptureAcceptedOrigin(child_routine, child_constraints, ListMemberThere(child_edge))
+    Cons(Accepted(routine, constraints), rest) -> match edge
+      ListMemberHere() -> CaptureAcceptedOrigin(routine, constraints, ListMemberHere())
+      ListMemberThere(prior) -> match finish_capture_origin(rest, finished, prior)
+        CaptureActiveOrigin(child_state, child_routine, child_constraints, child_edge) -> CaptureActiveOrigin(child_state, child_routine, child_constraints, ListMemberThere(child_edge))
+        CaptureAcceptedOrigin(child_routine, child_constraints, child_edge) -> CaptureAcceptedOrigin(child_routine, child_constraints, ListMemberThere(child_edge))
+
   fn thompson_evidence_acceptance_from_encodes({shape: ShapeCode}, {compilation: ThompsonCompilation(shape)}, proof: ThompsonEvidenceProof(shape, compilation), input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, acceptance: AcceptancePathFrom(thompson_state_count(compilation), thompson_machine(compilation), position, input, after_input, input_evidence, input_captures, final_evidence)) -> Encodes(shape, final_evidence, input_evidence) = match proof
     ThompsonEvidenceEmpty() -> empty_acceptance_path_from_encodes(input, after_input, position, input_evidence, input_captures, acceptance)
     ThompsonEvidenceBoundary(constraint) -> boundary_acceptance_path_from_encodes(constraint, input, after_input, position, input_evidence, input_captures, acceptance)
