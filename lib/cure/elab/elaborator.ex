@@ -13669,6 +13669,12 @@ defmodule Cure.Elab.Elaborator do
   # goal-directed pass is inapplicable.
   defp elaborate_ctor_app_bidirectional(env, cname, arg_asts, names, ctx, expected_core)
        when expected_core != nil do
+    # Constructor result pinning must see through reducible aliases before it
+    # seeds implicit fields from the goal. Otherwise a nullary indexed
+    # constructor nested in a dependent field is inferred without its hidden
+    # indices and fails as `:unsolved_metavariables` (or later `:ctor_arity`),
+    # even though the aliased goal determines them completely.
+    expected_core = Kernel.normalize(ctx, expected_core)
     ctor = Inductive.get_ctor(env, cname)
     family = Inductive.ctor_family(env, cname)
     param_tele = Inductive.param_telescope(env, family) || []
