@@ -790,6 +790,8 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_left_shared_execution")
     assert Env.get_def(env, :"Std.Regex.Proof#AlternateRightExecutedPathProjection")
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_right_executed_path")
+    assert Map.has_key?(env.ctors, :"Std.Regex.Proof#ProjectedAlternateRightSharedExecution")
+    assert Env.total?(env, :"Std.Regex.Proof#project_alternate_right_shared_execution")
     assert Map.has_key?(env.ctors, :"Std.Regex.Proof#ProjectedAlternateLeftExecutedAcceptance")
     assert Env.total?(env, :"Std.Regex.Proof#execute_alternate_left_acceptance_projection")
     assert Map.has_key?(env.ctors, :"Std.Regex.Proof#ProjectedAlternateRightExecutedAcceptance")
