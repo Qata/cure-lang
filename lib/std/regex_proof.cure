@@ -14,6 +14,9 @@ mod Std.Regex.Proof
       RoutineStep(_, suffix) -> match split_appended_routine_execution(rest, right, executed_evidence(execute_instruction(instruction, input_evidence, input_captures)), executed_captures(execute_instruction(instruction, input_evidence, input_captures)), suffix)
         AppendedRoutineExecuted(middle_evidence, middle_captures, left_execution, right_execution) -> AppendedRoutineExecuted(middle_evidence, middle_captures, RoutineStep(instruction, left_execution), right_execution)
 
+  fn strip_begin_capture_execution(routine: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame), execution: RoutineExecution(Cons(BeginCapture(), routine), input_evidence, input_captures, output_evidence, output_captures)) -> RoutineExecution(routine, input_evidence, Cons(CaptureFrame(Nil(), input_evidence), input_captures), output_evidence, output_captures) = match execution
+    RoutineStep(_, suffix) -> suffix
+
   fn extend_routine_execution(routine: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame), execution: RoutineExecution(routine, input_evidence, input_captures, output_evidence, output_captures)) -> ExtendedEvidenceRoutineExecution(regular_routine(routine), input_evidence, input_captures, output_evidence, output_captures) = match routine
     Nil() -> match execution
       RoutineDone() -> ExtendedEvidenceDone()
