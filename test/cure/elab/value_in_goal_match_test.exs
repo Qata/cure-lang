@@ -171,4 +171,30 @@ defmodule Cure.Elab.ValueInGoalMatchTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "nested match refines a scrutinee value retained in the dependent result" do
+    src =
+      """
+      mod NestedPathRefinement
+        type Input = Empty | One
+        type Path indices (input: Input)
+          PEmpty : Path(Empty())
+          POne : Path(One())
+        type Out = OEmpty | OOne
+        @reducible
+        fn final({input: Input}, path: Path(input)) -> Out = match path
+          PEmpty() -> OEmpty()
+          POne() -> OOne()
+        type Witness indices (out: Out)
+          WEmpty : Witness(OEmpty())
+          WOne : Witness(OOne())
+        fn prove(input: Input, path: Path(input)) -> Witness(final(path)) = match input
+          Empty() -> match path
+            PEmpty() -> WEmpty()
+          One() -> match path
+            POne() -> WOne()
+      """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

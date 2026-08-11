@@ -473,7 +473,13 @@ defmodule Cure.Elab.Relevance do
             |> Enum.reduce_while({:ok, []}, fn {arg, j}, {:ok, acc_u} ->
               x_usage = Map.get(u_inner, Enum.at(x_levels, j), no_uses())
 
-              case walk(arg, depth, :present_arg, st2) do
+              # Convoy arguments are authored in the OUTER frame. Constructor
+              # fields exist only inside the selected branch; applying `st2`
+              # here aliases their levels with binders introduced inside an
+              # argument (for example a lambda), falsely treating those binders
+              # as erased. The branch-local state remains correct for `inner`
+              # above; outer arguments must be walked with the outer state.
+              case walk(arg, depth, :present_arg, st) do
                 {:ok, ua} -> {:cont, {:ok, acc_u ++ [scale_by_uses(ua, x_usage)]}}
                 {:error, _} = err -> {:halt, err}
               end

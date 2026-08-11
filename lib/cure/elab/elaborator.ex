@@ -6516,17 +6516,16 @@ defmodule Cure.Elab.Elaborator do
          env
        ) do
     scrut_type_term = resplit_data(Quote.reify(scrut_type, Context.length(ctx)), env)
-    m = length(siblings)
-    g_abs = abstract_term(result_type_term, scrut_term, 0)
-
+    # Build the sibling telescope through the same binder-aware authority as the
+    # indexed convoy path. Merely shifting the result under fresh Π binders leaves
+    # references pointing at the original ambient siblings (`final(old_path)`)
+    # instead of rebinding them to the refined branch arguments
+    # (`final(refined_path)`). Abstracting the scrutinee after telescope
+    # generalization refines both every sibling domain and the dependent result.
     motive_body =
       siblings
-      |> Enum.with_index(1)
-      |> Enum.reverse()
-      |> Enum.reduce(Subst.shift(g_abs, m, 0), fn {%{type_term: h_ctx}, j}, acc ->
-        h_abs = abstract_term(h_ctx, scrut_term, 0)
-        {:pi, Cure.Core.Grade.unrestricted(), Subst.shift(h_abs, j - 1, 0), acc}
-      end)
+      |> generalize_sibling_telescope(result_type_term)
+      |> abstract_term(scrut_term, 0)
 
     motive = {:lam, Cure.Core.Grade.unrestricted(), scrut_type_term, motive_body}
     pc = Inductive.param_count(env, dname)

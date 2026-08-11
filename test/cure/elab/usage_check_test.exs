@@ -180,6 +180,19 @@ defmodule Cure.Elab.UsageCheckTest do
     test "an erased parameter in an ERASED argument position is still exempt" do
       assert :ok = check(box_env(:erased), [:erased], {:ctor, :mk, [{:var, 0}]})
     end
+
+    test "an erased branch field does not shadow a binder inside an outer convoy argument" do
+      # `(case box of mk(_) -> fn(x) -> x) (fn(y) -> y)`. The constructor field
+      # occupies an erased branch-local level, while the argument lambda is
+      # authored in the outer frame. Reusing the branch erasure set while walking
+      # the argument aliases those unrelated levels and falsely rejects `y`.
+      identity = {:lam, :unrestricted, @nat, {:var, 0}}
+
+      convoy =
+        {:app, {:case, {:var, 0}, @motive, [{:mk, 1, {:lam, :unrestricted, @nat, {:var, 0}}}]}, identity}
+
+      assert :ok = check(box_env(:erased), [:unrestricted], convoy)
+    end
   end
 
   describe "argument positions are gated by present?/1, not by == :unrestricted" do
