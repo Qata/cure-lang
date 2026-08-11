@@ -17,6 +17,22 @@ mod Std.Regex.Proof
   fn strip_begin_capture_execution(routine: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame), execution: RoutineExecution(Cons(BeginCapture(), routine), input_evidence, input_captures, output_evidence, output_captures)) -> RoutineExecution(routine, input_evidence, Cons(CaptureFrame(Nil(), input_evidence), input_captures), output_evidence, output_captures) = match execution
     RoutineStep(_, suffix) -> suffix
 
+  @reducible
+  fn captured_string(chars: List(Char)) -> String = Std.String.from_characters(evidence_reverse_chars(chars))
+
+  type EndCaptureExecutionView indices (routine: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame))
+    EndCaptureWithoutFrame : (middle_evidence: List(Evidence)) -> (inner: RoutineExecution(routine, input_evidence, input_captures, middle_evidence, Nil())) -> EndCaptureExecutionView(routine, input_evidence, input_captures, middle_evidence, Nil())
+    EndCaptureWithFrame : (middle_evidence: List(Evidence)) -> (chars: List(Char)) -> (saved: List(Evidence)) -> (outer: List(CaptureFrame)) -> (inner: RoutineExecution(routine, input_evidence, input_captures, middle_evidence, Cons(CaptureFrame(chars, saved), outer))) -> EndCaptureExecutionView(routine, input_evidence, input_captures, Cons(StringEvidence(captured_string(chars)), saved), outer)
+
+  fn split_end_capture_execution(routine: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), {output_evidence: List(Evidence)}, {output_captures: List(CaptureFrame)}, execution: RoutineExecution(append_routine(routine, Cons(EndCapture(), Nil())), input_evidence, input_captures, output_evidence, output_captures)) -> EndCaptureExecutionView(routine, input_evidence, input_captures, output_evidence, output_captures) = match split_appended_routine_execution(routine, Cons(EndCapture(), Nil()), input_evidence, input_captures, execution)
+    AppendedRoutineExecuted(middle_evidence, middle_captures, inner, ending) -> match middle_captures
+      Nil() -> match ending
+        RoutineStep(_, suffix) -> match suffix
+          RoutineDone() -> EndCaptureWithoutFrame(middle_evidence, inner)
+      Cons(CaptureFrame(chars, saved), outer) -> match ending
+        RoutineStep(_, suffix) -> match suffix
+          RoutineDone() -> EndCaptureWithFrame(middle_evidence, chars, saved, outer, inner)
+
   fn extend_routine_execution(routine: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame), execution: RoutineExecution(routine, input_evidence, input_captures, output_evidence, output_captures)) -> ExtendedEvidenceRoutineExecution(regular_routine(routine), input_evidence, input_captures, output_evidence, output_captures) = match routine
     Nil() -> match execution
       RoutineDone() -> ExtendedEvidenceDone()
