@@ -120,6 +120,23 @@ defmodule Cure.Dev.Trace do
   Options:
 
     * `:arity` — trace only this arity (default: all arities).
+    * `:where` — predicate over the raw argument list. Calls for which it
+      returns false are discarded before formatting or copying their arguments
+      into the collector. This is important when a hot function receives large
+      contexts and only one indexed family or declaration is relevant.
+    * `:match_spec` — an Erlang trace match specification passed directly to
+      `:dbg.tpl/4`. Prefer this over `:where` for very hot functions: rejected
+      calls never leave the VM tracing engine and therefore cannot overload the
+      collector. The default matches every argument list and records returns.
+    * `:on_event` — callback invoked as soon as a matching call returns. This is
+      useful when the observed thunk terminates the VM on failure and therefore
+      cannot return the accumulated event list.
+    * `:on_call` — callback invoked as soon as a matching call begins, with the
+      formatted argument list. Use this when the call itself never returns
+      because compilation exits on the diagnostic being investigated.
+    * `:collect` — retain closed events for the returned list (default: true).
+      Set false with `:on_event` on extremely hot functions to stream events
+      without allowing the collector process to grow without bound.
     * `:format` — a 1-arg function applied to each captured argument and return
       value before storing, e.g. `&Cure.Core.Quote.reify(&1, 0)` to make kernel
       values readable. Default: identity.
@@ -136,19 +153,28 @@ defmodule Cure.Dev.Trace do
   def calls(mod, fun, thunk, opts \\ []) when is_function(thunk, 0) do
     arity = Keyword.get(opts, :arity, :_)
     fmt = Keyword.get(opts, :format, & &1)
+    where = Keyword.get(opts, :where, fn _args -> true end)
+    match_spec = Keyword.get(opts, :match_spec, [{:_, [], [{:return_trace}]}])
+    on_call = Keyword.get(opts, :on_call, fn _args -> :ok end)
+    on_event = Keyword.get(opts, :on_event, fn _event -> :ok end)
+    collect? = Keyword.get(opts, :collect, true)
 
     {:ok, collector} = Agent.start_link(fn -> %{calls: [], by_pid: %{}} end)
 
     handler = fn msg, acc ->
-      handle_trace(collector, fmt, msg)
+      handle_trace(collector, fmt, where, on_call, on_event, collect?, msg)
       acc
     end
 
     _ = :dbg.stop()
     {:ok, _} = :dbg.tracer(:process, {handler, :ok})
-    _ = :dbg.p(:all, :c)
+    # Canonical compilation elaborates modules in workers created after the
+    # probe starts. `:sos` makes those children inherit call tracing; without it
+    # a probe around the compiler can silently report no events even though the
+    # target function ran in a newly spawned task.
+    _ = :dbg.p(:all, [:c, :sos])
     # Match spec `[{:_, [], [{:return_trace}]}]`: match any args, emit return too.
-    _ = :dbg.tpl(mod, fun, arity, [{:_, [], [{:return_trace}]}])
+    _ = :dbg.tpl(mod, fun, arity, match_spec)
 
     result =
       try do
@@ -170,19 +196,34 @@ defmodule Cure.Dev.Trace do
 
   # A `:call` opens a pending event for that pid; the matching `:return_from`
   # closes it. Interleaving across pids is handled by keying pending calls on pid.
-  defp handle_trace(collector, fmt, {:trace, pid, :call, {_m, _f, args}}) do
+  defp handle_trace(collector, fmt, where, on_call, _on_event, _collect?, {:trace, pid, :call, {_m, _f, args}}) do
+    args = List.wrap(args)
+
     Agent.update(collector, fn state ->
-      event = %{args: Enum.map(args, fmt), return: :no_return}
+      event =
+        if where.(args) do
+          formatted = Enum.map(args, fmt)
+          on_call.(formatted)
+          %{args: formatted, return: :no_return}
+        else
+          :discard
+        end
+
       %{state | by_pid: Map.update(state.by_pid, pid, [event], &[event | &1])}
     end)
   end
 
-  defp handle_trace(collector, fmt, {:trace, pid, :return_from, _mfa, retval}) do
+  defp handle_trace(collector, fmt, _where, _on_call, on_event, collect?, {:trace, pid, :return_from, _mfa, retval}) do
     Agent.update(collector, fn state ->
       case Map.get(state.by_pid, pid, []) do
+        [:discard | rest] ->
+          %{state | by_pid: Map.put(state.by_pid, pid, rest)}
+
         [pending | rest] ->
           closed = %{pending | return: fmt.(retval)}
-          %{state | calls: [closed | state.calls], by_pid: Map.put(state.by_pid, pid, rest)}
+          on_event.(closed)
+          calls = if collect?, do: [closed | state.calls], else: state.calls
+          %{state | calls: calls, by_pid: Map.put(state.by_pid, pid, rest)}
 
         [] ->
           state
@@ -190,8 +231,10 @@ defmodule Cure.Dev.Trace do
     end)
   end
 
-  defp handle_trace(collector, _fmt, {:trace, _pid, _other, _}), do: collector |> ignore()
-  defp handle_trace(collector, _fmt, _), do: collector |> ignore()
+  defp handle_trace(collector, _fmt, _where, _on_call, _on_event, _collect?, {:trace, _pid, _other, _}),
+    do: collector |> ignore()
+
+  defp handle_trace(collector, _fmt, _where, _on_call, _on_event, _collect?, _), do: collector |> ignore()
 
   defp ignore(_), do: :ok
 

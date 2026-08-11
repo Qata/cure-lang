@@ -5538,9 +5538,7 @@ defmodule Cure.Elab.Program do
   defp builtin_key([key]) when is_atom(key), do: key
 
   defp body_pass(fn_decls, env) do
-    {plain, computed} = Enum.split_with(fn_decls, &(not MacroExpand.contains_computed_use?(&1)))
-
-    Enum.reduce_while(plain ++ computed, {:ok, env}, fn decl, {:ok, acc} ->
+    Enum.reduce_while(body_pass_order(fn_decls), {:ok, env}, fn decl, {:ok, acc} ->
       case elaborate_body_with_canonical_modules(decl, acc) do
         {:ok, acc2} ->
           {:cont, {:ok, acc2}}
@@ -5555,9 +5553,7 @@ defmodule Cure.Elab.Program do
   # from the phase planner. A missing qualified global is therefore a real
   # resolver error: it must never invoke the source loader and retry.
   defp body_pass_strict(fn_decls, env, owner, event_sink) do
-    {plain, computed} = Enum.split_with(fn_decls, &(not MacroExpand.contains_computed_use?(&1)))
-
-    Enum.reduce_while(plain ++ computed, {:ok, env}, fn decl, {:ok, acc} ->
+    Enum.reduce_while(body_pass_order(fn_decls), {:ok, env}, fn decl, {:ok, acc} ->
       started = System.monotonic_time(:microsecond)
       metadata = body_timing_metadata(owner, decl)
 
@@ -5575,6 +5571,78 @@ defmodule Cure.Elab.Program do
       end
     end)
   end
+
+  # Reducible bodies are part of the module's definitional interface, not merely
+  # runtime implementations. If an earlier body references a later reducible,
+  # publish that helper immediately before its first caller so dependent
+  # conversion is independent of source order. This is deliberately a stable,
+  # dependency-directed move rather than a blanket "all reducibles first": an
+  # already-ordered reducible may itself rely on opaque helpers above it. Keep
+  # computed-macro users in their later phase because macro expansion has a
+  # separate staging dependency.
+  defp body_pass_order(fn_decls) do
+    {plain, computed} = Enum.split_with(fn_decls, &(not MacroExpand.contains_computed_use?(&1)))
+    order_forward_reducibles(plain) ++ order_forward_reducibles(computed)
+  end
+
+  defp order_forward_reducibles(declarations) do
+    reducible_names =
+      declarations
+      |> Enum.filter(&reducible_function_declaration?/1)
+      |> Enum.map(&function_declaration_name/1)
+
+    Enum.reduce(reducible_names, declarations, fn name, ordered ->
+      helper_index = Enum.find_index(ordered, &(function_declaration_name(&1) == name))
+
+      caller_index =
+        ordered
+        |> Enum.take(helper_index)
+        |> Enum.find_index(&MapSet.member?(surface_function_calls(&1), name))
+
+      if is_nil(caller_index) do
+        ordered
+      else
+        {helper, without_helper} = List.pop_at(ordered, helper_index)
+        List.insert_at(without_helper, caller_index, helper)
+      end
+    end)
+  end
+
+  defp function_declaration_name({:function_def, meta, _body}) when is_list(meta),
+    do: meta |> Keyword.fetch!(:name) |> to_string()
+
+  defp function_declaration_name(_declaration), do: nil
+
+  defp surface_function_calls({:function_call, meta, arguments}) when is_list(meta) do
+    called = meta |> Keyword.get(:name) |> to_string()
+    Enum.reduce(arguments, MapSet.new([called]), &MapSet.union(surface_function_calls(&1), &2))
+  end
+
+  defp surface_function_calls({_tag, meta, children}) when is_list(meta) and is_list(children) do
+    MapSet.union(surface_function_calls(meta), surface_function_calls(children))
+  end
+
+  defp surface_function_calls({_key, value}), do: surface_function_calls(value)
+
+  defp surface_function_calls(map) when is_map(map),
+    do: Enum.reduce(Map.values(map), MapSet.new(), &MapSet.union(surface_function_calls(&1), &2))
+
+  defp surface_function_calls(list) when is_list(list),
+    do: Enum.reduce(list, MapSet.new(), &MapSet.union(surface_function_calls(&1), &2))
+
+  defp surface_function_calls(_leaf), do: MapSet.new()
+
+  defp reducible_function_declaration?({:function_def, meta, _body}) when is_list(meta) do
+    case Keyword.get(meta, :decorator) do
+      {:decorator, decorator_meta, _args} when is_list(decorator_meta) ->
+        Keyword.get(decorator_meta, :name) == :reducible
+
+      _ ->
+        false
+    end
+  end
+
+  defp reducible_function_declaration?(_declaration), do: false
 
   defp body_timing_metadata(owner, {:function_def, meta, _body}) when is_list(meta) do
     source_info = Cure.MetaAST.Metadata.source_info(meta)

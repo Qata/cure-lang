@@ -1950,11 +1950,12 @@ defmodule Cure.Core.Kernel do
   def specialize_branch_context(ctx, subst) do
     depth = Context.length(ctx)
     env = Context.env(ctx)
+    signature = Context.signature(ctx)
 
     types =
       Enum.map(ctx.types, fn type_value ->
         type_value
-        |> Quote.reify(depth)
+        |> Quote.reify(depth, signature)
         |> replace_branch_vars(subst)
         |> Eval.eval(env)
       end)
@@ -1963,7 +1964,7 @@ defmodule Cure.Core.Kernel do
       for i <- 0..(depth - 1)//1 do
         {:var, i}
         |> Eval.eval(env)
-        |> Quote.reify(depth)
+        |> Quote.reify(depth, signature)
         |> replace_branch_vars(subst)
         |> Eval.eval(env)
       end
@@ -1975,7 +1976,7 @@ defmodule Cure.Core.Kernel do
 
   defp specialize_branch_value(value, ctx, subst) do
     value
-    |> Quote.reify(Context.length(ctx))
+    |> Quote.reify(Context.length(ctx), Context.signature(ctx))
     |> replace_branch_vars(subst)
     |> Eval.eval(Context.env(ctx))
   end

@@ -408,6 +408,11 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
       )
     ) -> Encodes(ChoiceC(CharC(), CharC()), final_evidence, empty_evidence()) =
       thompson_evidence_acceptance_encodes(
+        ThompsonAlternate(
+          ThompsonPredicate(left),
+          ThompsonPredicate(right),
+          prefer_right
+        ),
         predicate_alternate_evidence_proof(left, right, prefer_right),
         input,
         after_input,
@@ -437,6 +442,11 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
       )
     ) -> Encodes(ChoiceC(CharC(), CharC()), final_evidence, input_evidence) =
       thompson_evidence_acceptance_from_encodes(
+        ThompsonAlternate(
+          ThompsonPredicate(left),
+          ThompsonPredicate(right),
+          prefer_right
+        ),
         predicate_alternate_evidence_proof(left, right, prefer_right),
         input,
         after_input,
@@ -461,6 +471,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
       )
     ) -> Encodes(UnitC(), final_evidence, empty_evidence()) =
       thompson_evidence_acceptance_encodes(
+        ThompsonEmpty(),
         ThompsonEvidenceEmpty(),
         input,
         after_input,
@@ -484,6 +495,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
       )
     ) -> Encodes(UnitC(), final_evidence, empty_evidence()) =
       thompson_evidence_acceptance_encodes(
+        ThompsonBoundary(constraint),
         ThompsonEvidenceBoundary(constraint),
         input,
         after_input,
@@ -854,17 +866,23 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_right_acceptance_from")
     assert Env.get_def(env, :"Std.Regex.Proof#project_alternate_acceptance_from")
     assert Env.get_def(env, :"Std.Regex.Proof#thompson_evidence_acceptance_from_encodes")
+    assert Env.get_def(env, :"Std.Regex.Proof#thompson_evidence_acceptance_captures")
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_acceptance_from")
     assert Env.total?(env, :"Std.Regex.Proof#thompson_evidence_acceptance_from_encodes")
+    assert Env.total?(env, :"Std.Regex.Proof#thompson_evidence_acceptance_captures")
 
     thompson_reachable =
       Program.reachable_def_names(env, [
         :"Std.Regex.Proof#thompson_evidence_acceptance_from_encodes"
       ])
 
-    assert :"Std.Regex.Proof#execute_alternate_left_acceptance_projection" in thompson_reachable
-    assert :"Std.Regex.Proof#execute_alternate_right_acceptance_projection" in thompson_reachable
-    assert :"Std.Regex.Proof#execute_concat_acceptance_projection" in thompson_reachable
+    # `reachable_def_names/2` is the post-erasure emission closure. This theorem
+    # returns erased evidence, so its proof implementation and projection
+    # dependencies are certified by totality above but do not become runtime
+    # functions merely because the theorem is selected as an emission root.
+    assert thompson_reachable == [
+             :"Std.Regex.Proof#thompson_evidence_acceptance_from_encodes"
+           ]
     assert Env.get_def(env, :"Std.Regex.Proof#concat_right_transition_origin")
     assert Env.total?(env, :"Std.Regex.Proof#concat_right_transition_origin")
     assert Env.get_def(env, :"Std.Regex.Proof#project_concat_right_path")
