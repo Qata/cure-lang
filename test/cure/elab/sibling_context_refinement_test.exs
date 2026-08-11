@@ -68,4 +68,26 @@ defmodule Cure.Elab.SiblingContextRefinementTest do
 
     assert {:ok, _env} = Program.elaborate(source)
   end
+
+  test "dependent index variables are not duplicated as carried siblings" do
+    source = """
+    mod DependentIndexSibling
+      type Shape = Text | Number
+      type Compilation indices (shape: Shape)
+        TextCompilation : Compilation(Text())
+        NumberCompilation : Compilation(Number())
+      type Proof indices (shape: Shape, compilation: Compilation(shape))
+        TextProof : Proof(Text(), TextCompilation())
+        NumberProof : Proof(Number(), NumberCompilation())
+      type Acceptance indices (shape: Shape, compilation: Compilation(shape))
+        TextAccepted : Acceptance(Text(), TextCompilation())
+        NumberAccepted : Acceptance(Number(), NumberCompilation())
+      fn preserve({shape: Shape}, {compilation: Compilation(shape)}, proof: Proof(shape, compilation), acceptance: Acceptance(shape, compilation)) -> Acceptance(shape, compilation) = match proof
+        TextProof() -> acceptance
+        NumberProof() -> acceptance
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
 end

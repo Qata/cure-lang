@@ -6091,11 +6091,24 @@ defmodule Cure.Elab.Elaborator do
         _ -> -1
       end
 
+    # An index variable is already abstracted by the motive's own index
+    # telescope. Generalizing it again as a carried sibling duplicates that
+    # binder and can rebind a later dependent sibling against the wrong value
+    # (for example `shape : ShapeCode`, `compilation : Compilation(shape)`).
+    # Carry only other context entries whose *types* depend on an index.
+    index_var_indices =
+      idx_terms
+      |> Enum.flat_map(fn
+        {:var, i} -> [i]
+        _ -> []
+      end)
+      |> MapSet.new()
+
     gen =
       names
       |> visible_named_context_indices()
       |> Enum.flat_map(fn {name, i} ->
-        if is_binary(name) and i != scrut_idx do
+        if is_binary(name) and i != scrut_idx and not MapSet.member?(index_var_indices, i) do
           type_term = resplit_data(Quote.reify(Context.lookup(ctx, i), depth), env)
 
           if Enum.any?(targets, &contains_term_scoped?(type_term, &1)),
