@@ -1180,6 +1180,14 @@ mod Std.Regex.Proof
     Nil() -> reflexive(Cons(CaptureFrame(chars, saved), captures))
     Cons(char, rest) -> record_capture_frame_input(Cons(char, chars), saved, record_capture_char(captures, char), rest)
 
+  type RecordedOpenCapture(chars: List(Char), saved: List(Evidence), captures: List(CaptureFrame), input: List(Char)) indices (final_captures: List(CaptureFrame))
+    RecordedOpenCaptureExact : RecordedOpenCapture(chars, saved, captures, input, Cons(CaptureFrame(evidence_reverse_chars_into(input, chars), saved), record_capture_input(captures, input)))
+
+  fn recorded_open_capture_view(chars: List(Char), saved: List(Evidence), captures: List(CaptureFrame), input: List(Char), final_captures: List(CaptureFrame), equality: Equivalent(List(CaptureFrame), final_captures, record_capture_input(Cons(CaptureFrame(chars, saved), captures), input))) -> RecordedOpenCapture(chars, saved, captures, input, final_captures) =
+    rewrite equality in
+      rewrite record_capture_frame_input(chars, saved, captures, input) in
+        RecordedOpenCaptureExact()
+
   ## Structural inverses for Group's two routine transformations. These retain
   ## the original membership witness, so later projection can rebuild an inner
   ## accepting edge without guessing from function-valued transition tables.
