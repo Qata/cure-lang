@@ -299,6 +299,33 @@ claims:
 Do not entangle these proofs with evidence extraction. Language correctness and
 shape safety are separate theorem families.
 
+### 5.5 Dependent elaboration diagnostics required by this work
+
+Proof development must not depend on reading unstructured dumps of fully
+normalized dependent types. In particular, `E093` (call result has the wrong
+type) must report the first structurally differing subterm between the expected
+and inferred result types. The diagnostic must:
+
+- preserve and display meaningful binder names instead of exposing only
+  anonymous metavariables such as `?39`;
+- identify the enclosing index or result-type position containing the mismatch;
+- render the differing subterms compactly, with unchanged surrounding terms
+  elided;
+- say when the mismatch crosses a pattern-match branch refinement and name the
+  scrutinee whose constructor was substituted;
+- distinguish a missing explicit equality transport from an unsolved
+  metavariable or a failure to apply a valid branch refinement; and
+- retain declaration, call-site, source-span, and macro-expansion provenance.
+
+The motivating regression is a proof whose result is indexed by
+`accepting_final_captures(..., path)`: after matching `path` as
+`AcceptingNextAccepted(...)`, `E093` currently prints two enormous normalized
+types whose only material difference is the original abstract `path` versus the
+branch constructor. The improved diagnostic must isolate that pair and indicate
+whether the programmer must transport across their equality or the elaborator
+failed to refine the dependent motive. Add a focused compiler diagnostic test
+before relying on the improved behavior during Phase E.
+
 ## 6. Literal and Elixir-compatibility contract
 
 Slash literals—not `~r`—are Cure syntax. `/[A-Z]*/im` and `/[A-Z]*/mi` are valid,
