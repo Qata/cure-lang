@@ -785,6 +785,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.total?(env, :"Std.Regex.Proof#left_marker_execution_captures")
     assert Env.total?(env, :"Std.Regex.Proof#right_marker_execution_captures")
     assert Env.total?(env, :"Std.Regex#alternate_left_injection_is_widening")
+    assert Env.total?(env, :"Std.Regex#alternate_left_widening_is_injection")
     assert Env.total?(env, :"Std.Regex#alternate_right_injection_is_inject_right")
     assert Env.get_def(env, :"Std.Regex.Proof#AlternateLeftExecutedPathProjection")
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_left_executed_path")

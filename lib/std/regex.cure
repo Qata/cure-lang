@@ -361,7 +361,10 @@ mod Std.Regex
   fn inject_alternate_right(left_count: Nat, right_count: Nat, state: Bounded(right_count)) -> Bounded(plus(left_count, right_count)) =
     inject_right(left_count, state)
 
-  fn alternate_left_injection_is_widening({left_count: Nat}, {right_count: Nat}, state: Bounded(left_count)) -> Equivalent(Bounded(plus(left_count, right_count)), inject_alternate_left(left_count, right_count, state), inject_left_at(left_count, right_count, state)) =
+  fn alternate_left_injection_is_widening({left_count: Nat}, @erased right_count: Nat, state: Bounded(left_count)) -> Equivalent(Bounded(plus(left_count, right_count)), inject_alternate_left(left_count, right_count, state), inject_left_at(left_count, right_count, state)) =
+    reflexive(inject_left_at(left_count, right_count, state))
+
+  fn alternate_left_widening_is_injection({left_count: Nat}, @erased right_count: Nat, state: Bounded(left_count)) -> Equivalent(Bounded(plus(left_count, right_count)), inject_left_at(left_count, right_count, state), inject_alternate_left(left_count, right_count, state)) =
     reflexive(inject_left_at(left_count, right_count, state))
 
   fn alternate_right_injection_is_inject_right(left_count: Nat, {right_count: Nat}, state: Bounded(right_count)) -> Equivalent(Bounded(plus(left_count, right_count)), inject_alternate_right(left_count, right_count, state), inject_right_at(left_count, right_count, state)) =
