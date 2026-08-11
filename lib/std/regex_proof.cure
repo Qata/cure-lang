@@ -44,6 +44,14 @@ mod Std.Regex.Proof
 
   typealias AcceptancePath(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char), final_evidence: List(Evidence)) = AcceptancePathFrom(n, machine, position, input, after_input, Nil(), Nil(), final_evidence)
 
+  @reducible
+  fn accepting_final_captures(n: Nat, machine: PatternMachine(n), input: List(Char), after_input: List(Char), state: ThreadState(n), current_evidence: List(Evidence), captures: List(CaptureFrame), final_evidence: List(Evidence), routine: List(ExtendedInstruction), path: AcceptingFrom(n, machine, input, after_input, state, current_evidence, captures, final_evidence, routine)) -> List(CaptureFrame) = match input
+    Nil() -> match path
+      AcceptingNow() -> captures
+    Cons(char, rest) -> match path
+      AcceptingNextActive(destination, regular, constraints, destination_evidence, destination_captures, suffix_routine, edge, execution, suffix) -> accepting_final_captures(n, machine, rest, after_input, ThreadActive(destination), destination_evidence, destination_captures, final_evidence, suffix_routine, suffix)
+      AcceptingNextAccepted(regular, constraints, destination_evidence, destination_captures, suffix_routine, edge, execution, suffix) -> accepting_final_captures(n, machine, rest, after_input, ThreadAccepted(), destination_evidence, destination_captures, final_evidence, suffix_routine, suffix)
+
   type PathExecution indices (routine: List(ExtendedInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), final_evidence: List(Evidence))
     PathExecuted : (final_captures: List(CaptureFrame)) -> (execution: ExtendedEvidenceRoutineExecution(routine, input_evidence, input_captures, final_evidence, final_captures)) -> PathExecution(routine, input_evidence, input_captures, final_evidence)
 
@@ -56,13 +64,7 @@ mod Std.Regex.Proof
       AcceptingNextAccepted(regular, constraints, destination_evidence, destination_captures, suffix_routine, edge, execution, suffix) -> match accepting_path_execution(n, machine, rest, after_input, ThreadAccepted(), destination_evidence, destination_captures, final_evidence, suffix_routine, suffix)
         PathExecuted(final_captures, suffix_execution) -> PathExecuted(final_captures, ExtendedEvidenceObserve(char, append_extended_routine_execution(regular_routine(regular), suffix_routine, current_evidence, record_capture_char(captures, char), destination_evidence, destination_captures, final_evidence, final_captures, extend_routine_execution(regular, current_evidence, record_capture_char(captures, char), destination_evidence, destination_captures, execution), suffix_execution)))
 
-  fn accepting_final_captures(n: Nat, machine: PatternMachine(n), input: List(Char), after_input: List(Char), state: ThreadState(n), current_evidence: List(Evidence), captures: List(CaptureFrame), final_evidence: List(Evidence), routine: List(ExtendedInstruction), path: AcceptingFrom(n, machine, input, after_input, state, current_evidence, captures, final_evidence, routine)) -> List(CaptureFrame) = match input
-    Nil() -> match path
-      AcceptingNow() -> captures
-    Cons(char, rest) -> match path
-      AcceptingNextActive(destination, regular, constraints, destination_evidence, destination_captures, suffix_routine, edge, execution, suffix) -> accepting_final_captures(n, machine, rest, after_input, ThreadActive(destination), destination_evidence, destination_captures, final_evidence, suffix_routine, suffix)
-      AcceptingNextAccepted(regular, constraints, destination_evidence, destination_captures, suffix_routine, edge, execution, suffix) -> accepting_final_captures(n, machine, rest, after_input, ThreadAccepted(), destination_evidence, destination_captures, final_evidence, suffix_routine, suffix)
-
+  @reducible
   fn acceptance_path_final_captures(n: Nat, machine: PatternMachine(n), position: InitialPosition, input: List(Char), after_input: List(Char), input_evidence: List(Evidence), input_captures: List(CaptureFrame), final_evidence: List(Evidence), acceptance: AcceptancePathFrom(n, machine, position, input, after_input, input_evidence, input_captures, final_evidence)) -> List(CaptureFrame) = match acceptance
     mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> accepting_final_captures(n, machine, input, after_input, machine_state_thread(n, destination), initial_evidence, initial_captures, final_evidence, path_routine, path)
 
@@ -1072,6 +1074,15 @@ mod Std.Regex.Proof
     ThompsonEvidencePredicate : (test: (Char -> Bool)) -> ThompsonEvidenceProof(CharC(), ThompsonPredicate(test))
     ThompsonEvidenceConcat : {left_shape: ShapeCode} -> {right_shape: ShapeCode} -> (left: ThompsonCompilation(left_shape)) -> (right: ThompsonCompilation(right_shape)) -> (left_proof: ThompsonEvidenceProof(left_shape, left)) -> (right_proof: ThompsonEvidenceProof(right_shape, right)) -> ThompsonEvidenceProof(PairC(left_shape, right_shape), ThompsonConcat(left, right))
     ThompsonEvidenceAlternate : {left_shape: ShapeCode} -> {right_shape: ShapeCode} -> (left: ThompsonCompilation(left_shape)) -> (right: ThompsonCompilation(right_shape)) -> (prefer_right: Bool) -> (left_proof: ThompsonEvidenceProof(left_shape, left)) -> (right_proof: ThompsonEvidenceProof(right_shape, right)) -> ThompsonEvidenceProof(ChoiceC(left_shape, right_shape), ThompsonAlternate(left, right, prefer_right))
+
+  @reducible
+  fn record_capture_input(captures: List(CaptureFrame), input: List(Char)) -> List(CaptureFrame) = match input
+    Nil() -> captures
+    Cons(char, rest) -> record_capture_input(record_capture_char(captures, char), rest)
+
+  fn record_capture_partition({input: List(Char)}, {left: List(Char)}, {right: List(Char)}, captures: List(CaptureFrame), partition: InputPartition(input, left, right)) -> Equivalent(List(CaptureFrame), record_capture_input(record_capture_input(captures, left), right), record_capture_input(captures, input)) = match partition
+    InputPartitionHere(parts_right) -> reflexive(record_capture_input(captures, parts_right))
+    InputPartitionThere(char, prior) -> record_capture_partition(record_capture_char(captures, char), prior)
 
   fn thompson_evidence_acceptance_from_encodes({shape: ShapeCode}, {compilation: ThompsonCompilation(shape)}, proof: ThompsonEvidenceProof(shape, compilation), input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, acceptance: AcceptancePathFrom(thompson_state_count(compilation), thompson_machine(compilation), position, input, after_input, input_evidence, input_captures, final_evidence)) -> Encodes(shape, final_evidence, input_evidence) = match proof
     ThompsonEvidenceEmpty() -> empty_acceptance_path_from_encodes(input, after_input, position, input_evidence, input_captures, acceptance)
