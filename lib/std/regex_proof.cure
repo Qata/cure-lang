@@ -33,6 +33,28 @@ mod Std.Regex.Proof
         RoutineStep(_, suffix) -> match suffix
           RoutineDone() -> EndCaptureWithFrame(middle_evidence, chars, saved, outer, inner)
 
+  typealias ExecutionOutputsEqual(first_evidence: List(Evidence), first_captures: List(CaptureFrame), second_evidence: List(Evidence), second_captures: List(CaptureFrame)) = Sigma(evidence_equal: Equivalent(List(Evidence), first_evidence, second_evidence), Equivalent(List(CaptureFrame), first_captures, second_captures))
+
+  fn routine_execution_unique(routine: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), {first_evidence: List(Evidence)}, {first_captures: List(CaptureFrame)}, {second_evidence: List(Evidence)}, {second_captures: List(CaptureFrame)}, first: RoutineExecution(routine, input_evidence, input_captures, first_evidence, first_captures), second: RoutineExecution(routine, input_evidence, input_captures, second_evidence, second_captures)) -> ExecutionOutputsEqual(first_evidence, first_captures, second_evidence, second_captures) = match routine
+    Nil() -> match first
+      RoutineDone() -> match second
+        RoutineDone() -> %[reflexive(input_evidence), reflexive(input_captures)]
+    Cons(instruction, rest) -> match first
+      RoutineStep(_, first_suffix) -> match second
+        RoutineStep(_, second_suffix) -> routine_execution_unique(rest, executed_evidence(execute_instruction(instruction, input_evidence, input_captures)), executed_captures(execute_instruction(instruction, input_evidence, input_captures)), first_suffix, second_suffix)
+
+  fn extended_routine_execution_unique(routine: List(ExtendedInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), {first_evidence: List(Evidence)}, {first_captures: List(CaptureFrame)}, {second_evidence: List(Evidence)}, {second_captures: List(CaptureFrame)}, first: ExtendedEvidenceRoutineExecution(routine, input_evidence, input_captures, first_evidence, first_captures), second: ExtendedEvidenceRoutineExecution(routine, input_evidence, input_captures, second_evidence, second_captures)) -> ExecutionOutputsEqual(first_evidence, first_captures, second_evidence, second_captures) = match routine
+    Nil() -> match first
+      ExtendedEvidenceDone() -> match second
+        ExtendedEvidenceDone() -> %[reflexive(input_evidence), reflexive(input_captures)]
+    Cons(instruction, rest) -> match instruction
+      Observe(char) -> match first
+        ExtendedEvidenceObserve(_, first_suffix) -> match second
+          ExtendedEvidenceObserve(_, second_suffix) -> extended_routine_execution_unique(rest, input_evidence, record_capture_char(input_captures, char), first_suffix, second_suffix)
+      Regular(regular) -> match first
+        ExtendedEvidenceRegular(_, first_suffix) -> match second
+          ExtendedEvidenceRegular(_, second_suffix) -> extended_routine_execution_unique(rest, executed_evidence(execute_instruction(regular, input_evidence, input_captures)), executed_captures(execute_instruction(regular, input_evidence, input_captures)), first_suffix, second_suffix)
+
   fn extend_routine_execution(routine: List(EvidenceInstruction), input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame), execution: RoutineExecution(routine, input_evidence, input_captures, output_evidence, output_captures)) -> ExtendedEvidenceRoutineExecution(regular_routine(routine), input_evidence, input_captures, output_evidence, output_captures) = match routine
     Nil() -> match execution
       RoutineDone() -> ExtendedEvidenceDone()
