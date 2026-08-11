@@ -794,6 +794,8 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.total?(env, :"Std.Regex.Proof#accepted_path_input_empty")
     assert Env.total?(env, :"Std.Regex.Proof#empty_acceptance_captures")
     assert Env.total?(env, :"Std.Regex.Proof#boundary_acceptance_captures")
+    assert Env.total?(env, :"Std.Regex.Proof#predicate_path_captures")
+    assert Env.total?(env, :"Std.Regex.Proof#predicate_acceptance_captures")
     assert Env.total?(env, :"Std.Regex.Proof#prefix_routine_origin")
     assert Env.total?(env, :"Std.Regex.Proof#finish_capture_origin")
     assert Env.total?(env, :"Std.Regex.Proof#filtered_finish_capture_origin")
@@ -872,10 +874,12 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.total?(env, :"Std.Regex.Proof#thompson_machine_acceptance_encodes")
     assert Map.has_key?(env.ctors, :"Std.Regex.Proof#ThompsonEvidenceBoundary")
     assert Map.has_key?(env.ctors, :"Std.Regex.Proof#ThompsonEvidenceConcat")
+
     assert Env.certified?(
              env,
              Env.resolve_key(env, env.defs, :predicate_concat_evidence_proof)
            )
+
     assert Env.certified?(
              env,
              Env.resolve_key(env, env.defs, :generic_predicate_alternate_acceptance_case)
@@ -908,6 +912,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
                :generic_predicate_alternate_machine_acceptance_case
              )
            )
+
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :grouped_predicate_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_concat_acceptance_case))
     assert Env.certified?(env, Env.resolve_key(env, env.defs, :predicate_alternate_acceptance_case))

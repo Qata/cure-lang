@@ -1201,6 +1201,11 @@ mod Std.Regex.Proof
       rewrite record_capture_frame_input(chars, saved, captures, input) in
         RecordedOpenCaptureExact()
 
+  fn capture_equivalent_transitive(left: List(CaptureFrame), middle: List(CaptureFrame), right: List(CaptureFrame), first: Equivalent(List(CaptureFrame), left, middle), second: Equivalent(List(CaptureFrame), middle, right)) -> Equivalent(List(CaptureFrame), left, right) = match first
+    reflexive() -> second
+
+  fn record_capture_single(captures: List(CaptureFrame), char: Char) -> Equivalent(List(CaptureFrame), record_capture_char(captures, char), record_capture_input(captures, Cons(char, Nil()))) = reflexive(record_capture_char(captures, char))
+
   fn empty_acceptance_captures(input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, acceptance: AcceptancePathFrom(Z(), empty_pattern_machine(), position, input, after_input, input_evidence, input_captures, final_evidence)) -> Equivalent(List(CaptureFrame), acceptance_path_final_captures(Z(), empty_pattern_machine(), position, input, after_input, input_evidence, input_captures, final_evidence, acceptance), record_capture_input(input_captures, input)) = match acceptance
     mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> match edge
       ListMemberHere() -> match initial_execution
@@ -1224,6 +1229,59 @@ mod Std.Regex.Proof
 
   fn boundary_acceptance_captures(constraint: BoundaryConstraint, input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, acceptance: AcceptancePathFrom(Z(), boundary_pattern_machine(constraint), position, input, after_input, input_evidence, input_captures, final_evidence)) -> Equivalent(List(CaptureFrame), acceptance_path_final_captures(Z(), boundary_pattern_machine(constraint), position, input, after_input, input_evidence, input_captures, final_evidence, acceptance), record_capture_input(input_captures, input)) = match acceptance
     mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> boundary_acceptance_captures_parts(constraint, input, after_input, position, input_evidence, input_captures, destination, initial_evidence, initial_captures, path_routine, edge, initial_execution, path)
+
+  fn predicate_active_capture_impossible({result: Type}, test: Char -> Bool, char: Char, boundary: Boundary, {destination: Bounded(S(Z()))}, {regular: List(EvidenceInstruction)}, {constraints: List(BoundaryConstraint)}, edge: ListMember(MachineState(S(Z())), Active(destination, regular, constraints), machine_destinations(S(Z()), predicate_pattern_machine(test), predicate_machine_thread(), char, boundary))) -> result = with predicate_destinations_view(test, char, boundary)
+    PredicateRejects() -> impossible_list_member(edge)
+    PredicateAccepts() -> match edge
+      ListMemberThere(prior) -> impossible_list_member(prior)
+
+  type PredicateAcceptedEdgeView indices (test: Char -> Bool, char: Char, regular: List(EvidenceInstruction), constraints: List(BoundaryConstraint))
+    PredicateAcceptedEdgeExact : PredicateAcceptedEdgeView(test, char, Cons(EmitChar(char), Nil()), Nil())
+
+  fn predicate_accepted_edge_view(test: Char -> Bool, char: Char, boundary: Boundary, regular: List(EvidenceInstruction), constraints: List(BoundaryConstraint), edge: ListMember(MachineState(S(Z())), Accepted(regular, constraints), machine_destinations(S(Z()), predicate_pattern_machine(test), predicate_machine_thread(), char, boundary))) -> PredicateAcceptedEdgeView(test, char, regular, constraints) = with predicate_destinations_view(test, char, boundary)
+    PredicateRejects() -> impossible_list_member(edge)
+    PredicateAccepts() -> match edge
+      ListMemberHere() -> PredicateAcceptedEdgeExact()
+      ListMemberThere(prior) -> impossible_list_member(prior)
+
+  type PredicateCaptureExecutionView indices (test: Char -> Bool, char: Char, input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame))
+    PredicateCaptureExecutionExact : PredicateCaptureExecutionView(test, char, input_evidence, input_captures, Cons(CharacterEvidence(char), input_evidence), input_captures)
+
+  fn predicate_capture_execution_view(test: Char -> Bool, char: Char, input_evidence: List(Evidence), input_captures: List(CaptureFrame), output_evidence: List(Evidence), output_captures: List(CaptureFrame), execution: RoutineExecution(Cons(EmitChar(char), Nil()), input_evidence, input_captures, output_evidence, output_captures)) -> PredicateCaptureExecutionView(test, char, input_evidence, input_captures, output_evidence, output_captures) = match execution
+    RoutineStep(_, suffix) -> match suffix
+      RoutineDone() -> PredicateCaptureExecutionExact()
+
+  fn predicate_path_captures(test: Char -> Bool, input: List(Char), after_input: List(Char), current_evidence: List(Evidence), captures: List(CaptureFrame), {final_evidence: List(Evidence)}, {routine: List(ExtendedInstruction)}, path: AcceptingFrom(S(Z()), predicate_pattern_machine(test), input, after_input, predicate_machine_thread(), current_evidence, captures, final_evidence, routine)) -> Equivalent(List(CaptureFrame), accepting_final_captures(S(Z()), predicate_pattern_machine(test), input, after_input, predicate_machine_thread(), current_evidence, captures, final_evidence, routine, path), record_capture_input(captures, input)) = match input
+    Nil() -> match path
+      AcceptingNow() -> impossible
+      AcceptingNextActive(_, _, _, _, _, _, _, _, _) -> impossible
+      AcceptingNextAccepted(_, _, _, _, _, _, _, _) -> impossible
+    Cons(char, rest) -> match path
+      AcceptingNow() -> impossible
+      AcceptingNextActive(_, _, _, _, _, _, edge, _, _) -> predicate_active_capture_impossible(test, char, transition_boundary_before(char, rest, after_input), edge)
+      AcceptingNextAccepted(regular, constraints, destination_evidence, destination_captures, suffix_routine, edge, execution, suffix) -> match predicate_accepted_edge_view(test, char, transition_boundary_before(char, rest, after_input), regular, constraints, edge)
+        PredicateAcceptedEdgeExact() -> match predicate_capture_execution_view(test, char, current_evidence, record_capture_char(captures, char), destination_evidence, destination_captures, execution)
+          PredicateCaptureExecutionExact() -> match accepted_path_view(S(Z()), MkPatternMachine(Cons(predicate_machine_start(), Nil()), fn(state, next_char) -> predicate_machine_next(test, state, next_char)), rest, after_input, destination_evidence, destination_captures, final_evidence, suffix_routine, suffix)
+            AcceptedPathNow() -> rewrite accepted_path_input_empty(S(Z()), MkPatternMachine(Cons(predicate_machine_start(), Nil()), fn(state, next_char) -> predicate_machine_next(test, state, next_char)), rest, after_input, destination_evidence, destination_captures, final_evidence, suffix_routine, suffix) in
+              capture_equivalent_transitive(
+                  accepting_final_captures(S(Z()), MkPatternMachine(Cons(Active(First(), Nil(), Nil()), Nil()), fn(state, next_char) -> predicate_machine_next(test, state, next_char)), Cons(char, Nil()), after_input, ThreadActive(First()), current_evidence, captures, final_evidence, Cons(Observe(char), Cons(Regular(EmitChar(char)), Nil())), path),
+                  accepting_final_captures(S(Z()), MkPatternMachine(Cons(predicate_machine_start(), Nil()), fn(state, next_char) -> predicate_machine_next(test, state, next_char)), rest, after_input, ThreadAccepted(), destination_evidence, destination_captures, final_evidence, suffix_routine, suffix),
+                  record_capture_input(captures, Cons(char, Nil())),
+                  reflexive(accepting_final_captures(S(Z()), MkPatternMachine(Cons(predicate_machine_start(), Nil()), fn(state, next_char) -> predicate_machine_next(test, state, next_char)), rest, after_input, ThreadAccepted(), destination_evidence, destination_captures, final_evidence, suffix_routine, suffix)),
+                  capture_equivalent_transitive(
+                accepting_final_captures(S(Z()), MkPatternMachine(Cons(predicate_machine_start(), Nil()), fn(state, next_char) -> predicate_machine_next(test, state, next_char)), rest, after_input, ThreadAccepted(), destination_evidence, destination_captures, final_evidence, suffix_routine, suffix),
+                record_capture_char(captures, char),
+                record_capture_input(captures, Cons(char, Nil())),
+                accepted_path_final_captures(S(Z()), MkPatternMachine(Cons(predicate_machine_start(), Nil()), fn(state, next_char) -> predicate_machine_next(test, state, next_char)), rest, after_input, destination_evidence, destination_captures, final_evidence, suffix_routine, suffix),
+                record_capture_single(captures, char)
+              ))
+
+  fn predicate_acceptance_captures(test: Char -> Bool, input: List(Char), after_input: List(Char), position: InitialPosition, input_evidence: List(Evidence), input_captures: List(CaptureFrame), {final_evidence: List(Evidence)}, acceptance: AcceptancePathFrom(S(Z()), predicate_pattern_machine(test), position, input, after_input, input_evidence, input_captures, final_evidence)) -> Equivalent(List(CaptureFrame), acceptance_path_final_captures(S(Z()), predicate_pattern_machine(test), position, input, after_input, input_evidence, input_captures, final_evidence, acceptance), record_capture_input(input_captures, input)) = match acceptance
+    mk_pair(destination, mk_pair(initial_evidence, mk_pair(initial_captures, mk_pair(path_routine, mk_pair(edge, mk_pair(initial_execution, path)))))) -> match predicate_starts_view(test, position, input, after_input)
+      PredicateStartsExact() -> match edge
+        ListMemberHere() -> match initial_execution
+          RoutineDone() -> predicate_path_captures(test, input, after_input, initial_evidence, initial_captures, path)
+        ListMemberThere(prior) -> impossible_list_member(prior)
 
   ## Structural inverses for Group's two routine transformations. These retain
   ## the original membership witness, so later projection can rebuild an inner
