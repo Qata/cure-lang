@@ -850,6 +850,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
 
     assert :"Std.Regex.Proof#execute_alternate_left_acceptance_projection" in thompson_reachable
     assert :"Std.Regex.Proof#execute_alternate_right_acceptance_projection" in thompson_reachable
+    assert :"Std.Regex.Proof#execute_concat_acceptance_projection" in thompson_reachable
     assert Env.get_def(env, :"Std.Regex.Proof#concat_right_transition_origin")
     assert Env.total?(env, :"Std.Regex.Proof#concat_right_transition_origin")
     assert Env.get_def(env, :"Std.Regex.Proof#project_concat_right_path")

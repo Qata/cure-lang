@@ -1527,8 +1527,8 @@ mod Std.Regex.Proof
     ThompsonEvidenceEmpty() -> empty_acceptance_path_from_encodes(input, after_input, position, input_evidence, input_captures, acceptance)
     ThompsonEvidenceBoundary(constraint) -> boundary_acceptance_path_from_encodes(constraint, input, after_input, position, input_evidence, input_captures, acceptance)
     ThompsonEvidencePredicate(test) -> predicate_acceptance_path_from_encodes(test, input, after_input, position, input_evidence, input_captures, acceptance)
-    ThompsonEvidenceConcat(left, right, left_proof, right_proof) -> match project_concat_acceptance_from(thompson_state_count(left), thompson_machine(left), thompson_state_count(right), thompson_machine(right), position, input, after_input, input_evidence, input_captures, acceptance)
-      ProjectedConcatAcceptance(left_input, right_input, partition, left_final_evidence, left_final_captures, left_acceptance, _, right_final_evidence, right_acceptance, final_is_paired) -> match final_is_paired
+    ThompsonEvidenceConcat(left, right, left_proof, right_proof) -> match execute_concat_acceptance_projection(thompson_state_count(left), thompson_machine(left), thompson_state_count(right), thompson_machine(right), position, input, after_input, input_evidence, input_captures, project_concat_acceptance_from(thompson_state_count(left), thompson_machine(left), thompson_state_count(right), thompson_machine(right), position, input, after_input, input_evidence, input_captures, acceptance))
+      ProjectedExecutedConcatAcceptance(left_input, right_input, partition, left_final_evidence, left_final_captures, left_acceptance, _, right_final_evidence, right_final_captures, right_acceptance, right_execution, final_is_paired) -> match final_is_paired
         reflexive() -> EncodesPair(
           thompson_evidence_acceptance_from_encodes(right_proof, right_input, after_input, advance_initial_position(position, left_input), left_final_evidence, left_final_captures, right_acceptance),
           thompson_evidence_acceptance_from_encodes(left_proof, left_input, append_characters(right_input, after_input), position, input_evidence, input_captures, left_acceptance)
