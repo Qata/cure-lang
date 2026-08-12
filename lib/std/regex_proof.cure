@@ -639,6 +639,34 @@ mod Std.Regex.Proof
     FilteredActiveStateOrigin(state, combined_routine, combined_constraints, transformed_edge, holds) -> filtered_repeat_active_origin(n, destinations, starts, lazy, boundary, state, combined_routine, combined_constraints, transformed_edge, holds)
     FilteredAcceptedStateOrigin(combined_routine, combined_constraints, transformed_edge, holds) -> filtered_repeat_accepted_origin(n, destinations, starts, lazy, boundary, combined_routine, combined_constraints, transformed_edge, holds)
 
+  type RepeatStartsOrigin(n: Nat, starts: List(MachineState(n)), lazy: Bool) indices (destination: MachineState(n))
+    RepeatEmptyStartOrigin : RepeatStartsOrigin(n, starts, lazy, Accepted(Cons(BeginList(), Cons(EndList(), Nil())), Nil()))
+    RepeatEnteredStartOrigin : (state: Bounded(n)) -> (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(n), Active(state, routine, constraints), starts)) -> RepeatStartsOrigin(n, starts, lazy, Active(state, Cons(BeginList(), routine), constraints))
+
+  fn repeat_starts_origin(n: Nat, starts: List(MachineState(n)), lazy: Bool, destination: MachineState(n), edge: ListMember(MachineState(n), destination, repeat_machine_starts(starts, lazy))) -> RepeatStartsOrigin(n, starts, lazy, destination) = match lazy
+    False() -> match append_member_origin(n, enter_repeat(Cons(BeginList(), Nil()), starts), Cons(Accepted(Cons(BeginList(), Cons(EndList(), Nil())), Nil()), Nil()), destination, edge)
+      AppendMemberLeft(entered_edge) -> match enter_repeat_state_origin(n, Cons(BeginList(), Nil()), Nil(), starts, destination, entered_edge)
+        EnterRepeatActiveOrigin(state, routine, constraints, start_edge) -> RepeatEnteredStartOrigin(state, routine, constraints, start_edge)
+      AppendMemberRight(empty_edge) -> match empty_edge
+        ListMemberHere() -> RepeatEmptyStartOrigin()
+        ListMemberThere(impossible) -> impossible_list_member(impossible)
+    True() -> match append_member_origin(n, Cons(Accepted(Cons(BeginList(), Cons(EndList(), Nil())), Nil()), Nil()), enter_repeat(Cons(BeginList(), Nil()), starts), destination, edge)
+      AppendMemberLeft(empty_edge) -> match empty_edge
+        ListMemberHere() -> RepeatEmptyStartOrigin()
+        ListMemberThere(impossible) -> impossible_list_member(impossible)
+      AppendMemberRight(entered_edge) -> match enter_repeat_state_origin(n, Cons(BeginList(), Nil()), Nil(), starts, destination, entered_edge)
+        EnterRepeatActiveOrigin(state, routine, constraints, start_edge) -> RepeatEnteredStartOrigin(state, routine, constraints, start_edge)
+
+  type FilteredRepeatStartsOrigin(n: Nat, starts: List(MachineState(n)), lazy: Bool, boundary: Boundary) indices (filtered: MachineState(n))
+    FilteredRepeatEmptyStartOrigin : FilteredRepeatStartsOrigin(n, starts, lazy, boundary, Accepted(Cons(BeginList(), Cons(EndList(), Nil())), Nil()))
+    FilteredRepeatEnteredStartOrigin : (state: Bounded(n)) -> (routine: List(EvidenceInstruction)) -> (constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(n), Active(state, routine, constraints), starts)) -> (holds: Equivalent(Bool, constraints_hold(constraints, boundary), True())) -> FilteredRepeatStartsOrigin(n, starts, lazy, boundary, Active(state, Cons(BeginList(), routine), Nil()))
+
+  fn filtered_repeat_starts_origin(n: Nat, starts: List(MachineState(n)), lazy: Bool, boundary: Boundary, filtered: MachineState(n), edge: ListMember(MachineState(n), filtered, filter_machine_states(n, repeat_machine_starts(starts, lazy), boundary))) -> FilteredRepeatStartsOrigin(n, starts, lazy, boundary, filtered) = match filtered_state_origin(n, repeat_machine_starts(starts, lazy), boundary, filtered, edge)
+    FilteredActiveStateOrigin(state, combined_routine, constraints, transformed_edge, holds) -> match repeat_starts_origin(n, starts, lazy, Active(state, combined_routine, constraints), transformed_edge)
+      RepeatEnteredStartOrigin(_, routine, child_constraints, child_edge) -> FilteredRepeatEnteredStartOrigin(state, routine, child_constraints, child_edge, holds)
+    FilteredAcceptedStateOrigin(combined_routine, constraints, transformed_edge, holds) -> match repeat_starts_origin(n, starts, lazy, Accepted(combined_routine, constraints), transformed_edge)
+      RepeatEmptyStartOrigin() -> FilteredRepeatEmptyStartOrigin()
+
   type FilteredAppendMemberOrigin(n: Nat, left: List(MachineState(n)), right: List(MachineState(n))) indices (value: MachineState(n))
     FilteredAppendMemberLeft : (edge: ListMember(MachineState(n), value, left)) -> FilteredAppendMemberOrigin(n, left, right, value)
     FilteredAppendMemberRight : (edge: ListMember(MachineState(n), value, right)) -> FilteredAppendMemberOrigin(n, left, right, value)

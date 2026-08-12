@@ -459,6 +459,20 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> FilteredRepeatDestinationsOrigin(n, destinations, starts, lazy, boundary, filtered) =
       filtered_repeat_destinations_origin(n, destinations, starts, lazy, boundary, filtered, edge)
 
+    fn filtered_repeat_starts_origin_case(
+      n: Nat,
+      starts: List(MachineState(n)),
+      lazy: Bool,
+      boundary: Boundary,
+      filtered: MachineState(n),
+      edge: ListMember(
+        MachineState(n),
+        filtered,
+        filter_machine_states(n, repeat_machine_starts(starts, lazy), boundary)
+      )
+    ) -> FilteredRepeatStartsOrigin(n, starts, lazy, boundary, filtered) =
+      filtered_repeat_starts_origin(n, starts, lazy, boundary, filtered, edge)
+
     fn generic_predicate_alternate_acceptance_case(
       left: Char -> Bool,
       right: Char -> Bool,
@@ -951,6 +965,9 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.get_def(env, :"Std.Regex.Proof#filtered_repeat_destinations_origin")
     assert Env.total?(env, :"Std.Regex.Proof#filtered_repeat_destinations_origin")
     assert Env.total?(env, :"RegexAcceptingPath#filtered_repeat_destinations_origin_case")
+    assert Env.get_def(env, :"Std.Regex.Proof#filtered_repeat_starts_origin")
+    assert Env.total?(env, :"Std.Regex.Proof#filtered_repeat_starts_origin")
+    assert Env.total?(env, :"RegexAcceptingPath#filtered_repeat_starts_origin_case")
     assert Env.total?(env, :"Std.Regex.Proof#prefix_routine_origin")
     assert Env.total?(env, :"Std.Regex.Proof#finish_capture_origin")
     assert Env.total?(env, :"Std.Regex.Proof#filtered_finish_capture_origin")
