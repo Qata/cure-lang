@@ -60,6 +60,27 @@ defmodule Cure.Elab.ValueInGoalMatchTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "scrutinee refinement reconstructs inferred constructor fields" do
+    src = """
+    mod InferredFieldReconstruction
+      type Nat = Z | S(Nat)
+      type List(a: Type) = Nil | Cons(a, List(a))
+      type Path indices (input: List(Nat), final: Nat)
+        Finished : Path(Nil(), final)
+        Stepped : (head: Nat) -> (tail: List(Nat)) -> Path(tail, final) -> Path(Cons(head, tail), final)
+
+      fn ignore({input: List(Nat)}, {final: Nat}, _path: Path(input, final)) -> Nat = Z()
+
+      fn retain(input: List(Nat), final: Nat, path: Path(input, final)) -> Nat = match input
+        Nil() -> match path
+          Finished() -> ignore(path)
+        Cons(_, _) -> match path
+          Stepped(head, tail, suffix) -> ignore(path)
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
   test "an explicit erased parameter is consumed before a dependent present argument" do
     src =
       mod("""

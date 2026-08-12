@@ -7046,13 +7046,24 @@ defmodule Cure.Elab.Elaborator do
       if contextual_impossible? do
         body_expr
       else
-        refine_scrutinee_in_body(
-          body_expr,
-          Map.fetch!(cfg, :scrut_term),
-          pattern,
-          pattern_vars,
-          names
-        )
+        # Surface reconstruction contains only positional pattern fields. When
+        # the constructor telescope also has inferred fields, substituting that
+        # partial call for the scrutinee manufactures an under-applied Core
+        # constructor if the surrounding expression offers no expected type at
+        # the call site. The branch motive already performs the authoritative
+        # Core-level value refinement, so retain the original surface name until
+        # reconstruction can represent the complete telescope.
+        if length(plicities) == arity and Enum.all?(plicities, &(&1 == :explicit)) do
+          refine_scrutinee_in_body(
+            body_expr,
+            Map.fetch!(cfg, :scrut_term),
+            pattern,
+            pattern_vars,
+            names
+          )
+        else
+          body_expr
+        end
       end
 
     branch_body_result =
