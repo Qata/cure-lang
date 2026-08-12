@@ -6845,14 +6845,38 @@ defmodule Cure.Elab.Elaborator do
       arm_map
       |> Enum.reduce_while({:ok, []}, fn
         {cname, {:impossible_marked, pattern}}, {:ok, acc} ->
-          case elaborate_with_motivegen_branch(
-                 cname,
-                 pattern,
-                 @contextual_impossible_body,
-                 cfg
-               ) do
-            {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
-            {:error, _} = err -> {:halt, err}
+          # An indexed constructor that cannot unify with the scrutinee is
+          # discharged by the same kernel authority as an ordinary dependent
+          # match.  Previously the motive-generalized convoy path still built a
+          # synthetic constructor context and asked `contextual_absurd/3` to
+          # rediscover the contradiction from a carried sibling.  That context
+          # contains the constructor at its own result indices, so the original
+          # rigid index clash (for example `Cons _ _ = Nil`) has already been
+          # erased and a valid `-> impossible` was rejected as reachable.
+          #
+          # Keep contextual ex-falso for the distinct case it was designed for:
+          # the matched constructor is reachable at its own indices, but a
+          # transported sibling in the convoy is empty.
+          direct_verdict =
+            case Map.fetch(cfg, :idx_vals) do
+              {:ok, idx_vals} -> Kernel.branch_unify(ctx, dname, cname, idx_vals, cfg.param_vals)
+              :error -> :trivial
+            end
+
+          case direct_verdict do
+            :impossible ->
+              {:cont, {:ok, acc}}
+
+            _reachable ->
+              case elaborate_with_motivegen_branch(
+                     cname,
+                     pattern,
+                     @contextual_impossible_body,
+                     cfg
+                   ) do
+                {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
+                {:error, _} = err -> {:halt, err}
+              end
           end
 
         {cname, {:matched, pattern, body_expr}}, {:ok, acc} ->

@@ -89,4 +89,24 @@ defmodule Cure.Elab.DependentMatchSurfaceTest do
 
     assert {:error, {:source_context, {:reachable_impossible, :"Main#prepend"}, _}} = Program.elaborate(src)
   end
+
+  test "an impossible nested branch is discharged from the matched family's indices" do
+    src = """
+    mod NestedIndexedImpossible
+      use Std.List
+
+      type State = Active(Nat) | Accepted
+
+      type Path indices (input: List(Nat), state: State)
+        Finished : Path(Nil(), Accepted())
+
+      fn reject_finished(input: List(Nat), source: Nat, path: Path(input, Active(source))) -> Nat = match input
+        Nil() -> match path
+          Finished() -> impossible
+        Cons(_, _) -> match path
+          Finished() -> impossible
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
 end
