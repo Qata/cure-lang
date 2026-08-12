@@ -430,6 +430,35 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     ) -> RepeatDestinationOrderOrigin(n, routine, constraints, starts, lazy, destination) =
       repeat_destination_order_origin(n, routine, constraints, starts, lazy, destination, edge)
 
+    fn repeat_destinations_origin_case(
+      n: Nat,
+      destinations: List(MachineState(n)),
+      starts: List(MachineState(n)),
+      lazy: Bool,
+      destination: MachineState(n),
+      edge: ListMember(
+        MachineState(n),
+        destination,
+        repeat_destinations(destinations, starts, lazy)
+      )
+    ) -> RepeatDestinationsOrigin(n, destinations, starts, lazy, destination) =
+      repeat_destinations_origin(n, destinations, starts, lazy, destination, edge)
+
+    fn filtered_repeat_destinations_origin_case(
+      n: Nat,
+      destinations: List(MachineState(n)),
+      starts: List(MachineState(n)),
+      lazy: Bool,
+      boundary: Boundary,
+      filtered: MachineState(n),
+      edge: ListMember(
+        MachineState(n),
+        filtered,
+        filter_machine_states(n, repeat_destinations(destinations, starts, lazy), boundary)
+      )
+    ) -> FilteredRepeatDestinationsOrigin(n, destinations, starts, lazy, boundary, filtered) =
+      filtered_repeat_destinations_origin(n, destinations, starts, lazy, boundary, filtered, edge)
+
     fn generic_predicate_alternate_acceptance_case(
       left: Char -> Bool,
       right: Char -> Bool,
@@ -916,6 +945,12 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.get_def(env, :"Std.Regex.Proof#repeat_destination_order_origin")
     assert Env.total?(env, :"Std.Regex.Proof#repeat_destination_order_origin")
     assert Env.total?(env, :"RegexAcceptingPath#repeat_destination_order_origin_case")
+    assert Env.get_def(env, :"Std.Regex.Proof#repeat_destinations_origin")
+    assert Env.total?(env, :"Std.Regex.Proof#repeat_destinations_origin")
+    assert Env.total?(env, :"RegexAcceptingPath#repeat_destinations_origin_case")
+    assert Env.get_def(env, :"Std.Regex.Proof#filtered_repeat_destinations_origin")
+    assert Env.total?(env, :"Std.Regex.Proof#filtered_repeat_destinations_origin")
+    assert Env.total?(env, :"RegexAcceptingPath#filtered_repeat_destinations_origin_case")
     assert Env.total?(env, :"Std.Regex.Proof#prefix_routine_origin")
     assert Env.total?(env, :"Std.Regex.Proof#finish_capture_origin")
     assert Env.total?(env, :"Std.Regex.Proof#filtered_finish_capture_origin")
