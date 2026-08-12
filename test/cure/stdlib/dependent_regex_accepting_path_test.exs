@@ -401,6 +401,20 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
         ThompsonEvidencePredicate(test)
       )
 
+    fn enter_repeat_origin_case(
+      n: Nat,
+      routine: List(EvidenceInstruction),
+      constraints: List(BoundaryConstraint),
+      starts: List(MachineState(n)),
+      entered: MachineState(n),
+      edge: ListMember(
+        MachineState(n),
+        entered,
+        enter_repeat_with_constraints(routine, constraints, starts)
+      )
+    ) -> EnterRepeatStateOrigin(n, routine, constraints, starts, entered) =
+      enter_repeat_state_origin(n, routine, constraints, starts, entered, edge)
+
     fn generic_predicate_alternate_acceptance_case(
       left: Char -> Bool,
       right: Char -> Bool,
@@ -881,6 +895,9 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.total?(env, :"Std.Regex.Proof#boundary_acceptance_captures")
     assert Env.total?(env, :"Std.Regex.Proof#predicate_path_captures")
     assert Env.total?(env, :"Std.Regex.Proof#predicate_acceptance_captures")
+    assert Env.get_def(env, :"Std.Regex.Proof#enter_repeat_state_origin")
+    assert Env.total?(env, :"Std.Regex.Proof#enter_repeat_state_origin")
+    assert Env.total?(env, :"RegexAcceptingPath#enter_repeat_origin_case")
     assert Env.total?(env, :"Std.Regex.Proof#prefix_routine_origin")
     assert Env.total?(env, :"Std.Regex.Proof#finish_capture_origin")
     assert Env.total?(env, :"Std.Regex.Proof#filtered_finish_capture_origin")

@@ -567,6 +567,22 @@ mod Std.Regex.Proof
         AppendMemberLeft(origin) -> append_member_left(left, right, value, member_there(head, origin))
         AppendMemberRight(origin) -> append_member_right(left, right, value, origin)
 
+  ## Repetition re-enters only active child starts.  This inversion retains the
+  ## exact child start edge and the routine/constraint prefix contributed by the
+  ## just-completed iteration.
+  type EnterRepeatStateOrigin(n: Nat, routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState(n))) indices (entered: MachineState(n))
+    EnterRepeatActiveOrigin : (state: Bounded(n)) -> (start_routine: List(EvidenceInstruction)) -> (start_constraints: List(BoundaryConstraint)) -> (edge: ListMember(MachineState(n), Active(state, start_routine, start_constraints), starts)) -> EnterRepeatStateOrigin(n, routine, constraints, starts, Active(state, append_routine(routine, start_routine), append_constraints(constraints, start_constraints)))
+
+  fn prepend_enter_repeat_origin(n: Nat, routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), head: MachineState(n), starts: List(MachineState(n)), entered: MachineState(n), origin: EnterRepeatStateOrigin(n, routine, constraints, starts, entered)) -> EnterRepeatStateOrigin(n, routine, constraints, Cons(head, starts), entered) = match origin
+    EnterRepeatActiveOrigin(state, start_routine, start_constraints, edge) -> EnterRepeatActiveOrigin(state, start_routine, start_constraints, ListMemberThere(edge))
+
+  fn enter_repeat_state_origin(n: Nat, routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState(n)), entered: MachineState(n), edge: ListMember(MachineState(n), entered, enter_repeat_with_constraints(routine, constraints, starts))) -> EnterRepeatStateOrigin(n, routine, constraints, starts, entered) = match starts
+    Nil() -> impossible_list_member(edge)
+    Cons(Accepted(start_routine, start_constraints), rest) -> prepend_enter_repeat_origin(n, routine, constraints, Accepted(start_routine, start_constraints), rest, entered, enter_repeat_state_origin(n, routine, constraints, rest, entered, edge))
+    Cons(Active(state, start_routine, start_constraints), rest) -> match edge
+      ListMemberHere() -> EnterRepeatActiveOrigin(state, start_routine, start_constraints, ListMemberHere())
+      ListMemberThere(prior) -> prepend_enter_repeat_origin(n, routine, constraints, Active(state, start_routine, start_constraints), rest, entered, enter_repeat_state_origin(n, routine, constraints, rest, entered, prior))
+
   type FilteredAppendMemberOrigin(n: Nat, left: List(MachineState(n)), right: List(MachineState(n))) indices (value: MachineState(n))
     FilteredAppendMemberLeft : (edge: ListMember(MachineState(n), value, left)) -> FilteredAppendMemberOrigin(n, left, right, value)
     FilteredAppendMemberRight : (edge: ListMember(MachineState(n), value, right)) -> FilteredAppendMemberOrigin(n, left, right, value)
