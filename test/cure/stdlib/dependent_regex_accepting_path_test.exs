@@ -401,6 +401,19 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
         ThompsonEvidencePredicate(test)
       )
 
+    fn repeated_predicate_evidence_proof(
+      test: Char -> Bool,
+      lazy: Bool
+    ) -> ThompsonEvidenceProof(
+      ListC(CharC()),
+      ThompsonRepeat(ThompsonPredicate(test), lazy)
+    ) =
+      ThompsonEvidenceRepeat(
+        ThompsonPredicate(test),
+        lazy,
+        ThompsonEvidencePredicate(test)
+      )
+
     fn enter_repeat_origin_case(
       n: Nat,
       routine: List(EvidenceInstruction),
@@ -1075,10 +1088,17 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.get_def(env, :"Std.Regex#extract_encoding")
     assert Env.total?(env, :"Std.Regex#extract_encoding")
     assert Env.total?(env, :generic_predicate_alternate_total_extraction)
+    assert Env.total?(env, :repeated_predicate_evidence_proof)
     assert Env.get_def(env, :"Std.Regex.Proof#thompson_machine_acceptance_encodes")
     assert Env.total?(env, :"Std.Regex.Proof#thompson_machine_acceptance_encodes")
     assert Map.has_key?(env.ctors, :"Std.Regex.Proof#ThompsonEvidenceBoundary")
     assert Map.has_key?(env.ctors, :"Std.Regex.Proof#ThompsonEvidenceConcat")
+    assert Map.has_key?(env.ctors, :"Std.Regex.Proof#ThompsonEvidenceRepeat")
+    assert Env.total?(env, :"Std.Regex.Proof#project_repeat_acceptance_from_machine")
+    assert Env.total?(env, :"Std.Regex.Proof#thompson_repeat_projection_encodes_many")
+    assert Env.total?(env, :"Std.Regex.Proof#thompson_repeat_projection_captures")
+    assert Env.total?(env, :"Std.Regex.Proof#thompson_repeat_acceptance_from_encodes")
+    assert Env.total?(env, :"Std.Regex.Proof#thompson_repeat_acceptance_captures")
 
     assert Env.certified?(
              env,
