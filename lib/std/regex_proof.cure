@@ -583,6 +583,22 @@ mod Std.Regex.Proof
       ListMemberHere() -> EnterRepeatActiveOrigin(state, start_routine, start_constraints, ListMemberHere())
       ListMemberThere(prior) -> prepend_enter_repeat_origin(n, routine, constraints, Active(state, start_routine, start_constraints), rest, entered, enter_repeat_state_origin(n, routine, constraints, rest, entered, prior))
 
+  type RepeatDestinationOrderOrigin(n: Nat, routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState(n)), lazy: Bool) indices (destination: MachineState(n))
+    RepeatDestinationAcceptingOrigin : RepeatDestinationOrderOrigin(n, routine, constraints, starts, lazy, Accepted(append_routine(routine, Cons(EndList(), Nil())), constraints))
+    RepeatDestinationReenteredOrigin : (origin: EnterRepeatStateOrigin(n, routine, constraints, starts, destination)) -> RepeatDestinationOrderOrigin(n, routine, constraints, starts, lazy, destination)
+
+  fn repeat_destination_order_origin(n: Nat, routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState(n)), lazy: Bool, destination: MachineState(n), edge: ListMember(MachineState(n), destination, repeat_destination_order(routine, constraints, starts, lazy))) -> RepeatDestinationOrderOrigin(n, routine, constraints, starts, lazy, destination) = match lazy
+    False() -> match append_member_origin(n, enter_repeat_with_constraints(routine, constraints, starts), repeat_accepting(routine, constraints), destination, edge)
+      AppendMemberLeft(entered_edge) -> RepeatDestinationReenteredOrigin(enter_repeat_state_origin(n, routine, constraints, starts, destination, entered_edge))
+      AppendMemberRight(accepting_edge) -> match accepting_edge
+        ListMemberHere() -> RepeatDestinationAcceptingOrigin()
+        ListMemberThere(impossible) -> impossible_list_member(impossible)
+    True() -> match append_member_origin(n, repeat_accepting(routine, constraints), enter_repeat_with_constraints(routine, constraints, starts), destination, edge)
+      AppendMemberLeft(accepting_edge) -> match accepting_edge
+        ListMemberHere() -> RepeatDestinationAcceptingOrigin()
+        ListMemberThere(impossible) -> impossible_list_member(impossible)
+      AppendMemberRight(entered_edge) -> RepeatDestinationReenteredOrigin(enter_repeat_state_origin(n, routine, constraints, starts, destination, entered_edge))
+
   type FilteredAppendMemberOrigin(n: Nat, left: List(MachineState(n)), right: List(MachineState(n))) indices (value: MachineState(n))
     FilteredAppendMemberLeft : (edge: ListMember(MachineState(n), value, left)) -> FilteredAppendMemberOrigin(n, left, right, value)
     FilteredAppendMemberRight : (edge: ListMember(MachineState(n), value, right)) -> FilteredAppendMemberOrigin(n, left, right, value)
