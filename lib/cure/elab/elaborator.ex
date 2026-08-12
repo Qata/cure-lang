@@ -33,6 +33,12 @@ defmodule Cure.Elab.Elaborator do
   # `wrap_join/2` replaces every marker before the term escapes `elaborate_match`.
   @join_marker :"$join_point"
 
+  # Internal request used by motive-generalized matches when an authored
+  # `Ctor(...) -> impossible` branch is reachable by the outer scrutinee but its
+  # refined dependent context contains an uninhabited indexed value. It is
+  # consumed before expression elaboration and never reaches Core.
+  @contextual_impossible_body {:__cure_contextual_impossible__, [], []}
+
   @doc """
   Elaborate a top-level function definition into `{:ok, core_lambda, type_value}`
   — the λ over the parameters and the Π type it inhabits.
@@ -6086,7 +6092,7 @@ defmodule Cure.Elab.Elaborator do
           type_term = expose_reducible_dependency(type_term, scrut_term, ctx, env)
 
           if contains_term?(type_term, scrut_term),
-            do: [%{name: name, index: i, type_term: type_term}],
+            do: [%{name: name, index: i, type_term: type_term, grade: Context.grade(ctx, i) || Grade.unrestricted()}],
             else: []
         else
           []
@@ -6630,7 +6636,7 @@ defmodule Cure.Elab.Elaborator do
 
     # Per-sibling transport (`prf = {:var,0}`; original `h_j` = {:var, idx+sc}).
     sib_data =
-      Enum.map(siblings, fn %{index: idx, name: sname, type_term: h_ctx} ->
+      Enum.map(siblings, fn %{index: idx, name: sname, type_term: h_ctx} = sibling ->
         h_b1 = Subst.shift(h_ctx, sc, 0)
         motive_j = {:lam, Cure.Core.Grade.unrestricted(), t_b1, abstract_term(h_b1, e_b1, 0)}
         # J/subst transport (Phase B): prf {:var,0} : Eq(T, e, pat); the case's
@@ -6641,14 +6647,19 @@ defmodule Cure.Elab.Elaborator do
         transport =
           {:app, transport_case({:var, 0}, t_b1, motive_j, e_b1), {:var, idx + sc}}
 
-        %{name: sname, dom: replace_term_scoped(h_b1, e_b1, pat_b1), transport: transport}
+        %{
+          name: sname,
+          grade: Map.get(sibling, :grade, Grade.unrestricted()),
+          dom: replace_term_scoped(h_b1, e_b1, pat_b1),
+          transport: transport
+        }
       end)
 
     m = length(sib_data)
 
     branch_ctx_full =
-      Enum.reduce(sib_data, branch_ctx1, fn %{dom: d}, c ->
-        Context.extend(c, Eval.eval(d, Context.env(branch_ctx1)))
+      Enum.reduce(sib_data, branch_ctx1, fn %{dom: d, grade: grade}, c ->
+        Context.extend(c, Eval.eval(d, Context.env(branch_ctx1)), grade)
       end)
 
     body_names = Enum.reduce(sib_data, branch_names1, fn %{name: s}, acc -> [s | acc] end)
@@ -6660,8 +6671,8 @@ defmodule Cure.Elab.Elaborator do
         sib_data
         |> Enum.with_index()
         |> Enum.reverse()
-        |> Enum.reduce(inner, fn {%{dom: d, transport: t}, i}, acc ->
-          {:app, {:lam, Cure.Core.Grade.unrestricted(), Subst.shift(d, i, 0), acc}, Subst.shift(t, i, 0)}
+        |> Enum.reduce(inner, fn {%{dom: d, transport: t, grade: grade}, i}, acc ->
+          {:app, {:lam, grade, Subst.shift(d, i, 0), acc}, Subst.shift(t, i, 0)}
         end)
 
       {:ok, {cname, arity, {:lam, Cure.Core.Grade.unrestricted(), eq_dom_term, wrapped}}}
@@ -6816,9 +6827,10 @@ defmodule Cure.Elab.Elaborator do
       end)
 
     domains
+    |> Enum.zip(Enum.map(siblings, &Map.get(&1, :grade, Grade.unrestricted())))
     |> Enum.reverse()
-    |> Enum.reduce(body, fn domain, codomain ->
-      {:pi, Grade.unrestricted(), domain, codomain}
+    |> Enum.reduce(body, fn {domain, grade}, codomain ->
+      {:pi, grade, domain, codomain}
     end)
   end
 
@@ -6832,8 +6844,16 @@ defmodule Cure.Elab.Elaborator do
          :ok <- reject_with_default(default) do
       arm_map
       |> Enum.reduce_while({:ok, []}, fn
-        {_cname, {:impossible_marked, _pattern}}, {:ok, acc} ->
-          {:cont, {:ok, acc}}
+        {cname, {:impossible_marked, pattern}}, {:ok, acc} ->
+          case elaborate_with_motivegen_branch(
+                 cname,
+                 pattern,
+                 @contextual_impossible_body,
+                 cfg
+               ) do
+            {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
+            {:error, _} = err -> {:halt, err}
+          end
 
         {cname, {:matched, pattern, body_expr}}, {:ok, acc} ->
           case elaborate_with_motivegen_branch(cname, pattern, body_expr, cfg) do
@@ -6966,7 +6986,7 @@ defmodule Cure.Elab.Elaborator do
 
         dom_value = Eval.eval(dom_term, Context.env(c))
 
-        {Context.extend(c, dom_value), [sibling.name | ns], cod_ty, [{g, dom_term} | acc]}
+        {Context.extend(c, dom_value, g), [sibling.name | ns], cod_ty, [{g, dom_term} | acc]}
       end)
 
     # For an indexed convoy, reconstruct the branch goal from the original
@@ -6996,17 +7016,27 @@ defmodule Cure.Elab.Elaborator do
         Kernel.normalize(branch_ctx, cod)
       end
 
+    contextual_impossible? = body_expr == @contextual_impossible_body
+
     body_expr =
-      refine_scrutinee_in_body(
-        body_expr,
-        Map.fetch!(cfg, :scrut_term),
-        pattern,
-        pattern_vars,
-        names
-      )
+      if contextual_impossible? do
+        body_expr
+      else
+        refine_scrutinee_in_body(
+          body_expr,
+          Map.fetch!(cfg, :scrut_term),
+          pattern,
+          pattern_vars,
+          names
+        )
+      end
 
     branch_body_result =
-      elaborate_branch_body(body_expr, cod_expected, branch_names, branch_ctx, env)
+      if contextual_impossible? do
+        contextual_absurd(branch_ctx, cod_expected, env)
+      else
+        elaborate_branch_body(body_expr, cod_expected, branch_names, branch_ctx, env)
+      end
 
     with :ok <-
            check_named_implicits(
@@ -7024,6 +7054,51 @@ defmodule Cure.Elab.Elaborator do
         Enum.reduce(doms_rev, inner, fn {g, dom_term}, acc -> {:lam, g, dom_term, acc} end)
 
       {:ok, {cname, arity, wrapped}}
+    end
+  end
+
+  # Build ex-falso from an indexed value already present in the refined branch
+  # context. This is the contextual counterpart of omitting an impossible
+  # constructor of the *matched* family: all constructors of the sibling family
+  # must receive the kernel's certain `:impossible` verdict at its actual
+  # indices. The produced empty Core case is then independently checked by the
+  # kernel, so an elaborator mistake cannot manufacture an inhabitant.
+  defp contextual_absurd(ctx, expected, env) do
+    depth = Context.length(ctx)
+
+    0..(depth - 1)//1
+    |> Enum.find_value(fn index ->
+      case Normalise.whnf_value(Context.lookup(ctx, index), Context.signature(ctx)) do
+        {:vdata, dname, args} ->
+          family = Inductive.get_family(env, dname)
+
+          if family != nil and not Inductive.opaque_family?(family) do
+            pc = Inductive.param_count(env, dname)
+            {params, indices} = Enum.split(args, pc)
+
+            impossible? =
+              env
+              |> Inductive.ctors_of(dname)
+              |> Enum.all?(fn ctor ->
+                Kernel.branch_unify(ctx, dname, ctor.name, indices, params) == :impossible
+              end)
+
+            if impossible? do
+              param_terms = Enum.map(params, &Quote.reify(&1, depth))
+              index_terms = Enum.map(indices, &Quote.reify(&1, depth))
+              scrutinee = {:var, index}
+              motive = build_motive(dname, family.indices, param_terms, index_terms, scrutinee, expected)
+              {:ok, {:case, scrutinee, motive, []}}
+            end
+          end
+
+        _ ->
+          nil
+      end
+    end)
+    |> case do
+      nil -> {:error, {:reachable_impossible, :context_inhabited}}
+      result -> result
     end
   end
 
@@ -9609,7 +9684,13 @@ defmodule Cure.Elab.Elaborator do
         rows =
           Enum.map(arms, fn {:match_arm, m, b} ->
             {:function_call, _fm, as} = Keyword.fetch!(m, :pattern)
-            {as, Keyword.get(m, :guard), single_body(b)}
+
+            body =
+              if Keyword.get(m, :impossible, false),
+                do: @contextual_impossible_body,
+                else: single_body(b)
+
+            {as, Keyword.get(m, :guard), body}
           end)
 
         case compile_matrix(fresh, rows) do
@@ -10700,6 +10781,9 @@ defmodule Cure.Elab.Elaborator do
 
     replace_branch_vars(shifted, subst)
   end
+
+  defp elaborate_branch_body(@contextual_impossible_body, expected, _names, ctx, env),
+    do: contextual_absurd(ctx, expected, env)
 
   defp elaborate_branch_body({:rewrite_expr, _meta, _children} = expr, expected, names, ctx, env),
     do: elaborate_expr_checked(expr, expected, names, ctx, env)

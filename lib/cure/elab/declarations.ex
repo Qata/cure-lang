@@ -923,7 +923,7 @@ defmodule Cure.Elab.Declarations do
          {:ok, sig} <- timed_body_stage(opts, :signature, fn -> function_signature(meta, env) end),
          {:ok, body_expr} <-
            timed_body_stage(opts, :induction, fn -> Induction.expand(body_expr, sig, env) end) do
-      ctx = build_context(env, sig.telescope)
+      ctx = build_context(env, sig.telescope, sig.quantities)
       # Qualify any hole minted while elaborating THIS body by its enclosing def
       # (`hole_id/2`) — local to this call, never merged back into `final` below,
       # so it cannot leak into another def's elaboration.
@@ -2448,8 +2448,12 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  defp build_context(env, telescope) do
-    Enum.reduce(telescope, Context.empty(env), fn {_name, type_core}, ctx ->
+  defp build_context(env, telescope, quantities \\ nil) do
+    grades = binder_grades(quantities, length(telescope))
+
+    telescope
+    |> Enum.zip(grades)
+    |> Enum.reduce(Context.empty(env), fn {{_name, type_core}, grade}, ctx ->
       # Weak-head-normalise each binder type so a type alias (`type Endo = (Nat) ->
       # Nat`, a certified δ-def) is stored as the underlying Π/Σ/data value the
       # kernel inspects — e.g. applying an `Endo`-typed parameter reaches a Π. This
@@ -2460,7 +2464,7 @@ defmodule Cure.Elab.Declarations do
         |> Eval.eval(Context.env(ctx))
         |> Cure.Core.Normalise.whnf_value(env)
 
-      Context.extend(ctx, type_value)
+      Context.extend(ctx, type_value, grade)
     end)
   end
 

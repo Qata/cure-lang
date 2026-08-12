@@ -12,10 +12,11 @@ defmodule Cure.Core.Context do
 
   alias Cure.Core.{Env, Value}
 
-  defstruct types: [], env: [], length: 0, signature: nil
+  defstruct types: [], grades: [], env: [], length: 0, signature: nil
 
   @type t :: %__MODULE__{
           types: [Value.t()],
+          grades: [Cure.Core.Grade.t()],
           env: [Value.t()],
           length: non_neg_integer(),
           signature: Env.t() | nil
@@ -40,11 +41,12 @@ defmodule Cure.Core.Context do
   level, exactly as `neutral_env/1` would have produced. This is the binder used
   by `:pi`, `:lam` and `:case` branches.
   """
-  @spec extend(t(), Value.t()) :: t()
-  def extend(%__MODULE__{} = ctx, type_value),
+  @spec extend(t(), Value.t(), Cure.Core.Grade.t()) :: t()
+  def extend(%__MODULE__{} = ctx, type_value, grade \\ Cure.Core.Grade.unrestricted()),
     do: %{
       ctx
       | types: [type_value | ctx.types],
+        grades: [grade | ctx.grades],
         env: [{:vneutral, {:nvar, ctx.length}} | ctx.env],
         length: ctx.length + 1
     }
@@ -70,6 +72,7 @@ defmodule Cure.Core.Context do
     do: %{
       ctx
       | types: [type_value | ctx.types],
+        grades: [Cure.Core.Grade.unrestricted() | ctx.grades],
         env: [value | ctx.env],
         length: ctx.length + 1
     }
@@ -82,6 +85,11 @@ defmodule Cure.Core.Context do
   # at a binding it does not name. `Term.term?/1` has always rejected `{:var, -1}`.
   def lookup(%__MODULE__{}, k) when not is_integer(k) or k < 0, do: nil
   def lookup(%__MODULE__{types: ts}, k), do: Enum.at(ts, k)
+
+  @doc "The declared grade of the variable at de Bruijn index `k`."
+  @spec grade(t(), non_neg_integer()) :: Cure.Core.Grade.t() | nil
+  def grade(%__MODULE__{}, k) when not is_integer(k) or k < 0, do: nil
+  def grade(%__MODULE__{grades: grades}, k), do: Enum.at(grades, k)
 
   @doc "Number of variables in scope."
   @spec length(t()) :: non_neg_integer()

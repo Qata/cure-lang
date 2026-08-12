@@ -259,15 +259,12 @@ defmodule Cure.Elab.Rewrite do
   def abstract_term({:var, index}, _target, depth) when index >= depth, do: {:var, index + 1}
   def abstract_term({:var, _} = variable, _target, _depth), do: variable
 
-  def abstract_term({:pi, _grade, domain, codomain}, target, depth),
+  def abstract_term({:pi, grade, domain, codomain}, target, depth),
     do:
-      {:pi, Grade.unrestricted(), abstract_term(domain, target, depth),
-       abstract_term(codomain, Subst.shift(target, 1, 0), depth + 1)}
+      {:pi, grade, abstract_term(domain, target, depth), abstract_term(codomain, Subst.shift(target, 1, 0), depth + 1)}
 
-  def abstract_term({:lam, _grade, domain, body}, target, depth),
-    do:
-      {:lam, Grade.unrestricted(), abstract_term(domain, target, depth),
-       abstract_term(body, Subst.shift(target, 1, 0), depth + 1)}
+  def abstract_term({:lam, grade, domain, body}, target, depth),
+    do: {:lam, grade, abstract_term(domain, target, depth), abstract_term(body, Subst.shift(target, 1, 0), depth + 1)}
 
   def abstract_term({:case, scrutinee, motive, branches}, target, depth) do
     {:case, abstract_term(scrutinee, target, depth), abstract_term(motive, target, depth),

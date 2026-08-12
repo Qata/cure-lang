@@ -90,4 +90,45 @@ defmodule Cure.Elab.SiblingContextRefinementTest do
 
     assert {:ok, _env} = Program.elaborate(source)
   end
+
+  test "nested pattern lowering preserves contextual impossible branches" do
+    source = """
+    mod NestedContextualImpossible
+      type Marker = Stop | Value
+      type Markers = Empty | More(Marker, Markers)
+      type Encodes indices (markers: Markers)
+        EncodesValue : Encodes(More(Value(), rest))
+
+      fn consume(markers: Markers, @erased proof: Encodes(markers)) -> Unit = match markers
+        Empty() -> impossible
+        More(Stop(), _) -> impossible
+        More(Value(), _) -> match proof
+          EncodesValue() -> ()
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
+
+  test "nested constructor refinement keeps an erased dependent sibling erased" do
+    source = """
+    mod NestedErasedSibling
+      type Tag = A | B
+      type Marker = MA | MB | MX
+      type Markers = Empty | More(Marker, Markers)
+      type Encodes indices (tag: Tag, markers: Markers)
+        EncodesA : Encodes(A(), More(MA(), tail))
+        EncodesB : Encodes(B(), More(MB(), tail))
+
+      fn consume({tag: Tag}, markers: Markers, @erased proof: Encodes(tag, markers)) -> Unit = match markers
+        Empty() -> impossible
+        More(MA(), _) -> match proof
+          EncodesA() -> ()
+        More(MB(), _) -> match proof
+          EncodesB() -> ()
+        More(MX(), _) -> impossible
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
 end

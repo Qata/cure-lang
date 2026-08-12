@@ -52,6 +52,23 @@ defmodule Cure.Elab.EraseRelevanceCollapsibleAgreementGreenGuardTest do
     ])
   end
 
+  # Indexed singleton: the family has two constructors globally, but a checked
+  # case at `IndexedProof(LeftIndex)` can retain only `LeftProof`.  Coverage has
+  # already proved that branch exhaustive before either pass sees Core.  Since
+  # its only field is erased, the case is computationally irrelevant just like
+  # the globally-single-constructor `Proof` case above.
+  defp indexed_proof_env do
+    Env.empty()
+    |> Inductive.declare(Inductive.family(:Index, [], [], 0), [
+      Inductive.ctor(:LeftIndex, [], []),
+      Inductive.ctor(:RightIndex, [], [])
+    ])
+    |> Inductive.declare(Inductive.family(:IndexedProof, [], [index: {:data, :Index, [], []}], 0), [
+      Inductive.ctor(:LeftProof, [], [{:ctor, :LeftIndex, []}]),
+      Inductive.ctor(:RightProof, [], [{:ctor, :RightIndex, []}])
+    ])
+  end
+
   # A single-branch case scrutinising the sole in-scope `:erased` parameter
   # (`{:var, 0}`), whose branch body ignores every field it binds.
   defp erased_scrutinee_case(cname, arity),
@@ -83,8 +100,40 @@ defmodule Cure.Elab.EraseRelevanceCollapsibleAgreementGreenGuardTest do
     assert exempted_via_relevance?(env, :T2, 0) == false
   end
 
+  test "an index-forced singleton case with erased fields collapses even in a multi-constructor family" do
+    env = indexed_proof_env()
+
+    assert erased_via_erase?(env, :LeftProof, 0)
+    assert exempted_via_relevance?(env, :LeftProof, 0)
+  end
+
+  test "kernel-certified empty elimination neither retains nor scrutinises its erased proof" do
+    term = {:case, {:var, 0}, @motive, []}
+
+    assert Erase.erase(Env.empty(), term) == {:ctor, :cure_erased, []}
+    assert Relevance.check(Env.empty(), :absurd, [:erased], term) == :ok
+  end
+
+  test "an impossible proof branch does not make an otherwise forced proof case runtime-relevant" do
+    env = indexed_proof_env()
+
+    term =
+      {:case, {:var, 0}, @motive,
+       [
+         {:LeftProof, 0, {:global, :done}},
+         {:RightProof, 0, {:case, {:global, :impossible_witness}, @motive, []}}
+       ]}
+
+    assert Erase.erase(env, term) == {:global, :done}
+    assert Relevance.check(env, :forced, [:erased], term) == :ok
+  end
+
   test "the two judgments AGREE with each other across the whole family table" do
-    table = [{proof_env(), :MkProof, 1}, {bool2_env(), :T2, 0}]
+    table = [
+      {proof_env(), :MkProof, 1},
+      {bool2_env(), :T2, 0},
+      {indexed_proof_env(), :LeftProof, 0}
+    ]
 
     for {env, cname, arity} <- table do
       assert erased_via_erase?(env, cname, arity) == exempted_via_relevance?(env, cname, arity),

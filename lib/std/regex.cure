@@ -768,6 +768,81 @@ mod Std.Regex
     EncodesManyEmpty : EncodesMany(shape, Cons(BeginListEvidence(), rest), rest)
     EncodesManyItem : (@erased item : Encodes(shape, item_evidence, prior_evidence)) -> (@erased prior : EncodesMany(shape, prior_evidence, rest)) -> EncodesMany(shape, item_evidence, rest)
 
+  ## The runtime remainder returned by one extraction is also its result index.
+  ## Recursive callers therefore receive the exact boundary required by the next
+  ## erased `Encodes` witness without recovering runtime data from that witness.
+  type EncodingExtraction indices (shape: ShapeCode, input: List(Evidence), rest: List(Evidence))
+    EncodingExtracted : (remaining: List(Evidence)) -> (value: Sem(shape)) -> EncodingExtraction(shape, input, remaining)
+
+  type ManyEncodingExtraction indices (shape: ShapeCode, input: List(Evidence), rest: List(Evidence))
+    ManyEncodingExtracted : (remaining: List(Evidence)) -> (values: List(Sem(shape))) -> ManyEncodingExtraction(shape, input, remaining)
+
+  ## Total proof-directed extraction (thesis §5.3 / Fig. 5.8). `input` is an
+  ## explicit runtime argument, exactly like the paper's `ev`; only `encoding`
+  ## is erased. The evidence marker is inspected first and its index leaves one
+  ## possible proof constructor. There is no malformed-evidence branch and no
+  ## `Option` after an accepting run has produced the certificate.
+  fn extract_encoding_result({shape: ShapeCode}, input: List(Evidence), {rest: List(Evidence)}, @erased encoding: Encodes(shape, input, rest)) -> EncodingExtraction(shape, input, rest) = match input
+    [] -> impossible
+    [BeginListEvidence() | _] -> impossible
+    [UnitEvidence() | tail] -> match encoding
+      EncodesUnit() -> EncodingExtracted(tail, ())
+    [CharacterEvidence(char) | tail] -> match encoding
+      EncodesCharacter(_) -> EncodingExtracted(tail, char)
+    [StringEvidence(string_value) | tail] -> match encoding
+      EncodesString(_) -> EncodingExtracted(tail, string_value)
+    [PairEvidence() | pair_evidence] -> match encoding
+      EncodesPair(right, left) -> match extract_encoding_result(pair_evidence, right)
+        EncodingExtracted(left_evidence, right_value) -> match extract_encoding_result(left_evidence, left)
+          EncodingExtracted(remaining, left_value) -> EncodingExtracted(remaining, %[left_value, right_value])
+    [LeftEvidence() | branch_evidence] -> match encoding
+      EncodesLeft(branch) -> match extract_encoding_result(branch_evidence, branch)
+        EncodingExtracted(remaining, decoded_branch) -> EncodingExtracted(remaining, decoded_left_value(decoded_branch))
+    [RightEvidence() | branch_evidence] -> match encoding
+      EncodesRight(branch) -> match extract_encoding_result(branch_evidence, branch)
+        EncodingExtracted(remaining, decoded_branch) -> EncodingExtracted(remaining, decoded_right_value(decoded_branch))
+    [EndListEvidence() | items_evidence] -> match encoding
+      EncodesList(items) -> match extract_many_encoding_result(items_evidence, items)
+        ManyEncodingExtracted(remaining, values) -> EncodingExtracted(remaining, reverse_sem_values(values))
+
+  fn extract_many_encoding_result({shape: ShapeCode}, input: List(Evidence), {rest: List(Evidence)}, @erased encoding: EncodesMany(shape, input, rest)) -> ManyEncodingExtraction(shape, input, rest) = match input
+    [] -> match encoding
+      EncodesManyItem(item, prior) -> match item
+    [BeginListEvidence() | tail] -> match encoding
+      EncodesManyEmpty() -> ManyEncodingExtracted(tail, [])
+      EncodesManyItem(item, prior) -> match item
+    [CharacterEvidence(char) | tail] -> match encoding
+      EncodesManyItem(item, prior) -> match extract_encoding_result([CharacterEvidence(char) | tail], item)
+        EncodingExtracted(prior_evidence, value) -> match extract_many_encoding_result(prior_evidence, prior)
+          ManyEncodingExtracted(remaining, values) -> ManyEncodingExtracted(remaining, [value | values])
+    [UnitEvidence() | tail] -> match encoding
+      EncodesManyItem(item, prior) -> match extract_encoding_result([UnitEvidence() | tail], item)
+        EncodingExtracted(prior_evidence, value) -> match extract_many_encoding_result(prior_evidence, prior)
+          ManyEncodingExtracted(remaining, values) -> ManyEncodingExtracted(remaining, [value | values])
+    [PairEvidence() | tail] -> match encoding
+      EncodesManyItem(item, prior) -> match extract_encoding_result([PairEvidence() | tail], item)
+        EncodingExtracted(prior_evidence, value) -> match extract_many_encoding_result(prior_evidence, prior)
+          ManyEncodingExtracted(remaining, values) -> ManyEncodingExtracted(remaining, [value | values])
+    [LeftEvidence() | tail] -> match encoding
+      EncodesManyItem(item, prior) -> match extract_encoding_result([LeftEvidence() | tail], item)
+        EncodingExtracted(prior_evidence, value) -> match extract_many_encoding_result(prior_evidence, prior)
+          ManyEncodingExtracted(remaining, values) -> ManyEncodingExtracted(remaining, [value | values])
+    [RightEvidence() | tail] -> match encoding
+      EncodesManyItem(item, prior) -> match extract_encoding_result([RightEvidence() | tail], item)
+        EncodingExtracted(prior_evidence, value) -> match extract_many_encoding_result(prior_evidence, prior)
+          ManyEncodingExtracted(remaining, values) -> ManyEncodingExtracted(remaining, [value | values])
+    [EndListEvidence() | tail] -> match encoding
+      EncodesManyItem(item, prior) -> match extract_encoding_result([EndListEvidence() | tail], item)
+        EncodingExtracted(prior_evidence, value) -> match extract_many_encoding_result(prior_evidence, prior)
+          ManyEncodingExtracted(remaining, values) -> ManyEncodingExtracted(remaining, [value | values])
+    [StringEvidence(string_value) | tail] -> match encoding
+      EncodesManyItem(item, prior) -> match extract_encoding_result([StringEvidence(string_value) | tail], item)
+        EncodingExtracted(prior_evidence, value) -> match extract_many_encoding_result(prior_evidence, prior)
+          ManyEncodingExtracted(remaining, values) -> ManyEncodingExtracted(remaining, [value | values])
+
+  fn extract_encoding({shape: ShapeCode}, input: List(Evidence), @erased encoding: Encodes(shape, input, Nil())) -> Sem(shape) = match extract_encoding_result(input, encoding)
+    EncodingExtracted(Nil(), value) -> value
+
   ## A successful decoding existentially exposes the evidence prefix consumed
   ## for one Pattern and proves that the untouched suffix reconstructs the
   ## original evidence stream. This is the proof-producing boundary between

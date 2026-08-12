@@ -37,7 +37,7 @@ defmodule Cure.Elab.UsageCheckTest do
   use ExUnit.Case, async: true
 
   alias Cure.Core.{Env, Inductive}
-  alias Cure.Elab.Relevance
+  alias Cure.Elab.{Erase, Relevance}
 
   @nat {:data, :Nat, [], []}
   @motive {:lam, :unrestricted, @nat, @nat}
@@ -192,6 +192,16 @@ defmodule Cure.Elab.UsageCheckTest do
         {:app, {:case, {:var, 0}, @motive, [{:mk, 1, {:lam, :unrestricted, @nat, {:var, 0}}}]}, identity}
 
       assert :ok = check(box_env(:erased), [:unrestricted], convoy)
+    end
+
+    test "an unused convoy binder does not make its erased administrative argument relevant" do
+      convoy =
+        {:app, {:case, {:global, :box}, @motive, [{:mk, 1, {:lam, :erased, @nat, {:int_lit, 0}}}]}, {:var, 0}}
+
+      assert :ok = check(box_env(:unrestricted), [:erased], convoy)
+
+      assert {:case, {:global, :box}, _motive, [{:mk, 1, {:int_lit, 0}}]} =
+               Erase.erase(box_env(:unrestricted), convoy)
     end
   end
 

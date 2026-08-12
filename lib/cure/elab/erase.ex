@@ -14,6 +14,7 @@ defmodule Cure.Elab.Erase do
   """
 
   alias Cure.Core.{Grade, Inductive}
+  alias Cure.Elab.Collapsible
 
   @doc "Erase a Core term to its runtime form (drop erased constructor arguments)."
   @spec erase(Cure.Core.Env.t(), Cure.Core.Term.t()) :: Cure.Core.Term.t()
@@ -65,6 +66,28 @@ defmodule Cure.Elab.Erase do
     {head, args} = spine(app, [])
 
     case head do
+      {:case, scrutinee, motive, branches} when branches != [] ->
+        case convoy_grades(branches, length(args)) do
+          {:ok, grades} ->
+            erased_branches =
+              Enum.map(branches, fn {cname, arity, body} ->
+                {cname, arity, erase_convoy_body(env, body, grades)}
+              end)
+
+            erased_head = erase(env, {:case, scrutinee, motive, erased_branches})
+
+            args
+            |> Enum.zip(grades)
+            |> Enum.filter(fn {_arg, grade} -> Grade.present?(grade) end)
+            |> Enum.map(fn {arg, _grade} -> erase(env, arg) end)
+            |> Enum.reduce(erased_head, fn arg, acc -> {:app, acc, arg} end)
+
+          :error ->
+            args
+            |> Enum.map(&erase(env, &1))
+            |> Enum.reduce(erase(env, head), fn arg, acc -> {:app, acc, arg} end)
+        end
+
       {:global, name} ->
         quantities =
           case Cure.Core.Env.get_def(env, name) do
@@ -156,18 +179,19 @@ defmodule Cure.Elab.Erase do
   # relevant code. MUST stay in lockstep with `Relevance.collapsible_case?/2`,
   # which exempts the scrutinee from the relevance check on the same class —
   # keeping the case here would emit a scrutinee referencing dropped binders.
-  def erase(env, {:case, s, m, [{cname, arity, body}] = branches}) do
-    if collapsible_ctor?(env, cname, arity) do
-      body
-      |> Cure.Elab.Subst.instantiate(List.duplicate({:ctor, :cure_erased, []}, arity))
-      |> then(&erase(env, &1))
-    else
-      {:case, erase(env, s), erase(env, m), Enum.map(branches, fn {c, ar, b} -> {c, ar, erase(env, b)} end)}
-    end
-  end
-
   def erase(env, {:case, s, m, branches}) do
-    {:case, erase(env, s), erase(env, m), Enum.map(branches, fn {c, ar, b} -> {c, ar, erase(env, b)} end)}
+    case Collapsible.classify(env, branches) do
+      :unreachable ->
+        {:ctor, :cure_erased, []}
+
+      {:collapse, {_cname, arity, body}} ->
+        body
+        |> Cure.Elab.Subst.instantiate(List.duplicate({:ctor, :cure_erased, []}, arity))
+        |> then(&erase(env, &1))
+
+      :runtime ->
+        {:case, erase(env, s), erase(env, m), Enum.map(branches, fn {c, ar, b} -> {c, ar, erase(env, b)} end)}
+    end
   end
 
   # Effect nodes are NEVER dropped (§5.3): erasure recurses into their subterms —
@@ -183,17 +207,31 @@ defmodule Cure.Elab.Erase do
   defp spine({:app, f, x}, acc), do: spine(f, [x | acc])
   defp spine(head, acc), do: {head, acc}
 
-  # The single branch's ctor is its family's ONLY constructor and every field is
-  # erased (nonempty — nullary single-ctor families like Unit keep the ordinary
-  # case; this rule targets proof-like carriers). Mirror of
-  # `Relevance.collapsible_case?/2` — keep in lockstep.
-  defp collapsible_ctor?(env, cname, arity) do
-    with dname when dname != nil <- Inductive.ctor_family(env, cname),
-         [_only] <- Inductive.ctors_of(env, dname),
-         qs when is_list(qs) <- Inductive.ctor_quantities(env, cname) do
-      arity == length(qs) and qs != [] and Enum.all?(qs, &Grade.erased?/1)
+  defp convoy_grades(branches, arity) do
+    grades = Enum.map(branches, fn {_cname, _ctor_arity, body} -> lambda_grades(body, arity, []) end)
+
+    case grades do
+      [first | rest] ->
+        if length(first) == arity and Enum.all?(rest, &(&1 == first)), do: {:ok, first}, else: :error
+
+      _ ->
+        :error
+    end
+  end
+
+  defp lambda_grades(_body, 0, acc), do: Enum.reverse(acc)
+  defp lambda_grades({:lam, grade, _domain, body}, count, acc), do: lambda_grades(body, count - 1, [grade | acc])
+  defp lambda_grades(_body, _count, _acc), do: []
+
+  defp erase_convoy_body(env, body, []), do: erase(env, body)
+
+  defp erase_convoy_body(env, {:lam, grade, domain, body}, [expected | rest]) do
+    if Grade.erased?(expected) do
+      body
+      |> Cure.Elab.Subst.instantiate([{:ctor, :cure_erased, []}])
+      |> then(&erase_convoy_body(env, &1, rest))
     else
-      _ -> false
+      {:lam, grade, erase(env, domain), erase_convoy_body(env, body, rest)}
     end
   end
 

@@ -88,6 +88,7 @@ defmodule Cure.Elab.Relevance do
   """
 
   alias Cure.Core.{Env, Grade, Inductive}
+  alias Cure.Elab.Collapsible
 
   @type site :: :returned | :present_arg | :scrutinee | :applied
   @type kind :: :param | :lambda | :let | :field
@@ -341,10 +342,11 @@ defmodule Cure.Elab.Relevance do
   # `case`: the discriminant is scrutinised (relevant); the motive is a type
   # position (exempt); each branch body runs under `arity` fresh pattern binders.
   #
-  # EXCEPTION — collapsible-family elimination (Phase B, spec "Phase-B encoding
-  # amendment"): a case whose single branch names the sole constructor of its
-  # family, all of whose fields are erased (e.g. `Equivalent`'s `reflexive`),
-  # inspects nothing at runtime — the matched shape is forced. Such a scrutinee
+  # EXCEPTION — indexed-singleton elimination: a well-typed Core case with one
+  # branch is exhaustive at its instantiated indices, even if the family has
+  # other constructors globally. If all fields of that forced constructor are
+  # erased (e.g. `Equivalent`'s `reflexive`, or one constructor of an indexed
+  # `Encodes` proof), it inspects nothing at runtime. Such a scrutinee
   # is a PROOF position, exempt like the retired `{:rewrite}` node's proof
   # (Idris2 permits case on a 0-multiplicity value precisely when the match has
   # a single uninformative alternative; Brady/McBride/McKinna's collapsible
@@ -472,6 +474,7 @@ defmodule Cure.Elab.Relevance do
             |> Enum.with_index()
             |> Enum.reduce_while({:ok, []}, fn {arg, j}, {:ok, acc_u} ->
               x_usage = Map.get(u_inner, Enum.at(x_levels, j), no_uses())
+              lambda_grade = Enum.at(lam_grades, j, Grade.unrestricted())
 
               # Convoy arguments are authored in the OUTER frame. Constructor
               # fields exist only inside the selected branch; applying `st2`
@@ -479,9 +482,17 @@ defmodule Cure.Elab.Relevance do
               # argument (for example a lambda), falsely treating those binders
               # as erased. The branch-local state remains correct for `inner`
               # above; outer arguments must be walked with the outer state.
-              case walk(arg, depth, :present_arg, st) do
-                {:ok, ua} -> {:cont, {:ok, acc_u ++ [scale_by_uses(ua, x_usage)]}}
-                {:error, _} = err -> {:halt, err}
+              if Grade.erased?(lambda_grade) and Enum.all?(x_usage, &Grade.erased?/1) do
+                # The selected branch never uses this convoy binder. The
+                # application is administrative dependent transport, not a
+                # runtime call argument; walking `arg` as present before scaling
+                # would reject an erased proof even though its use count is zero.
+                {:cont, {:ok, acc_u ++ [%{}]}}
+              else
+                case walk(arg, depth, :present_arg, st) do
+                  {:ok, ua} -> {:cont, {:ok, acc_u ++ [scale_by_uses(ua, x_usage)]}}
+                  {:error, _} = err -> {:halt, err}
+                end
               end
             end)
 
@@ -738,20 +749,13 @@ defmodule Cure.Elab.Relevance do
     end
   end
 
-  # Exactly one branch, naming its family's ONLY constructor, whose fields are
-  # all erased (and nonempty — a nullary single-ctor family like Unit keeps
-  # today's relevant-scrutinee treatment; this rule targets proof-like carriers).
-  defp collapsible_case?(env, [{cname, arity, _body}]) do
-    with dname when dname != nil <- Inductive.ctor_family(env, cname),
-         [_only] <- Inductive.ctors_of(env, dname),
-         qs when is_list(qs) <- Inductive.ctor_quantities(env, cname) do
-      arity == length(qs) and qs != [] and Enum.all?(qs, &Grade.erased?/1)
-    else
-      _ -> false
-    end
-  end
-
-  defp collapsible_case?(_env, _branches), do: false
+  # Exactly one branch whose fields are all erased. Kernel coverage
+  # has already proved this constructor is the only inhabitant possible at the
+  # case's instantiated indices; requiring it to be the family's only constructor
+  # globally would incorrectly reject indexed singleton elimination. A nullary
+  # branch collapses only for an indexed family, preserving ordinary Unit-like
+  # value cases.
+  defp collapsible_case?(env, branches), do: Collapsible.classify(env, branches) != :runtime
 
   defp spine({:app, f, x}, acc), do: spine(f, [x | acc])
   defp spine(head, acc), do: {head, acc}

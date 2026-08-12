@@ -397,7 +397,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
       input: List(Char),
       after_input: List(Char),
       position: InitialPosition,
-      {final_evidence: List(Evidence)},
+      final_evidence: List(Evidence),
       acceptance: AcceptancePath(
         plus(S(Z()), S(Z())),
         predicate_alternate_mode_machine(left, right, prefer_right),
@@ -419,6 +419,38 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
         position,
         acceptance
       )
+
+    fn generic_predicate_alternate_total_extraction(
+      left: Char -> Bool,
+      right: Char -> Bool,
+      prefer_right: Bool,
+      input: List(Char),
+      after_input: List(Char),
+      position: InitialPosition,
+      final_evidence: List(Evidence),
+      acceptance: AcceptancePath(
+        plus(S(Z()), S(Z())),
+        predicate_alternate_mode_machine(left, right, prefer_right),
+        position,
+        input,
+        after_input,
+        final_evidence
+      )
+    ) -> Sem(ChoiceC(CharC(), CharC())) =
+      let compilation = ThompsonAlternate(
+        ThompsonPredicate(left),
+        ThompsonPredicate(right),
+        prefer_right
+      )
+      let certificate = thompson_evidence_acceptance_encodes(
+        compilation,
+        predicate_alternate_evidence_proof(left, right, prefer_right),
+        input,
+        after_input,
+        position,
+        acceptance
+      )
+      extract_encoding(final_evidence, certificate)
 
     fn generic_predicate_alternate_acceptance_from_case(
       left: Char -> Bool,
@@ -883,6 +915,7 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert thompson_reachable == [
              :"Std.Regex.Proof#thompson_evidence_acceptance_from_encodes"
            ]
+
     assert Env.get_def(env, :"Std.Regex.Proof#concat_right_transition_origin")
     assert Env.total?(env, :"Std.Regex.Proof#concat_right_transition_origin")
     assert Env.get_def(env, :"Std.Regex.Proof#project_concat_right_path")
@@ -933,6 +966,9 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
     assert Env.total?(env, :"Std.Regex.Proof#project_alternate_acceptance")
     assert Env.get_def(env, :"Std.Regex.Proof#thompson_evidence_acceptance_encodes")
     assert Env.total?(env, :"Std.Regex.Proof#thompson_evidence_acceptance_encodes")
+    assert Env.get_def(env, :"Std.Regex#extract_encoding")
+    assert Env.total?(env, :"Std.Regex#extract_encoding")
+    assert Env.total?(env, :generic_predicate_alternate_total_extraction)
     assert Env.get_def(env, :"Std.Regex.Proof#thompson_machine_acceptance_encodes")
     assert Env.total?(env, :"Std.Regex.Proof#thompson_machine_acceptance_encodes")
     assert Map.has_key?(env.ctors, :"Std.Regex.Proof#ThompsonEvidenceBoundary")
