@@ -1915,13 +1915,51 @@ defmodule Cure.Core.Kernel do
   defp head_key({:data, n, _, _}), do: {:data, n}
   defp head_key(t) when is_tuple(t), do: elem(t, 0)
 
-  # Conservative occurs-check: does {:var, key} appear anywhere in term? Ignores
-  # binder-depth shifts (over-approximates ⇒ at worst a spurious :undecided, never
-  # an unsound bind). Given disjoint ranges it effectively never fires on real input.
-  defp occurs_index?(key, {:var, k}), do: k == key
-  defp occurs_index?(key, t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&occurs_index?(key, &1))
-  defp occurs_index?(key, l) when is_list(l), do: Enum.any?(l, &occurs_index?(key, &1))
-  defp occurs_index?(_key, _), do: false
+  # Capture-aware occurs-check: does the FREE variable `key` appear in `term`?
+  # Normalizing a reducible index can expose a stuck `case`. Its branch bodies
+  # introduce constructor fields at de Bruijn indices starting from zero; the old
+  # tuple walk mistook one of those BOUND variables for the constructor-telescope
+  # variable being solved. That conservatively degraded the equation to
+  # `:undecided`, but lost a valid GADT refinement such as
+  # `projected_captures := accepting_final_captures(...)`. Track binder depth so
+  # only the shifted FREE occurrence (`key + depth`) blocks a binding.
+  defp occurs_index?(key, term), do: occurs_index?(key, term, 0)
+
+  defp occurs_index?(key, {:var, k}, depth), do: k == key + depth
+  defp occurs_index?(key, {:pi, _grade, domain, codomain}, depth),
+    do: occurs_index?(key, domain, depth) or occurs_index?(key, codomain, depth + 1)
+
+  defp occurs_index?(key, {:lam, _grade, domain, body}, depth),
+    do: occurs_index?(key, domain, depth) or occurs_index?(key, body, depth + 1)
+
+  defp occurs_index?(key, {:let, _grade, type, value, body}, depth),
+    do:
+      occurs_index?(key, type, depth) or occurs_index?(key, value, depth) or
+        occurs_index?(key, body, depth + 1)
+
+  defp occurs_index?(key, {:app, fun, arg}, depth),
+    do: occurs_index?(key, fun, depth) or occurs_index?(key, arg, depth)
+
+  defp occurs_index?(key, {:data, _name, params, indices}, depth),
+    do: Enum.any?(params ++ indices, &occurs_index?(key, &1, depth))
+
+  defp occurs_index?(key, {:ctor, _name, args}, depth),
+    do: Enum.any?(args, &occurs_index?(key, &1, depth))
+
+  defp occurs_index?(key, {:case, scrutinee, motive, branches}, depth) do
+    occurs_index?(key, scrutinee, depth) or occurs_index?(key, motive, depth) or
+      Enum.any?(branches, fn {_constructor, arity, body} ->
+        occurs_index?(key, body, depth + arity)
+      end)
+  end
+
+  defp occurs_index?(key, {:effect_type, inner}, depth), do: occurs_index?(key, inner, depth)
+  defp occurs_index?(key, {:effect_pure, value}, depth), do: occurs_index?(key, value, depth)
+
+  defp occurs_index?(key, {:effect_bind, effect, continuation}, depth),
+    do: occurs_index?(key, effect, depth) or occurs_index?(key, continuation, depth)
+
+  defp occurs_index?(_key, _term, _depth), do: false
 
   # Agda Cycle rule (Rules/LHS/Unify.hs `ifOccursStronglyRigid` / `flexRigOccurrenceIn`):
   # does {:var, key} occur STRONGLY RIGID in `term` — an occurrence reachable through

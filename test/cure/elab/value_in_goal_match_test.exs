@@ -81,6 +81,27 @@ defmodule Cure.Elab.ValueInGoalMatchTest do
     assert {:ok, _env} = Program.elaborate(src)
   end
 
+  test "constructor index refinement ignores variables bound inside a normalized index" do
+    src = """
+    mod BinderAwareIndexRefinement
+      type Nat = Z | S(Nat)
+      type List(a: Type) = Nil | Cons(a, List(a))
+
+      @reducible
+      fn copied(xs: List(Nat)) -> List(Nat) = match xs
+        Nil() -> Nil()
+        Cons(head, tail) -> Cons(head, copied(tail))
+
+      type Indexed indices (value: List(Nat))
+        IndexedBy : (projected: List(Nat)) -> Indexed(projected)
+
+      fn projected_is_copied(xs: List(Nat), witness: Indexed(copied(xs))) -> Equivalent(List(Nat), copied(xs), copied(xs)) = match witness
+        IndexedBy(projected) -> reflexive(projected)
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
   test "an explicit erased parameter is consumed before a dependent present argument" do
     src =
       mod("""
@@ -217,5 +238,28 @@ defmodule Cure.Elab.ValueInGoalMatchTest do
       """
 
     assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "nested constructor decomposition retains the outer scrutinee refinement" do
+    src = """
+    mod NestedOuterScrutineeRefinement
+      type Nat = Z | S(Nat)
+      type Box = MkBox(Nat)
+      type Pair = MkPair(Nat, Box)
+
+      @reducible
+      fn boxed_value(box: Box) -> Nat = match box
+        MkBox(value) -> value
+
+      @reducible
+      fn pair_box(pair: Pair) -> Box = match pair
+        MkPair(_, box) -> box
+
+      fn projected_is_itself(pair: Pair) -> Equivalent(Nat, boxed_value(pair_box(pair)), boxed_value(pair_box(pair))) = match pair
+        MkPair(_, box) -> match box
+          MkBox(value) -> reflexive(value)
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
   end
 end

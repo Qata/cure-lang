@@ -759,8 +759,11 @@ defmodule Cure.Elab.Elaborator do
               {:ok, _, _} = ok ->
                 ok
 
-              {:error, _rr} ->
-                orig
+              {:error, retry_reason} ->
+                case orig do
+                  {:error, :ctor_arity} -> {:error, retry_reason}
+                  _ -> orig
+                end
             end
         end
     end
@@ -10348,12 +10351,42 @@ defmodule Cure.Elab.Elaborator do
           # `ctor_term` the kernel's branch goal expects. Without this, a body
           # like `refl(v)` keeps `v` opaque (`v ≢ vz`) even though the goal
           # correctly refined to `Eq(NV(Z), vz, vz)`.
-          body_expr = refine_scrutinee_in_body(body_expr, scrut_term, pattern, pattern_vars, names)
+          refined_body_expr =
+            refine_scrutinee_in_body(body_expr, scrut_term, pattern, pattern_vars, names)
+
+          elaborate_checked_candidate = fn candidate ->
+            case elaborate_branch_body(candidate, branch_expected, branch_names, branch_ctx, env) do
+              {:ok, term} = ok ->
+                case Kernel.check(branch_ctx, term, Eval.eval(branch_expected, Context.env(branch_ctx))) do
+                  :ok -> ok
+                  {:error, reason} -> {:error, {:branch_type, cname, reason}}
+                end
+
+              {:error, _} = error ->
+                error
+            end
+          end
+
+          body_result = fn ->
+            if length(plicities) == arity and Enum.all?(plicities, &(&1 == :explicit)) do
+              elaborate_checked_candidate.(refined_body_expr)
+            else
+              case elaborate_checked_candidate.(body_expr) do
+                {:ok, _} = ok ->
+                  ok
+
+                {:error, _} = original ->
+                  case elaborate_checked_candidate.(refined_body_expr) do
+                    {:ok, _} = ok -> ok
+                    {:error, _} -> original
+                  end
+              end
+            end
+          end
 
           with :ok <-
                  check_named_implicits(checks, subst, arity, telescope, branch_ctx, branch_names, env),
-               {:ok, body_term} <-
-                 elaborate_branch_body(body_expr, branch_expected, branch_names, branch_ctx, env) do
+               {:ok, body_term} <- body_result.() do
             {:ok, {cname, arity, body_term}}
           end
         end

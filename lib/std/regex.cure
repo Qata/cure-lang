@@ -594,13 +594,23 @@ mod Std.Regex
     ThompsonRepeat(inner, _) -> thompson_state_count(inner)
 
   @reducible
+  fn pattern_machine_starts({n: Nat}, machine: PatternMachine(n)) -> List(MachineState(n)) = match machine
+    MkPatternMachine(starts, next) -> starts
+
+  @reducible
+  fn pattern_machine_next({n: Nat}, machine: PatternMachine(n)) -> (Bounded(n)) -> Char -> List(MachineState(n)) = match machine
+    MkPatternMachine(starts, next) -> next
+
+  fn pattern_machine_eta({n: Nat}, machine: PatternMachine(n)) -> Equivalent(PatternMachine(n), machine, MkPatternMachine(pattern_machine_starts(machine), pattern_machine_next(machine))) = match machine
+    MkPatternMachine(starts, next) -> reflexive(MkPatternMachine(starts, next))
+
+  @reducible
   fn thompson_machine({shape: ShapeCode}, compilation: ThompsonCompilation(shape)) -> PatternMachine(thompson_state_count(compilation)) = match compilation
     ThompsonPredicate(test) -> predicate_pattern_machine(test)
     ThompsonEmpty() -> empty_pattern_machine()
     ThompsonBoundary(constraint) -> boundary_pattern_machine(constraint)
     ThompsonConcat(left, right) -> concat_pattern_machine(thompson_state_count(left), thompson_machine(left), thompson_state_count(right), thompson_machine(right))
-    ThompsonGroup(inner) -> match thompson_machine(inner)
-      MkPatternMachine(starts, next) -> group_pattern_machine(thompson_state_count(inner), starts, next)
+    ThompsonGroup(inner) -> group_pattern_machine(thompson_state_count(inner), pattern_machine_starts(thompson_machine(inner)), pattern_machine_next(thompson_machine(inner)))
     ThompsonAlternate(left, right, prefer_right) -> alternate_pattern_machine(thompson_state_count(left), thompson_machine(left), thompson_state_count(right), thompson_machine(right), prefer_right)
     ThompsonRepeat(inner, lazy) -> repeat_pattern_machine(thompson_state_count(inner), thompson_machine(inner), lazy)
 

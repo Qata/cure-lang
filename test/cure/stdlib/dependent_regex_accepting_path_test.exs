@@ -390,6 +390,17 @@ defmodule Cure.Stdlib.DependentRegexAcceptingPathTest do
         ThompsonEvidencePredicate(right)
       )
 
+    fn grouped_predicate_evidence_proof(
+      test: Char -> Bool
+    ) -> ThompsonEvidenceProof(
+      StringC(),
+      ThompsonGroup(ThompsonPredicate(test))
+    ) =
+      ThompsonEvidenceGroup(
+        ThompsonPredicate(test),
+        ThompsonEvidencePredicate(test)
+      )
+
     fn generic_predicate_alternate_acceptance_case(
       left: Char -> Bool,
       right: Char -> Bool,
